@@ -1,0 +1,29 @@
+# Python environments and caches
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.hypothesis/
+.pyrefly/
+.coverage
+.coverage.*
+htmlcov/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Local ithrl evidence and runtime data
+.ithrl/
+*.ithrl
+*.sqlite
+*.sqlite-journal
+*.sqlite-shm
+*.sqlite-wal

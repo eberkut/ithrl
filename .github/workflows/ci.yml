@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_FROZEN: "1"
+  UV_NO_PROGRESS: "1"
+
+jobs:
+  quality:
+    name: Quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.9"
+          python-version: "3.14"
+          enable-cache: true
+
+      - name: Synchronize locked environment
+        run: uv sync --locked --all-groups
+
+      - name: Check lockfile
+        run: uv lock --check
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Report code metrics
+        run: |
+          uv run radon cc src/ithrl --min B --show-complexity --total-average
+          uv run radon mi src/ithrl --min B --show
+
+      - name: Check formatting
+        run: uv run ruff format --check .
+
+      - name: Check types
+        run: uv run pyrefly check
+
+  test:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13", "3.14"]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.9"
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+
+      - name: Synchronize locked environment
+        run: uv sync --locked --all-groups
+
+      - name: Run tests
+        run: uv run pytest --ignore=tests/packaging
+
+  package:
+    name: Package
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.9"
+          python-version: "3.14"
+          enable-cache: true
+
+      - name: Synchronize locked environment
+        run: uv sync --locked --all-groups
+
+      - name: Build artifacts
+        run: uv build --sdist --wheel --no-sources
+
+      - name: Validate artifacts and clean installation
+        run: uv run pytest -o addopts= tests/packaging
+        env:
+          ITHRL_DIST_DIR: dist

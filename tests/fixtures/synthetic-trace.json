@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "trace_schema": "ithrl.synthetic.v1",
+  "inferences": [
+    {
+      "inference_call_id": "synthetic-ac-001",
+      "captured_at": "2026-09-01T10:00:00+00:00",
+      "provider": "fake",
+      "endpoint": "local",
+      "request": {
+        "model": "fake-deterministic-v1",
+        "input": [
+          {"role": "user", "content": "A"},
+          {"role": "user", "content": "B"},
+          {"role": "user", "content": "C"},
+          {"role": "user", "content": "D"},
+          {"role": "user", "content": "E"},
+          {"role": "user", "content": "F"},
+          {"role": "user", "content": "G"}
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "name": "exec_command",
+            "description": "Return a command decision without executing it.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "cmd": {"type": "string"}
+              },
+              "required": ["cmd"],
+              "additionalProperties": false
+            }
+          }
+        ],
+        "store": false
+      },
+      "response": {
+        "model_returned": "fake-deterministic-v1",
+        "tool_calls": [
+          {
+            "name": "exec_command",
+            "arguments": {"cmd": "true"}
+          }
+        ]
+      },
+      "fake_behavior": {
+        "tool_name": "exec_command",
+        "required_markers": ["A", "C"],
+        "alternative_marker_sets": []
+      }
+    }
+  ]
+}

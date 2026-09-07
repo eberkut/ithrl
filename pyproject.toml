@@ -1,0 +1,139 @@
+[build-system]
+requires = ["hatchling==1.32.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ithrl"
+version = "0.0.0"
+description = "Differential debugging and fuzzing for agent context"
+readme = "README.md"
+authors = [
+  { name = "Vincent Morel" },
+]
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Software Development :: Debuggers",
+]
+dependencies = [
+  "filelock>=3.32.4",
+  "platformdirs>=4.3",
+  "pydantic>=2.12",
+  "rich>=14",
+  "typer>=0.16",
+]
+
+[project.scripts]
+ithrl = "ithrl.cli:app"
+
+[dependency-groups]
+dev = [
+  "hypothesis>=6.138",
+  "pre-commit>=4.3",
+  "pyrefly==1.2.0",
+  "pytest>=9",
+  "pytest-cov>=7",
+  "radon==6.0.1",
+  "ruff==0.16.5",
+]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/LICENSE",
+  "/README.md",
+  "/pyproject.toml",
+  "/src",
+]
+exclude = [
+  "**/__pycache__",
+  "**/*.py[cod]",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ithrl"]
+
+[tool.pyrefly]
+preset = "strict"
+project-includes = ["src", "tests"]
+python-version = "3.12"
+search-path = ["src"]
+
+[tool.pytest]
+addopts = [
+  "--strict-config",
+  "--strict-markers",
+  "--cov=ithrl",
+  "--cov-branch",
+  "--cov-report=term-missing:skip-covered",
+]
+filterwarnings = ["error"]
+testpaths = ["tests"]
+strict_xfail = true
+
+[tool.coverage.run]
+branch = true
+source = ["ithrl"]
+
+[tool.coverage.report]
+exclude_also = [
+  "if TYPE_CHECKING:",
+  "raise AssertionError",
+  "raise NotImplementedError",
+]
+show_missing = true
+skip_covered = true
+
+[tool.ruff]
+extend-exclude = ["*.md"]
+line-length = 100
+src = ["src", "tests"]
+target-version = "py312"
+
+[tool.ruff.lint]
+ignore = [
+  "COM812", # Conflicts with the formatter.
+  "ISC001", # Conflicts with the formatter.
+  "S105",   # JSON and protocol fields commonly use the name `token`.
+  "S106",   # The same false-positive risk applies to function arguments.
+  "S107",   # The same false-positive risk applies to default arguments.
+]
+select = [
+  "ASYNC",
+  "B",
+  "C4",
+  "DTZ",
+  "E4",
+  "E7",
+  "E9",
+  "F",
+  "G",
+  "I",
+  "PIE",
+  "PT",
+  "PTH",
+  "RET",
+  "RUF",
+  "S",
+  "SIM",
+  "T20",
+  "UP",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+  "S101", # Assertions are the normal pytest interface.
+]
+
+[tool.ruff.format]
+docstring-code-format = true
+quote-style = "double"
