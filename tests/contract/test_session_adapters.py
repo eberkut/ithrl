@@ -143,6 +143,33 @@ def test_adapter_layers_do_not_depend_on_execution_or_network_modules() -> None:
         }, source
 
 
+def test_case_layer_does_not_depend_on_harness_or_execution_modules() -> None:
+    package = Path(__file__).parents[2] / "src" / "ithrl" / "case"
+    forbidden = (
+        "httpx",
+        "requests",
+        "socket",
+        "subprocess",
+        "urllib",
+        "ithrl.adapters",
+        "ithrl.cli",
+        "ithrl.execution",
+        "ithrl.observations",
+        "ithrl.reduce",
+        "ithrl.runner",
+        "ithrl.workflow",
+    )
+
+    for source in package.rglob("*.py"):
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        imported = _imported_modules(tree)
+        assert not {
+            module
+            for module in imported
+            if any(module == blocked or module.startswith(f"{blocked}.") for blocked in forbidden)
+        }, source
+
+
 def _imported_modules(tree: ast.AST) -> set[str]:
     modules: set[str] = set()
     for node in ast.walk(tree):
