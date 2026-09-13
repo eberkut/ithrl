@@ -200,13 +200,13 @@ def test_resolution_preserves_a_matching_source_error(tmp_path: Path) -> None:
     root = tmp_path / "codex"
     source = _codex_session(root, f"rollout-fixture-{CODEX_SESSION_ID}.jsonl")
     records = [json.loads(line) for line in source.read_text().splitlines()]
-    records[0]["payload"]["cli_version"] = "0.153.5"
+    del records[0]["payload"]["id"]
     source.write_text("".join(json.dumps(record) + "\n" for record in records))
 
     with pytest.raises(AdapterError) as caught:
         resolve_session(harness="codex", session_id=CODEX_SESSION_ID, root=root)
 
-    assert caught.value.code is AdapterErrorCode.UNSUPPORTED_VERSION
+    assert caught.value.code is AdapterErrorCode.INVALID_SESSION
 
 
 def test_missing_stores_return_an_empty_result(tmp_path: Path) -> None:

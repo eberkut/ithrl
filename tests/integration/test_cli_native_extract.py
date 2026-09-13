@@ -474,7 +474,7 @@ def test_explicit_source_preserves_a_recognized_native_error(tmp_path: Path) -> 
         json.loads(line)
         for line in (FIXTURES / "codex-session/rollout.jsonl").read_text().splitlines()
     ]
-    records[0]["payload"]["cli_version"] = "0.153.5"
+    del records[0]["payload"]["id"]
     source.write_text("".join(json.dumps(record) + "\n" for record in records))
 
     result = CliRunner().invoke(
@@ -483,10 +483,10 @@ def test_explicit_source_preserves_a_recognized_native_error(tmp_path: Path) -> 
         color=False,
     )
 
-    assert result.exit_code == ExitCode.UNSUPPORTED
+    assert result.exit_code == ExitCode.USAGE
     report = json.loads(result.stdout)
-    assert report["error_code"] == "unsupported-version"
-    assert "producer version is not supported" in report["message"]
+    assert report["error_code"] == "invalid-session"
+    assert "source session identifier" in report["message"]
 
 
 def test_missing_default_store_reports_no_sessions(

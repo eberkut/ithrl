@@ -1,4 +1,4 @@
-"""Validate the supported Codex CLI rollout JSONL format."""
+"""Validate Codex rollout JSONL that starts with `session_meta`."""
 
 from __future__ import annotations
 
@@ -13,7 +13,6 @@ from ithrl.context import JsonObject
 from ithrl.timestamps import validate_rfc3339_timestamp
 
 _FORMAT_NAME = "codex-rollout-jsonl"
-_SUPPORTED_VERSION = "0.153.4"
 _CALL_OUTPUT_TYPES = {
     "custom_tool_call": "custom_tool_call_output",
     "function_call": "function_call_output",
@@ -109,12 +108,6 @@ def _session_metadata(records: tuple[_Record, ...]) -> SessionMetadata:
         record.line,
         "producer version",
     )
-    if producer_version != _SUPPORTED_VERSION:
-        raise AdapterError(
-            AdapterErrorCode.UNSUPPORTED_VERSION,
-            "Codex session producer version is not supported",
-            line=record.line,
-        )
 
     return SessionMetadata(
         format=SessionFormat(

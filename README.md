@@ -1,67 +1,161 @@
 # ithrl
 
-`ithrl` tests how changes to an agent's saved context affect a model decision. It extracts one
-decision and searches for a smaller context that preserves the selected behavior without breaking
-context dependencies.
+`ithrl` is a differential debugging tool for agent context. It extracts one model decision from a
+saved agent session and records the preceding context and the dependencies between its parts. With
+a compatible runner, it searches for a smaller context that preserves the selected behavior.
 
 Pronounce `ithrl` as **Ithuriel**. The name refers to the angel in John Milton's
 [*Paradise Lost*](https://rpo.library.utoronto.ca/content/paradise-lost-book-iv-1674) whose spear
 reveals Satan in disguise.
 
-The project does not claim that a reduced context is the unique cause of a behavior or the
-smallest possible context. A completed reduction is reproducible and search-1-minimal under the
-recorded execution method, behavior test, search algorithm, and budget. This means that the search
-tested every valid single-group removal from the final context and none preserved the behavior.
+A `search-1-minimal` result means that, under the recorded runner, behavior test, search settings,
+and budget, ithrl tested every valid single-group removal from the final context and none passed the
+preservation test. It does not mean that the result is the smallest possible context, the only
+context that would work, or the cause of the behavior.
 
-## Current status
+## Available workflows
 
-The current pre-release version can create cases from ordinary saved Codex CLI and GitHub Copilot
-CLI sessions. It can discover their default local session stores or read an explicit session file.
-Extraction is read-only: it does not start the coding agent, contact a provider, execute a tool, or
-change the saved session.
+| Input | `extract` | `shrink` |
+| --- | --- | --- |
+| Included synthetic trace format | Yes | Yes, with the deterministic local runner |
+| Codex CLI rollout JSONL | Yes | No |
+| Copilot CLI event schema `1` | Yes | No |
 
-Controlled runners for Codex and Copilot are not available yet, so cases extracted from their
-sessions cannot be reduced. The deterministic synthetic workflow below implements the complete
-local extract-and-reduce path without credentials or network requests.
+`extract` can discover the default Codex and Copilot session stores or read an explicit session
+file. It does not start the coding agent, contact a provider, execute a tool, or change the saved
+session. `shrink` rejects native-session cases because no compatible controlled runner is included.
 
-## Research basis
+The synthetic workflow covers extraction and reduction without provider credentials or network
+access. Its deterministic runner does not execute tool calls.
 
-The project design draws on these papers and preprints:
-
-- [*Same Model, Different Harness: Different Coding-Agent Results*](https://arxiv.org/abs/2608.26218)
-  by Sydney Lewis reports that harness-level context management can change coding-agent results
-  when the model and task stay fixed.
-- [*What Does Context Compression Cost an Agent? Interaction Costs Unrevealed by Task-Completion
-  Metrics*](https://arxiv.org/abs/2608.16370) by Shuyu Liu motivates the planned analysis of
-  information that an agent must retrieve again after context is removed.
-- [*Semantic Invariance in Agentic AI*](https://arxiv.org/abs/2603.13173) by I. de Zarzà, J. de
-  Curtò, Jordi Cabot, Pietro Manzoni, and Carlos T. Calafate motivates testing whether
-  meaning-preserving context changes alter behavior.
-- [*Causal Agent Replay: Counterfactual Attribution for LLM-Agent
-  Failures*](https://arxiv.org/abs/2606.08275) by Jaineet Shah is related intervention-based work.
-  `ithrl` studies one decision and does not claim to identify the cause of an entire failed run.
-- [*Interval estimation for the difference between independent proportions: comparison of eleven
-  methods*](https://pubmed.ncbi.nlm.nih.gov/9595617/) by R. G. Newcombe provides the confidence
-  interval method planned for comparisons between stochastic runs.
-
-These papers motivate the design; they do not validate `ithrl`. The current synthetic workflow
-does not yet implement stochastic comparison, context fuzzing, or retrieval analysis.
-
-## Develop from a checkout
+## Set up a checkout
 
 Prerequisites:
 
 - [uv](https://docs.astral.sh/uv/)
 - Python 3.12, 3.13, or 3.14; Python 3.14 is the primary development version
 
-Clone the repository, replacing `REPOSITORY_URL` with its Git URL, then synchronize the locked
-development environment:
+From the repository root, synchronize the locked development environment:
 
 ```bash
-git clone REPOSITORY_URL ithrl
-cd ithrl
 uv sync --locked --all-groups
 ```
+
+Run ithrl from the checkout with `uv run`:
+
+```bash
+uv run ithrl --help
+```
+
+## Run the synthetic workflow
+
+The included synthetic trace is deterministic and does not call a model. Extract its selected
+decision into a local case, then reduce it:
+
+```bash
+uv run ithrl extract tests/fixtures/synthetic-trace.json \
+  --inference synthetic-ac-001 \
+  --output .ithrl/demo-case
+uv run ithrl shrink .ithrl/demo-case
+```
+
+The expected result retains the synthetic markers `A` and `C`, reports zero provider calls, and
+saves an inspectable result under `.ithrl/demo-case/results/`. Extraction never overwrites an
+existing case, so remove `.ithrl/demo-case` before repeating the walkthrough.
+
+Useful options:
+
+```bash
+# Validate the case and show the execution plan without running it.
+uv run ithrl shrink .ithrl/demo-case --dry-run
+
+# Test only the original context.
+uv run ithrl shrink .ithrl/demo-case --calibrate-only
+
+# Return the command result as one JSON object on stdout.
+uv run ithrl shrink .ithrl/demo-case --format json
+```
+
+Every completed run prints its result directory. Start with `summary.json` for the outcome,
+evidence identifiers, counts, and `next_action` value. `request.json` contains the original request
+after a calibration-only run or the reduced request after a search.
+`retained-context.jsonl` lists the retained context entries. `checkpoint.json` contains the search
+state needed to verify or resume the reduction. Other result files record the experiment settings,
+execution plan, and capture source.
+
+Print the installed version when reporting a problem:
+
+```bash
+uv run ithrl --version
+```
+
+The synthetic trace defines one behavior for each recorded decision. The synthetic workflow does
+not offer interactive behavior selection.
+
+When `shrink` reaches the candidate limit, it saves a partial result and prints a command to resume
+the search. Use `--max-candidates` to set the limit; `uv run ithrl shrink --help` shows the accepted
+range.
+
+## Extract a saved Codex or Copilot session
+
+Run `extract` without a source in a terminal to discover supported sessions and choose a
+completed decision and behavior:
+
+```bash
+uv run ithrl extract
+```
+
+You can also pass a native session file directly:
+
+```bash
+uv run ithrl extract path/to/session.jsonl --output .ithrl/native-case
+```
+
+For non-interactive use, pass the IDs reported by `extract`:
+
+```bash
+uv run ithrl extract \
+  --harness codex \
+  --session SESSION_ID \
+  --decision DECISION_ID \
+  --target TARGET_ID \
+  --output .ithrl/native-case \
+  --format json
+```
+
+When a required selection is missing, the command lists available IDs. Selection and discovery
+output exclude prompts, responses, commands, tool arguments, and source paths.
+
+The Codex parser recognizes rollout JSONL by its first `session_meta` record, then validates record
+structure and recognized tool relationships. The
+[accepted Codex structure](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/protocol/src/protocol.rs)
+has no schema-version field. ithrl records the CLI version in the case but checks the file structure
+instead. The Copilot parser accepts event schema `1` and rejects other schema versions. Both parsers
+preserve unrecognized records without interpreting them.
+
+Codex extraction supports completed final responses. Copilot extraction supports top-level final
+responses and recognized `bash` or `shell` requests.
+
+A native case contains the exact saved-session bytes, separate decision metadata, and an index of
+context records and their dependencies.
+
+## Data and privacy
+
+Cases can contain prompts, source code, command output, paths, and other sensitive data. Never
+commit unsanitized cases, traces, observation databases, or credentials. On POSIX systems, ithrl
+refuses case files and directories that do not have their expected private permissions.
+
+By default, observations are stored in the standard user-data directory for the host platform.
+Use `--observation-store PATH` for a dedicated SQLite store. A custom store must be inside a
+directory that only the user running ithrl can access.
+
+Content digests detect accidental or inconsistent changes; they are not signatures. ithrl assumes
+that another process running as the same user has not replaced the local case, result, run state,
+or observation database. It rejects source and case paths reached through directories writable
+by other users. On platforms where directory ownership cannot be checked with standard Python
+APIs, custom paths must stay inside the active user profile.
+
+## Development checks
 
 Run the same validation entry points used by CI:
 
@@ -76,112 +170,31 @@ uv run pytest
 uv build --sdist --wheel --no-sources
 ```
 
-The default test suite and walkthrough do not use provider credentials or make network requests.
+The default test suite and synthetic walkthrough do not use provider credentials or make network
+requests.
 
-## Extract an ordinary saved session
+## Research basis
 
-Run `extract` without a source in a terminal to discover recent supported Codex and Copilot
-sessions and choose a completed decision and behavior:
+The design draws on published research and preprints:
 
-```bash
-uv run ithrl extract
-```
+- [*Same Model, Different Harness: Different Coding-Agent Results*](https://arxiv.org/abs/2608.26218)
+  by Sydney Lewis reports that harness-level context management can change coding-agent results
+  when the model and task stay fixed.
+- [*What Does Context Compression Cost an Agent? Interaction Costs Unrevealed by Task-Completion
+  Metrics*](https://arxiv.org/abs/2608.16370) by Shuyu Liu examines information that an agent must
+  retrieve again after context is removed.
+- [*Semantic Invariance in Agentic AI*](https://arxiv.org/abs/2603.13173) by I. de Zarzà, J. de
+  Curtò, Jordi Cabot, Pietro Manzoni, and Carlos T. Calafate studies whether behavior remains stable
+  under meaning-preserving changes.
+- [*Causal Agent Replay: Counterfactual Attribution for LLM-Agent
+  Failures*](https://arxiv.org/abs/2606.08275) by Jaineet Shah describes counterfactual
+  interventions for failures across agent runs. `ithrl` studies one decision and does not claim to
+  identify the cause of an entire failed run.
+- [*Interval estimation for the difference between independent proportions: comparison of eleven
+  methods*](https://pubmed.ncbi.nlm.nih.gov/9595617/) by R. G. Newcombe informs the statistical
+  design for comparisons between stochastic runs.
 
-You can also pass a native session file directly:
-
-```bash
-uv run ithrl extract path/to/session.jsonl --output .ithrl/native-case
-```
-
-For non-interactive use, provide stable selection IDs:
-
-```bash
-uv run ithrl extract \
-  --harness codex \
-  --session SESSION_ID \
-  --decision DECISION_ID \
-  --target TARGET_ID \
-  --output .ithrl/native-case \
-  --format json
-```
-
-The command lists available content-free IDs when a required selection is missing. It does not
-print prompts, responses, commands, tool arguments, or source paths from discovered sessions.
-
-Native format support is deliberately narrow during pre-release development. The checked fixtures
-cover Codex CLI 0.153.4 rollout JSONL and GitHub Copilot CLI 1.0.82 event JSONL. Other versions fail
-closed until their persisted format has been reviewed and tested. Unknown records are preserved in
-the case but are not interpreted.
-
-The Codex adapter exposes completed final responses. The Copilot adapter exposes top-level final
-responses and recognized `bash` or `shell` requests. These behaviors are observable in the saved
-session, but controlled experiments remain unvalidated until the corresponding runners exist.
-
-The case contains the exact native session bytes, separate decision metadata, and a context edit
-graph. Keep it private. Because controlled native runners are not implemented yet, `extract` does
-not suggest running `shrink` for these cases.
-
-## Try the synthetic workflow
-
-Extract the fixture's selected decision into a local case, then reduce it:
-
-```bash
-uv run ithrl extract tests/fixtures/synthetic-trace.json \
-  --inference synthetic-ac-001 \
-  --output .ithrl/demo-case
-uv run ithrl shrink .ithrl/demo-case
-```
-
-The expected result retains the synthetic markers `A` and `C`, reports zero provider calls,
-and saves an inspectable result under `.ithrl/demo-case/results/`. Remove `.ithrl/demo-case`
-before repeating the walkthrough because extraction never overwrites an existing case.
-
-Use these options when you need a narrower operation or machine-readable output:
-
-```bash
-# Validate the case and show the execution plan without running it.
-uv run ithrl shrink .ithrl/demo-case --dry-run
-
-# Test only the original context.
-uv run ithrl shrink .ithrl/demo-case --calibrate-only
-
-# Return the same command result as one JSON object on stdout.
-uv run ithrl shrink .ithrl/demo-case --format json
-```
-
-Every completed run prints its result directory. Start with `summary.json` for the outcome,
-evidence identifiers, counts, and next action. `request.json` is the request saved for that result:
-the original request after calibration-only runs or the current reduced request after a search.
-`retained-context.jsonl` records the retained context entries, and
-`checkpoint.json` contains the search evidence needed to verify or resume the reduction. The
-remaining files preserve the experiment settings, execution plan, and capture source.
-
-Print the installed version when reporting a problem:
-
-```bash
-uv run ithrl --version
-```
-
-The synthetic trace defines one behavior to test for each recorded decision. This pre-release
-workflow does not let you choose a different behavior interactively. By default, observations are
-stored in the standard user-data directory for the current platform. Use
-`--observation-store PATH` for a dedicated SQLite store. Place a custom store in a directory that
-only the current user can access.
-
-`shrink` tests at most 100 candidate contexts by default. If the limit is reached, it saves a
-partial result and prints a command that resumes with a larger total limit. The supported hard
-limit is 10,000 candidate contexts.
-
-Cases can contain prompts, source code, command output, paths, and other sensitive data. Treat
-local ithrl evidence as private. Never commit unsanitized cases, traces, observation databases,
-or credentials. On POSIX systems, ithrl refuses case files and directories that do not have their
-expected private permissions.
-
-Content digests detect accidental or inconsistent changes. They are not signatures. ithrl assumes
-that another process running as the same user has not replaced the local case, result, run state,
-or observation database. It rejects source and case paths controlled through directories writable
-by other users. On platforms where directory ownership cannot be checked with standard Python
-APIs, custom paths must stay inside the current user profile.
+The publications inform the design but do not validate `ithrl`.
 
 ## License
 

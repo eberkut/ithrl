@@ -34,7 +34,7 @@ class _ImmutableContract(BaseModel):
 
 
 class SessionFormat(_ImmutableContract):
-    """Versioned identity of one native persisted session format."""
+    """Identity and producer metadata for one native saved-session format."""
 
     schema_version: Literal[1] = 1
     harness: Annotated[str, Field(min_length=1, max_length=64)]

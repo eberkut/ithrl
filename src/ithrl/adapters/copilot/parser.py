@@ -14,7 +14,6 @@ from ithrl.timestamps import validate_rfc3339_timestamp
 
 _FORMAT_NAME = "copilot-events-jsonl"
 _PRODUCER = "copilot-agent"
-_SUPPORTED_PRODUCER_VERSION = "1.0.82"
 _SUPPORTED_RECORD_SCHEMA = 1
 
 
@@ -140,12 +139,6 @@ def _parse_metadata(records: tuple[_Record, ...]) -> SessionMetadata:
     producer_version = _required_string(
         start.data.get("copilotVersion"), start.line, "producer version is missing"
     )
-    if producer_version != _SUPPORTED_PRODUCER_VERSION:
-        raise AdapterError(
-            AdapterErrorCode.UNSUPPORTED_VERSION,
-            "GitHub Copilot CLI producer version is not supported",
-            line=start.line,
-        )
     captured_at = _required_string(
         start.data.get("startTime"), start.line, "session start time is missing"
     )

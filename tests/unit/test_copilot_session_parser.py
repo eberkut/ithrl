@@ -87,10 +87,9 @@ def test_detector_does_not_claim_another_jsonl_format() -> None:
     [
         ("version", 2, "record schema is not supported"),
         ("version", True, "record schema is not supported"),
-        ("copilotVersion", "1.0.83", "producer version is not supported"),
     ],
 )
-def test_unsupported_versions_fail_closed(field: str, value: object, message: str) -> None:
+def test_unsupported_record_schemas_fail_closed(field: str, value: object, message: str) -> None:
     records = _mutable_records()
     records[0]["data"][field] = value
 
@@ -99,6 +98,16 @@ def test_unsupported_versions_fail_closed(field: str, value: object, message: st
 
     assert caught.value.code is AdapterErrorCode.UNSUPPORTED_VERSION
     assert caught.value.line == 1
+
+
+def test_parser_accepts_another_producer_version_with_the_supported_record_schema() -> None:
+    records = _mutable_records()
+    records[0]["data"]["copilotVersion"] = "1.1.0"
+
+    session = PARSER.parse(_changed_document(records=tuple(records)))
+
+    assert session.metadata.format.producer_version == "1.1.0"
+    assert session.metadata.format.record_schema_version == 1
 
 
 def test_duplicate_record_ids_are_rejected() -> None:

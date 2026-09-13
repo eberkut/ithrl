@@ -115,20 +115,16 @@ def test_parser_allows_missing_and_repeated_ordinals(document: JsonlDocument) ->
     assert session.records[2]["ordinal"] == 0
 
 
-def test_parser_rejects_unsupported_version_without_echoing_it(
+def test_parser_records_the_producer_version_without_using_it_as_a_format_gate(
     document: JsonlDocument,
 ) -> None:
-    private_value = "private-version-value"
     records = copy.deepcopy(document.records)
     payload = _payload(records[0])
-    payload["cli_version"] = private_value
+    payload["cli_version"] = "unrecognized-build"
 
-    with pytest.raises(AdapterError) as raised:
-        PARSER.parse(_document(records))
+    session = PARSER.parse(_document(records))
 
-    assert raised.value.code is AdapterErrorCode.UNSUPPORTED_VERSION
-    assert raised.value.line == 1
-    assert private_value not in str(raised.value)
+    assert session.metadata.format.producer_version == "unrecognized-build"
 
 
 @pytest.mark.parametrize("field", ["id", "session_id", "timestamp"])
@@ -144,6 +140,20 @@ def test_parser_requires_session_metadata_fields(
 
     assert raised.value.code is AdapterErrorCode.INVALID_SESSION
     assert raised.value.line == 1
+
+
+def test_parser_requires_a_producer_version_in_the_format_signature(
+    document: JsonlDocument,
+) -> None:
+    records = copy.deepcopy(document.records)
+    del _payload(records[0])["cli_version"]
+
+    changed = _document(records)
+    assert not PARSER.matches(changed)
+    with pytest.raises(AdapterError) as raised:
+        PARSER.parse(changed)
+
+    assert raised.value.code is AdapterErrorCode.UNSUPPORTED_FORMAT
 
 
 def test_parser_uses_the_source_id_when_the_session_family_id_differs(
