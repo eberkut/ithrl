@@ -28,7 +28,7 @@ CASES = (
         "copilot-events-jsonl",
         "1.0.82",
         1,
-        18,
+        27,
         "fixture.unknown_event",
     ),
 )
@@ -167,6 +167,31 @@ def test_case_layer_does_not_depend_on_harness_or_execution_modules() -> None:
             module
             for module in imported
             if any(module == blocked or module.startswith(f"{blocked}.") for blocked in forbidden)
+        }, source
+
+
+def test_shared_domain_layers_do_not_depend_on_concrete_harnesses() -> None:
+    root = Path(__file__).parents[2] / "src" / "ithrl"
+    shared = (
+        root / "behavior.py",
+        root / "context.py",
+        root / "decisions.py",
+        root / "execution.py",
+        root / "experiment.py",
+        root / "measurement.py",
+        root / "observations.py",
+        root / "workflow.py",
+        *sorted((root / "reduce").glob("*.py")),
+        *sorted((root / "results").glob("*.py")),
+    )
+
+    for source in shared:
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        imported = _imported_modules(tree)
+        assert not {
+            module
+            for module in imported
+            if module.startswith(("ithrl.adapters.codex", "ithrl.adapters.copilot"))
         }, source
 
 

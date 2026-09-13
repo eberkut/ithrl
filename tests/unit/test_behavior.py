@@ -4,6 +4,9 @@ import pytest
 from pydantic import ValidationError
 
 from ithrl.behavior import (
+    MAX_BEHAVIOR_TEXT_LENGTH,
+    MAX_SHELL_ACTIONS,
+    MAX_TOOL_NAME_LENGTH,
     BehaviorObservation,
     FinalResponseTarget,
     ShellAction,
@@ -83,3 +86,13 @@ def test_behavior_contracts_are_immutable() -> None:
 
     with pytest.raises(ValidationError, match="frozen"):
         setattr(target, field, "changed")
+
+
+def test_behavior_contracts_bound_persisted_text_and_action_counts() -> None:
+    with pytest.raises(ValidationError, match="at most"):
+        FinalResponseTarget(text_equals="x" * (MAX_BEHAVIOR_TEXT_LENGTH + 1))
+    with pytest.raises(ValidationError, match="at most"):
+        ShellAction(tool_name="x" * (MAX_TOOL_NAME_LENGTH + 1), command="pwd")
+    action = ShellAction(tool_name="shell", command="pwd")
+    with pytest.raises(ValidationError, match="at most"):
+        BehaviorObservation(shell_actions=(action,) * (MAX_SHELL_ACTIONS + 1))

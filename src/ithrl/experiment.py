@@ -72,6 +72,20 @@ class FakeRunnerConfig(_ImmutableContract):
         return self
 
 
+class UnavailableRunnerConfig(_ImmutableContract):
+    """Explicit refusal used until a compatible harness runner is available."""
+
+    type: Literal["unavailable"] = "unavailable"
+    harness: Annotated[str, Field(min_length=1)]
+    reason_code: Literal["runner-not-implemented"] = "runner-not-implemented"
+
+
+type RunnerConfig = Annotated[
+    FakeRunnerConfig | UnavailableRunnerConfig,
+    Field(discriminator="type"),
+]
+
+
 class DeterministicPhase(_ImmutableContract):
     """One observation per candidate is sufficient for a deterministic runner."""
 
@@ -85,7 +99,7 @@ class ExperimentDefinition(_ImmutableContract):
     schema_version: Literal[1] = 1
     target: BehaviorTarget
     oracle: StructuralOracleConfig
-    runner: FakeRunnerConfig
+    runner: RunnerConfig
     calibration: DeterministicPhase
     search: DeterministicPhase
     confirmation: DeterministicPhase
@@ -101,9 +115,10 @@ class ExperimentDefinition(_ImmutableContract):
         if actual_roles != expected_roles:
             raise ValueError("experiment phase roles must match their sections")
 
-        observation = _configured_observation(self.runner)
-        if not evaluate_target(self.target, observation):
-            raise ValueError("fake runner output cannot satisfy the behavior target")
+        if isinstance(self.runner, FakeRunnerConfig):
+            observation = _configured_observation(self.runner)
+            if not evaluate_target(self.target, observation):
+                raise ValueError("fake runner output cannot satisfy the behavior target")
         return self
 
     @property
@@ -147,7 +162,7 @@ def _normalize_toml(raw: dict[str, Any]) -> dict[str, Any]:
     runner = normalized.get("runner")
     if isinstance(runner, dict):
         runner = dict(runner)
-        if isinstance(runner.get("required_markers"), list):
+        if runner.get("type") == "fake" and isinstance(runner.get("required_markers"), list):
             runner["required_markers"] = tuple(runner["required_markers"])
         alternatives = runner.get("alternative_marker_sets")
         if isinstance(alternatives, list):
@@ -190,12 +205,16 @@ def _render_experiment(experiment: ExperimentDefinition) -> str:
     lines.append(f"protected_context_ids = {_toml_value(experiment.oracle.protected_context_ids)}")
 
     runner = experiment.runner
-    lines.extend(("", "[runner]", 'type = "fake"'))
-    lines.append(f"required_markers = {_toml_value(runner.required_markers)}")
-    lines.append(f"alternative_marker_sets = {_toml_value(runner.alternative_marker_sets)}")
-    _append_optional_string(lines, "tool_name", runner.tool_name)
-    _append_optional_string(lines, "command", runner.command)
-    _append_optional_string(lines, "final_text", runner.final_text)
+    lines.extend(("", "[runner]", f"type = {_toml_string(runner.type)}"))
+    if isinstance(runner, FakeRunnerConfig):
+        lines.append(f"required_markers = {_toml_value(runner.required_markers)}")
+        lines.append(f"alternative_marker_sets = {_toml_value(runner.alternative_marker_sets)}")
+        _append_optional_string(lines, "tool_name", runner.tool_name)
+        _append_optional_string(lines, "command", runner.command)
+        _append_optional_string(lines, "final_text", runner.final_text)
+    else:
+        lines.append(f"harness = {_toml_string(runner.harness)}")
+        lines.append(f"reason_code = {_toml_string(runner.reason_code)}")
 
     for name, phase in (
         ("calibration", experiment.calibration),

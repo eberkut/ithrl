@@ -58,7 +58,6 @@ class _CodexSessionParser:
         records = _validate_envelopes(document.records)
         metadata = _session_metadata(records)
         _validate_response_items(records)
-        _validate_task_turns(records)
         return NativeSession(
             metadata=metadata,
             source=document.source,
@@ -72,16 +71,13 @@ PARSER = _CodexSessionParser()
 
 def _validate_envelopes(records: tuple[JsonObject, ...]) -> tuple[_Record, ...]:
     validated: list[_Record] = []
-    previous_timestamp: datetime | None = None
     for line, record in enumerate(records, start=1):
         ordinal = record.get("ordinal")
-        if type(ordinal) is not int or ordinal != line - 1:
-            _invalid("Codex records must have contiguous ordinals starting at zero", line)
+        if ordinal is not None and (type(ordinal) is not int or ordinal < 0):
+            _invalid("Codex record ordinal must be a non-negative integer when present", line)
 
         timestamp_text = _required_string(record, "timestamp", line, "record timestamp")
         timestamp = _parse_timestamp(timestamp_text, line, "record timestamp")
-        if previous_timestamp is not None and timestamp < previous_timestamp:
-            _invalid("Codex record timestamps must be ordered", line)
 
         record_type = _required_string(record, "type", line, "record type")
         payload = record.get("payload")
@@ -89,25 +85,23 @@ def _validate_envelopes(records: tuple[JsonObject, ...]) -> tuple[_Record, ...]:
             _invalid("Codex record payload must be an object", line)
 
         validated.append(_Record(line=line, timestamp=timestamp, type=record_type, payload=payload))
-        previous_timestamp = timestamp
     return tuple(validated)
 
 
 def _session_metadata(records: tuple[_Record, ...]) -> SessionMetadata:
-    metadata_records = tuple(record for record in records if record.type == "session_meta")
-    if len(metadata_records) != 1 or metadata_records[0].line != 1:
-        _invalid("Codex session metadata must be the first and only metadata record")
-
-    record = metadata_records[0]
-    session_id = _required_string(record.payload, "session_id", record.line, "session identifier")
-    alternate_id = _required_string(record.payload, "id", record.line, "session identifier")
-    if session_id != alternate_id:
-        _invalid("Codex session identifiers must agree", record.line)
+    record = records[0]
+    if record.type != "session_meta":
+        _invalid("Codex session metadata must be the first record")
+    source_session_id = _required_string(
+        record.payload,
+        "id",
+        record.line,
+        "source session identifier",
+    )
+    _required_string(record.payload, "session_id", record.line, "session family identifier")
 
     captured_at = _required_string(record.payload, "timestamp", record.line, "capture timestamp")
-    captured_timestamp = _parse_timestamp(captured_at, record.line, "capture timestamp")
-    if captured_timestamp != record.timestamp:
-        _invalid("Codex metadata and record timestamps must agree", record.line)
+    _parse_timestamp(captured_at, record.line, "capture timestamp")
 
     producer_version = _required_string(
         record.payload,
@@ -128,7 +122,7 @@ def _session_metadata(records: tuple[_Record, ...]) -> SessionMetadata:
             name=_FORMAT_NAME,
             producer_version=producer_version,
         ),
-        session_id=session_id,
+        session_id=source_session_id,
         captured_at=captured_at,
     )
 
@@ -174,26 +168,6 @@ def _validate_tool_relationship(
     if call_id in outputs:
         _invalid("Codex tool calls must have at most one output", record.line)
     outputs.add(call_id)
-
-
-def _validate_task_turns(records: tuple[_Record, ...]) -> None:
-    active_turn: str | None = None
-    for record in records:
-        if record.type != "event_msg":
-            continue
-        event_type = _required_string(record.payload, "type", record.line, "event type")
-        if event_type == "task_started":
-            turn_id = _required_string(record.payload, "turn_id", record.line, "turn identifier")
-            if active_turn is not None:
-                _invalid("Codex task turns must not overlap", record.line)
-            active_turn = turn_id
-        elif event_type == "task_complete":
-            turn_id = _required_string(record.payload, "turn_id", record.line, "turn identifier")
-            if active_turn is None:
-                _invalid("Codex task completion must follow a task start", record.line)
-            if turn_id != active_turn:
-                _invalid("Codex task completion must match the active turn", record.line)
-            active_turn = None
 
 
 def _required_string(

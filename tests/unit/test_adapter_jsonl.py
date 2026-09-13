@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -8,7 +9,7 @@ import pytest
 
 from ithrl.adapters import AdapterError, AdapterErrorCode, ParsingLimits
 from ithrl.adapters import _jsonl as jsonl_module
-from ithrl.adapters._jsonl import read_jsonl
+from ithrl.adapters._jsonl import read_jsonl, read_jsonl_bytes
 
 
 def _write(path: Path, content: bytes) -> Path:
@@ -38,6 +39,24 @@ def test_reader_preserves_exact_bytes_and_record_order(tmp_path: Path) -> None:
     assert document.records == ({"position": 1}, {"position": 2})
     assert document.source.size_bytes == len(document.raw)
     assert len(document.source.sha256) == 64
+
+
+def test_bytes_reader_matches_file_reader(tmp_path: Path) -> None:
+    raw = b'{"position":1}\r\n{"position":2}\r\n'
+    source = _write(tmp_path / "session.jsonl", raw)
+    limits = ParsingLimits()
+
+    assert read_jsonl_bytes(raw, limits=limits) == read_jsonl(source, limits=limits)
+
+
+def test_bytes_reader_enforces_source_limit_before_parsing() -> None:
+    with pytest.raises(AdapterError) as captured:
+        read_jsonl_bytes(
+            b"{}\n{}\n",
+            limits=ParsingLimits(max_bytes=5, max_line_bytes=2, max_records=3),
+        )
+
+    assert captured.value.code is AdapterErrorCode.SOURCE_TOO_LARGE
 
 
 @pytest.mark.parametrize(
@@ -174,6 +193,58 @@ def test_reader_refuses_a_source_that_changes_during_read(
         return signature
 
     monkeypatch.setattr(jsonl_module, "_signature", changed_signature)
+
+    error = _assert_error(source, AdapterErrorCode.SOURCE_CHANGED)
+
+    assert error.bytes_read == source.stat().st_size
+
+
+def test_reader_charges_bytes_when_source_disappears_after_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _write(tmp_path / "session.jsonl", b"{}\n")
+    original_lstat = jsonl_module._lstat
+
+    def disappear_after_read(path: Path, *, changed: bool = False) -> os.stat_result:
+        if changed:
+            raise AdapterError(
+                AdapterErrorCode.SOURCE_CHANGED,
+                "session source changed while reading",
+            )
+        return original_lstat(path, changed=changed)
+
+    monkeypatch.setattr(jsonl_module, "_lstat", disappear_after_read)
+
+    error = _assert_error(source, AdapterErrorCode.SOURCE_CHANGED)
+
+    assert error.bytes_read == source.stat().st_size
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permission contract")
+def test_reader_rejects_a_store_directory_writable_by_other_users(tmp_path: Path) -> None:
+    shared = tmp_path / "shared"
+    shared.mkdir(mode=0o777)
+    shared.chmod(0o777)
+    source = _write(shared / "session.jsonl", b"{}\n")
+
+    _assert_error(source, AdapterErrorCode.UNSAFE_SOURCE)
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="FIFO replacement requires POSIX")
+def test_reader_does_not_block_if_a_regular_source_is_replaced_by_a_fifo(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _write(tmp_path / "session.jsonl", b"{}\n")
+    original_open = jsonl_module._open_read_only
+
+    def replace_before_open(path: Path) -> int:
+        path.unlink()
+        os.mkfifo(path)
+        return original_open(path)
+
+    monkeypatch.setattr(jsonl_module, "_open_read_only", replace_before_open)
 
     _assert_error(source, AdapterErrorCode.SOURCE_CHANGED)
 

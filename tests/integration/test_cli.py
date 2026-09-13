@@ -14,7 +14,8 @@ import pytest
 from typer.testing import CliRunner
 
 from ithrl.case import CaseEvidence, CaseWorkspace
-from ithrl.cli import ExitCode, OutputFormat, _select_inference, app
+from ithrl.cli import ExitCode, OutputFormat, app
+from ithrl.cli.extract import select_inference
 from ithrl.context import JsonObject, content_digest
 from ithrl.experiment import ExperimentDefinition
 from ithrl.measurement import RunnerExecutionError
@@ -165,6 +166,86 @@ def test_default_data_root_is_private(tmp_path: Path, monkeypatch: pytest.Monkey
     assert (data_root / "observations.sqlite").stat().st_mode & 0o777 == 0o600
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permission contract")
+def test_default_data_root_creates_private_parents_with_a_permissive_umask(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    data_home = tmp_path / "first" / "data"
+    monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
+    previous_umask = os.umask(0)
+    try:
+        result = CliRunner().invoke(
+            app,
+            [
+                "extract",
+                str(FIXTURE),
+                "--inference",
+                INFERENCE_ID,
+                "--format",
+                "json",
+            ],
+            color=False,
+        )
+    finally:
+        os.umask(previous_umask)
+
+    assert result.exit_code == ExitCode.SUCCESS, result.output
+    for path in (tmp_path / "first", data_home, data_home / "ithrl"):
+        assert path.stat().st_mode & 0o777 == 0o700
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permission contract")
+def test_default_data_root_rejects_a_parent_writable_by_other_users(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    data_home = tmp_path / "shared"
+    data_home.mkdir(mode=0o777)
+    data_home.chmod(0o777)
+    monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "extract",
+            str(FIXTURE),
+            "--inference",
+            INFERENCE_ID,
+            "--format",
+            "json",
+        ],
+        color=False,
+    )
+
+    assert result.exit_code == ExitCode.USAGE
+    assert json.loads(result.stdout)["error_code"] == "unsafe-case-path"
+    assert not (data_home / "ithrl").exists()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permission contract")
+def test_shrink_reports_an_unsafe_default_data_parent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = tmp_path / "case"
+    assert _extract(CliRunner(), case).exit_code == ExitCode.SUCCESS
+    data_home = tmp_path / "shared"
+    data_home.mkdir(mode=0o777)
+    data_home.chmod(0o777)
+    monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
+
+    result = CliRunner().invoke(
+        app,
+        ["shrink", str(case), "--format", "json"],
+        color=False,
+    )
+
+    assert result.exit_code == ExitCode.USAGE
+    assert json.loads(result.stdout)["error_code"] == "unsafe-data-path"
+    assert not (data_home / "ithrl").exists()
+
+
 def test_unusable_observation_store_fails_before_creating_run_state(tmp_path: Path) -> None:
     runner = CliRunner()
     case = tmp_path / "case"
@@ -196,7 +277,6 @@ def test_unusable_observation_store_fails_before_creating_run_state(tmp_path: Pa
     "arguments",
     [
         ["extract", "/definitely/missing", "--inference", "x", "--format", "json"],
-        ["extract", "--format", "json"],
         ["shrink", "/definitely/missing", "--max-candidates", "0", "--format=json"],
         ["unknown", "--format", "json"],
     ],
@@ -1020,10 +1100,11 @@ def test_extract_guides_interactive_inference_selection(
     def choose_first(*_args: object, **_kwargs: object) -> int:
         return 1
 
-    monkeypatch.setattr("ithrl.cli.sys.stdin", _InteractiveInput())
-    monkeypatch.setattr("ithrl.cli.typer.prompt", choose_first)
+    extract_module = import_module("ithrl.cli.extract")
+    monkeypatch.setattr(extract_module.sys, "stdin", _InteractiveInput())
+    monkeypatch.setattr(extract_module.typer, "prompt", choose_first)
 
-    selected = _select_inference(FIXTURE, None, OutputFormat.HUMAN)
+    selected = select_inference(FIXTURE, None, OutputFormat.HUMAN)
 
     assert selected == INFERENCE_ID
 
@@ -1106,7 +1187,7 @@ def test_unexpected_cli_failures_are_sanitized_without_a_traceback(
     def fail(*_args: object, **_kwargs: object) -> None:
         raise RuntimeError("private-sentinel")
 
-    monkeypatch.setattr("ithrl.cli.list_inferences", fail)
+    monkeypatch.setattr(import_module("ithrl.cli.extract"), "list_inferences", fail)
     result = CliRunner().invoke(
         app,
         ["extract", str(FIXTURE), "--output", str(tmp_path / "case"), "--format", "json"],

@@ -95,6 +95,22 @@ def test_duplicate_normalized_marker_sets_are_rejected(tmp_path: Path) -> None:
         list_inferences(trace)
 
 
+def test_oversized_behavior_tool_name_is_rejected_during_trace_validation(
+    tmp_path: Path,
+) -> None:
+    payload = _fixture_payload()
+    marker = "private-tool-" * 32
+    payload["inferences"][0]["fake_behavior"]["tool_name"] = marker
+    trace = tmp_path / "oversized-tool-name.json"
+    trace.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(SyntheticTraceFormatError) as refused:
+        list_inferences(trace)
+
+    assert "at most 256 characters" in str(refused.value)
+    assert marker not in str(refused.value)
+
+
 @pytest.mark.parametrize(
     "captured_at",
     [
@@ -221,7 +237,11 @@ def test_extract_creates_stable_context_and_experiment_metadata(tmp_path: Path) 
 
     assert first.digest == second.digest
     assert first.context.nodes == second.context.nodes
-    input_nodes = [node for node in first.context.nodes if node.path.startswith("/input/")]
+    input_nodes = [
+        node
+        for node in first.context.nodes
+        if node.path is not None and node.path.startswith("/input/")
+    ]
     assert [node.path for node in input_nodes] == [f"/input/{index}" for index in range(7)]
     assert all(node.mutable and not node.protected for node in input_nodes)
 

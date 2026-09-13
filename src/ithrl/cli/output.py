@@ -27,6 +27,7 @@ class ExitCode(IntEnum):
     INCONCLUSIVE = 4
     PROVIDER = 5
     BUDGET = 6
+    CANCELLED = 130
     INTERNAL = 70
 
 
@@ -65,7 +66,19 @@ class CommandOutput(BaseModel):
     execution_plan_digest: str | None = None
     runner_type: str | None = None
     runner_version: str | None = None
+    capture_type: str | None = None
+    capture_completeness: str | None = None
+    replay_state: str | None = None
+    replay_environment: str | None = None
+    harness: str | None = None
+    harness_version: str | None = None
+    session_id: str | None = None
+    decision_id: str | None = None
+    target_id: str | None = None
     target_type: str | None = None
+    evidence_support: str | None = None
+    experimental_support: str | None = None
+    limitations: tuple[str, ...] = ()
     protected_context_ids: tuple[str, ...] = ()
     run_state_path: str | None = None
     network_calls: Literal[0] = 0
@@ -118,6 +131,10 @@ _CONFIRMATION_LABELS = {
     "confirmed-preserving": "target preserved",
     "failed": "failed",
     "not-run": "not run",
+}
+_LIMITATION_LABELS = {
+    "experimental-support-unvalidated": "controlled experiment not validated",
+    "opaque-context-frozen": "opaque context kept",
 }
 
 
@@ -199,6 +216,14 @@ def command_boundary(
                 function(*args, **kwargs)
             except typer.Exit:
                 raise
+            except typer.Abort:
+                fail(
+                    "Selection cancelled.",
+                    ExitCode.CANCELLED,
+                    output_format,
+                    command,
+                    "cancelled",
+                )
             except OSError as error:
                 fail(
                     f"filesystem operation failed: {error}",
@@ -235,16 +260,48 @@ def _render_extract(report: CommandOutput) -> None:
     print_plain(console, "Case created")
     print_plain(console, f"  path            {report.case_path}", soft_wrap=True)
     print_plain(console, f"  case digest     {report.case_digest[:12]}")
+    _render_capture_details(report)
+    _render_decision_details(report)
     print_plain(console, f"  context items   {report.original_context_count}")
     print_plain(console, "  No network requests or provider calls. No actions executed.")
-    console.print()
-    print_plain(console, "Next step")
-    print_plain(console, f"  {report.next_action}")
-    print_plain(
-        console,
-        f"  Command ({report.next_command_shell}): {report.next_command}",
-        soft_wrap=True,
-    )
+    _render_next_step(report)
+
+
+def _render_capture_details(report: CommandOutput) -> None:
+    if report.harness is not None:
+        version = f" {report.harness_version}" if report.harness_version is not None else ""
+        print_plain(console, f"  harness         {report.harness}{version}")
+    if report.session_id is not None:
+        print_plain(console, f"  session         {report.session_id}", soft_wrap=True)
+    if report.capture_type is not None:
+        print_plain(console, f"  capture         {report.capture_type}")
+    if report.capture_completeness is not None:
+        print_plain(console, f"  completeness    {report.capture_completeness}")
+    if report.replay_state is not None:
+        print_plain(console, f"  replay state    {report.replay_state}")
+    if report.replay_environment is not None:
+        print_plain(console, f"  environment     {report.replay_environment}")
+
+
+def _render_decision_details(report: CommandOutput) -> None:
+    if report.decision_id is not None:
+        print_plain(console, f"  decision        {report.decision_id}")
+    if report.target_type is not None:
+        target = report.target_type
+        if report.target_id is not None:
+            target = f"{report.target_id} ({target})"
+        print_plain(console, f"  target          {target}")
+    if report.evidence_support is not None:
+        print_plain(console, f"  evidence        {report.evidence_support}")
+    if report.experimental_support is not None:
+        print_plain(console, f"  experiment      {report.experimental_support}")
+    if report.limitations:
+        limitations = ", ".join(
+            _LIMITATION_LABELS.get(limitation, limitation) for limitation in report.limitations
+        )
+        print_plain(console, f"  limitations     {limitations}")
+    if report.runner_type == "unavailable":
+        print_plain(console, "  controlled run  unavailable")
 
 
 def _render_shrink(report: CommandOutput) -> None:

@@ -19,6 +19,7 @@ from ithrl.case import (
     UnsafeCasePathError,
     case_digest,
 )
+from ithrl.case import storage as case_storage
 from ithrl.context import ContextNode, content_digest
 
 EXPERIMENT = """\
@@ -85,6 +86,34 @@ def _create_case(path: Path) -> CaseWorkspace:
     )
 
 
+def test_capture_classification_matches_request_file_presence(tmp_path: Path) -> None:
+    with pytest.raises(CaseFormatError, match="classification"):
+        CaseWorkspace.create(
+            tmp_path / "missing-request",
+            manifest=_manifest(),
+            request=None,
+            nodes=(),
+            default_experiment=EXPERIMENT,
+        )
+
+    logical = _manifest().model_copy(
+        update={
+            "harness": "fixture",
+            "harness_version": "1",
+            "source_schema": "fixture-jsonl",
+            "capture": CaptureFacts(request="logical-session", completeness="complete"),
+        }
+    )
+    with pytest.raises(CaseFormatError, match="classification"):
+        CaseWorkspace.create(
+            tmp_path / "unexpected-request",
+            manifest=logical,
+            request=_request(),
+            nodes=_nodes(_request()),
+            default_experiment=EXPERIMENT,
+        )
+
+
 def test_workspace_round_trip_and_defensive_request_copy(tmp_path: Path) -> None:
     workspace = _create_case(tmp_path / "case")
 
@@ -133,6 +162,57 @@ def test_create_refuses_parent_traversal(tmp_path: Path) -> None:
 
     with pytest.raises(UnsafeCasePathError, match=r"cannot contain '\.\.'"):
         _create_case(target)
+
+
+def test_prepare_destination_rejects_traversal_without_creating_parents(
+    tmp_path: Path,
+) -> None:
+    parent = tmp_path / "not-created"
+
+    with pytest.raises(UnsafeCasePathError, match=r"cannot contain '\.\.'"):
+        CaseWorkspace.prepare_destination(parent / ".." / "case")
+
+    assert not parent.exists()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permission contract")
+def test_prepare_destination_creates_private_intermediate_parents(tmp_path: Path) -> None:
+    first = tmp_path / "first"
+    second = first / "second"
+    target = second / "case"
+
+    assert CaseWorkspace.prepare_destination(target) == target
+
+    assert stat.S_IMODE(first.stat().st_mode) == 0o700
+    assert stat.S_IMODE(second.stat().st_mode) == 0o700
+    assert not target.exists()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permission contract")
+def test_prepare_destination_rejects_parent_writable_by_other_users(tmp_path: Path) -> None:
+    shared = tmp_path / "shared"
+    shared.mkdir(mode=0o777)
+    shared.chmod(0o777)
+
+    with pytest.raises(UnsafeCasePathError, match="writable by other users"):
+        CaseWorkspace.prepare_destination(shared / "case")
+
+    assert not (shared / "case").exists()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX symlink semantics")
+def test_prepare_destination_rejects_symlinked_parent_without_writing(
+    tmp_path: Path,
+) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(UnsafeCasePathError, match="symlink"):
+        CaseWorkspace.prepare_destination(alias / "created" / "case")
+
+    assert tuple(outside.iterdir()) == ()
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX symlink semantics")
@@ -260,8 +340,63 @@ def test_workspace_rejects_duplicate_context_record_keys(tmp_path: Path) -> None
         encoding="utf-8",
     )
 
-    with pytest.raises(CaseFormatError, match="duplicate key 'id'"):
+    with pytest.raises(CaseFormatError, match="duplicate object key"):
         workspace.load()
+
+
+def test_workspace_stops_context_loading_at_the_record_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = _create_case(tmp_path / "case")
+    monkeypatch.setattr(case_storage, "MAX_CONTEXT_NODES", 2)
+
+    with pytest.raises(CaseFormatError, match="context record limit"):
+        workspace.load()
+
+
+def test_workspace_stops_context_loading_at_the_line_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = _create_case(tmp_path / "case")
+    monkeypatch.setattr(case_storage, "_MAX_CONTEXT_RECORD_BYTES", 32)
+
+    with pytest.raises(CaseFormatError, match="record at line 1 exceeds the byte limit"):
+        workspace.load()
+
+
+def test_workspace_rejects_oversized_context_record_before_creating_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = tmp_path / "case"
+    request = _request()
+    monkeypatch.setattr(case_storage, "_MAX_CONTEXT_RECORD_BYTES", 32)
+
+    with pytest.raises(CaseFormatError, match="record at line 1 exceeds the byte limit"):
+        CaseWorkspace.create(
+            target,
+            manifest=_manifest(),
+            request=request,
+            nodes=_nodes(request),
+            default_experiment=EXPERIMENT,
+        )
+
+    assert not target.exists()
+
+
+def test_context_record_limit_excludes_the_jsonl_delimiter(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = _create_case(tmp_path / "case")
+    path = workspace.root / "context.jsonl"
+    record = path.read_text(encoding="utf-8").splitlines()[0]
+    path.write_text(record + "\r\n", encoding="utf-8")
+    monkeypatch.setattr(case_storage, "_MAX_CONTEXT_RECORD_BYTES", len(record.encode("utf-8")))
+
+    assert len(workspace.load().context.nodes) == 1
 
 
 def test_workspace_rejects_oversized_case_file_before_reading(tmp_path: Path) -> None:

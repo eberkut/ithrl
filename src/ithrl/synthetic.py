@@ -17,7 +17,7 @@ from pydantic import (
     model_validator,
 )
 
-from ithrl.behavior import ShellActionTarget
+from ithrl.behavior import MAX_TOOL_NAME_LENGTH, ShellActionTarget
 from ithrl.case import (
     CaptureFacts,
     CaseManifest,
@@ -61,7 +61,7 @@ class InferenceSelectionError(SyntheticTraceError):
 class _ObservedToolCall(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    name: Annotated[str, Field(min_length=1)]
+    name: Annotated[str, Field(min_length=1, max_length=MAX_TOOL_NAME_LENGTH)]
     arguments: dict[str, JsonValue] = Field(default_factory=dict)
 
 
@@ -75,7 +75,7 @@ class _SyntheticResponse(BaseModel):
 class _FakeBehavior(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    tool_name: Annotated[str, Field(min_length=1)]
+    tool_name: Annotated[str, Field(min_length=1, max_length=MAX_TOOL_NAME_LENGTH)]
     required_markers: Annotated[tuple[str, ...], Field(min_length=1)]
     alternative_marker_sets: tuple[tuple[str, ...], ...] = ()
 

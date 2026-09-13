@@ -13,11 +13,24 @@ from ithrl.context import (
     ContextGraphError,
     ContextNode,
     MaterializationError,
+    SourceRecordSelector,
     UnsafeRemovalError,
     content_digest,
     stable_context_id,
     validate_json_limits,
 )
+
+
+def _source_node(node_id: str, line: int) -> ContextNode:
+    selector = SourceRecordSelector(line=line, identity_key="ordinal", identity_value=line - 1)
+    return ContextNode(
+        id=node_id,
+        kind="message",
+        selector=selector,
+        mutable=True,
+        source="source/session.jsonl",
+        digest="0" * 64,
+    )
 
 
 def _request() -> dict[str, Any]:
@@ -137,6 +150,20 @@ def test_graph_rejects_duplicate_ids_and_pointers() -> None:
         ContextGraph(nodes=(node, node.model_copy(update={"id": "other"})))
 
 
+def test_graph_requires_ordered_unique_source_records() -> None:
+    with pytest.raises(ValidationError, match="source record order"):
+        ContextGraph(nodes=(_source_node("later", 2), _source_node("earlier", 1)))
+    with pytest.raises(ValidationError, match="source record order"):
+        ContextGraph(nodes=(_source_node("first", 1), _source_node("again", 1)))
+
+
+def test_source_backed_removal_requires_a_harness_runner() -> None:
+    graph = ContextGraph(nodes=(_source_node("source-item", 1),))
+
+    with pytest.raises(MaterializationError, match="compatible harness runner"):
+        graph.materialize({"input": []}, {"source-item"})
+
+
 def test_graph_rejects_overlapping_node_paths() -> None:
     request = _request()
     parent = _node(request, "A", 0)
@@ -179,6 +206,34 @@ def test_node_rejects_invalid_json_pointer(path: str) -> None:
             path=path,
             mutable=True,
             source="source/inference.json",
+            digest="0" * 64,
+        )
+
+
+def test_node_requires_request_path_or_source_selector() -> None:
+    with pytest.raises(ValidationError, match="request path or source selector"):
+        ContextNode(
+            id="A",
+            kind="message",
+            mutable=True,
+            source="source/session.jsonl",
+            digest="0" * 64,
+        )
+
+
+def test_node_cannot_mix_request_path_and_source_selector() -> None:
+    with pytest.raises(ValidationError, match="exactly one"):
+        ContextNode(
+            id="A",
+            kind="message",
+            path="/input/0",
+            selector=SourceRecordSelector(
+                line=1,
+                identity_key="ordinal",
+                identity_value=0,
+            ),
+            mutable=True,
+            source="source/session.jsonl",
             digest="0" * 64,
         )
 

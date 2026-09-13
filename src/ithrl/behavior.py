@@ -10,6 +10,10 @@ from ithrl.context import content_digest
 
 type BehaviorType = Literal["final-response", "shell-action"]
 
+MAX_BEHAVIOR_TEXT_LENGTH = 64 * 1024
+MAX_SHELL_ACTIONS = 32
+MAX_TOOL_NAME_LENGTH = 256
+
 
 class _ImmutableContract(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
@@ -20,8 +24,12 @@ class FinalResponseTarget(_ImmutableContract):
 
     schema_version: Literal[1] = 1
     type: Literal["final-response"] = "final-response"
-    text_equals: Annotated[str | None, Field(min_length=1)] = None
-    text_contains: Annotated[str | None, Field(min_length=1)] = None
+    text_equals: Annotated[str | None, Field(min_length=1, max_length=MAX_BEHAVIOR_TEXT_LENGTH)] = (
+        None
+    )
+    text_contains: Annotated[
+        str | None, Field(min_length=1, max_length=MAX_BEHAVIOR_TEXT_LENGTH)
+    ] = None
 
     @model_validator(mode="after")
     def validate_text_predicate(self) -> FinalResponseTarget:
@@ -41,9 +49,15 @@ class ShellActionTarget(_ImmutableContract):
 
     schema_version: Literal[1] = 1
     type: Literal["shell-action"] = "shell-action"
-    tool_name_equals: Annotated[str | None, Field(min_length=1)] = None
-    command_equals: Annotated[str | None, Field(min_length=1)] = None
-    command_contains: Annotated[str | None, Field(min_length=1)] = None
+    tool_name_equals: Annotated[
+        str | None, Field(min_length=1, max_length=MAX_TOOL_NAME_LENGTH)
+    ] = None
+    command_equals: Annotated[
+        str | None, Field(min_length=1, max_length=MAX_BEHAVIOR_TEXT_LENGTH)
+    ] = None
+    command_contains: Annotated[
+        str | None, Field(min_length=1, max_length=MAX_BEHAVIOR_TEXT_LENGTH)
+    ] = None
     count: Annotated[int | None, Field(ge=1)] = None
 
     @model_validator(mode="after")
@@ -71,16 +85,16 @@ class ShellAction(_ImmutableContract):
     """One normalized shell action retained alongside its native evidence."""
 
     schema_version: Literal[1] = 1
-    tool_name: Annotated[str, Field(min_length=1)]
-    command: str
+    tool_name: Annotated[str, Field(min_length=1, max_length=MAX_TOOL_NAME_LENGTH)]
+    command: Annotated[str, Field(max_length=MAX_BEHAVIOR_TEXT_LENGTH)]
 
 
 class BehaviorObservation(_ImmutableContract):
     """The normalized fields used by the built-in v0.1 targets."""
 
     schema_version: Literal[1] = 1
-    final_response: str | None = None
-    shell_actions: tuple[ShellAction, ...] = ()
+    final_response: Annotated[str | None, Field(max_length=MAX_BEHAVIOR_TEXT_LENGTH)] = None
+    shell_actions: Annotated[tuple[ShellAction, ...], Field(max_length=MAX_SHELL_ACTIONS)] = ()
 
 
 def parse_behavior_target(value: object) -> BehaviorTarget:

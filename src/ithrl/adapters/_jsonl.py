@@ -13,6 +13,7 @@ from typing import Any
 from ithrl.adapters.contracts import ParsingLimits, SourceFacts
 from ithrl.adapters.errors import AdapterError, AdapterErrorCode
 from ithrl.context import JsonObject, validate_json_limits
+from ithrl.path_safety import UnsafePathError, validate_directory_chain
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,14 +30,17 @@ class _DuplicateKeyError(ValueError):
     pass
 
 
-class _InvalidConstantError(ValueError):
-    pass
-
-
 def read_jsonl(path: str | os.PathLike[str], *, limits: ParsingLimits) -> JsonlDocument:
     """Read one regular JSONL file without following its final path component."""
 
     source_path = Path(path)
+    try:
+        validate_directory_chain(source_path.parent)
+    except UnsafePathError:
+        raise AdapterError(
+            AdapterErrorCode.UNSAFE_SOURCE,
+            "session source has an unsafe controlling directory",
+        ) from None
     initial = _lstat(source_path)
     if stat.S_ISLNK(initial.st_mode) or not stat.S_ISREG(initial.st_mode):
         raise AdapterError(AdapterErrorCode.UNSAFE_SOURCE, "session source must be a regular file")
@@ -48,13 +52,18 @@ def read_jsonl(path: str | os.PathLike[str], *, limits: ParsingLimits) -> JsonlD
     descriptor = _open_read_only(source_path)
     try:
         opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode):
+            raise AdapterError(
+                AdapterErrorCode.SOURCE_CHANGED,
+                "session source changed while opening",
+            )
         if _signature(initial) != _signature(opened):
             raise AdapterError(
                 AdapterErrorCode.SOURCE_CHANGED, "session source changed while opening"
             )
         with os.fdopen(descriptor, "rb") as handle:
             descriptor = -1
-            raw = handle.read(limits.max_bytes + 1)
+            raw = handle.read(min(opened.st_size, limits.max_bytes) + 1)
             finished = os.fstat(handle.fileno())
     except OSError:
         raise AdapterError(
@@ -66,12 +75,36 @@ def read_jsonl(path: str | os.PathLike[str], *, limits: ParsingLimits) -> JsonlD
 
     if len(raw) > limits.max_bytes:
         raise AdapterError(
+            AdapterErrorCode.SOURCE_TOO_LARGE,
+            "session source exceeds the byte limit",
+            bytes_read=len(raw),
+        )
+    try:
+        current = _lstat(source_path, changed=True)
+    except AdapterError as error:
+        error.bytes_read = len(raw)
+        raise
+    if _signature(opened) != _signature(finished) or _signature(opened) != _signature(current):
+        raise AdapterError(
+            AdapterErrorCode.SOURCE_CHANGED,
+            "session source changed while reading",
+            bytes_read=len(raw),
+        )
+
+    try:
+        return read_jsonl_bytes(raw, limits=limits)
+    except AdapterError as error:
+        error.bytes_read = len(raw)
+        raise
+
+
+def read_jsonl_bytes(raw: bytes, *, limits: ParsingLimits) -> JsonlDocument:
+    """Parse one in-memory JSONL snapshot under the native evidence limits."""
+
+    if len(raw) > limits.max_bytes:
+        raise AdapterError(
             AdapterErrorCode.SOURCE_TOO_LARGE, "session source exceeds the byte limit"
         )
-    current = _lstat(source_path, changed=True)
-    if _signature(opened) != _signature(finished) or _signature(opened) != _signature(current):
-        raise AdapterError(AdapterErrorCode.SOURCE_CHANGED, "session source changed while reading")
-
     records = _parse_lines(raw, limits)
     return JsonlDocument(
         raw=raw,
@@ -99,6 +132,8 @@ def _open_read_only(path: Path) -> int:
         flags |= os.O_CLOEXEC
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
+    if hasattr(os, "O_NONBLOCK"):
+        flags |= os.O_NONBLOCK
     try:
         return os.open(path, flags)
     except OSError:
@@ -181,13 +216,7 @@ def _parse_record(raw: bytes, line_number: int) -> JsonObject:
             "session record contains a duplicate object key",
             line=line_number,
         ) from None
-    except (_InvalidConstantError, json.JSONDecodeError, RecursionError):
-        raise AdapterError(
-            AdapterErrorCode.INVALID_JSONL,
-            "session record is not valid JSON",
-            line=line_number,
-        ) from None
-    except ValueError:
+    except (ValueError, RecursionError):
         raise AdapterError(
             AdapterErrorCode.INVALID_JSONL,
             "session record is not valid JSON",
@@ -234,4 +263,4 @@ def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]
 
 
 def _reject_constant(_value: str) -> None:
-    raise _InvalidConstantError
+    raise ValueError

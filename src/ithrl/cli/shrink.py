@@ -10,6 +10,7 @@ from uuid import uuid4
 from ithrl.case import CaseEvidence, CaseWorkspace
 from ithrl.cli.output import CommandOutput, ExitCode, shell_command
 from ithrl.context import content_digest
+from ithrl.extraction import load_extracted_case
 from ithrl.measurement import RunnerExecutionError
 from ithrl.observations import (
     Observation,
@@ -284,7 +285,7 @@ def prepare_shrink(
     int,
 ]:
     workspace, previous, run_state = _resolve_source(source, resume=resume)
-    evidence = workspace.load()
+    evidence = load_extracted_case(workspace)
     if previous is not None:
         _validate_result_case(previous, evidence)
     prepared = prepare_experiment(evidence)

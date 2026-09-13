@@ -3,9 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
-import stat
-import sys
 from contextlib import nullcontext
 from dataclasses import dataclass
 from importlib.metadata import version as distribution_version
@@ -16,20 +13,29 @@ from uuid import uuid4
 import typer
 from platformdirs import user_data_path
 
-from ithrl.case import CaseError, CaseEvidence, CaseWorkspace
+from ithrl.adapters import AdapterError, AdapterErrorCode
+from ithrl.case import (
+    CaseError,
+    CaseEvidence,
+    CaseExistsError,
+    CaseFormatError,
+    CaseWorkspace,
+    UnsafeCasePathError,
+)
+from ithrl.cli.extract import ExtractionSelectionError, create_case_report
 from ithrl.cli.output import (
     CommandOutput,
     ExitCode,
     JsonAwareGroup,
     OutputFormat,
     command_boundary,
-    console,
     error_console,
     fail,
     print_plain,
     render,
     shell_command,
 )
+from ithrl.cli.paths import private_data_root
 from ithrl.cli.shrink import prepare_shrink, save_outcome, validate_phase_observations
 from ithrl.experiment import ExperimentFormatError
 from ithrl.observations import ObservationStore, ObservationStoreError
@@ -44,8 +50,6 @@ from ithrl.run_state import RunStateBusyError, RunStateError, RunStateFile
 from ithrl.synthetic import (
     InferenceSelectionError,
     SyntheticTraceError,
-    extract_inference,
-    list_inferences,
 )
 from ithrl.workflow import (
     OraclePrerequisiteError,
@@ -94,23 +98,42 @@ class _ObservationSession:
 
 
 @app.command(
-    help="Create a case from a supported local trace.",
-    epilog=("Example: ithrl extract trace.json --inference inference-001 --output .ithrl/case"),
+    help="Create a case from a saved agent session or supported synthetic trace.",
+    epilog=(
+        "Saved session: ithrl extract --harness codex --session SESSION --decision DECISION "
+        "--target TARGET\nSynthetic trace: ithrl extract trace.json --inference inference-001"
+    ),
 )
 @command_boundary("extract")
 def extract(
-    trace: Annotated[
-        Path,
+    source: Annotated[
+        Path | None,
         typer.Argument(
             exists=True,
             readable=True,
-            metavar="TRACE",
-            help="Path to a supported synthetic trace.",
+            metavar="SOURCE",
+            help="Saved native session or supported synthetic trace. Omit to discover sessions.",
         ),
-    ],
+    ] = None,
     inference: Annotated[
         str | None,
-        typer.Option("--inference", help="Inference ID to extract."),
+        typer.Option("--inference", help="Synthetic trace inference ID."),
+    ] = None,
+    harness: Annotated[
+        str | None,
+        typer.Option("--harness", metavar="codex|copilot", help="Native session harness."),
+    ] = None,
+    session: Annotated[
+        str | None,
+        typer.Option("--session", help="Native session ID."),
+    ] = None,
+    decision: Annotated[
+        str | None,
+        typer.Option("--decision", help="Completed decision ID."),
+    ] = None,
+    target: Annotated[
+        str | None,
+        typer.Option("--target", help="Target ID or unique target type."),
     ] = None,
     output: Annotated[
         Path | None,
@@ -125,18 +148,39 @@ def extract(
         typer.Option("--format", help="Output format."),
     ] = OutputFormat.HUMAN,
 ) -> None:
-    """Extract one inference without making a network request."""
+    """Extract one decision without making a network request."""
 
     try:
-        selected_inference = _select_inference(trace, inference, output_format)
-        destination = output or _default_case_path(selected_inference)
-        destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        workspace = extract_inference(
-            trace,
-            inference_call_id=selected_inference,
-            case_path=destination,
+        report = create_case_report(
+            source=source,
+            inference=inference,
+            harness=harness,
+            session_id=session,
+            decision_id=decision,
+            target=target,
+            output=output,
+            output_format=output_format,
         )
-        evidence = workspace.load()
+    except ExtractionSelectionError as error:
+        fail(str(error), ExitCode.USAGE, output_format, "extract", error.code)
+    except AdapterError as error:
+        exit_code = (
+            ExitCode.UNSUPPORTED
+            if error.code
+            in {
+                AdapterErrorCode.NO_SESSIONS,
+                AdapterErrorCode.UNSUPPORTED_FORMAT,
+                AdapterErrorCode.UNSUPPORTED_VERSION,
+            }
+            else ExitCode.USAGE
+        )
+        fail(str(error), exit_code, output_format, "extract", error.code.value)
+    except CaseExistsError as error:
+        fail(str(error), ExitCode.USAGE, output_format, "extract", "case-exists")
+    except UnsafeCasePathError as error:
+        fail(str(error), ExitCode.USAGE, output_format, "extract", "unsafe-case-path")
+    except CaseFormatError as error:
+        fail(str(error), ExitCode.USAGE, output_format, "extract", "invalid-case")
     except (CaseError, SyntheticTraceError, InferenceSelectionError) as error:
         fail(
             str(error),
@@ -145,21 +189,6 @@ def extract(
             "extract",
             "invalid-extraction",
         )
-
-    next_command, next_command_shell = shell_command(
-        ("ithrl", "shrink", str(workspace.root.absolute()))
-    )
-    report = CommandOutput(
-        command="extract",
-        status="case-created",
-        case_path=str(workspace.root.absolute()),
-        case_digest=evidence.digest,
-        original_context_count=len(evidence.context.nodes),
-        retained_context_count=len(evidence.context.nodes),
-        next_action="Run shrink to calibrate and reduce this case.",
-        next_command=next_command,
-        next_command_shell=next_command_shell,
-    )
     render(report, output_format)
 
 
@@ -300,13 +329,16 @@ def _shrink(
         )
         return
 
-    observations = _open_observation_session(
-        requested_path=observation_store,
-        run_state=run_state,
-        previous=previous,
-        prepared=prepared,
-        output_format=output_format,
-    )
+    try:
+        observations = _open_observation_session(
+            requested_path=observation_store,
+            run_state=run_state,
+            previous=previous,
+            prepared=prepared,
+            output_format=output_format,
+        )
+    except CaseError as error:
+        fail(str(error), ExitCode.USAGE, output_format, "shrink", "unsafe-data-path")
 
     initial_checkpoint = checkpoint or ReductionCheckpoint(
         case_digest=prepared.identity.case_digest,
@@ -443,7 +475,7 @@ def _open_observation_session(
     elif requested_path is not None:
         path = requested_path
     else:
-        path = _private_data_root() / "observations.sqlite"
+        path = private_data_root() / "observations.sqlite"
 
     store = ObservationStore(path)
     try:
@@ -524,53 +556,6 @@ def _finish_shrink(
     render(outcome.report, output_format)
     if outcome.exit_code is not ExitCode.SUCCESS:
         raise typer.Exit(outcome.exit_code)
-
-
-def _default_case_path(inference: str) -> Path:
-    safe = "".join(
-        character if character.isalnum() or character in "-_" else "-" for character in inference
-    )
-    safe = safe.strip("-")[:48] or "case"
-    return _private_data_root() / "cases" / f"{safe}-{uuid4().hex[:8]}"
-
-
-def _private_data_root() -> Path:
-    """Create the application-owned data directory with private permissions."""
-
-    root = user_data_path("ithrl", ensure_exists=False)
-    root.mkdir(mode=0o700, parents=True, exist_ok=True)
-    metadata = root.lstat()
-    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
-        raise OSError(f"ithrl data path must be a directory, not a link: {root}")
-    if os.name == "posix":
-        root.chmod(0o700)
-    return root
-
-
-def _select_inference(
-    trace: Path,
-    selected: str | None,
-    output_format: OutputFormat,
-) -> str:
-    if selected is not None:
-        return selected
-    summaries = list_inferences(trace)
-    available = ", ".join(summary.inference_call_id for summary in summaries)
-    if output_format is OutputFormat.JSON or not sys.stdin.isatty():
-        raise InferenceSelectionError(
-            "--inference is required in non-interactive mode; available IDs: " + available
-        )
-    print_plain(console, "Available inferences")
-    for index, summary in enumerate(summaries, start=1):
-        print_plain(
-            console,
-            f"  {index}. {summary.inference_call_id}  {summary.captured_at}  "
-            f"{summary.model_requested}",
-        )
-    choice = typer.prompt("Select an inference", type=int, default=1)
-    if choice < 1 or choice > len(summaries):
-        raise InferenceSelectionError(f"selection must be between 1 and {len(summaries)}")
-    return summaries[choice - 1].inference_call_id
 
 
 if __name__ == "__main__":

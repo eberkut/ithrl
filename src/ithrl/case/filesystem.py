@@ -15,6 +15,7 @@ from ithrl.case.contracts import (
     CaseFormatError,
     UnsafeCasePathError,
 )
+from ithrl.path_safety import UnsafePathError, validate_directory_chain
 
 type FileSignature = tuple[int, int, int, int, int]
 type FileIdentity = tuple[int, int]
@@ -29,20 +30,67 @@ class PublishedFile:
 
 
 def validate_target_path(path: Path) -> Path:
-    if ".." in path.parts:
-        raise UnsafeCasePathError("case path cannot contain '..'")
-    if os.path.lexists(path):
-        raise CaseExistsError(f"case path already exists: {path}")
+    _validate_new_target(path)
     parent = path.parent if path.parent != Path() else Path()
+    _validate_directory_control(parent)
     reject_symlink_components(parent)
     if not parent.is_dir():
         raise UnsafeCasePathError(f"case parent directory does not exist: {parent}")
     return path
 
 
+def prepare_target_path(path: Path) -> Path:
+    """Create missing private parents after validating a new case path."""
+
+    _validate_new_target(path)
+    parent = path.parent if path.parent != Path() else Path()
+    _validate_directory_control(parent)
+    reject_symlink_components(parent)
+    _create_missing_private_directories(parent)
+    return validate_target_path(path)
+
+
+def prepare_private_directory(path: Path) -> Path:
+    """Create a private directory and any missing private parents."""
+
+    _validate_directory_control(path)
+    reject_symlink_components(path)
+    _create_missing_private_directories(path)
+    if not path.is_dir():
+        raise UnsafeCasePathError("private data path is not a directory")
+    set_private_mode(path, 0o700)
+    _validate_directory_control(path)
+    return path
+
+
+def _create_missing_private_directories(path: Path) -> None:
+    missing: list[Path] = []
+    current = path
+    while not current.exists():
+        if os.path.lexists(current):
+            raise UnsafeCasePathError(f"case parent is unavailable: {current}")
+        missing.append(current)
+        ancestor = current.parent
+        if ancestor == current:
+            raise UnsafeCasePathError(f"case parent directory does not exist: {path}")
+        current = ancestor
+    if not current.is_dir():
+        raise UnsafeCasePathError(f"case parent directory does not exist: {current}")
+    for directory in reversed(missing):
+        create_private_directory(directory)
+
+
+def _validate_new_target(path: Path) -> None:
+    if ".." in path.parts:
+        raise UnsafeCasePathError("case path cannot contain '..'")
+    if os.path.lexists(path):
+        raise CaseExistsError(f"case path already exists: {path}")
+
+
 def validate_existing_root(path: Path) -> Path:
     if ".." in path.parts:
         raise UnsafeCasePathError("case path cannot contain '..'")
+    _validate_directory_control(path)
     reject_symlink_components(path)
     try:
         metadata = path.stat()
@@ -62,6 +110,13 @@ def reject_symlink_components(path: Path) -> None:
         current /= part
         if os.path.lexists(current) and current.is_symlink():
             raise UnsafeCasePathError(f"case path contains a symlink: {current}")
+
+
+def _validate_directory_control(path: Path) -> None:
+    try:
+        validate_directory_chain(path)
+    except UnsafePathError as error:
+        raise UnsafeCasePathError(str(error)) from error
 
 
 def create_private_directory(path: Path) -> Path:
@@ -106,7 +161,12 @@ def read_safe_bytes(path: Path, *, max_bytes: int, label: str) -> bytes:
         _validate_opened_file(initial, opened, label=label)
         read_descriptor = descriptor
         descriptor = -1
-        content, finished = _read_descriptor(read_descriptor, max_bytes=max_bytes, label=label)
+        content, finished = _read_descriptor(
+            read_descriptor,
+            expected_size=opened.st_size,
+            max_bytes=max_bytes,
+            label=label,
+        )
     finally:
         if descriptor >= 0:
             os.close(descriptor)
@@ -136,6 +196,8 @@ def _open_read_only(path: Path, *, label: str) -> int:
         flags |= os.O_BINARY
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
+    if hasattr(os, "O_NONBLOCK"):
+        flags |= os.O_NONBLOCK
     try:
         return os.open(path, flags)
     except OSError as error:
@@ -143,6 +205,8 @@ def _open_read_only(path: Path, *, label: str) -> int:
 
 
 def _validate_opened_file(expected: os.stat_result, opened: os.stat_result, *, label: str) -> None:
+    if not stat.S_ISREG(opened.st_mode):
+        raise UnsafeCasePathError(f"case file changed while opening: {label}")
     if file_signature(expected) != file_signature(opened):
         raise UnsafeCasePathError(f"case file changed while opening: {label}")
     if os.name == "posix" and stat.S_IMODE(opened.st_mode) != 0o600:
@@ -150,7 +214,7 @@ def _validate_opened_file(expected: os.stat_result, opened: os.stat_result, *, l
 
 
 def _read_descriptor(
-    descriptor: int, *, max_bytes: int, label: str
+    descriptor: int, *, expected_size: int, max_bytes: int, label: str
 ) -> tuple[bytes, os.stat_result]:
     try:
         handle = os.fdopen(descriptor, "rb")
@@ -160,7 +224,7 @@ def _read_descriptor(
         raise CaseFormatError(f"cannot read case file: {label}") from error
     try:
         with handle:
-            content = handle.read(max_bytes + 1)
+            content = handle.read(min(expected_size, max_bytes) + 1)
             return content, os.fstat(handle.fileno())
     except OSError as error:
         raise CaseFormatError(f"cannot read case file: {label}") from error

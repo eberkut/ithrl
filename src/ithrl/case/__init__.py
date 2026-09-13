@@ -13,6 +13,7 @@ from ithrl.case.contracts import (
 from ithrl.case.evidence import CaseEvidence, case_digest
 from ithrl.case.source import SourceArtifact, SourceArtifactIdentity
 from ithrl.case.storage import CaseWorkspace
+from ithrl.decisions import DecisionEvidence
 
 __all__ = [
     "CaptureFacts",
@@ -22,6 +23,7 @@ __all__ = [
     "CaseFormatError",
     "CaseManifest",
     "CaseWorkspace",
+    "DecisionEvidence",
     "ProvenanceFacts",
     "ReplayFacts",
     "SourceArtifact",

@@ -55,7 +55,7 @@ def test_parser_detects_and_preserves_copilot_fixture() -> None:
     assert session.metadata.format.name == "copilot-events-jsonl"
     assert session.metadata.format.producer_version == "1.0.82"
     assert session.metadata.format.record_schema_version == 1
-    assert session.record_count == 18
+    assert session.record_count == 27
     assert session.native_bytes == document.raw
     assert session.source == document.source
     assert session.records == document.records
@@ -133,7 +133,7 @@ def test_invalid_record_envelopes_are_rejected(field: str, value: object, messag
     assert caught.value.line == 2
 
 
-def test_invalid_and_reordered_timestamps_are_rejected() -> None:
+def test_invalid_timestamps_are_rejected_but_record_order_is_authoritative() -> None:
     records = _mutable_records()
     records[1]["timestamp"] = "private timestamp"
     with pytest.raises(AdapterError, match="not valid RFC 3339") as malformed:
@@ -143,9 +143,7 @@ def test_invalid_and_reordered_timestamps_are_rejected() -> None:
 
     records = _mutable_records()
     records[2]["timestamp"] = "2025-12-31T23:59:59Z"
-    with pytest.raises(AdapterError, match="timestamps are out of order") as reordered:
-        PARSER.parse(_changed_document(records=tuple(records)))
-    assert reordered.value.line == 3
+    assert PARSER.parse(_changed_document(records=tuple(records))).record_count == 27
 
 
 def test_invalid_session_start_time_is_rejected_without_echoing_it() -> None:
@@ -170,16 +168,30 @@ def test_session_start_must_be_unique() -> None:
     assert caught.value.line == 1
 
 
-def test_known_parents_must_precede_children_but_external_parents_are_allowed() -> None:
+def test_forward_and_external_parent_references_are_preserved() -> None:
     records = _mutable_records()
     records[1]["parentId"] = records[2]["id"]
-    with pytest.raises(AdapterError, match="parent must precede its child") as caught:
-        PARSER.parse(_changed_document(records=tuple(records)))
-    assert caught.value.line == 2
+    assert PARSER.parse(_changed_document(records=tuple(records))).record_count == 27
 
     records = _mutable_records()
     records[1]["parentId"] = "90000000-0000-4000-8000-000000000001"
-    assert PARSER.parse(_changed_document(records=tuple(records))).record_count == 18
+    assert PARSER.parse(_changed_document(records=tuple(records))).record_count == 27
+
+
+def test_fixture_preserves_repeated_turn_id_intervals() -> None:
+    session = PARSER.parse(_fixture_document())
+
+    turn_events = [
+        record
+        for record in session.records
+        if record["type"] in {"assistant.turn_start", "assistant.turn_end"}
+    ]
+    assert [record["type"] for record in turn_events] == [
+        "assistant.turn_start",
+        "assistant.turn_end",
+        "assistant.turn_start",
+        "assistant.turn_end",
+    ]
 
 
 def test_tool_execution_must_follow_its_request_and_start() -> None:
@@ -208,26 +220,23 @@ def test_tool_start_requires_a_preceding_request() -> None:
     assert caught.value.line == 13
 
 
-def test_tool_relationships_must_use_the_same_turn() -> None:
+def test_tool_relationships_must_use_an_open_matching_turn() -> None:
     records = _mutable_records()
     private_value = "private-turn-value"
     records[13]["data"]["turnId"] = private_value
 
-    with pytest.raises(AdapterError, match="different turns") as caught:
+    with pytest.raises(AdapterError, match="outside its assistant turn") as caught:
         PARSER.parse(_changed_document(records=tuple(records)))
 
     assert caught.value.line == 14
     assert private_value not in str(caught.value)
 
 
-def test_turn_cannot_end_with_an_incomplete_tool_request() -> None:
+def test_turn_can_end_after_a_tool_request_without_a_completion_record() -> None:
     records = _mutable_records()
     del records[12:14]
 
-    with pytest.raises(AdapterError, match="before its requested tools complete") as caught:
-        PARSER.parse(_changed_document(records=tuple(records)))
-
-    assert caught.value.line == 15
+    assert PARSER.parse(_changed_document(records=tuple(records))).record_count == 25
 
 
 @pytest.mark.parametrize("tool_requests", [None, []])
@@ -309,7 +318,7 @@ def test_incomplete_trailing_tool_work_is_accepted(last_index: int) -> None:
 
 def test_turn_end_requires_a_preceding_turn_start() -> None:
     records = _mutable_records()
-    records = [*records[:2], records[16]]
+    records = [*records[:2], records[25]]
 
     with pytest.raises(AdapterError, match="turn ends before it starts") as caught:
         PARSER.parse(_changed_document(records=tuple(records)))
@@ -317,12 +326,21 @@ def test_turn_end_requires_a_preceding_turn_start() -> None:
     assert caught.value.line == 3
 
 
-def test_turn_cannot_start_twice() -> None:
+def test_same_turn_id_can_be_nested() -> None:
     records = _mutable_records()
     records[3]["type"] = "assistant.turn_start"
     records[3]["data"] = copy.deepcopy(records[2]["data"])
 
-    with pytest.raises(AdapterError, match="turn starts more than once") as caught:
-        PARSER.parse(_changed_document(records=tuple(records)))
+    assert PARSER.parse(_changed_document(records=tuple(records))).record_count == 27
 
-    assert caught.value.line == 4
+
+def test_outer_tool_can_remain_pending_while_nested_same_id_turn_closes() -> None:
+    records = _mutable_records()
+    nested_start = copy.deepcopy(records[2])
+    nested_start["id"] = "10000000-0000-4000-8000-000000000096"
+    nested_end = copy.deepcopy(records[14])
+    nested_end["id"] = "10000000-0000-4000-8000-000000000097"
+    records[12:12] = [nested_start]
+    records[14:14] = [nested_end]
+
+    assert PARSER.parse(_changed_document(records=tuple(records))).record_count == 29

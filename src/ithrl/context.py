@@ -10,7 +10,7 @@ from collections import defaultdict, deque
 from collections.abc import Iterable, Mapping, Sequence
 from itertools import pairwise
 from pathlib import PurePosixPath
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -122,24 +122,77 @@ def stable_context_id(*, path: str, kind: str, digest: str) -> str:
     return f"ctx-{hashlib.sha256(_canonical_json(payload)).hexdigest()[:16]}"
 
 
+class SourceRecordSelector(BaseModel):
+    """Stable location of one record in immutable JSONL source evidence."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    schema_version: Literal[1] = 1
+    type: Literal["jsonl-record"] = "jsonl-record"
+    line: Annotated[int, Field(ge=1, le=250_000)]
+    identity_key: Annotated[str, Field(min_length=1, max_length=128)] | None = None
+    identity_value: int | Annotated[str, Field(min_length=1, max_length=1024)] | None = None
+
+    @model_validator(mode="after")
+    def validate_identity(self) -> SourceRecordSelector:
+        if (self.identity_key is None) != (self.identity_value is None):
+            raise ValueError("source record identity key and value must be set together")
+        return self
+
+
+def stable_source_context_id(
+    *,
+    source: str,
+    selector: SourceRecordSelector,
+    kind: str,
+    digest: str,
+) -> str:
+    """Derive a stable context identity from immutable source record facts."""
+
+    payload = {
+        "digest": digest,
+        "kind": kind,
+        "selector": selector.model_dump(mode="json"),
+        "source": source,
+    }
+    return f"ctx-{hashlib.sha256(_canonical_json(payload)).hexdigest()[:16]}"
+
+
+def validate_source_reference(value: str) -> str:
+    """Require a portable relative path inside a case workspace."""
+
+    if "\\" in value:
+        raise ValueError("source must use portable POSIX path separators")
+    path = PurePosixPath(value)
+    if path.is_absolute() or any(part in {"", ".", ".."} for part in value.split("/")):
+        raise ValueError("source must be a safe relative path inside the case")
+    return value
+
+
 class ContextNode(BaseModel):
-    """Versioned metadata for editing one part of a provider request."""
+    """Versioned edit metadata for request or native source evidence."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[1] = 1
-    id: Annotated[str, Field(min_length=1, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")]
-    kind: Annotated[str, Field(min_length=1)]
-    path: str
+    id: Annotated[
+        str,
+        Field(min_length=1, max_length=256, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$"),
+    ]
+    kind: Annotated[str, Field(min_length=1, max_length=256)]
+    path: Annotated[str | None, Field(min_length=1, max_length=4096)] = None
+    selector: SourceRecordSelector | None = None
     mutable: bool
     protected: bool = False
     depends_on: Annotated[tuple[str, ...], Field(max_length=MAX_DEPENDENCIES_PER_NODE)] = ()
-    source: Annotated[str, Field(min_length=1)]
+    source: Annotated[str, Field(min_length=1, max_length=1024)]
     digest: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 
     @field_validator("path")
     @classmethod
-    def validate_pointer(cls, value: str) -> str:
+    def validate_pointer(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         try:
             decode_pointer(value)
         except ValueError as error:
@@ -151,12 +204,7 @@ class ContextNode(BaseModel):
     @field_validator("source")
     @classmethod
     def validate_source(cls, value: str) -> str:
-        if "\\" in value:
-            raise ValueError("source must use portable POSIX path separators")
-        path = PurePosixPath(value)
-        if path.is_absolute() or any(part in {"", ".", ".."} for part in value.split("/")):
-            raise ValueError("source must be a safe relative path inside the case")
-        return value
+        return validate_source_reference(value)
 
     @field_validator("depends_on")
     @classmethod
@@ -166,9 +214,11 @@ class ContextNode(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def validate_self_dependency(self) -> ContextNode:
+    def validate_node(self) -> ContextNode:
         if self.id in self.depends_on:
             raise ValueError("a context node cannot depend on itself")
+        if (self.path is None) == (self.selector is None):
+            raise ValueError("a context node requires exactly one request path or source selector")
         return self
 
 
@@ -184,6 +234,7 @@ class ContextGraph(BaseModel):
     def validate_graph(self) -> ContextGraph:
         by_id = _index_unique_nodes(self.nodes)
         _validate_non_overlapping_paths(self.nodes)
+        _validate_source_order(self.nodes)
         _validate_known_dependencies(self.nodes, by_id)
         _validate_dependency_order(self.nodes)
         return self
@@ -228,6 +279,8 @@ class ContextGraph(BaseModel):
         validate_json_limits(request)
 
         for node in self.nodes:
+            if node.path is None:
+                continue
             value = _resolve_pointer(request, decode_pointer(node.path), node.path)
             if content_digest(value) != node.digest:
                 raise MaterializationError(
@@ -246,12 +299,22 @@ class ContextGraph(BaseModel):
         if not closure:
             return copy.deepcopy(request)
 
+        source_only = sorted(
+            node.id for node in self.nodes if node.id in closure and node.path is None
+        )
+        if source_only:
+            raise MaterializationError(
+                "source-backed context edits require a compatible harness runner: "
+                + ", ".join(source_only)
+            )
+
         trie: dict[object, Any] = {}
         for node in self.nodes:
             if node.id not in closure:
                 continue
-            tokens = decode_pointer(node.path)
-            _resolve_pointer(request, tokens, node.path)
+            path = cast(str, node.path)
+            tokens = decode_pointer(path)
+            _resolve_pointer(request, tokens, path)
             branch = trie
             for token in tokens:
                 branch = branch.setdefault(token, {})
@@ -269,25 +332,39 @@ def _index_unique_nodes(nodes: Sequence[ContextNode]) -> dict[str, ContextNode]:
     for node in nodes:
         if node.id in by_id:
             raise ValueError(f"duplicate context node ID: {node.id}")
-        if node.path in paths:
-            raise ValueError(f"duplicate context node path: {node.path}")
+        if node.path is not None:
+            if node.path in paths:
+                raise ValueError(f"duplicate context node path: {node.path}")
+            paths.add(node.path)
         by_id[node.id] = node
-        paths.add(node.path)
     return by_id
 
 
 def _validate_non_overlapping_paths(nodes: Sequence[ContextNode]) -> None:
-    ordered_paths = sorted((decode_pointer(node.path), node) for node in nodes)
+    ordered_paths = sorted(
+        (decode_pointer(node.path), node) for node in nodes if node.path is not None
+    )
     for (parent_path, parent), (child_path, child) in pairwise(ordered_paths):
         if len(parent_path) < len(child_path) and child_path[: len(parent_path)] == parent_path:
             raise ValueError(f"context node paths overlap: {parent.id!r} contains {child.id!r}")
+
+
+def _validate_source_order(nodes: Sequence[ContextNode]) -> None:
+    previous_lines: dict[str, int] = {}
+    for node in nodes:
+        if node.selector is None:
+            continue
+        previous = previous_lines.get(node.source, 0)
+        if node.selector.line <= previous:
+            raise ValueError("context source selectors must follow source record order")
+        previous_lines[node.source] = node.selector.line
 
 
 def _validate_known_dependencies(
     nodes: Sequence[ContextNode], by_id: Mapping[str, ContextNode]
 ) -> None:
     for node in nodes:
-        missing = sorted(set(node.depends_on) - by_id.keys())
+        missing = sorted(dependency for dependency in node.depends_on if dependency not in by_id)
         if missing:
             raise ValueError(
                 f"context node {node.id!r} has unknown dependencies: {', '.join(missing)}"

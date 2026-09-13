@@ -15,11 +15,14 @@ tested every valid single-group removal from the final context and none preserve
 
 ## Current status
 
-The current pre-release version supports synthetic saved evidence and a deterministic local
-runner. This workflow does not use provider credentials or make network requests.
+The current pre-release version can create cases from ordinary saved Codex CLI and GitHub Copilot
+CLI sessions. It can discover their default local session stores or read an explicit session file.
+Extraction is read-only: it does not start the coding agent, contact a provider, execute a tool, or
+change the saved session.
 
-Adapters and runners for real coding agents are not available yet. The synthetic workflow cannot
-measure real-model reliability, suitability, or cost.
+Controlled runners for Codex and Copilot are not available yet, so cases extracted from their
+sessions cannot be reduced. The deterministic synthetic workflow below implements the complete
+local extract-and-reduce path without credentials or network requests.
 
 ## Research basis
 
@@ -74,6 +77,49 @@ uv build --sdist --wheel --no-sources
 ```
 
 The default test suite and walkthrough do not use provider credentials or make network requests.
+
+## Extract an ordinary saved session
+
+Run `extract` without a source in a terminal to discover recent supported Codex and Copilot
+sessions and choose a completed decision and behavior:
+
+```bash
+uv run ithrl extract
+```
+
+You can also pass a native session file directly:
+
+```bash
+uv run ithrl extract path/to/session.jsonl --output .ithrl/native-case
+```
+
+For non-interactive use, provide stable selection IDs:
+
+```bash
+uv run ithrl extract \
+  --harness codex \
+  --session SESSION_ID \
+  --decision DECISION_ID \
+  --target TARGET_ID \
+  --output .ithrl/native-case \
+  --format json
+```
+
+The command lists available content-free IDs when a required selection is missing. It does not
+print prompts, responses, commands, tool arguments, or source paths from discovered sessions.
+
+Native format support is deliberately narrow during pre-release development. The checked fixtures
+cover Codex CLI 0.153.4 rollout JSONL and GitHub Copilot CLI 1.0.82 event JSONL. Other versions fail
+closed until their persisted format has been reviewed and tested. Unknown records are preserved in
+the case but are not interpreted.
+
+The Codex adapter exposes completed final responses. The Copilot adapter exposes top-level final
+responses and recognized `bash` or `shell` requests. These behaviors are observable in the saved
+session, but controlled experiments remain unvalidated until the corresponding runners exist.
+
+The case contains the exact native session bytes, separate decision metadata, and a context edit
+graph. Keep it private. Because controlled native runners are not implemented yet, `extract` does
+not suggest running `shrink` for these cases.
 
 ## Try the synthetic workflow
 
@@ -133,7 +179,9 @@ expected private permissions.
 
 Content digests detect accidental or inconsistent changes. They are not signatures. ithrl assumes
 that another process running as the same user has not replaced the local case, result, run state,
-or observation database.
+or observation database. It rejects source and case paths controlled through directories writable
+by other users. On platforms where directory ownership cannot be checked with standard Python
+APIs, custom paths must stay inside the current user profile.
 
 ## License
 

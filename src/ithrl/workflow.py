@@ -11,11 +11,12 @@ from ithrl.case import CaseEvidence
 from ithrl.context import JsonObject, content_digest
 from ithrl.execution import (
     CapabilityProfile,
+    PreflightIssue,
     PreflightReport,
     ResolvedExecutionPlan,
     resolve_execution_plan,
 )
-from ithrl.experiment import ExperimentDefinition
+from ithrl.experiment import ExperimentDefinition, FakeRunnerConfig, UnavailableRunnerConfig
 from ithrl.measurement import RunnerExecutionError, observe_once
 from ithrl.observations import (
     Observation,
@@ -90,8 +91,33 @@ def prepare_experiment(evidence: CaseEvidence) -> PreparedExperiment:
     """Parse, protect, and resolve the built-in credential-free experiment."""
 
     experiment = ExperimentDefinition.from_toml(evidence.default_experiment)
+    decision = evidence.decision
+    if decision is not None and experiment.target != decision.selected_target:
+        raise PreflightRefusedError(
+            _runner_evidence_mismatch("experiment target does not match the selected decision")
+        )
     _validate_oracle_prerequisites(evidence, experiment)
     config = experiment.runner
+    if isinstance(config, FakeRunnerConfig) and not evidence.has_request:
+        raise PreflightRefusedError(
+            _runner_evidence_mismatch("the fake runner requires an exact provider request")
+        )
+    if isinstance(config, UnavailableRunnerConfig):
+        if evidence.manifest.harness != config.harness:
+            raise PreflightRefusedError(
+                _runner_evidence_mismatch("experiment runner does not match the captured harness")
+            )
+        report = PreflightReport(
+            ready=False,
+            plan=None,
+            issues=(
+                PreflightIssue(
+                    code="runner-unavailable",
+                    message="the experiment has no compatible implemented runner",
+                ),
+            ),
+        )
+        raise PreflightRefusedError(report)
     runner = FakeRunner(
         required_markers=frozenset(config.required_markers),
         alternative_marker_sets=tuple(
@@ -120,6 +146,14 @@ def prepare_experiment(evidence: CaseEvidence) -> PreparedExperiment:
         runner=runner,
         execution_plan=report.plan,
         identity=identity,
+    )
+
+
+def _runner_evidence_mismatch(message: str) -> PreflightReport:
+    return PreflightReport(
+        ready=False,
+        plan=None,
+        issues=(PreflightIssue(code="runner-evidence-mismatch", message=message),),
     )
 
 

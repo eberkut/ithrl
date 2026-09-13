@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ithrl.behavior import BehaviorType
 from ithrl.context import content_digest
-from ithrl.experiment import ExperimentDefinition
+from ithrl.experiment import ExperimentDefinition, UnavailableRunnerConfig
 
 type NetworkAccess = Literal["forbidden", "required"]
 type ActionExecution = Literal["denied", "possible"]
@@ -92,6 +92,8 @@ type PreflightIssueCode = Literal[
     "provider-calls-required",
     "action-execution-not-denied",
     "source-store-may-change",
+    "runner-unavailable",
+    "runner-evidence-mismatch",
 ]
 
 
@@ -132,6 +134,17 @@ def resolve_execution_plan(
 
     issues: list[PreflightIssue] = []
     target_type = experiment.target.type
+    if isinstance(experiment.runner, UnavailableRunnerConfig):
+        return PreflightReport(
+            ready=False,
+            plan=None,
+            issues=(
+                PreflightIssue(
+                    code="runner-unavailable",
+                    message="the experiment has no compatible implemented runner",
+                ),
+            ),
+        )
     if capability.runner_type != experiment.runner.type:
         issues.append(
             PreflightIssue(

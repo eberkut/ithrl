@@ -73,7 +73,7 @@ def test_parser_rejects_an_empty_document() -> None:
     ("record_index", "field", "value"),
     [
         (1, "ordinal", True),
-        (1, "ordinal", 4),
+        (1, "ordinal", -1),
         (1, "timestamp", "not-a-timestamp"),
         (1, "type", 1),
         (1, "payload", []),
@@ -95,15 +95,24 @@ def test_parser_rejects_invalid_record_envelopes(
     assert raised.value.line == record_index + 1
 
 
-def test_parser_rejects_timestamps_out_of_order(document: JsonlDocument) -> None:
+def test_parser_allows_non_monotonic_record_timestamps(document: JsonlDocument) -> None:
     records = copy.deepcopy(document.records)
     records[2]["timestamp"] = "2025-12-31T23:59:59.000Z"
 
-    with pytest.raises(AdapterError) as raised:
-        PARSER.parse(_document(records))
+    session = PARSER.parse(_document(records))
 
-    assert raised.value.code is AdapterErrorCode.INVALID_SESSION
-    assert raised.value.line == 3
+    assert session.records[2]["timestamp"] == "2025-12-31T23:59:59.000Z"
+
+
+def test_parser_allows_missing_and_repeated_ordinals(document: JsonlDocument) -> None:
+    records = copy.deepcopy(document.records)
+    del records[1]["ordinal"]
+    records[2]["ordinal"] = records[0]["ordinal"]
+
+    session = PARSER.parse(_document(records))
+
+    assert "ordinal" not in session.records[1]
+    assert session.records[2]["ordinal"] == 0
 
 
 def test_parser_rejects_unsupported_version_without_echoing_it(
@@ -137,39 +146,36 @@ def test_parser_requires_session_metadata_fields(
     assert raised.value.line == 1
 
 
-def test_parser_rejects_inconsistent_session_metadata(document: JsonlDocument) -> None:
+def test_parser_uses_the_source_id_when_the_session_family_id_differs(
+    document: JsonlDocument,
+) -> None:
     records = copy.deepcopy(document.records)
-    _payload(records[0])["session_id"] = "different-session"
+    _payload(records[0])["session_id"] = "different-session-family"
 
-    with pytest.raises(AdapterError) as raised:
-        PARSER.parse(_document(records))
+    session = PARSER.parse(_document(records))
 
-    assert raised.value.code is AdapterErrorCode.INVALID_SESSION
-    assert raised.value.line == 1
+    assert session.metadata.session_id == _payload(records[0])["id"]
 
 
-def test_parser_rejects_inconsistent_capture_timestamp(document: JsonlDocument) -> None:
+def test_parser_allows_distinct_record_and_capture_timestamps(document: JsonlDocument) -> None:
     records = copy.deepcopy(document.records)
     _payload(records[0])["timestamp"] = "2026-01-01T00:00:00.001Z"
 
-    with pytest.raises(AdapterError) as raised:
-        PARSER.parse(_document(records))
+    session = PARSER.parse(_document(records))
 
-    assert raised.value.code is AdapterErrorCode.INVALID_SESSION
-    assert raised.value.line == 1
+    assert session.metadata.captured_at == "2026-01-01T00:00:00.001Z"
 
 
-def test_parser_rejects_duplicate_session_metadata(document: JsonlDocument) -> None:
+def test_parser_preserves_later_session_metadata(document: JsonlDocument) -> None:
     records = list(copy.deepcopy(document.records))
     duplicate = copy.deepcopy(records[0])
     duplicate["ordinal"] = 1
     duplicate["timestamp"] = records[1]["timestamp"]
     records[1] = duplicate
 
-    with pytest.raises(AdapterError) as raised:
-        PARSER.parse(_document(tuple(records)))
+    session = PARSER.parse(_document(tuple(records)))
 
-    assert raised.value.code is AdapterErrorCode.INVALID_SESSION
+    assert session.records[1]["type"] == "session_meta"
 
 
 def test_parser_rejects_duplicate_response_item_identifier(document: JsonlDocument) -> None:
@@ -273,38 +279,35 @@ def test_parser_accepts_incomplete_trailing_call_and_turn(document: JsonlDocumen
     assert session.record_count == 6
 
 
-def test_parser_rejects_task_completion_without_start(document: JsonlDocument) -> None:
+def test_parser_preserves_task_completion_without_a_local_start(document: JsonlDocument) -> None:
     records = copy.deepcopy(document.records)
     _payload(records[2])["type"] = "fixture.event"
 
-    with pytest.raises(AdapterError) as raised:
-        PARSER.parse(_document(records))
+    session = PARSER.parse(_document(records))
 
-    assert raised.value.code is AdapterErrorCode.INVALID_SESSION
-    assert raised.value.line == 13
+    assert session.records[12]["type"] == "event_msg"
 
 
-def test_parser_rejects_overlapping_task_turns(document: JsonlDocument) -> None:
+def test_parser_preserves_overlapping_task_turn_events(document: JsonlDocument) -> None:
     records = copy.deepcopy(document.records)
     records[3]["type"] = "event_msg"
     records[3]["payload"] = {"type": "task_started", "turn_id": "turn-fixture-002"}
 
-    with pytest.raises(AdapterError) as raised:
-        PARSER.parse(_document(records))
+    session = PARSER.parse(_document(records))
 
-    assert raised.value.code is AdapterErrorCode.INVALID_SESSION
-    assert raised.value.line == 4
+    assert session.records[3]["payload"] == {
+        "type": "task_started",
+        "turn_id": "turn-fixture-002",
+    }
 
 
-def test_parser_rejects_completion_for_a_different_turn(document: JsonlDocument) -> None:
+def test_parser_preserves_completion_for_a_different_turn(document: JsonlDocument) -> None:
     records = copy.deepcopy(document.records)
     _payload(records[12])["turn_id"] = "turn-fixture-002"
 
-    with pytest.raises(AdapterError) as raised:
-        PARSER.parse(_document(records))
+    session = PARSER.parse(_document(records))
 
-    assert raised.value.code is AdapterErrorCode.INVALID_SESSION
-    assert raised.value.line == 13
+    assert _payload(session.records[12])["turn_id"] == "turn-fixture-002"
 
 
 def _payload(record: JsonObject) -> JsonObject:

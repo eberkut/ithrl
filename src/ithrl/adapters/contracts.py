@@ -37,9 +37,9 @@ class SessionFormat(_ImmutableContract):
     """Versioned identity of one native persisted session format."""
 
     schema_version: Literal[1] = 1
-    harness: Annotated[str, Field(min_length=1)]
-    name: Annotated[str, Field(min_length=1)]
-    producer_version: Annotated[str, Field(min_length=1)]
+    harness: Annotated[str, Field(min_length=1, max_length=64)]
+    name: Annotated[str, Field(min_length=1, max_length=128)]
+    producer_version: Annotated[str, Field(min_length=1, max_length=128)]
     record_schema_version: int | str | None = None
 
 
@@ -48,8 +48,8 @@ class SessionMetadata(_ImmutableContract):
 
     schema_version: Literal[1] = 1
     format: SessionFormat
-    session_id: Annotated[str, Field(min_length=1)]
-    captured_at: Annotated[str, Field(min_length=1)]
+    session_id: Annotated[str, Field(min_length=1, max_length=1024)]
+    captured_at: Annotated[str, Field(min_length=1, max_length=64)]
 
     @field_validator("captured_at")
     @classmethod

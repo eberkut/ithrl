@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import io
 import json
 import os
 import tomllib
@@ -13,11 +14,12 @@ from typing import Any
 from pydantic import ValidationError
 
 from ithrl.case.contracts import CaseError, CaseExistsError, CaseFormatError, CaseManifest
-from ithrl.case.evidence import CaseEvidence
+from ithrl.case.evidence import CaseEvidence, validate_case_inputs
 from ithrl.case.filesystem import (
     PublishedFile,
     atomic_write,
     create_private_directory,
+    prepare_target_path,
     read_safe_text,
     remove_published_file,
     require_private_directory,
@@ -27,14 +29,24 @@ from ithrl.case.filesystem import (
 )
 from ithrl.case.source import SourceArtifact, prepare_source_artifacts
 from ithrl.case.source_storage import load_sources, source_parent_paths, write_sources
-from ithrl.context import ContextGraph, ContextNode, JsonObject, JsonValue, validate_json_limits
+from ithrl.context import (
+    MAX_CONTEXT_NODES,
+    ContextGraph,
+    ContextNode,
+    JsonObject,
+    JsonValue,
+    validate_json_limits,
+)
+from ithrl.decisions import DecisionEvidence
 
 _EXPERIMENT_PATH = Path("experiments/default.toml")
 _GITIGNORE = "*\n!.gitignore\n"
+_MAX_CONTEXT_RECORD_BYTES = 1024 * 1024
 _CASE_FILE_LIMITS = {
     "case.toml": 1024 * 1024,
     "request.json": 64 * 1024 * 1024,
     "context.jsonl": 64 * 1024 * 1024,
+    "decision.json": 1024 * 1024,
     "default.toml": 1024 * 1024,
     ".gitignore": 1024,
 }
@@ -49,28 +61,42 @@ class CaseWorkspace:
         self.root = root
 
     @classmethod
+    def prepare_destination(cls, path: str | os.PathLike[str]) -> Path:
+        """Validate a new case path and create any missing private parents."""
+
+        return prepare_target_path(Path(path))
+
+    @classmethod
     def create(
         cls,
         path: str | os.PathLike[str],
         *,
         manifest: CaseManifest,
-        request: JsonObject,
+        request: JsonObject | None,
         nodes: Iterable[ContextNode],
         default_experiment: str,
         source_artifacts: Iterable[SourceArtifact] = (),
+        decision: DecisionEvidence | None = None,
     ) -> CaseWorkspace:
         root = validate_target_path(Path(path))
         node_tuple = tuple(nodes)
         graph = ContextGraph(nodes=node_tuple)
         sources = _validate_sources(source_artifacts)
         try:
-            validate_json_limits(request)
+            validate_case_inputs(
+                manifest=manifest,
+                request=request,
+                context=graph,
+                source_artifacts=sources,
+                decision=decision,
+            )
+        except CaseFormatError:
+            raise
         except ValueError as error:
-            raise CaseFormatError(f"request is not valid JSON: {error}") from error
-        graph.validate_request(request)
+            raise CaseFormatError(f"case evidence is invalid: {error}") from error
         _validate_experiment(default_experiment)
 
-        contents = _case_contents(manifest, request, node_tuple, default_experiment)
+        contents = _case_contents(manifest, request, node_tuple, default_experiment, decision)
         _validate_case_file_limits(contents)
         _create_root(root)
         published: list[PublishedFile] = []
@@ -79,7 +105,10 @@ class CaseWorkspace:
             published.append(atomic_write(root / ".gitignore", contents[".gitignore"]))
             write_sources(root, sources, published)
             published.append(atomic_write(root / "case.toml", contents["case.toml"]))
-            published.append(atomic_write(root / "request.json", contents["request.json"]))
+            if request_content := contents.get("request.json"):
+                published.append(atomic_write(root / "request.json", request_content))
+            if decision_content := contents.get("decision.json"):
+                published.append(atomic_write(root / "decision.json", decision_content))
             published.append(atomic_write(root / "context.jsonl", contents["context.jsonl"]))
             published.append(atomic_write(experiments / "default.toml", contents["default.toml"]))
         except Exception:
@@ -93,11 +122,14 @@ class CaseWorkspace:
         return cls(validate_existing_root(Path(path)))
 
     def load(self) -> CaseEvidence:
+        """Load and structurally validate case files without adapter interpretation."""
+
         root = validate_existing_root(self.root)
         require_private_directory(root / "experiments", label="experiments")
         try:
             manifest = _load_case_manifest(root)
-            request = _load_request(root)
+            request = _load_optional_request(root)
+            decision = _load_optional_decision(root)
             context = _load_context(root)
             experiment = read_safe_text(
                 root / _EXPERIMENT_PATH, max_bytes=_CASE_FILE_LIMITS["default.toml"]
@@ -110,6 +142,7 @@ class CaseWorkspace:
                 context=context,
                 default_experiment=experiment,
                 source_artifacts=load_sources(root),
+                decision=decision,
             )
         except CaseError:
             raise
@@ -133,17 +166,22 @@ def _validate_sources(artifacts: Iterable[SourceArtifact]) -> tuple[SourceArtifa
 
 def _case_contents(
     manifest: CaseManifest,
-    request: JsonObject,
+    request: JsonObject | None,
     nodes: tuple[ContextNode, ...],
     default_experiment: str,
+    decision: DecisionEvidence | None,
 ) -> dict[str, str]:
-    return {
+    contents = {
         "case.toml": _render_manifest(manifest),
-        "request.json": _render_json(request),
         "context.jsonl": "".join(_render_json_line(node.model_dump(mode="json")) for node in nodes),
         "default.toml": _normalize_text(default_experiment),
         ".gitignore": _GITIGNORE,
     }
+    if request is not None:
+        contents["request.json"] = _render_json(request)
+    if decision is not None:
+        contents["decision.json"] = _render_json(decision.model_dump(mode="json"))
+    return contents
 
 
 def _validate_case_file_limits(contents: Mapping[str, str]) -> None:
@@ -151,6 +189,17 @@ def _validate_case_file_limits(contents: Mapping[str, str]) -> None:
         limit = _CASE_FILE_LIMITS[name]
         if len(content.encode("utf-8")) > limit:
             raise CaseFormatError(f"{name} exceeds the {limit}-byte limit")
+        if name == "context.jsonl":
+            _validate_context_record_limits(content)
+
+
+def _validate_context_record_limits(content: str) -> None:
+    for line_number, line in enumerate(io.StringIO(content), start=1):
+        record = line.removesuffix("\n").removesuffix("\r")
+        if len(record.encode("utf-8")) > _MAX_CONTEXT_RECORD_BYTES:
+            raise CaseFormatError(
+                f"context.jsonl record at line {line_number} exceeds the byte limit"
+            )
 
 
 def _create_root(root: Path) -> None:
@@ -168,7 +217,9 @@ def _load_case_manifest(root: Path) -> CaseManifest:
     return CaseManifest.model_validate(tomllib.loads(source))
 
 
-def _load_request(root: Path) -> JsonObject:
+def _load_optional_request(root: Path) -> JsonObject | None:
+    if not os.path.lexists(root / "request.json"):
+        return None
     request = _load_json(
         read_safe_text(root / "request.json", max_bytes=_CASE_FILE_LIMITS["request.json"]),
         label="request.json",
@@ -179,16 +230,31 @@ def _load_request(root: Path) -> JsonObject:
     return request
 
 
+def _load_optional_decision(root: Path) -> DecisionEvidence | None:
+    if not os.path.lexists(root / "decision.json"):
+        return None
+    source = read_safe_text(root / "decision.json", max_bytes=_CASE_FILE_LIMITS["decision.json"])
+    _load_json(source, label="decision.json")
+    return DecisionEvidence.model_validate_json(source)
+
+
 def _load_context(root: Path) -> ContextGraph:
     nodes: list[ContextNode] = []
     source = read_safe_text(root / "context.jsonl", max_bytes=_CASE_FILE_LIMITS["context.jsonl"])
-    for line_number, line in enumerate(source.splitlines(), start=1):
-        if not line.strip():
+    for line_number, line in enumerate(io.StringIO(source), start=1):
+        record = line.removesuffix("\n").removesuffix("\r")
+        if line_number > MAX_CONTEXT_NODES:
+            raise CaseFormatError("context.jsonl exceeds the context record limit")
+        if len(record.encode("utf-8")) > _MAX_CONTEXT_RECORD_BYTES:
+            raise CaseFormatError(
+                f"context.jsonl record at line {line_number} exceeds the byte limit"
+            )
+        if not record.strip():
             raise CaseFormatError(f"context.jsonl contains a blank record at line {line_number}")
         try:
             nodes.append(
                 ContextNode.model_validate(
-                    _load_json(line, label=f"context.jsonl line {line_number}")
+                    _load_json(record, label=f"context.jsonl line {line_number}")
                 )
             )
         except ValidationError as error:
@@ -206,7 +272,7 @@ def _load_json(source: str, *, label: str) -> object:
         result: dict[str, object] = {}
         for key, value in pairs:
             if key in result:
-                raise CaseFormatError(f"{label} contains duplicate key {key!r}")
+                raise CaseFormatError(f"{label} contains a duplicate object key")
             result[key] = value
         return result
 

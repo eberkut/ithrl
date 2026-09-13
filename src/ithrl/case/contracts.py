@@ -26,12 +26,18 @@ class CaseFormatError(CaseError):
 
 
 class CaptureFacts(BaseModel):
-    """Classification of the captured provider request."""
+    """Classification and completeness of captured evidence."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[1] = 1
-    request: Annotated[str, Field(min_length=1)]
+    request: Literal[
+        "provider-request",
+        "logical-session",
+        "reconstructed",
+        "transcript",
+        "unknown",
+    ]
     completeness: Annotated[str, Field(min_length=1)]
 
 
@@ -46,7 +52,7 @@ class ReplayFacts(BaseModel):
 
 
 class ProvenanceFacts(BaseModel):
-    """Source trace identity without copied credentials or transport headers."""
+    """Source identity without copied credentials or transport headers."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -65,9 +71,12 @@ class CaseManifest(BaseModel):
     adapter: Annotated[str, Field(min_length=1)]
     adapter_version: Annotated[str, Field(min_length=1)]
     captured_at: Annotated[str, Field(min_length=1)]
-    provider: Annotated[str, Field(min_length=1)]
-    endpoint: Annotated[str, Field(min_length=1)]
-    model_requested: Annotated[str, Field(min_length=1)]
+    harness: Annotated[str | None, Field(min_length=1)] = None
+    harness_version: Annotated[str | None, Field(min_length=1)] = None
+    source_schema: Annotated[str | None, Field(min_length=1)] = None
+    provider: Annotated[str | None, Field(min_length=1)] = None
+    endpoint: Annotated[str | None, Field(min_length=1)] = None
+    model_requested: Annotated[str | None, Field(min_length=1)] = None
     model_returned: Annotated[str | None, Field(min_length=1)] = None
     capture: CaptureFacts
     replay: ReplayFacts
