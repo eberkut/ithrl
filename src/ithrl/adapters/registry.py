@@ -112,7 +112,7 @@ def discover_sessions(
     roots: Mapping[HarnessName, Path] | None = None,
     limits: DiscoveryLimits | None = None,
 ) -> DiscoveryResult:
-    """Find recent supported sessions without exposing captured content."""
+    """Find recent supported sessions without exposing their captured content."""
 
     selected_limits = limits or DiscoveryLimits()
     scans = _discover_source_scans(harness, roots, selected_limits)
@@ -343,7 +343,7 @@ def _parse_document(
 
 
 def enumerate_decisions(session: NativeSession) -> tuple[DecisionSummary, ...]:
-    """List completed decisions without exposing captured content."""
+    """List completed decisions without exposing their captured content."""
 
     return tuple(draft.summarize() for draft in _decision_drafts(session))
 

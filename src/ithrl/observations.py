@@ -136,7 +136,7 @@ class Observation(BaseModel):
 
     @property
     def valid(self) -> bool:
-        """Whether this attempt produced an oracle verdict."""
+        """Whether the attempt produced an oracle verdict."""
 
         return self.outcome in {ObservationOutcome.MATCH, ObservationOutcome.NO_MATCH}
 
@@ -209,6 +209,7 @@ class ObservationStore:
         _restrict_permissions(self.path, 0o600)
         try:
             with self._connection() as connection:
+                # Serialize schema creation and validation before any writer uses the database.
                 connection.execute("BEGIN IMMEDIATE")
                 tables = _user_tables(connection)
                 if not tables:

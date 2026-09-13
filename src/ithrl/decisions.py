@@ -57,7 +57,7 @@ class DecisionSelector(_ImmutableContract):
 
     @property
     def digest(self) -> str:
-        """Return the stable identity of this selector."""
+        """Return the stable identity of the selector."""
 
         return content_digest(self.model_dump(mode="json", exclude={"record_digest"}))
 
@@ -87,7 +87,7 @@ class DecisionCaseFacts(_ImmutableContract):
 
 
 class TargetCandidate(_ImmutableContract):
-    """One mechanically observable behavior and its current support status."""
+    """One mechanically observable behavior and its recorded support status."""
 
     schema_version: Literal[1] = 1
     ordinal: Annotated[int, Field(ge=1, le=MAX_TARGETS_PER_DECISION)]
@@ -101,7 +101,7 @@ class TargetCandidate(_ImmutableContract):
 
 
 class TargetSummary(_ImmutableContract):
-    """Content-free target metadata safe for decision listings."""
+    """Target metadata that can be listed without exposing the observed behavior."""
 
     schema_version: Literal[1] = 1
     target_id: Annotated[
@@ -113,7 +113,7 @@ class TargetSummary(_ImmutableContract):
 
 
 class DecisionSummary(_ImmutableContract):
-    """Content-free metadata for one selectable completed decision."""
+    """Metadata for selecting a completed decision without exposing its content."""
 
     schema_version: Literal[1] = 1
     decision_id: Annotated[str, Field(pattern=r"^decision-[0-9a-f]{16}$")]
@@ -168,7 +168,7 @@ class DecisionEvidence(_ImmutableContract):
         if len(set(target_ids)) != len(target_ids):
             raise ValueError("decision evidence contains duplicate targets")
         if self.selected_target_id not in target_ids:
-            raise ValueError("selected_target_id is not available for this decision")
+            raise ValueError("selected_target_id is not available for the decision")
         if any(
             not evaluate_target(candidate.target, self.observation) for candidate in self.targets
         ):
@@ -234,7 +234,7 @@ class DecisionDraft(_ImmutableContract):
         return self.selector.decision_id
 
     def summarize(self) -> DecisionSummary:
-        """Return content-free metadata for selection and display."""
+        """Return selection metadata without exposing the decision content."""
 
         return DecisionSummary(
             decision_id=self.decision_id,

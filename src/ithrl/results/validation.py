@@ -99,6 +99,8 @@ def _validate_content_identities(
     execution_plan: ResolvedExecutionPlan,
     checkpoint: ReductionCheckpoint,
 ) -> None:
+    """Cross-check every persisted digest before a result is trusted or resumed."""
+
     if experiment.digest != summary.experiment_digest:
         raise ResultSnapshotError("summary experiment_digest does not match experiment.toml")
     if execution_plan.digest != summary.execution_plan_digest:

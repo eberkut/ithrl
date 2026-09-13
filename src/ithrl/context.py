@@ -63,6 +63,7 @@ def content_digest(value: Any) -> str:
 def validate_json_limits(value: object) -> None:
     """Reject invalid JSON values and structures outside local resource limits."""
 
+    # An explicit stack keeps user-controlled nesting out of the Python call stack.
     pending: list[tuple[object, int]] = [(value, 0)]
     items = 0
     while pending:
@@ -274,7 +275,7 @@ class ContextGraph(BaseModel):
         return frozenset(closure)
 
     def validate_request(self, request: JsonValue) -> None:
-        """Verify that every node still identifies its captured request content."""
+        """Verify that every node identifies its captured request content."""
 
         validate_json_limits(request)
 
@@ -441,6 +442,7 @@ def _prune(value: JsonValue, trie: dict[object, Any]) -> JsonValue | object:
         return result
     if isinstance(value, list):
         result_list: list[JsonValue] = []
+        # Trie branches use positions in the original list, before removals shift later items.
         for index, child in enumerate(value):
             branch = trie.get(str(index))
             transformed = copy.deepcopy(child) if branch is None else _prune(child, branch)

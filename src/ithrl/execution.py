@@ -40,7 +40,7 @@ class CapabilityProfile(_ImmutableContract):
 
     @property
     def digest(self) -> str:
-        """Return the stable identity of this capability profile."""
+        """Return the stable identity of the capability profile."""
 
         return content_digest(self.model_dump(mode="json"))
 

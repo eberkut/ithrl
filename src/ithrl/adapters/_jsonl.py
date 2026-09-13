@@ -31,7 +31,7 @@ class _DuplicateKeyError(ValueError):
 
 
 def read_jsonl(path: str | os.PathLike[str], *, limits: ParsingLimits) -> JsonlDocument:
-    """Read one regular JSONL file without following its final path component."""
+    """Read one regular JSONL file and reject links or concurrent source replacement."""
 
     source_path = Path(path)
     try:

@@ -23,7 +23,7 @@ type FileIdentity = tuple[int, int]
 
 @dataclass(frozen=True, slots=True)
 class PublishedFile:
-    """Identity of a case file created by the current operation."""
+    """Identity of a case file created during one publication operation."""
 
     path: Path
     signature: FileSignature
@@ -300,7 +300,7 @@ def _link_without_overwrite(temporary: Path, destination: Path) -> None:
 
 
 def remove_published_file(published: PublishedFile) -> None:
-    """Remove an unchanged file published by the current operation."""
+    """Remove a published file only when its identity is unchanged."""
 
     try:
         metadata = published.path.lstat()

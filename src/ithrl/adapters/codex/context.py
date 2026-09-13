@@ -33,7 +33,7 @@ _OPAQUE_RECORD_TYPES = frozenset(
 
 
 def compile_context(session: NativeSession, selector: DecisionSelector) -> ContextGraph:
-    """Build context preceding one selector produced from this session."""
+    """Build context preceding one selector produced from the parsed session."""
 
     records = session.records
     _validate_selector(session, selector, records)

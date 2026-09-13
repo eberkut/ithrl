@@ -1,4 +1,4 @@
-"""Persist and verify opaque files below a case's source boundary."""
+"""Persist and verify opaque files within a case's source boundary."""
 
 from __future__ import annotations
 

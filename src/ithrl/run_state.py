@@ -88,6 +88,8 @@ class RunStateFile:
         return cls(path)
 
     def load(self) -> RunState:
+        """Load and validate one private state file without accepting a symbolic link."""
+
         _reject_unsafe_path(self.path)
         try:
             metadata = self.path.lstat()
@@ -130,7 +132,7 @@ class RunStateFile:
 
     @contextmanager
     def acquire_lock(self) -> Iterator[None]:
-        """Prevent concurrent execution against this active run."""
+        """Prevent concurrent execution against the active run."""
 
         lock_path = self.path.with_name("run.lock")
         _reject_unsafe_path(lock_path)
@@ -139,7 +141,7 @@ class RunStateFile:
             with lock:
                 yield
         except Timeout as error:
-            raise RunStateBusyError("another process is already using this active run") from error
+            raise RunStateBusyError("another process is already using the active run") from error
 
     def complete(self, result_path: Path) -> None:
         current = self.load()

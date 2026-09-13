@@ -12,7 +12,7 @@ class UnsafePathError(ValueError):
 
 
 def validate_directory_chain(path: Path) -> None:
-    """Require existing path components to be directories controlled by the current user."""
+    """Require existing path components to be directories controlled by the active user."""
 
     if ".." in path.parts:
         raise UnsafePathError("path cannot contain '..'")
@@ -21,7 +21,7 @@ def validate_directory_chain(path: Path) -> None:
     if os.name == "posix":
         _validate_posix_control(existing)
     elif not _is_below_user_profile(absolute):
-        raise UnsafePathError("path must be inside the current user profile on this platform")
+        raise UnsafePathError("path must be inside the active user's profile on the host platform")
 
 
 def _existing_directories(path: Path) -> tuple[tuple[Path, os.stat_result], ...]:

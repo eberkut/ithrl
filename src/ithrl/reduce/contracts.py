@@ -25,7 +25,7 @@ class ReductionError(RuntimeError):
 
 
 class ResumeMismatchError(ReductionError):
-    """A checkpoint does not belong to this exact reduction."""
+    """A checkpoint does not belong to the requested reduction."""
 
 
 class CandidateTrial(BaseModel):

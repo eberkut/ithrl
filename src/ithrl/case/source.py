@@ -58,7 +58,7 @@ class SourceArtifactIdentity(BaseModel):
 
 
 class SourceManifest(BaseModel):
-    """Versioned index of every opaque file below the source boundary."""
+    """Versioned index of every opaque file within the source boundary."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -180,7 +180,7 @@ def _validate_path_structure(value: str, parts: list[str]) -> None:
         or parts[0] != "source"
         or any(part in {"", ".", ".."} for part in parts)
     ):
-        raise ValueError("source artifact path must be a safe path below 'source/'")
+        raise ValueError("source artifact path must be a safe path under 'source/'")
 
 
 def _validate_path_lengths(value: str, parts: list[str]) -> None:

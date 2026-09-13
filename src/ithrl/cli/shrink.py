@@ -151,6 +151,7 @@ def save_outcome(
         execution_plan=prepared.execution_plan,
         checkpoint=checkpoint,
     )
+    # Publish the immutable result before replacing the active run with its completed pointer.
     run_state.complete(destination)
     report = CommandOutput(
         command="shrink",

@@ -54,7 +54,7 @@ def create_case_report(
     output: Path | None,
     output_format: OutputFormat,
 ) -> CommandOutput:
-    """Select evidence, create one case, and return content-safe output."""
+    """Select evidence and create a case without exposing captured content in the output."""
 
     selected_harness = _parse_harness(harness)
     mode, opened_session = _select_mode(
@@ -160,7 +160,7 @@ def _extract_synthetic(
         harness_version=evidence.manifest.harness_version,
         original_context_count=len(evidence.context.nodes),
         retained_context_count=len(evidence.context.nodes),
-        next_action="Run shrink to calibrate and reduce this case.",
+        next_action="Run shrink to calibrate and reduce the case.",
         next_command=next_command,
         next_command_shell=next_command_shell,
     )

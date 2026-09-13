@@ -47,7 +47,7 @@ class DiscoveryLimits:
 
 @dataclass(frozen=True, slots=True)
 class SessionSource:
-    """One candidate native session file found below a known store."""
+    """One candidate native session file found under a known store."""
 
     path: Path
     modified_at_ns: int
@@ -63,7 +63,7 @@ class SourceScan:
 
 
 class SessionSummary(BaseModel):
-    """Content-free native session facts safe for selection output."""
+    """Native session facts that can be shown without captured content."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
@@ -92,7 +92,7 @@ class SessionSummary(BaseModel):
 
 @dataclass(frozen=True, slots=True)
 class DiscoveredSession:
-    """A content-free summary paired with its internal source path."""
+    """A display-safe summary paired with its internal source path."""
 
     source: SessionSource
     summary: SessionSummary
@@ -101,7 +101,7 @@ class DiscoveredSession:
 
 @dataclass(frozen=True, slots=True)
 class DiscoveryResult:
-    """Bounded supported sessions plus content-free scan counts."""
+    """Bounded supported sessions and scan counts that expose no session content."""
 
     sessions: tuple[DiscoveredSession, ...]
     candidates_seen: int

@@ -80,7 +80,7 @@ def discover_native_sessions(
     harness: HarnessName | None = None,
     limits: DiscoveryLimits | None = None,
 ) -> DiscoveryResult:
-    """Return supported ordinary sessions without captured content."""
+    """Return supported saved sessions without exposing their captured content."""
 
     return discover_sessions(harness=harness, limits=limits)
 
@@ -117,7 +117,7 @@ def open_native_session(
 
 
 def list_native_decisions(session: NativeSession) -> tuple[DecisionSummary, ...]:
-    """Return content-free completed decisions for user selection."""
+    """Return completed decisions for selection without exposing their content."""
 
     return enumerate_decisions(session)
 

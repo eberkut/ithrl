@@ -1,4 +1,4 @@
-"""Stable, content-safe errors for native session parsing."""
+"""Stable native-session errors that do not expose captured content."""
 
 from __future__ import annotations
 

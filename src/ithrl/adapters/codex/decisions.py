@@ -80,6 +80,7 @@ def _completed_decision_records(records: tuple[JsonObject, ...]) -> tuple[_Decis
             continue
         if event_type != "task_complete" or not (starts := open_turns.get(turn_id)):
             continue
+        # Codex task IDs can overlap; a completion closes the latest unmatched start for that ID.
         context_before_line = max(starts.pop(), latest_model_input_line)
         if not starts:
             del open_turns[turn_id]

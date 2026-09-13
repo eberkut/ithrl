@@ -39,7 +39,7 @@ class FinalResponseTarget(_ImmutableContract):
 
     @property
     def digest(self) -> str:
-        """Return the stable identity of this target contract."""
+        """Return the stable identity of the target contract."""
 
         return target_digest(self)
 
@@ -68,7 +68,7 @@ class ShellActionTarget(_ImmutableContract):
 
     @property
     def digest(self) -> str:
-        """Return the stable identity of this target contract."""
+        """Return the stable identity of the target contract."""
 
         return target_digest(self)
 

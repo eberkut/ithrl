@@ -215,7 +215,7 @@ def shrink(
             min=1,
             max=MAX_CANDIDATE_RUNS,
             help=(
-                "Maximum candidate tests across this run and any resumed runs. "
+                "Maximum candidate tests across the active run and any resumed runs. "
                 "Default: 100 for a new search; 100 or twice the saved count, whichever is "
                 f"larger, capped at {MAX_CANDIDATE_RUNS:,}, when resuming."
             ),
