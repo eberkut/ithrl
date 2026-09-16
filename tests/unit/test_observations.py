@@ -22,6 +22,9 @@ from ithrl.observations import (
     ObservationStoreError,
     UnsupportedObservationSchemaError,
 )
+from ithrl.runner import AttemptEvidence, ProviderAcceptanceState, RunAccounting
+
+_TEST_DIGEST = "0" * 64
 
 
 def _observation(
@@ -36,6 +39,7 @@ def _observation(
         "candidate_digest": "candidate",
         "experiment_digest": "experiment",
         "runner_fingerprint": "fake-v1",
+        "execution_plan_digest": "plan-v1",
         "target_digest": "target",
         "algorithm_digest": "deterministic-ddmin-v1",
         "role": ObservationRole.SEARCH,
@@ -43,6 +47,23 @@ def _observation(
         "attempt": attempt,
         "outcome": outcome,
         "error_category": error_category,
+        "attempt_evidence": (
+            AttemptEvidence(
+                attempt_id="attempt-" + "0" * 32,
+                attempt_digest=_TEST_DIGEST,
+                termination_reason="failed",
+                provider_acceptance_state=ProviderAcceptanceState.NOT_STARTED,
+            )
+            if outcome is ObservationOutcome.RUNNER_ERROR
+            else AttemptEvidence(
+                attempt_id="attempt-" + "0" * 32,
+                attempt_digest=_TEST_DIGEST,
+                termination_reason="completed",
+                provider_acceptance_state=ProviderAcceptanceState.NOT_STARTED,
+                effective_policy_digest=_TEST_DIGEST,
+                accounting=RunAccounting(),
+            )
+        ),
     }
     values.update(changes)
     return Observation.model_validate(values)
@@ -53,6 +74,7 @@ def _identity(**changes: str) -> ObservationIdentity:
         "case_digest": "case",
         "experiment_digest": "experiment",
         "runner_fingerprint": "fake-v1",
+        "execution_plan_digest": "plan-v1",
         "target_digest": "target",
         "algorithm_digest": "deterministic-ddmin-v1",
     }
@@ -93,6 +115,7 @@ def test_store_appends_repeated_candidate_observations(tmp_path: Path) -> None:
         ("case_digest", "other-case"),
         ("experiment_digest", "other-experiment"),
         ("runner_fingerprint", "other-runner"),
+        ("execution_plan_digest", "other-plan"),
         ("target_digest", "other-target"),
         ("algorithm_digest", "other-algorithm"),
     ],
@@ -194,6 +217,14 @@ def test_record_attempt_allocates_same_arm_attempts_atomically(tmp_path: Path) -
             role=ObservationRole.SEARCH,
             arm=ObservationArm.CANDIDATE,
             outcome=ObservationOutcome.MATCH,
+            attempt_evidence=AttemptEvidence(
+                attempt_id="attempt-" + "0" * 32,
+                attempt_digest=_TEST_DIGEST,
+                termination_reason="completed",
+                provider_acceptance_state=ProviderAcceptanceState.NOT_STARTED,
+                effective_policy_digest=_TEST_DIGEST,
+                accounting=RunAccounting(),
+            ),
         )
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
@@ -210,6 +241,7 @@ def test_observation_rejects_unknown_versioned_values(field: str) -> None:
         "candidate_digest": "candidate",
         "experiment_digest": "experiment",
         "runner_fingerprint": "runner",
+        "execution_plan_digest": "plan",
         "target_digest": "target",
         "algorithm_digest": "algorithm",
         "role": ObservationRole.SEARCH,
@@ -301,7 +333,7 @@ def test_concurrent_first_initialization_uses_one_complete_schema(tmp_path: Path
     with closing(sqlite3.connect(path)) as connection:
         assert connection.execute(
             "SELECT value FROM ithrl_metadata WHERE key = 'schema_version'"
-        ).fetchone() == ("1",)
+        ).fetchone() == ("2",)
 
 
 def test_sqlite_initialization_errors_use_the_store_error_contract(

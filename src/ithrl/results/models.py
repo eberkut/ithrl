@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ithrl.case import ProvenanceFacts
 from ithrl.context import JsonObject
-from ithrl.execution import ResolvedExecutionPlan
+from ithrl.execution import CandidateMaterialization, ResolvedExecutionPlan
 from ithrl.experiment import ExperimentDefinition
 from ithrl.reduce import MAX_CANDIDATE_RUNS, ReductionCheckpoint
 
@@ -47,7 +47,10 @@ class ResultSummary(_StrictImmutableModel):
     experiment_digest: Annotated[str, Field(pattern=_DIGEST_PATTERN)]
     target_digest: Annotated[str, Field(pattern=_DIGEST_PATTERN)]
     execution_plan_digest: Annotated[str, Field(pattern=_DIGEST_PATTERN)]
-    reduced_request_digest: Annotated[str, Field(pattern=_DIGEST_PATTERN)]
+    candidate_digest: Annotated[str, Field(pattern=_DIGEST_PATTERN)]
+    candidate_materialization: CandidateMaterialization
+    source_artifact_digests: tuple[Annotated[str, Field(pattern=_DIGEST_PATTERN)], ...] = ()
+    reduced_request_digest: Annotated[str | None, Field(pattern=_DIGEST_PATTERN)] = None
     retained_context_digest: Annotated[str, Field(pattern=_DIGEST_PATTERN)]
     provenance_digest: Annotated[str, Field(pattern=_DIGEST_PATTERN)]
     checkpoint_digest: Annotated[str, Field(pattern=_DIGEST_PATTERN)]
@@ -66,9 +69,10 @@ class ResultSummary(_StrictImmutableModel):
     candidate_runs_used: Annotated[int, Field(ge=0, le=MAX_CANDIDATE_RUNS)]
     max_candidate_runs: Annotated[int | None, Field(ge=1, le=MAX_CANDIDATE_RUNS)] = None
     observations_recorded: Annotated[int, Field(ge=0)]
-    network_calls: Literal[0] = 0
-    provider_calls: Literal[0] = 0
-    actions_executed: Literal[0] = 0
+    network_calls: Annotated[int, Field(ge=0)] = 0
+    provider_calls: Annotated[int, Field(ge=0)] = 0
+    provider_calls_may_have_started: Annotated[int, Field(ge=0)] = 0
+    actions_executed: Annotated[int, Field(ge=0)] = 0
     source_case: Annotated[str, Field(min_length=1)]
     resume_of: Annotated[str | None, Field(min_length=1, max_length=128)] = None
     next_action: Annotated[str | None, Field(min_length=1)] = None
@@ -90,7 +94,7 @@ class ResultSnapshot(_StrictImmutableModel):
 
     root: Path
     summary: ResultSummary
-    reduced_request: JsonObject
+    reduced_request: JsonObject | None
     retained_context_lines: tuple[str, ...]
     experiment_source: str
     experiment: ExperimentDefinition

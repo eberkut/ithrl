@@ -25,13 +25,14 @@ from ithrl.execution import ResolvedExecutionPlan
 from ithrl.experiment import ExperimentDefinition, ExperimentFormatError
 from ithrl.reduce import CandidateTrial, ReductionCheckpoint
 from ithrl.results.models import ResultSnapshot, ResultSnapshotError, ResultSummary
+from ithrl.runner import Candidate
 
 
 def validate_contents(
     *,
     root: Path,
     summary: ResultSummary,
-    request: Mapping[str, Any],
+    request: Mapping[str, Any] | None,
     retained_context_lines: tuple[str, ...],
     experiment_source: str,
     provenance: Mapping[str, Any],
@@ -41,18 +42,19 @@ def validate_contents(
     """Validate and assemble all files in one result snapshot."""
 
     try:
-        request_data = json_object(request, label="request")
+        request_data = json_object(request, label="request") if request is not None else None
         checkpoint_model = (
             checkpoint
             if isinstance(checkpoint, ReductionCheckpoint)
             else ReductionCheckpoint.model_validate(checkpoint)
         )
         provenance_model = ProvenanceFacts.model_validate(provenance)
-        plan_model = (
-            execution_plan
+        plan_data = (
+            execution_plan.model_dump(mode="python")
             if isinstance(execution_plan, ResolvedExecutionPlan)
-            else ResolvedExecutionPlan.model_validate(execution_plan)
+            else execution_plan
         )
+        plan_model = ResolvedExecutionPlan.model_validate(plan_data)
         experiment = ExperimentDefinition.from_toml(experiment_source)
         context_lines, context_nodes, context_digest = validate_context_lines(
             retained_context_lines
@@ -91,7 +93,7 @@ def validate_contents(
 def _validate_content_identities(
     *,
     summary: ResultSummary,
-    request_data: JsonObject,
+    request_data: JsonObject | None,
     context_digest: str,
     context_ids: tuple[str, ...],
     experiment: ExperimentDefinition,
@@ -101,12 +103,24 @@ def _validate_content_identities(
 ) -> None:
     """Cross-check every persisted digest before a result is trusted or resumed."""
 
+    _validate_plan_identity(summary, experiment, execution_plan)
+    _validate_candidate_identity(summary, request_data, execution_plan)
+    _validate_file_identities(summary, context_digest, context_ids, provenance, checkpoint)
+
+
+def _validate_plan_identity(
+    summary: ResultSummary,
+    experiment: ExperimentDefinition,
+    execution_plan: ResolvedExecutionPlan,
+) -> None:
     if experiment.digest != summary.experiment_digest:
         raise ResultSnapshotError("summary experiment_digest does not match experiment.toml")
     if execution_plan.digest != summary.execution_plan_digest:
         raise ResultSnapshotError(
             "summary execution_plan_digest does not match execution-plan.json"
         )
+    if execution_plan.case_digest != summary.case_digest:
+        raise ResultSnapshotError("execution plan and summary case identities differ")
     if execution_plan.experiment_digest != summary.experiment_digest:
         raise ResultSnapshotError("execution plan and summary experiment identities differ")
     if (
@@ -118,8 +132,44 @@ def _validate_content_identities(
         raise ResultSnapshotError("execution plan and summary target identities differ")
     if execution_plan.runner_fingerprint != summary.runner_fingerprint:
         raise ResultSnapshotError("execution plan and summary runner identities differ")
-    if content_digest(request_data) != summary.reduced_request_digest:
-        raise ResultSnapshotError("summary reduced_request_digest does not match request.json")
+
+
+def _validate_candidate_identity(
+    summary: ResultSummary,
+    request_data: JsonObject | None,
+    execution_plan: ResolvedExecutionPlan,
+) -> None:
+    try:
+        candidate = Candidate(
+            case_digest=summary.case_digest,
+            execution_plan_digest=summary.execution_plan_digest,
+            source_artifact_digests=summary.source_artifact_digests,
+            retained_context_ids=summary.retained_context_ids,
+            removed_context_ids=summary.removed_context_ids,
+            materialization=summary.candidate_materialization,
+        )
+    except ValidationError as error:
+        raise ResultSnapshotError(
+            f"summary contains an invalid candidate: {validation_message(error)}"
+        ) from error
+    if candidate.digest != summary.candidate_digest:
+        raise ResultSnapshotError("summary candidate_digest does not match its context partition")
+    if candidate.materialization != execution_plan.candidate_materialization:
+        raise ResultSnapshotError("summary candidate materialization differs from execution plan")
+    if summary.candidate_materialization == "exact-request":
+        if request_data is None or content_digest(request_data) != summary.reduced_request_digest:
+            raise ResultSnapshotError("summary reduced_request_digest does not match request.json")
+    elif request_data is not None or summary.reduced_request_digest is not None:
+        raise ResultSnapshotError("source-backed results cannot contain a materialized request")
+
+
+def _validate_file_identities(
+    summary: ResultSummary,
+    context_digest: str,
+    context_ids: tuple[str, ...],
+    provenance: ProvenanceFacts,
+    checkpoint: ReductionCheckpoint,
+) -> None:
     if context_digest != summary.retained_context_digest:
         raise ResultSnapshotError(
             "summary retained_context_digest does not match retained-context.jsonl"
@@ -160,6 +210,7 @@ def _validate_checkpoint_structure(
         checkpoint.case_digest,
         checkpoint.experiment_digest,
         checkpoint.runner_fingerprint,
+        checkpoint.execution_plan_digest,
         checkpoint.target_digest,
         checkpoint.algorithm_digest,
     )
@@ -167,6 +218,7 @@ def _validate_checkpoint_structure(
         summary.case_digest,
         summary.experiment_digest,
         execution_plan.runner_fingerprint,
+        execution_plan.digest,
         execution_plan.target_digest,
         summary.algorithm_digest,
     )

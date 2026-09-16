@@ -176,13 +176,14 @@ def test_shared_domain_layers_do_not_depend_on_concrete_harnesses() -> None:
         root / "behavior.py",
         root / "context.py",
         root / "decisions.py",
-        root / "execution.py",
         root / "experiment.py",
         root / "measurement.py",
         root / "observations.py",
         root / "workflow.py",
+        *sorted((root / "execution").glob("*.py")),
         *sorted((root / "reduce").glob("*.py")),
         *sorted((root / "results").glob("*.py")),
+        *sorted((root / "runner").glob("*.py")),
     )
 
     for source in shared:
@@ -193,6 +194,34 @@ def test_shared_domain_layers_do_not_depend_on_concrete_harnesses() -> None:
             for module in imported
             if module.startswith(("ithrl.adapters.codex", "ithrl.adapters.copilot"))
         }, source
+
+
+def test_runner_core_does_not_depend_on_adapters_cli_or_workflow() -> None:
+    package = Path(__file__).parents[2] / "src" / "ithrl" / "runner"
+    forbidden = ("ithrl.adapters", "ithrl.cli", "ithrl.workflow")
+
+    for source in package.rglob("*.py"):
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        imported = _imported_modules(tree)
+        assert not {
+            module
+            for module in imported
+            if any(module == blocked or module.startswith(f"{blocked}.") for blocked in forbidden)
+        }, source
+
+
+def test_workflow_has_no_concrete_runner_selection_branch() -> None:
+    source = Path(__file__).parents[2] / "src" / "ithrl" / "workflow.py"
+    tree = ast.parse(source.read_text(encoding="utf-8"))
+    imported = _imported_modules(tree)
+
+    assert "ithrl.runner.fake" not in imported
+    assert "ithrl.adapters.codex" not in imported
+    assert "ithrl.adapters.copilot" not in imported
+    assert not any(
+        isinstance(node, ast.Name) and node.id in {"FakeRunner", "FakeRunnerConfig"}
+        for node in ast.walk(tree)
+    )
 
 
 def _imported_modules(tree: ast.AST) -> set[str]:

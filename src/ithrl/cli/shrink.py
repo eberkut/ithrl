@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from ithrl.case import CaseEvidence, CaseWorkspace
 from ithrl.cli.output import CommandOutput, ExitCode, shell_command
-from ithrl.context import content_digest
+from ithrl.context import JsonObject, content_digest
 from ithrl.extraction import load_extracted_case
 from ithrl.measurement import RunnerExecutionError
 from ithrl.observations import (
@@ -37,6 +37,7 @@ from ithrl.results import (
     write_result_snapshot,
 )
 from ithrl.run_state import RunStateError, RunStateFile
+from ithrl.runner import prepare_candidate
 from ithrl.workflow import (
     PhaseOutcome,
     PreparedExperiment,
@@ -64,6 +65,14 @@ class _NextStep:
     command_shell: Literal["posix", "powershell"] | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class _AttemptTotals:
+    network_calls: int = 0
+    provider_calls: int = 0
+    provider_calls_may_have_started: int = 0
+    actions_executed: int = 0
+
+
 def save_outcome(
     *,
     workspace: CaseWorkspace,
@@ -75,16 +84,17 @@ def save_outcome(
     calibrate_only: bool,
     max_candidates: int,
     observation_store_path: Path | None,
-    observations_recorded: int,
+    observations: tuple[Observation, ...],
     run_state: RunStateFile,
 ) -> SavedOutcome:
     checkpoint = phases.reduction.checkpoint if phases.reduction is not None else reducer.checkpoint
     removed = frozenset(checkpoint.removed_context_ids)
-    request = evidence.materialize(removed)
+    candidate = prepare_candidate(evidence, prepared.execution_plan, removed)
+    request = _materialized_request(evidence, removed)
     original_ids = tuple(node.id for node in evidence.context.nodes)
-    retained_ids = tuple(node_id for node_id in original_ids if node_id not in removed)
-    removed_ids = tuple(node_id for node_id in original_ids if node_id in removed)
-    run_id = f"result-{content_digest(request)[:12]}-{uuid4().hex[:8]}"
+    retained_ids, removed_ids = _partition_ids(original_ids, removed)
+    run_id = f"result-{candidate.digest[:12]}-{uuid4().hex[:8]}"
+    totals = _attempt_totals(observations)
     destination = workspace.root / "results" / run_id
     disposition = _classify_outcome(phases, checkpoint, calibrate_only=calibrate_only)
     next_step = _plan_next_step(
@@ -106,7 +116,10 @@ def save_outcome(
         experiment_digest=prepared.experiment.digest,
         target_digest=prepared.experiment.target.digest,
         execution_plan_digest=prepared.execution_plan.digest,
-        reduced_request_digest=content_digest(request),
+        candidate_digest=candidate.digest,
+        candidate_materialization=candidate.materialization,
+        source_artifact_digests=candidate.source_artifact_digests,
+        reduced_request_digest=content_digest(request) if request is not None else None,
         retained_context_digest=content_digest(
             [node.model_dump(mode="json") for node in retained_nodes]
         ),
@@ -120,21 +133,17 @@ def save_outcome(
         retained_context_ids=retained_ids,
         removed_context_ids=removed_ids,
         calibration_result=phases.calibration_result,
-        calibration_observation_ids=(
-            (phases.calibration_observation.observation_id,)
-            if phases.calibration_observation is not None
-            else ()
-        ),
+        calibration_observation_ids=_observation_ids(phases.calibration_observation),
         search_result=disposition.search_result,
         confirmation_result=phases.confirmation_result,
-        confirmation_observation_ids=(
-            (phases.confirmation_observation.observation_id,)
-            if phases.confirmation_observation is not None
-            else ()
-        ),
+        confirmation_observation_ids=_observation_ids(phases.confirmation_observation),
         candidate_runs_used=checkpoint.candidate_runs_used,
         max_candidate_runs=max_candidates,
-        observations_recorded=observations_recorded,
+        observations_recorded=len(observations),
+        network_calls=totals.network_calls,
+        provider_calls=totals.provider_calls,
+        provider_calls_may_have_started=totals.provider_calls_may_have_started,
+        actions_executed=totals.actions_executed,
         source_case=str(workspace.root.absolute()),
         resume_of=previous.summary.run_id if previous is not None else None,
         next_action=next_step.action,
@@ -166,10 +175,10 @@ def save_outcome(
         confirmation_result=phases.confirmation_result,
         candidate_runs_used=checkpoint.candidate_runs_used,
         max_candidate_runs=max_candidates,
-        observations_recorded=observations_recorded,
+        observations_recorded=len(observations),
         execution_plan_digest=prepared.execution_plan.digest,
-        runner_type=prepared.execution_plan.runner_type,
-        runner_version=prepared.execution_plan.runner_version,
+        runner_type=prepared.execution_plan.capability.runner_type,
+        runner_version=prepared.execution_plan.capability.runner_version,
         target_type=prepared.execution_plan.target_type,
         protected_context_ids=prepared.experiment.oracle.protected_context_ids,
         run_state_path=str(run_state.path.parent.absolute()),
@@ -178,6 +187,45 @@ def save_outcome(
         next_command_shell=next_step.command_shell,
     )
     return SavedOutcome(report=report, exit_code=disposition.exit_code)
+
+
+def _attempt_totals(observations: tuple[Observation, ...]) -> _AttemptTotals:
+    network_calls = 0
+    provider_calls = 0
+    provider_calls_may_have_started = 0
+    actions_executed = 0
+    for observation in observations:
+        evidence = observation.attempt_evidence
+        accounting = evidence.accounting
+        provider_calls_may_have_started += evidence.provider_calls_possible
+        if accounting is None:
+            provider_calls += int(evidence.provider_call_started)
+            continue
+        network_calls += accounting.provider_connections_started + accounting.tool_network_requests
+        provider_calls += accounting.provider_calls_started
+        actions_executed += accounting.actions_executed
+    return _AttemptTotals(
+        network_calls,
+        provider_calls,
+        provider_calls_may_have_started,
+        actions_executed,
+    )
+
+
+def _materialized_request(evidence: CaseEvidence, removed: frozenset[str]) -> JsonObject | None:
+    return evidence.materialize(removed) if evidence.has_request else None
+
+
+def _partition_ids(
+    original_ids: tuple[str, ...], removed: frozenset[str]
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    retained_ids = tuple(node_id for node_id in original_ids if node_id not in removed)
+    removed_ids = tuple(node_id for node_id in original_ids if node_id in removed)
+    return retained_ids, removed_ids
+
+
+def _observation_ids(observation: Observation | None) -> tuple[str, ...]:
+    return () if observation is None else (observation.observation_id,)
 
 
 def _classify_outcome(
@@ -421,13 +469,18 @@ def _validate_result_case(snapshot: ResultSnapshot, evidence: CaseEvidence) -> N
         raise ResultSnapshotError("result snapshot does not match its source case")
     try:
         removed = evidence.context.dependency_closure(summary.removed_context_ids)
-        expected_request = evidence.materialize(removed)
+        expected_candidate = prepare_candidate(evidence, snapshot.execution_plan, removed)
     except ValueError as error:
         raise ResultSnapshotError("result removals are invalid for the source case") from error
     if tuple(sorted(removed)) != tuple(sorted(summary.removed_context_ids)):
         raise ResultSnapshotError("result removals are not dependency-closed")
-    if expected_request != snapshot.reduced_request:
-        raise ResultSnapshotError("result request does not match source-case materialization")
+    if expected_candidate.digest != summary.candidate_digest:
+        raise ResultSnapshotError("result candidate does not match source-case materialization")
+    if expected_candidate.materialization == "exact-request":
+        if evidence.materialize(removed) != snapshot.reduced_request:
+            raise ResultSnapshotError("result request does not match source-case materialization")
+    elif snapshot.reduced_request is not None:
+        raise ResultSnapshotError("source-backed result contains a materialized request")
     retained_lines = tuple(
         node.model_dump_json()
         for node in evidence.context.nodes

@@ -15,6 +15,7 @@ def _checkpoint() -> ReductionCheckpoint:
         case_digest="case",
         experiment_digest="experiment",
         runner_fingerprint="fake-v2",
+        execution_plan_digest="plan",
         target_digest="target",
         removed_context_ids=(),
         trials=(),

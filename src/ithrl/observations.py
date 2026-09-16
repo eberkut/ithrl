@@ -11,11 +11,14 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
+from typing import Annotated
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-_STORE_SCHEMA_VERSION = 1
+from ithrl.runner.evidence import AttemptEvidence
+
+_STORE_SCHEMA_VERSION = 2
 _METADATA_TABLE = "ithrl_metadata"
 _OBSERVATION_COLUMNS = (
     "observation_id",
@@ -24,6 +27,7 @@ _OBSERVATION_COLUMNS = (
     "candidate_digest",
     "experiment_digest",
     "runner_fingerprint",
+    "execution_plan_digest",
     "target_digest",
     "algorithm_digest",
     "role",
@@ -31,6 +35,7 @@ _OBSERVATION_COLUMNS = (
     "attempt",
     "outcome",
     "error_category",
+    "attempt_evidence",
 )
 
 
@@ -80,6 +85,7 @@ class ObservationIdentity(BaseModel):
     case_digest: str = Field(min_length=1)
     experiment_digest: str = Field(min_length=1)
     runner_fingerprint: str = Field(min_length=1)
+    execution_plan_digest: str = Field(min_length=1)
     target_digest: str = Field(min_length=1)
     algorithm_digest: str = Field(min_length=1)
 
@@ -95,13 +101,18 @@ class Observation(BaseModel):
     candidate_digest: str = Field(min_length=1)
     experiment_digest: str = Field(min_length=1)
     runner_fingerprint: str = Field(min_length=1)
+    execution_plan_digest: str = Field(min_length=1)
     target_digest: str = Field(min_length=1)
     algorithm_digest: str = Field(min_length=1)
     role: ObservationRole
     arm: ObservationArm
     attempt: int = Field(ge=1)
     outcome: ObservationOutcome
-    error_category: str | None = None
+    error_category: Annotated[
+        str | None,
+        Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$"),
+    ] = None
+    attempt_evidence: AttemptEvidence
 
     @field_validator("recorded_at")
     @classmethod
@@ -120,6 +131,11 @@ class Observation(BaseModel):
             raise ValueError("error outcomes require error_category")
         if not is_error and self.error_category is not None:
             raise ValueError("valid outcomes must not have error_category")
+        completed = self.attempt_evidence.termination_reason == "completed"
+        if self.outcome is ObservationOutcome.RUNNER_ERROR and completed:
+            raise ValueError("runner errors require incomplete attempt evidence")
+        if self.valid and not completed:
+            raise ValueError("behavior outcomes require completed attempt evidence")
         return self
 
     @property
@@ -130,6 +146,7 @@ class Observation(BaseModel):
             case_digest=self.case_digest,
             experiment_digest=self.experiment_digest,
             runner_fingerprint=self.runner_fingerprint,
+            execution_plan_digest=self.execution_plan_digest,
             target_digest=self.target_digest,
             algorithm_digest=self.algorithm_digest,
         )
@@ -254,6 +271,7 @@ class ObservationStore:
         arm: ObservationArm,
         outcome: ObservationOutcome,
         error_category: str | None = None,
+        attempt_evidence: AttemptEvidence,
     ) -> Observation:
         """Allocate and append the next attempt for one exact arm atomically."""
 
@@ -277,6 +295,7 @@ class ObservationStore:
                     attempt=int(row[0]),
                     outcome=outcome,
                     error_category=error_category,
+                    attempt_evidence=attempt_evidence,
                 )
                 connection.execute(_INSERT_OBSERVATION, _to_row(observation))
         except sqlite3.IntegrityError as error:
@@ -307,6 +326,7 @@ class ObservationStore:
             case_digest = ?
             AND experiment_digest = ?
             AND runner_fingerprint = ?
+            AND execution_plan_digest = ?
             AND target_digest = ?
             AND algorithm_digest = ?
             AND candidate_digest = ?
@@ -317,6 +337,7 @@ class ObservationStore:
                 identity.case_digest,
                 identity.experiment_digest,
                 identity.runner_fingerprint,
+                identity.execution_plan_digest,
                 identity.target_digest,
                 identity.algorithm_digest,
                 candidate_digest,
@@ -361,6 +382,7 @@ class ObservationStore:
                      WHERE case_digest = ?
                        AND experiment_digest = ?
                        AND runner_fingerprint = ?
+                       AND execution_plan_digest = ?
                        AND target_digest = ?
                        AND algorithm_digest = ?
                        AND candidate_digest = ?
@@ -399,8 +421,10 @@ class ObservationStore:
                 rows = connection.execute(
                     f"""
                     SELECT observation_id, recorded_at, case_digest, candidate_digest,
-                           experiment_digest, runner_fingerprint, target_digest,
-                           algorithm_digest, role, arm, attempt, outcome, error_category
+                           experiment_digest, runner_fingerprint, execution_plan_digest,
+                           target_digest,
+                           algorithm_digest, role, arm, attempt, outcome, error_category,
+                           attempt_evidence
                      FROM observations
                      WHERE {where}
                      ORDER BY {order_by}
@@ -441,11 +465,13 @@ class ObservationStore:
         columns = tuple(item[1] for item in connection.execute("PRAGMA table_info(observations)"))
         if columns != _OBSERVATION_COLUMNS:
             raise UnsupportedObservationSchemaError(
-                "observation database schema version 1 has an incompatible observations table"
+                f"observation database schema version {_STORE_SCHEMA_VERSION} has an "
+                "incompatible observations table"
             )
         if _schema_fingerprint(connection) != _expected_schema_fingerprint():
             raise UnsupportedObservationSchemaError(
-                "observation database schema version 1 has modified or unexpected schema objects"
+                f"observation database schema version {_STORE_SCHEMA_VERSION} has modified or "
+                "unexpected schema objects"
             )
 
     @contextmanager
@@ -497,6 +523,7 @@ def _to_row(observation: Observation) -> tuple[str | int | None, ...]:
         observation.candidate_digest,
         observation.experiment_digest,
         observation.runner_fingerprint,
+        observation.execution_plan_digest,
         observation.target_digest,
         observation.algorithm_digest,
         observation.role.value,
@@ -504,14 +531,16 @@ def _to_row(observation: Observation) -> tuple[str | int | None, ...]:
         observation.attempt,
         observation.outcome.value,
         observation.error_category,
+        observation.attempt_evidence.model_dump_json(),
     )
 
 
-def _identity_parameters(identity: ObservationIdentity) -> tuple[str, str, str, str, str]:
+def _identity_parameters(identity: ObservationIdentity) -> tuple[str, str, str, str, str, str]:
     return (
         identity.case_digest,
         identity.experiment_digest,
         identity.runner_fingerprint,
+        identity.execution_plan_digest,
         identity.target_digest,
         identity.algorithm_digest,
     )
@@ -525,13 +554,15 @@ def _from_row(row: tuple[str | int | None, ...]) -> Observation:
         candidate_digest=str(row[3]),
         experiment_digest=str(row[4]),
         runner_fingerprint=str(row[5]),
-        target_digest=str(row[6]),
-        algorithm_digest=str(row[7]),
-        role=str(row[8]),
-        arm=str(row[9]),
-        attempt=int(str(row[10])),
-        outcome=str(row[11]),
-        error_category=None if row[12] is None else str(row[12]),
+        execution_plan_digest=str(row[6]),
+        target_digest=str(row[7]),
+        algorithm_digest=str(row[8]),
+        role=str(row[9]),
+        arm=str(row[10]),
+        attempt=int(str(row[11])),
+        outcome=str(row[12]),
+        error_category=None if row[13] is None else str(row[13]),
+        attempt_evidence=AttemptEvidence.model_validate_json(str(row[14])),
     )
 
 
@@ -554,9 +585,9 @@ def _reject_symlink_components(path: Path) -> None:
 _INSERT_OBSERVATION = """
 INSERT INTO observations (
     observation_id, recorded_at, case_digest, candidate_digest,
-    experiment_digest, runner_fingerprint, target_digest, algorithm_digest,
-    role, arm, attempt, outcome, error_category
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    experiment_digest, runner_fingerprint, execution_plan_digest, target_digest,
+    algorithm_digest, role, arm, attempt, outcome, error_category, attempt_evidence
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 _SELECT_NEXT_ATTEMPT = """
@@ -565,6 +596,7 @@ SELECT COALESCE(MAX(attempt), 0) + 1
  WHERE case_digest = ?
    AND experiment_digest = ?
    AND runner_fingerprint = ?
+   AND execution_plan_digest = ?
    AND target_digest = ?
    AND algorithm_digest = ?
    AND candidate_digest = ?
@@ -584,6 +616,7 @@ _SCHEMA_STATEMENTS = (
     candidate_digest TEXT NOT NULL,
     experiment_digest TEXT NOT NULL,
     runner_fingerprint TEXT NOT NULL,
+    execution_plan_digest TEXT NOT NULL,
     target_digest TEXT NOT NULL,
     algorithm_digest TEXT NOT NULL,
     role TEXT NOT NULL CHECK (
@@ -595,19 +628,20 @@ _SCHEMA_STATEMENTS = (
         outcome IN ('match', 'no_match', 'invalid_observation', 'runner_error')
     ),
     error_category TEXT,
+    attempt_evidence TEXT NOT NULL,
     CHECK (
         (outcome IN ('match', 'no_match') AND error_category IS NULL)
         OR
         (outcome IN ('invalid_observation', 'runner_error') AND length(error_category) > 0)
     ),
     UNIQUE (
-        case_digest, experiment_digest, runner_fingerprint, target_digest,
+        case_digest, experiment_digest, runner_fingerprint, execution_plan_digest, target_digest,
         algorithm_digest, candidate_digest, role, arm, attempt
     )
 )""",
     """CREATE INDEX observations_compatibility
     ON observations (
-        case_digest, experiment_digest, runner_fingerprint, target_digest,
+        case_digest, experiment_digest, runner_fingerprint, execution_plan_digest, target_digest,
         algorithm_digest, role, candidate_digest, arm
     )""",
     """CREATE INDEX observations_experiment

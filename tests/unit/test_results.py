@@ -7,8 +7,15 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from ithrl.context import ContextNode, content_digest
-from ithrl.execution import CapabilityProfile, ResolvedExecutionPlan, resolve_execution_plan
+from ithrl.case import CaptureFacts, CaseEvidence, CaseManifest, ProvenanceFacts, ReplayFacts
+from ithrl.context import ContextGraph, ContextNode, JsonObject, content_digest
+from ithrl.execution import (
+    CapabilityProfile,
+    ResolvedExecutionPlan,
+    ResourceLimits,
+    SafetyPolicy,
+    resolve_execution_plan,
+)
 from ithrl.experiment import ExperimentDefinition
 from ithrl.reduce import ALGORITHM_DIGEST, CandidateTrial, ReductionCheckpoint
 from ithrl.results import (
@@ -17,6 +24,7 @@ from ithrl.results import (
     load_result_snapshot,
     write_result_snapshot,
 )
+from ithrl.runner import Candidate
 
 _EXPERIMENT = """\
 schema_version = 1
@@ -55,11 +63,37 @@ def _experiment() -> ExperimentDefinition:
     return ExperimentDefinition.from_toml(_EXPERIMENT)
 
 
+def _evidence() -> CaseEvidence:
+    return CaseEvidence(
+        manifest=CaseManifest(
+            adapter="synthetic",
+            adapter_version="1",
+            captured_at="2026-01-01T00:00:00+00:00",
+            provider="fake",
+            endpoint="local",
+            model_requested="fake",
+            capture=CaptureFacts(request="provider-request", completeness="complete"),
+            replay=ReplayFacts(state="self-contained", environment="local"),
+            provenance=ProvenanceFacts(
+                source="synthetic.json",
+                inference_call_id="inference-001",
+                trace_schema="synthetic-v1",
+            ),
+        ),
+        request=_request(),
+        context=ContextGraph(nodes=()),
+        default_experiment=_EXPERIMENT,
+    )
+
+
 def _plan() -> ResolvedExecutionPlan:
     report = resolve_execution_plan(
         CapabilityProfile.deterministic_fake(),
         _experiment(),
+        evidence=_evidence(),
         runner_fingerprint="fake:v1",
+        safety_policy=SafetyPolicy.credential_free(),
+        resource_limits=ResourceLimits.credential_free(),
     )
     assert report.plan is not None
     return report.plan
@@ -76,7 +110,7 @@ def _node(node_id: str, path: str) -> ContextNode:
     )
 
 
-def _request() -> dict[str, object]:
+def _request() -> JsonObject:
     return {"model": "fake", "input": [{"marker": "keep"}]}
 
 
@@ -112,9 +146,10 @@ def _checkpoint(**overrides: object) -> ReductionCheckpoint:
         )
     )
     values: dict[str, object] = {
-        "case_digest": "a" * 64,
+        "case_digest": _plan().case_digest,
         "experiment_digest": _experiment().digest,
         "runner_fingerprint": _plan().runner_fingerprint,
+        "execution_plan_digest": _plan().digest,
         "target_digest": _plan().target_digest,
         "algorithm_digest": ALGORITHM_DIGEST,
         "removed_context_ids": ("ctx-b",),
@@ -142,13 +177,22 @@ def _summary(
         "inference_call_id": "inference-001",
         "trace_schema": "synthetic-v1",
     }
+    candidate = Candidate(
+        case_digest=plan.case_digest,
+        execution_plan_digest=plan.digest,
+        retained_context_ids=("ctx-a", "ctx-c"),
+        removed_context_ids=("ctx-b",),
+        materialization="exact-request",
+    )
     values: dict[str, object] = {
         "run_id": "run-001",
         "status": "reduced",
-        "case_digest": "a" * 64,
+        "case_digest": plan.case_digest,
         "experiment_digest": _experiment().digest,
         "target_digest": plan.target_digest,
         "execution_plan_digest": plan.digest,
+        "candidate_digest": candidate.digest,
+        "candidate_materialization": "exact-request",
         "reduced_request_digest": content_digest(request),
         "retained_context_digest": content_digest(retained_context),
         "provenance_digest": content_digest(provenance),
@@ -205,6 +249,7 @@ def test_result_snapshot_round_trip_is_complete_and_immutable(tmp_path: Path) ->
     assert loaded.root == destination
     assert loaded.summary == _summary()
     assert loaded.summary.status == "reduced"
+    assert loaded.reduced_request is not None
     assert loaded.reduced_request["model"] == "fake"
     assert tuple(
         node.id for node in map(ContextNode.model_validate_json, loaded.retained_context_lines)
@@ -224,6 +269,70 @@ def test_result_snapshot_round_trip_is_complete_and_immutable(tmp_path: Path) ->
     }
     with pytest.raises(ValidationError, match="frozen"):
         loaded.summary.status = "stopped"  # type: ignore[misc]
+
+
+def test_source_backed_result_has_no_materialized_request(tmp_path: Path) -> None:
+    destination = tmp_path / "results" / "source-backed"
+    experiment_path = tmp_path / "default.toml"
+    experiment_path.write_text(_EXPERIMENT, encoding="utf-8")
+    original_plan = _plan()
+    source_capability = original_plan.capability.model_copy(
+        update={
+            "harness": "fixture-harness",
+            "source_schema": "fixture-source-schema",
+            "supported_capture_types": ("logical-session",),
+            "supported_materializations": ("source-backed",),
+            "reconstruction_method": "source-backed-test-v1",
+        }
+    )
+    plan = original_plan.model_copy(
+        update={
+            "capture_type": "logical-session",
+            "candidate_materialization": "source-backed",
+            "capability": source_capability,
+            "harness": source_capability.harness,
+            "source_schema": source_capability.source_schema,
+        }
+    )
+    checkpoint = _checkpoint(execution_plan_digest=plan.digest)
+    retained_nodes = (_node("ctx-a", "/input/0"), _node("ctx-c", "/input/2"))
+    candidate = Candidate(
+        case_digest=plan.case_digest,
+        execution_plan_digest=plan.digest,
+        source_artifact_digests=("1" * 64,),
+        retained_context_ids=("ctx-a", "ctx-c"),
+        removed_context_ids=("ctx-b",),
+        materialization="source-backed",
+    )
+    provenance = {
+        "schema_version": 1,
+        "source": "synthetic.json",
+        "inference_call_id": "inference-001",
+        "trace_schema": "synthetic-v1",
+    }
+    summary = _summary(
+        execution_plan_digest=plan.digest,
+        candidate_digest=candidate.digest,
+        candidate_materialization="source-backed",
+        source_artifact_digests=candidate.source_artifact_digests,
+        reduced_request_digest=None,
+        checkpoint_digest=content_digest(checkpoint.model_dump(mode="json")),
+    )
+
+    write_result_snapshot(
+        destination=destination,
+        summary=summary,
+        request=None,
+        retained_context_lines=tuple(node.model_dump_json() for node in retained_nodes),
+        experiment_source=experiment_path,
+        provenance=provenance,
+        execution_plan=plan,
+        checkpoint=checkpoint,
+    )
+    loaded = load_result_snapshot(destination)
+
+    assert loaded.reduced_request is None
+    assert not (destination / "request.json").exists()
 
 
 def test_result_snapshot_refuses_overwrite(tmp_path: Path) -> None:

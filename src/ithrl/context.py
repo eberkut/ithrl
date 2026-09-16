@@ -60,7 +60,12 @@ def content_digest(value: Any) -> str:
     return hashlib.sha256(_canonical_json(value)).hexdigest()
 
 
-def validate_json_limits(value: object) -> None:
+def validate_json_limits(
+    value: object,
+    *,
+    max_depth: int = MAX_JSON_DEPTH,
+    max_items: int = MAX_JSON_ITEMS,
+) -> None:
     """Reject invalid JSON values and structures outside local resource limits."""
 
     # An explicit stack keeps user-controlled nesting out of the Python call stack.
@@ -68,8 +73,8 @@ def validate_json_limits(value: object) -> None:
     items = 0
     while pending:
         current, depth = pending.pop()
-        if depth > MAX_JSON_DEPTH:
-            raise ValueError(f"JSON nesting exceeds the {MAX_JSON_DEPTH}-level limit")
+        if depth > max_depth:
+            raise ValueError(f"JSON nesting exceeds the {max_depth}-level limit")
         if isinstance(current, dict):
             if any(not isinstance(key, str) for key in current):
                 raise ValueError("JSON objects must use string keys")
@@ -85,8 +90,8 @@ def validate_json_limits(value: object) -> None:
             pass
         else:
             raise ValueError(f"unsupported JSON value type: {type(current).__name__}")
-        if items > MAX_JSON_ITEMS:
-            raise ValueError(f"JSON structure exceeds the {MAX_JSON_ITEMS}-item limit")
+        if items > max_items:
+            raise ValueError(f"JSON structure exceeds the {max_items}-item limit")
 
 
 def decode_pointer(pointer: str) -> tuple[str, ...]:

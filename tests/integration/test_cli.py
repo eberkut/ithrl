@@ -4,7 +4,6 @@ import json
 import os
 import socket
 import subprocess
-from collections.abc import Mapping
 from importlib import import_module
 from importlib.metadata import version as distribution_version
 from pathlib import Path
@@ -29,7 +28,15 @@ from ithrl.observations import (
 from ithrl.reduce import ReductionCheckpoint
 from ithrl.results import load_result_snapshot
 from ithrl.run_state import RunStateFile
-from ithrl.runner import FakeRunner, RunResult
+from ithrl.runner import (
+    AttemptEvidence,
+    FakeRunner,
+    PreparedAttempt,
+    ProviderAcceptanceState,
+    RunAccounting,
+    RunResult,
+    prepare_candidate,
+)
 from ithrl.workflow import prepare_experiment
 
 FIXTURE = Path(__file__).parents[1] / "fixtures/synthetic-trace.json"
@@ -82,7 +89,7 @@ def test_credential_free_cli_vertical_slice_and_json_contract(tmp_path: Path) ->
     dry_report = json.loads(dry_run.stdout)
     assert dry_report["status"] == "ready"
     assert dry_report["runner_type"] == "fake"
-    assert dry_report["runner_version"] == "2"
+    assert dry_report["runner_version"] == "3"
     assert dry_report["target_type"] == "shell-action"
     assert len(dry_report["execution_plan_digest"]) == 64
     assert dry_report["protected_context_ids"]
@@ -125,6 +132,7 @@ def test_credential_free_cli_vertical_slice_and_json_contract(tmp_path: Path) ->
     snapshot = load_result_snapshot(Path(report["result_path"]))
     assert snapshot.summary.status == "reduced"
     assert snapshot.summary.observations_recorded == report["observations_recorded"]
+    assert snapshot.reduced_request is not None
     input_items = cast(list[JsonObject], snapshot.reduced_request["input"])
     assert [item["content"] for item in input_items] == ["A", "C"]
     roles = [
@@ -535,6 +543,7 @@ def test_active_resume_refuses_a_concurrent_process(tmp_path: Path) -> None:
             case_digest=evidence.digest,
             experiment_digest=prepared.identity.experiment_digest,
             runner_fingerprint=prepared.identity.runner_fingerprint,
+            execution_plan_digest=prepared.identity.execution_plan_digest,
             target_digest=prepared.identity.target_digest,
             removed_context_ids=(),
             trials=(),
@@ -587,7 +596,7 @@ def test_active_resume_validates_trial_order_before_running_calibration(
     )
     runner_calls = 0
 
-    async def reject_run(_self: FakeRunner, _request: Mapping[str, object]) -> RunResult:
+    async def reject_run(_self: FakeRunner, _attempt: PreparedAttempt) -> RunResult:
         nonlocal runner_calls
         runner_calls += 1
         raise AssertionError("resume validation must not execute the runner")
@@ -626,6 +635,7 @@ def test_active_run_state_identity_mismatch_fails_before_calibration(tmp_path: P
         case_digest="another-case",
         experiment_digest=prepared.identity.experiment_digest,
         runner_fingerprint=prepared.identity.runner_fingerprint,
+        execution_plan_digest=prepared.identity.execution_plan_digest,
         target_digest=prepared.identity.target_digest,
         removed_context_ids=(),
         trials=(),
@@ -669,6 +679,7 @@ def test_active_resume_refuses_reordered_context_before_calibration(tmp_path: Pa
         case_digest=evidence.digest,
         experiment_digest=prepared.identity.experiment_digest,
         runner_fingerprint=prepared.identity.runner_fingerprint,
+        execution_plan_digest=prepared.identity.execution_plan_digest,
         target_digest=prepared.identity.target_digest,
         removed_context_ids=(),
         trials=(),
@@ -971,13 +982,13 @@ def test_candidate_runner_failure_is_checkpointed_and_can_be_resumed(
     runner_calls = 0
 
     async def fail_first_candidate(
-        runner_instance: FakeRunner, request: Mapping[str, object]
+        runner_instance: FakeRunner, attempt: PreparedAttempt
     ) -> RunResult:
         nonlocal runner_calls
         runner_calls += 1
         if runner_calls == 2:
             raise OSError("candidate transport failed")
-        return await original_run(runner_instance, request)
+        return await original_run(runner_instance, attempt)
 
     monkeypatch.setattr(FakeRunner, "run", fail_first_candidate)
     result = runner.invoke(
@@ -1022,7 +1033,7 @@ def test_conflicting_local_observations_use_internal_failure_not_provider_failur
     assert _extract(runner, case).exit_code == ExitCode.SUCCESS
     loaded = CaseWorkspace.open(case).load()
     prepared = prepare_experiment(loaded)
-    candidate_digest = content_digest(loaded.request)
+    candidate_digest = prepare_candidate(loaded, prepared.execution_plan).digest
     store.append_many(
         tuple(
             Observation(
@@ -1032,6 +1043,14 @@ def test_conflicting_local_observations_use_internal_failure_not_provider_failur
                 arm=ObservationArm.BASELINE,
                 attempt=attempt,
                 outcome=outcome,
+                attempt_evidence=AttemptEvidence(
+                    attempt_id="attempt-" + "0" * 32,
+                    attempt_digest="0" * 64,
+                    termination_reason="completed",
+                    provider_acceptance_state=ProviderAcceptanceState.NOT_STARTED,
+                    effective_policy_digest="0" * 64,
+                    accounting=RunAccounting(),
+                ),
             )
             for attempt, outcome in (
                 (1, ObservationOutcome.MATCH),

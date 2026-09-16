@@ -8,15 +8,15 @@ from dataclasses import dataclass
 from typing import Literal
 
 from ithrl.case import CaseEvidence
-from ithrl.context import JsonObject, content_digest
 from ithrl.execution import (
-    CapabilityProfile,
     PreflightIssue,
     PreflightReport,
     ResolvedExecutionPlan,
+    ResourceLimits,
+    SafetyPolicy,
     resolve_execution_plan,
 )
-from ithrl.experiment import ExperimentDefinition, FakeRunnerConfig, UnavailableRunnerConfig
+from ithrl.experiment import ExperimentDefinition
 from ithrl.measurement import RunnerExecutionError, observe_once
 from ithrl.observations import (
     Observation,
@@ -30,7 +30,13 @@ from ithrl.reduce import (
     DeterministicReducer,
     ReductionResult,
 )
-from ithrl.runner import FakeRunner, Runner
+from ithrl.runner import (
+    PreparedAttempt,
+    Runner,
+    RunnerRegistry,
+    built_in_runner_registry,
+    prepare_candidate,
+)
 
 
 class WorkflowError(RuntimeError):
@@ -61,6 +67,8 @@ class PreparedExperiment:
     experiment: ExperimentDefinition
     runner: Runner
     execution_plan: ResolvedExecutionPlan
+    safety_policy: SafetyPolicy
+    resource_limits: ResourceLimits
     identity: ObservationIdentity
 
 
@@ -87,50 +95,49 @@ class _PhaseState:
     phase: Literal["calibration", "search", "confirmation"] = "calibration"
 
 
-def prepare_experiment(evidence: CaseEvidence) -> PreparedExperiment:
+def prepare_experiment(
+    evidence: CaseEvidence,
+    *,
+    registry: RunnerRegistry | None = None,
+    safety_policy: SafetyPolicy | None = None,
+    resource_limits: ResourceLimits | None = None,
+) -> PreparedExperiment:
     """Parse, protect, and resolve the built-in credential-free experiment."""
 
     experiment = ExperimentDefinition.from_toml(evidence.default_experiment)
     decision = evidence.decision
     if decision is not None and experiment.target != decision.selected_target:
         raise PreflightRefusedError(
-            _runner_evidence_mismatch("experiment target does not match the selected decision")
+            PreflightReport(
+                ready=False,
+                plan=None,
+                issues=(
+                    PreflightIssue(
+                        code="runner-evidence-mismatch",
+                        message="experiment target does not match the selected decision",
+                    ),
+                ),
+            )
         )
     _validate_oracle_prerequisites(evidence, experiment)
-    config = experiment.runner
-    if isinstance(config, FakeRunnerConfig) and not evidence.has_request:
+    registry = registry or built_in_runner_registry()
+    resolution = registry.resolve(experiment.runner, evidence)
+    if resolution.issue is not None:
         raise PreflightRefusedError(
-            _runner_evidence_mismatch("the fake runner requires an exact provider request")
+            PreflightReport(ready=False, plan=None, issues=(resolution.issue,))
         )
-    if isinstance(config, UnavailableRunnerConfig):
-        if evidence.manifest.harness != config.harness:
-            raise PreflightRefusedError(
-                _runner_evidence_mismatch("experiment runner does not match the captured harness")
-            )
-        report = PreflightReport(
-            ready=False,
-            plan=None,
-            issues=(
-                PreflightIssue(
-                    code="runner-unavailable",
-                    message="the experiment has no compatible implemented runner",
-                ),
-            ),
-        )
-        raise PreflightRefusedError(report)
-    runner = FakeRunner(
-        required_markers=frozenset(config.required_markers),
-        alternative_marker_sets=tuple(
-            frozenset(marker_set) for marker_set in config.alternative_marker_sets
-        ),
-        tool_name=config.tool_name,
-        command=config.command,
-        final_text=config.final_text,
-    )
+    runner = resolution.runner
+    if runner is None:
+        raise RuntimeError("runner registry returned no resolution outcome")
+    safety_policy = safety_policy or SafetyPolicy.credential_free()
+    resource_limits = resource_limits or ResourceLimits.credential_free()
     report = resolve_execution_plan(
-        CapabilityProfile.deterministic_fake(runner_version="2"),
+        runner.capability_profile,
         experiment,
+        evidence=evidence,
         runner_fingerprint=runner.fingerprint,
+        safety_policy=safety_policy,
+        resource_limits=resource_limits,
     )
     if not report.ready or report.plan is None:
         raise PreflightRefusedError(report)
@@ -138,6 +145,7 @@ def prepare_experiment(evidence: CaseEvidence) -> PreparedExperiment:
         case_digest=evidence.digest,
         experiment_digest=experiment.digest,
         runner_fingerprint=runner.fingerprint,
+        execution_plan_digest=report.plan.digest,
         target_digest=experiment.target.digest,
         algorithm_digest=ALGORITHM_DIGEST,
     )
@@ -145,15 +153,9 @@ def prepare_experiment(evidence: CaseEvidence) -> PreparedExperiment:
         experiment=experiment,
         runner=runner,
         execution_plan=report.plan,
+        safety_policy=safety_policy,
+        resource_limits=resource_limits,
         identity=identity,
-    )
-
-
-def _runner_evidence_mismatch(message: str) -> PreflightReport:
-    return PreflightReport(
-        ready=False,
-        plan=None,
-        issues=(PreflightIssue(code="runner-evidence-mismatch", message=message),),
     )
 
 
@@ -243,7 +245,8 @@ async def _run_phases(
     if progress is not None:
         progress("Confirming the reduced context with a new run")
     state.confirmation_observation = await confirm(
-        request=state.reduction.reduced_request,
+        evidence=evidence,
+        removed_context_ids=state.reduction.removed_context_ids,
         prepared=prepared,
         store=store,
     )
@@ -268,10 +271,10 @@ async def calibrate(
 ) -> Observation:
     """Measure the original case, reusing only matching deterministic observations."""
 
-    candidate_digest = content_digest(evidence.request)
+    candidate = prepare_candidate(evidence, prepared.execution_plan)
     compatible = store.list_compatible(
         prepared.identity,
-        candidate_digest=candidate_digest,
+        candidate_digest=candidate.digest,
         role=ObservationRole.CALIBRATION,
         arm=ObservationArm.BASELINE,
     )
@@ -285,32 +288,46 @@ async def calibrate(
     else:
         observation = await observe_once(
             runner=prepared.runner,
-            target=prepared.experiment.target,
             identity=prepared.identity,
             store=store,
-            request=evidence.request,
-            role=ObservationRole.CALIBRATION,
-            arm=ObservationArm.BASELINE,
+            attempt=PreparedAttempt(
+                evidence=evidence,
+                candidate=candidate,
+                target=prepared.experiment.target,
+                execution_plan=prepared.execution_plan,
+                safety_policy=prepared.safety_policy,
+                resource_limits=prepared.resource_limits,
+                phase="calibration",
+                arm="baseline",
+            ),
         )
     return observation
 
 
 async def confirm(
     *,
-    request: JsonObject,
+    evidence: CaseEvidence,
+    removed_context_ids: tuple[str, ...] | frozenset[str],
     prepared: PreparedExperiment,
     store: ObservationStore,
 ) -> Observation:
     """Take a new final measurement of the candidate selected by the search."""
 
+    candidate = prepare_candidate(evidence, prepared.execution_plan, removed_context_ids)
     return await observe_once(
         runner=prepared.runner,
-        target=prepared.experiment.target,
         identity=prepared.identity,
         store=store,
-        request=request,
-        role=ObservationRole.CONFIRMATION,
-        arm=ObservationArm.SELECTED,
+        attempt=PreparedAttempt(
+            evidence=evidence,
+            candidate=candidate,
+            target=prepared.experiment.target,
+            execution_plan=prepared.execution_plan,
+            safety_policy=prepared.safety_policy,
+            resource_limits=prepared.resource_limits,
+            phase="confirmation",
+            arm="selected",
+        ),
     )
 
 

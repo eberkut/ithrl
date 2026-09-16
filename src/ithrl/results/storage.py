@@ -27,7 +27,6 @@ from ithrl.results.validation import (
 _SNAPSHOT_FILES = frozenset(
     {
         "summary.json",
-        "request.json",
         "retained-context.jsonl",
         "experiment.toml",
         "provenance.json",
@@ -42,7 +41,7 @@ def write_result_snapshot(
     *,
     destination: Path,
     summary: ResultSummary,
-    request: Mapping[str, Any],
+    request: Mapping[str, Any] | None,
     retained_context_lines: tuple[str, ...],
     experiment_source: Path,
     provenance: Mapping[str, Any],
@@ -72,7 +71,8 @@ def write_result_snapshot(
         staging.chmod(0o700)
     try:
         _write_json(staging / "summary.json", validated.summary.model_dump(mode="json"))
-        _write_json(staging / "request.json", validated.reduced_request)
+        if validated.reduced_request is not None:
+            _write_json(staging / "request.json", validated.reduced_request)
         _write_text(
             staging / "retained-context.jsonl",
             "".join(f"{line.rstrip()}\n" for line in validated.retained_context_lines),
@@ -102,8 +102,19 @@ def load_result_snapshot(root: Path) -> ResultSnapshot:
     root = _absolute_path(root)
     _require_private_directory(root)
     entries = {entry.name: entry for entry in root.iterdir()}
-    missing = sorted(_SNAPSHOT_FILES - entries.keys())
-    unexpected = sorted(entries.keys() - _SNAPSHOT_FILES)
+    if "summary.json" not in entries:
+        raise ResultSnapshotError("result snapshot is missing: summary.json")
+    _require_private_file(entries["summary.json"], label="summary.json")
+    summary_data = _read_json_object(entries["summary.json"])
+    try:
+        summary = ResultSummary.model_validate_json(json.dumps(summary_data))
+    except ValidationError as error:
+        raise ResultSnapshotError(f"invalid summary.json: {validation_message(error)}") from error
+    expected_files = _SNAPSHOT_FILES | (
+        {"request.json"} if summary.candidate_materialization == "exact-request" else set()
+    )
+    missing = sorted(expected_files - entries.keys())
+    unexpected = sorted(entries.keys() - expected_files)
     if missing:
         raise ResultSnapshotError(f"result snapshot is missing: {', '.join(missing)}")
     if unexpected:
@@ -113,20 +124,16 @@ def load_result_snapshot(root: Path) -> ResultSnapshot:
     for name, path in entries.items():
         _require_private_file(path, label=name)
 
-    summary_data = _read_json_object(entries["summary.json"])
-    request = _read_json_object(entries["request.json"])
+    request = (
+        _read_json_object(entries["request.json"])
+        if summary.candidate_materialization == "exact-request"
+        else None
+    )
     retained_lines = _read_context_lines(entries["retained-context.jsonl"])
     experiment_source = _read_regular_text(entries["experiment.toml"], label="experiment.toml")
     provenance = _read_json_object(entries["provenance.json"])
     execution_plan = _read_json_object(entries["execution-plan.json"])
     checkpoint = _read_json_object(entries["checkpoint.json"])
-    try:
-        # JSON arrays are the canonical persisted representation of tuple fields.
-        # Validate in JSON mode so strict Python-mode validation remains useful to callers.
-        summary = ResultSummary.model_validate_json(json.dumps(summary_data))
-    except ValidationError as error:
-        raise ResultSnapshotError(f"invalid summary.json: {validation_message(error)}") from error
-
     return validate_contents(
         root=root,
         summary=summary,

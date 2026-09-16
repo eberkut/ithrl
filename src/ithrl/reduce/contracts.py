@@ -109,6 +109,7 @@ class ReductionCheckpoint(BaseModel):
     case_digest: str = Field(min_length=1)
     experiment_digest: str = Field(min_length=1)
     runner_fingerprint: str = Field(min_length=1)
+    execution_plan_digest: str = Field(min_length=1)
     target_digest: str = Field(min_length=1)
     algorithm_digest: str = Field(pattern=r"^[0-9a-f]{64}$", default=ALGORITHM_DIGEST)
     removed_context_ids: tuple[str, ...]
@@ -146,8 +147,8 @@ class ReductionResult(BaseModel):
     status: SearchStatus
     case_digest: str
     experiment_digest: str
-    original_request: JsonObject
-    reduced_request: JsonObject
+    original_request: JsonObject | None
+    reduced_request: JsonObject | None
     removed_context_ids: tuple[str, ...]
     retained_context_ids: tuple[str, ...]
     trials: tuple[CandidateTrial, ...]
@@ -168,6 +169,7 @@ def validate_checkpoint_identity(
         case_digest,
         identity.experiment_digest,
         identity.runner_fingerprint,
+        identity.execution_plan_digest,
         identity.target_digest,
         ALGORITHM_DIGEST,
     )
@@ -175,12 +177,14 @@ def validate_checkpoint_identity(
         checkpoint.case_digest,
         checkpoint.experiment_digest,
         checkpoint.runner_fingerprint,
+        checkpoint.execution_plan_digest,
         checkpoint.target_digest,
         checkpoint.algorithm_digest,
     )
     if actual != expected:
         raise ResumeMismatchError(
-            "checkpoint identities do not match the case, experiment, runner, target, and algorithm"
+            "checkpoint identities do not match the case, experiment, execution plan, target, "
+            "and algorithm"
         )
 
 

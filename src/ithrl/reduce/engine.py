@@ -8,7 +8,8 @@ from dataclasses import dataclass
 
 from ithrl.behavior import BehaviorTarget
 from ithrl.case import CaseEvidence
-from ithrl.context import ContextGraphError, JsonObject, content_digest
+from ithrl.context import ContextGraphError
+from ithrl.execution import ResolvedExecutionPlan, ResourceLimits, SafetyPolicy
 from ithrl.measurement import RunnerExecutionError, observe_once
 from ithrl.observations import (
     ObservationArm,
@@ -30,7 +31,7 @@ from ithrl.reduce.contracts import (
     validate_checkpoint_identity,
 )
 from ithrl.reduce.search import run_search
-from ithrl.runner import Runner
+from ithrl.runner import Candidate, PreparedAttempt, Runner, prepare_candidate
 
 
 @dataclass(slots=True)
@@ -44,6 +45,13 @@ class _Budget:
         self.used += 1
         return True
 
+    def release(self) -> None:
+        """Return capacity when pre-existing evidence prevents an attempt."""
+
+        if self.used == 0:
+            raise RuntimeError("cannot release unused candidate capacity")
+        self.used -= 1
+
 
 class DeterministicReducer:
     """Delete groups, then test each valid single-group removal."""
@@ -53,6 +61,9 @@ class DeterministicReducer:
         *,
         runner: Runner,
         target: BehaviorTarget,
+        execution_plan: ResolvedExecutionPlan,
+        safety_policy: SafetyPolicy,
+        resource_limits: ResourceLimits,
         identity: ObservationIdentity,
         observation_store: ObservationStore,
         max_candidate_runs: int | None = None,
@@ -63,8 +74,27 @@ class DeterministicReducer:
             raise ValueError(f"max_candidate_runs must be between 1 and {MAX_CANDIDATE_RUNS}")
         if identity.algorithm_digest != ALGORITHM_DIGEST:
             raise ValueError("observation identity uses another reduction algorithm")
+        expected_identity = (
+            execution_plan.case_digest,
+            execution_plan.experiment_digest,
+            execution_plan.runner_fingerprint,
+            execution_plan.digest,
+            execution_plan.target_digest,
+        )
+        actual_identity = (
+            identity.case_digest,
+            identity.experiment_digest,
+            identity.runner_fingerprint,
+            identity.execution_plan_digest,
+            identity.target_digest,
+        )
+        if actual_identity != expected_identity:
+            raise ValueError("observation identity does not match the execution plan")
         self._runner = runner
         self._target = target
+        self._execution_plan = execution_plan
+        self._safety_policy = safety_policy
+        self._resource_limits = resource_limits
         self._identity = identity
         self._store = observation_store
         self._budget = _Budget(maximum=max_candidate_runs)
@@ -92,13 +122,13 @@ class DeterministicReducer:
         removed, trials, final_sweep_complete = await self._run_search(evidence, publish=True)
 
         checkpoint = self._publish_checkpoint(removed, trials, final_sweep_complete)
-        reduced_request = evidence.materialize(removed)
+        reduced_request = evidence.materialize(removed) if evidence.has_request else None
         retained = tuple(node.id for node in evidence.context.nodes if node.id not in removed)
         return ReductionResult(
             status="search-1-minimal" if final_sweep_complete else "search-incomplete",
             case_digest=evidence.digest,
             experiment_digest=self._identity.experiment_digest,
-            original_request=evidence.request,
+            original_request=evidence.request if evidence.has_request else None,
             reduced_request=reduced_request,
             removed_context_ids=tuple(sorted(removed)),
             retained_context_ids=retained,
@@ -192,8 +222,8 @@ class DeterministicReducer:
                 return prior.model_copy(update={"reused": True})
             return invalid
 
-        request = evidence.materialize(effective)
-        candidate_digest = content_digest(request)
+        candidate = prepare_candidate(evidence, self._execution_plan, effective)
+        candidate_digest = candidate.digest
         prior = _take_prior_trial(prior_trials, key)
         if prior is not None:
             self._validate_prior_trial(
@@ -208,7 +238,8 @@ class DeterministicReducer:
         if not self._budget.admit():
             return None
         return await self._observe_candidate(
-            request=request,
+            evidence=evidence,
+            candidate=candidate,
             candidate_digest=candidate_digest,
             key=key,
             phase=phase,
@@ -222,7 +253,8 @@ class DeterministicReducer:
     async def _observe_candidate(
         self,
         *,
-        request: JsonObject,
+        evidence: CaseEvidence,
+        candidate: Candidate,
         candidate_digest: str,
         key: str,
         phase: SearchPhase,
@@ -235,14 +267,23 @@ class DeterministicReducer:
         try:
             observation = await observe_once(
                 runner=self._runner,
-                target=self._target,
                 identity=self._identity,
                 store=self._store,
-                request=request,
-                role=ObservationRole.SEARCH,
-                arm=ObservationArm.CANDIDATE,
+                attempt=PreparedAttempt(
+                    evidence=evidence,
+                    candidate=candidate,
+                    target=self._target,
+                    execution_plan=self._execution_plan,
+                    safety_policy=self._safety_policy,
+                    resource_limits=self._resource_limits,
+                    phase="search",
+                    arm="candidate",
+                ),
             )
         except RunnerExecutionError as error:
+            if not error.attempt_started:
+                self._budget.release()
+                raise
             if error.observation is None:
                 raise
             self._failed_candidate_observation_ids.append(error.observation.observation_id)
@@ -368,6 +409,7 @@ class DeterministicReducer:
             case_digest=self._identity.case_digest,
             experiment_digest=self._identity.experiment_digest,
             runner_fingerprint=self._identity.runner_fingerprint,
+            execution_plan_digest=self._identity.execution_plan_digest,
             target_digest=self._identity.target_digest,
             removed_context_ids=tuple(sorted(removed)),
             trials=tuple(trials),

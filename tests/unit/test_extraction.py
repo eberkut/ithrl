@@ -337,7 +337,10 @@ def test_native_case_refuses_fake_runner_even_when_its_target_matches(
     with pytest.raises(PreflightRefusedError) as refused:
         prepare_experiment(_with_experiment(evidence, experiment))
 
-    assert [issue.code for issue in refused.value.report.issues] == ["runner-evidence-mismatch"]
+    assert [issue.code for issue in refused.value.report.issues] == [
+        "unsupported-capture",
+        "unsupported-materialization",
+    ]
 
 
 def test_native_case_refuses_experiment_target_or_harness_mismatch(

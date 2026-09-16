@@ -344,6 +344,7 @@ def _shrink(
         case_digest=prepared.identity.case_digest,
         experiment_digest=prepared.identity.experiment_digest,
         runner_fingerprint=prepared.identity.runner_fingerprint,
+        execution_plan_digest=prepared.identity.execution_plan_digest,
         target_digest=prepared.identity.target_digest,
         removed_context_ids=(),
         trials=(),
@@ -368,6 +369,9 @@ def _shrink(
     reducer = DeterministicReducer(
         runner=prepared.runner,
         target=prepared.experiment.target,
+        execution_plan=prepared.execution_plan,
+        safety_policy=prepared.safety_policy,
+        resource_limits=prepared.resource_limits,
         identity=prepared.identity,
         observation_store=observations.store,
         max_candidate_runs=candidate_limit,
@@ -440,8 +444,8 @@ def _render_dry_run(
             retained_context_count=len(evidence.context.nodes),
             max_candidate_runs=candidate_limit,
             execution_plan_digest=prepared.execution_plan.digest,
-            runner_type=prepared.execution_plan.runner_type,
-            runner_version=prepared.execution_plan.runner_version,
+            runner_type=prepared.execution_plan.capability.runner_type,
+            runner_version=prepared.execution_plan.capability.runner_version,
             target_type=prepared.execution_plan.target_type,
             protected_context_ids=prepared.experiment.oracle.protected_context_ids,
             next_action="Run the experiment when ready.",
@@ -534,9 +538,10 @@ def _finish_shrink(
             "observation-store-error",
         )
 
-    observations_recorded = sum(
-        observation.identity == prepared.identity
+    recorded_observations = tuple(
+        observation
         for observation in store.list_for_experiment(prepared.experiment.digest)
+        if observation.identity == prepared.identity
     )
     outcome = save_outcome(
         workspace=workspace,
@@ -548,7 +553,7 @@ def _finish_shrink(
         calibrate_only=calibrate_only,
         max_candidates=candidate_limit,
         observation_store_path=continuation_store_path,
-        observations_recorded=observations_recorded,
+        observations=recorded_observations,
         run_state=run_state,
     )
     if phases.operational_error is not None:

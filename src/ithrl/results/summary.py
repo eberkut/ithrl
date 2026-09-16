@@ -36,6 +36,17 @@ def _validate_context(summary: ResultSummary) -> None:
         raise ValueError("retained and removed context IDs must be disjoint")
     if set(original) != set(retained) | set(removed):
         raise ValueError("retained and removed context IDs must partition the original IDs")
+    _validate_candidate_materialization(summary)
+    _validate_candidate_budget(summary)
+
+
+def _validate_candidate_materialization(summary: ResultSummary) -> None:
+    has_request = summary.reduced_request_digest is not None
+    if has_request != (summary.candidate_materialization == "exact-request"):
+        raise ValueError("only exact-request results can have a reduced request digest")
+
+
+def _validate_candidate_budget(summary: ResultSummary) -> None:
     if (
         summary.max_candidate_runs is not None
         and summary.candidate_runs_used > summary.max_candidate_runs

@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -18,6 +16,18 @@ from ithrl.case import (
     ReplayFacts,
 )
 from ithrl.context import ContextGraph, ContextNode, JsonObject, JsonValue, content_digest
+from ithrl.execution import (
+    CapabilityProfile,
+    ResourceLimits,
+    SafetyPolicy,
+    resolve_execution_plan,
+)
+from ithrl.experiment import (
+    DeterministicPhase,
+    ExperimentDefinition,
+    FakeRunnerConfig,
+    StructuralOracleConfig,
+)
 from ithrl.measurement import RunnerExecutionError
 from ithrl.observations import ObservationIdentity, ObservationStore
 from ithrl.reduce import (
@@ -26,7 +36,15 @@ from ithrl.reduce import (
     ReductionCheckpoint,
     ResumeMismatchError,
 )
-from ithrl.runner import FakeRunner, RunResult, ToolCall
+from ithrl.runner import (
+    FakeRunner,
+    PreparedAttempt,
+    RunAccounting,
+    RunnerError,
+    RunnerErrorCode,
+    RunResult,
+    ToolCall,
+)
 
 
 def _evidence(markers: str = "ABCDEFG") -> CaseEvidence:
@@ -91,20 +109,58 @@ def _reducer(
         tool_name="exec_command",
     )
     target = ShellActionTarget(tool_name_equals="exec_command")
+    experiment = _experiment(
+        target,
+        alternatives=alternatives,
+    )
+    policy = SafetyPolicy.credential_free()
+    limits = ResourceLimits.credential_free()
+    report = resolve_execution_plan(
+        runner.capability_profile,
+        experiment,
+        evidence=evidence,
+        runner_fingerprint=runner.fingerprint,
+        safety_policy=policy,
+        resource_limits=limits,
+    )
+    assert report.plan is not None
     identity = ObservationIdentity(
         case_digest=evidence.digest,
-        experiment_digest="experiment",
+        experiment_digest=experiment.digest,
         runner_fingerprint=runner.fingerprint,
+        execution_plan_digest=report.plan.digest,
         target_digest=target.digest,
         algorithm_digest=ALGORITHM_DIGEST,
     )
     return DeterministicReducer(
         runner=runner,
         target=target,
+        execution_plan=report.plan,
+        safety_policy=policy,
+        resource_limits=limits,
         identity=identity,
         observation_store=store,
         max_candidate_runs=maximum,
         resume=resume,
+    )
+
+
+def _experiment(
+    target: ShellActionTarget,
+    *,
+    alternatives: tuple[frozenset[str], ...] = (),
+) -> ExperimentDefinition:
+    return ExperimentDefinition(
+        target=target,
+        oracle=StructuralOracleConfig(),
+        runner=FakeRunnerConfig(
+            required_markers=("A", "C"),
+            alternative_marker_sets=tuple(tuple(sorted(items)) for items in alternatives),
+            tool_name="exec_command",
+        ),
+        calibration=DeterministicPhase(role="calibration"),
+        search=DeterministicPhase(role="search"),
+        confirmation=DeterministicPhase(role="confirmation"),
     )
 
 
@@ -116,6 +172,7 @@ def test_reducer_finds_a_dependency_valid_one_minimal_reproducer(tmp_path: Path)
 
     assert result.status == "search-1-minimal"
     assert result.retained_context_ids == ("ctx-a", "ctx-c")
+    assert result.reduced_request is not None
     assert result.reduced_request["input"] == [
         {"role": "user", "content": "A"},
         {"role": "user", "content": "C"},
@@ -124,7 +181,14 @@ def test_reducer_finds_a_dependency_valid_one_minimal_reproducer(tmp_path: Path)
     assert result.candidate_runs_used == len(
         [trial for trial in result.trials if trial.runner_executed]
     )
-    assert len(store.list_for_experiment("experiment")) == result.candidate_runs_used
+    assert (
+        len(
+            store.list_for_experiment(
+                _experiment(ShellActionTarget(tool_name_equals="exec_command")).digest
+            )
+        )
+        == result.candidate_runs_used
+    )
 
 
 def test_reducer_reports_only_one_minimality_when_alternatives_exist(tmp_path: Path) -> None:
@@ -145,7 +209,8 @@ def test_budget_stop_resumes_without_reexecuting_prior_candidates(tmp_path: Path
     evidence = _evidence()
     store = ObservationStore(tmp_path / "observations.sqlite")
     partial = asyncio.run(_reducer(evidence, store, maximum=1).reduce(evidence))
-    observations_after_partial = len(store.list_for_experiment("experiment"))
+    experiment_digest = _experiment(ShellActionTarget(tool_name_equals="exec_command")).digest
+    observations_after_partial = len(store.list_for_experiment(experiment_digest))
 
     completed = asyncio.run(
         _reducer(evidence, store, maximum=30, resume=partial.checkpoint).reduce(evidence)
@@ -154,7 +219,7 @@ def test_budget_stop_resumes_without_reexecuting_prior_candidates(tmp_path: Path
     assert partial.status == "search-incomplete"
     assert completed.status == "search-1-minimal"
     assert completed.trials[0].reused is True
-    assert len(store.list_for_experiment("experiment")) - observations_after_partial == (
+    assert len(store.list_for_experiment(experiment_digest)) - observations_after_partial == (
         completed.candidate_runs_used - partial.candidate_runs_used
     )
 
@@ -223,12 +288,13 @@ def test_resume_rejects_out_of_order_trials_before_any_new_attempt(tmp_path: Pat
     checkpoint = partial.checkpoint.model_copy(
         update={"trials": tuple(reversed(partial.checkpoint.trials))}
     )
-    observations_before = store.list_for_experiment("experiment")
+    experiment_digest = _experiment(ShellActionTarget(tool_name_equals="exec_command")).digest
+    observations_before = store.list_for_experiment(experiment_digest)
 
     with pytest.raises(ResumeMismatchError, match="deterministic search order"):
         asyncio.run(_reducer(evidence, store, maximum=30, resume=checkpoint).reduce(evidence))
 
-    assert store.list_for_experiment("experiment") == observations_before
+    assert store.list_for_experiment(experiment_digest) == observations_before
 
 
 def test_failed_candidate_attempt_counts_against_resume_budget(tmp_path: Path) -> None:
@@ -236,24 +302,49 @@ def test_failed_candidate_attempt_counts_against_resume_budget(tmp_path: Path) -
         calls = 0
         fingerprint = "fail-once-v1"
 
-        async def run(self, request: Mapping[str, Any]) -> RunResult:
-            del request
+        @property
+        def capability_profile(self) -> CapabilityProfile:
+            return CapabilityProfile.deterministic_fake(runner_version="fail-once-v1")
+
+        async def run(self, attempt: PreparedAttempt) -> RunResult:
             self.calls += 1
             if self.calls == 1:
-                raise OSError("temporary failure")
+                raise RunnerError(
+                    RunnerErrorCode.STARTUP,
+                    "temporary failure before dispatch",
+                    accounting=RunAccounting(),
+                )
             return RunResult(
+                attempt_id=attempt.attempt_id,
+                effective_policy_digest=attempt.safety_policy.digest,
+                model_requested=attempt.execution_plan.model_requested,
+                model_returned=attempt.execution_plan.model_requested,
                 provider="fake",
                 tool_calls=(ToolCall(name="exec_command"),),
+                accounting=RunAccounting(actions_requested=1, actions_denied=1),
             )
 
     evidence = _evidence()
     store = ObservationStore(tmp_path / "observations.sqlite")
     runner = FailOnceRunner()
     target = ShellActionTarget(tool_name_equals="exec_command")
+    experiment = _experiment(target)
+    policy = SafetyPolicy.credential_free()
+    limits = ResourceLimits.credential_free()
+    report = resolve_execution_plan(
+        runner.capability_profile,
+        experiment,
+        evidence=evidence,
+        runner_fingerprint=runner.fingerprint,
+        safety_policy=policy,
+        resource_limits=limits,
+    )
+    assert report.plan is not None
     identity = ObservationIdentity(
         case_digest=evidence.digest,
-        experiment_digest="failed-attempt-experiment",
+        experiment_digest=experiment.digest,
         runner_fingerprint=runner.fingerprint,
+        execution_plan_digest=report.plan.digest,
         target_digest=target.digest,
         algorithm_digest=ALGORITHM_DIGEST,
     )
@@ -261,6 +352,9 @@ def test_failed_candidate_attempt_counts_against_resume_budget(tmp_path: Path) -
     first = DeterministicReducer(
         runner=runner,
         target=target,
+        execution_plan=report.plan,
+        safety_policy=policy,
+        resource_limits=limits,
         identity=identity,
         observation_store=store,
         max_candidate_runs=1,
@@ -275,6 +369,9 @@ def test_failed_candidate_attempt_counts_against_resume_budget(tmp_path: Path) -
     no_budget = DeterministicReducer(
         runner=runner,
         target=target,
+        execution_plan=report.plan,
+        safety_policy=policy,
+        resource_limits=limits,
         identity=identity,
         observation_store=store,
         max_candidate_runs=1,
@@ -287,6 +384,9 @@ def test_failed_candidate_attempt_counts_against_resume_budget(tmp_path: Path) -
     continued = DeterministicReducer(
         runner=runner,
         target=target,
+        execution_plan=report.plan,
+        safety_policy=policy,
+        resource_limits=limits,
         identity=identity,
         observation_store=store,
         max_candidate_runs=2,
@@ -295,3 +395,76 @@ def test_failed_candidate_attempt_counts_against_resume_budget(tmp_path: Path) -
     resumed = asyncio.run(continued.reduce(evidence))
     assert resumed.candidate_runs_used == 2
     assert runner.calls == 2
+
+
+def test_blocked_retry_does_not_change_candidate_budget_or_checkpoint(tmp_path: Path) -> None:
+    class UnsafeRunner:
+        calls = 0
+        fingerprint = "unsafe-v1"
+        capability_profile = CapabilityProfile.deterministic_fake(runner_version="unsafe-v1")
+
+        async def run(self, attempt: PreparedAttempt) -> RunResult:
+            del attempt
+            self.calls += 1
+            raise RunnerError(
+                RunnerErrorCode.SAFETY,
+                "runner executed a forbidden action",
+                accounting=RunAccounting(actions_requested=1, actions_executed=1),
+            )
+
+    evidence = _evidence()
+    store = ObservationStore(tmp_path / "unsafe-observations.sqlite")
+    runner = UnsafeRunner()
+    target = ShellActionTarget(tool_name_equals="exec_command")
+    experiment = _experiment(target)
+    policy = SafetyPolicy.credential_free()
+    limits = ResourceLimits.credential_free()
+    report = resolve_execution_plan(
+        runner.capability_profile,
+        experiment,
+        evidence=evidence,
+        runner_fingerprint=runner.fingerprint,
+        safety_policy=policy,
+        resource_limits=limits,
+    )
+    assert report.plan is not None
+    identity = ObservationIdentity(
+        case_digest=evidence.digest,
+        experiment_digest=experiment.digest,
+        runner_fingerprint=runner.fingerprint,
+        execution_plan_digest=report.plan.digest,
+        target_digest=target.digest,
+        algorithm_digest=ALGORITHM_DIGEST,
+    )
+
+    first = DeterministicReducer(
+        runner=runner,
+        target=target,
+        execution_plan=report.plan,
+        safety_policy=policy,
+        resource_limits=limits,
+        identity=identity,
+        observation_store=store,
+        max_candidate_runs=1,
+    )
+    with pytest.raises(RunnerExecutionError, match="safety"):
+        asyncio.run(first.reduce(evidence))
+    checkpoint = first.checkpoint
+
+    resumed = DeterministicReducer(
+        runner=runner,
+        target=target,
+        execution_plan=report.plan,
+        safety_policy=policy,
+        resource_limits=limits,
+        identity=identity,
+        observation_store=store,
+        max_candidate_runs=2,
+        resume=checkpoint,
+    )
+    with pytest.raises(RunnerExecutionError, match="automatic retry is disabled"):
+        asyncio.run(resumed.reduce(evidence))
+
+    assert resumed.checkpoint == checkpoint
+    assert runner.calls == 1
+    assert len(store.list_for_experiment(experiment.digest)) == 1
