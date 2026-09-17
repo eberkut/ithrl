@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -19,6 +20,7 @@ from ithrl.behavior import (
 from ithrl.case import CaseEvidence
 from ithrl.context import MAX_CONTEXT_NODES, JsonObject, content_digest, validate_json_limits
 from ithrl.execution import (
+    MAX_NATIVE_OUTPUT_BYTES,
     MAX_PROVIDER_CALLS_PER_ATTEMPT,
     CapabilityProfile,
     ProtectedStateEffect,
@@ -30,6 +32,8 @@ from ithrl.execution import (
 type AttemptPhase = Literal["calibration", "search", "confirmation"]
 type AttemptArm = Literal["baseline", "candidate", "selected"]
 type TerminationReason = Literal["completed", "timeout", "cancelled", "failed"]
+type ProcessOutcome = Literal["not-started", "exited", "terminated", "unknown"]
+type CleanupOutcome = Literal["not-required", "verified", "failed"]
 
 _DIGEST_PATTERN = r"^[0-9a-f]{64}$"
 MAX_TOOL_ARGUMENT_BYTES = 64 * 1024
@@ -159,7 +163,8 @@ class NativeOutputReference(_ImmutableContract):
     artifact_id: Annotated[str, Field(min_length=1, max_length=128)]
     sha256: Annotated[str, Field(pattern=_DIGEST_PATTERN)]
     media_type: Annotated[str, Field(min_length=3, max_length=255)]
-    size_bytes: Annotated[int, Field(ge=1)]
+    size_bytes: Annotated[int, Field(ge=1, le=MAX_NATIVE_OUTPUT_BYTES)]
+    complete: bool = True
 
 
 class RunAccounting(_ImmutableContract):
@@ -175,16 +180,56 @@ class RunAccounting(_ImmutableContract):
     elapsed_milliseconds: Annotated[int, Field(ge=0)] = 0
     native_output_bytes: Annotated[int, Field(ge=0)] = 0
     disposable_state_bytes: Annotated[int, Field(ge=0)] = 0
+    residual_disposable_state_bytes: Annotated[int, Field(ge=0)] = 0
+    disposable_state_entries: Annotated[int, Field(ge=0)] = 0
+    residual_disposable_state_entries: Annotated[int, Field(ge=0)] = 0
+    process_outcome: ProcessOutcome = "not-started"
+    forced_termination: bool = False
+    cleanup_outcome: CleanupOutcome = "not-required"
     source_store_effect: ProtectedStateEffect = "unchanged"
     original_workspace_effect: ProtectedStateEffect = "unchanged"
 
     @model_validator(mode="after")
     def validate_counts(self) -> RunAccounting:
-        if self.provider_calls_completed > self.provider_calls_started:
-            raise ValueError("completed provider calls cannot exceed started calls")
-        if self.actions_denied + self.actions_executed > self.actions_requested:
-            raise ValueError("denied and executed actions cannot exceed requested actions")
+        _validate_provider_counts(self)
+        _validate_action_counts(self)
+        _validate_state_counts(self)
+        _validate_cleanup_counts(self)
         return self
+
+
+def _validate_provider_counts(accounting: RunAccounting) -> None:
+    if accounting.provider_calls_completed > accounting.provider_calls_started:
+        raise ValueError("completed provider calls cannot exceed started calls")
+
+
+def _validate_action_counts(accounting: RunAccounting) -> None:
+    if accounting.actions_denied + accounting.actions_executed > accounting.actions_requested:
+        raise ValueError("denied and executed actions cannot exceed requested actions")
+
+
+def _validate_state_counts(accounting: RunAccounting) -> None:
+    if accounting.residual_disposable_state_bytes > accounting.disposable_state_bytes:
+        raise ValueError("residual disposable state cannot exceed its observed peak")
+    if accounting.residual_disposable_state_entries > accounting.disposable_state_entries:
+        raise ValueError("residual disposable entries cannot exceed their observed peak")
+
+
+def _validate_cleanup_counts(accounting: RunAccounting) -> None:
+    has_state = any(
+        (
+            accounting.disposable_state_bytes,
+            accounting.residual_disposable_state_bytes,
+            accounting.disposable_state_entries,
+            accounting.residual_disposable_state_entries,
+        )
+    )
+    if accounting.cleanup_outcome == "not-required" and has_state:
+        raise ValueError("disposable state requires a cleanup outcome")
+    if accounting.cleanup_outcome == "verified" and (
+        accounting.residual_disposable_state_bytes or accounting.residual_disposable_state_entries
+    ):
+        raise ValueError("verified cleanup cannot leave disposable state")
 
 
 class RunResult(_ImmutableContract):
@@ -264,6 +309,16 @@ class RunnerError(RuntimeError):
         self.accounting = accounting
         self.native_output = native_output
         self.effective_policy_digest = effective_policy_digest
+
+
+class RunnerCancelled(asyncio.CancelledError):
+    """Cancellation raised after a runner has collected bounded cleanup evidence."""
+
+    def __init__(self, error: RunnerError) -> None:
+        super().__init__(str(error))
+        if error.code is not RunnerErrorCode.CANCELLED:
+            raise ValueError("runner cancellation evidence requires the cancelled error category")
+        self.error = error
 
 
 class Runner(Protocol):

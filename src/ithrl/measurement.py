@@ -18,6 +18,7 @@ from ithrl.runner import (
     PreparedAttempt,
     ProviderAcceptanceState,
     Runner,
+    RunnerCancelled,
     RunnerError,
     RunnerErrorCode,
     RunResult,
@@ -41,6 +42,12 @@ class RunnerExecutionError(RuntimeError):
         self.attempt_started = attempt_started
 
 
+class _RunnerTimedOut(TimeoutError):
+    def __init__(self, error: RunnerError | None) -> None:
+        super().__init__("runner exceeded the attempt wall-time limit")
+        self.error = error
+
+
 async def observe_once(
     *,
     runner: Runner,
@@ -50,6 +57,68 @@ async def observe_once(
 ) -> Observation:
     """Run once, evaluate the result, and save the observation."""
 
+    role, arm, candidate_digest = _prepare_observation(runner, identity, store, attempt)
+    result: RunResult | None = None
+    try:
+        result = await _run_with_deadlines(runner, attempt)
+        validate_run_result(attempt, result)
+        observed = evaluate_target(attempt.target, normalize_run_result(result))
+    except asyncio.CancelledError as cancelled:
+        error = (
+            cancelled.error
+            if isinstance(cancelled, RunnerCancelled)
+            else RunnerError(
+                RunnerErrorCode.CANCELLED,
+                "runner was cancelled",
+                provider_acceptance_state=_interrupted_acceptance_state(attempt),
+                model_requested=attempt.execution_plan.model_requested,
+                provider=attempt.execution_plan.capability.provider,
+                endpoint=attempt.execution_plan.capability.endpoint,
+            )
+        )
+        _record_runner_error(
+            store,
+            identity,
+            attempt,
+            role,
+            arm,
+            candidate_digest,
+            error,
+        )
+        raise
+    except _RunnerTimedOut as timed_out:
+        error = _timeout_error(attempt, timed_out.error)
+        failed_observation = _record_runner_error(
+            store, identity, attempt, role, arm, candidate_digest, error
+        )
+        raise RunnerExecutionError(
+            f"runner failed with {failed_observation.error_category}", failed_observation
+        ) from error
+    except Exception as error:
+        runner_error = _normalize_runner_error(error, attempt, result)
+        failed_observation = _record_runner_error(
+            store, identity, attempt, role, arm, candidate_digest, runner_error
+        )
+        raise RunnerExecutionError(
+            f"runner failed with {failed_observation.error_category}", failed_observation
+        ) from error
+
+    return store.record_attempt(
+        identity=identity,
+        candidate_digest=candidate_digest,
+        role=role,
+        arm=arm,
+        outcome=(ObservationOutcome.MATCH if observed else ObservationOutcome.NO_MATCH),
+        attempt_evidence=AttemptEvidence.from_result(attempt, result),
+    )
+
+
+def _prepare_observation(
+    runner: Runner,
+    identity: ObservationIdentity,
+    store: ObservationStore,
+    attempt: PreparedAttempt,
+) -> tuple[ObservationRole, ObservationArm, str]:
     expected_identity = (
         attempt.candidate.case_digest,
         attempt.execution_plan.experiment_digest,
@@ -87,61 +156,62 @@ async def observe_once(
             unsafe_to_retry,
             attempt_started=False,
         )
-    result: RunResult | None = None
+    return role, arm, candidate_digest
+
+
+async def _run_with_deadlines(runner: Runner, attempt: PreparedAttempt) -> RunResult:
+    wall_time = attempt.resource_limits.max_wall_time_seconds
+    cancellation_deadline = wall_time + runner.capability_profile.cancellation_grace_seconds
+    cancellation_error: RunnerError | None = None
+    execution_timer: asyncio.Timeout | None = None
+    cleanup_timer: asyncio.Timeout | None = None
     try:
-        async with asyncio.timeout(attempt.resource_limits.max_wall_time_seconds):
-            result = await runner.run(attempt)
-        validate_run_result(attempt, result)
-        observed = evaluate_target(attempt.target, normalize_run_result(result))
-    except asyncio.CancelledError:
-        _record_runner_error(
-            store,
-            identity,
-            attempt,
-            role,
-            arm,
-            candidate_digest,
-            RunnerError(
-                RunnerErrorCode.CANCELLED,
-                "runner was cancelled",
-                provider_acceptance_state=_interrupted_acceptance_state(attempt),
-                model_requested=attempt.execution_plan.model_requested,
-                provider=attempt.execution_plan.capability.provider,
-                endpoint=attempt.execution_plan.capability.endpoint,
-            ),
-        )
+        async with asyncio.timeout(cancellation_deadline) as cleanup_timer:
+            async with asyncio.timeout(wall_time) as execution_timer:
+                try:
+                    result = await runner.run(attempt)
+                except RunnerCancelled as cancelled:
+                    cancellation_error = cancelled.error
+                    if _deadline_expired(execution_timer, cleanup_timer):
+                        raise asyncio.CancelledError from None
+                    raise
+    except TimeoutError as error:
+        if _deadline_expired(execution_timer, cleanup_timer):
+            raise _RunnerTimedOut(cancellation_error) from error
         raise
-    except TimeoutError:
-        error = RunnerError(
+    if _deadline_expired(execution_timer, cleanup_timer):
+        raise _RunnerTimedOut(cancellation_error)
+    return result
+
+
+def _deadline_expired(*timers: asyncio.Timeout | None) -> bool:
+    return any(timer is not None and timer.expired() for timer in timers)
+
+
+def _timeout_error(attempt: PreparedAttempt, evidence: RunnerError | None) -> RunnerError:
+    if evidence is None:
+        plan = attempt.execution_plan
+        return RunnerError(
             RunnerErrorCode.TIMEOUT,
             "runner exceeded the attempt wall-time limit",
             provider_acceptance_state=_interrupted_acceptance_state(attempt),
-            model_requested=attempt.execution_plan.model_requested,
-            provider=attempt.execution_plan.capability.provider,
-            endpoint=attempt.execution_plan.capability.endpoint,
+            model_requested=plan.model_requested,
+            provider=plan.capability.provider,
+            endpoint=plan.capability.endpoint,
         )
-        failed_observation = _record_runner_error(
-            store, identity, attempt, role, arm, candidate_digest, error
-        )
-        raise RunnerExecutionError(
-            f"runner failed with {failed_observation.error_category}", failed_observation
-        ) from error
-    except Exception as error:
-        runner_error = _normalize_runner_error(error, attempt, result)
-        failed_observation = _record_runner_error(
-            store, identity, attempt, role, arm, candidate_digest, runner_error
-        )
-        raise RunnerExecutionError(
-            f"runner failed with {failed_observation.error_category}", failed_observation
-        ) from error
-
-    return store.record_attempt(
-        identity=identity,
-        candidate_digest=candidate_digest,
-        role=role,
-        arm=arm,
-        outcome=(ObservationOutcome.MATCH if observed else ObservationOutcome.NO_MATCH),
-        attempt_evidence=AttemptEvidence.from_result(attempt, result),
+    return RunnerError(
+        RunnerErrorCode.TIMEOUT,
+        "runner exceeded the attempt wall-time limit",
+        provider_acceptance_state=evidence.provider_acceptance_state,
+        model_requested=evidence.model_requested,
+        model_returned=evidence.model_returned,
+        provider=evidence.provider,
+        endpoint=evidence.endpoint,
+        service_tier=evidence.service_tier,
+        usage=evidence.usage,
+        accounting=evidence.accounting,
+        native_output=evidence.native_output,
+        effective_policy_digest=evidence.effective_policy_digest,
     )
 
 

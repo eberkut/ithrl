@@ -27,11 +27,16 @@ type ActionExecution = Literal["denied", "possible"]
 type ProtectedStateEffect = Literal["unchanged", "may-change"]
 type DisposableStateEffect = Literal["none", "writes"]
 type InputTokenLimitEnforcement = Literal["unavailable", "pre-dispatch"]
+type ProtectedStateEnforcement = Literal["not-applicable", "postcondition", "preventive"]
+type DisposableStateLimitEnforcement = Literal["not-applicable", "observed", "enforced"]
+type ProcessContainment = Literal["not-applicable", "process-group", "process-tree"]
 
 MAX_PROVIDER_CALLS_PER_ATTEMPT = 16
 MAX_WALL_TIME_SECONDS = 24 * 60 * 60
+MAX_CANCELLATION_GRACE_SECONDS = 60
 MAX_NATIVE_OUTPUT_BYTES = 64 * 1024 * 1024
 MAX_DISPOSABLE_STATE_BYTES = 4 * 1024 * 1024 * 1024
+MAX_DISPOSABLE_STATE_ENTRIES = 1_000_000
 
 
 class _ImmutableContract(BaseModel):
@@ -65,9 +70,13 @@ class CapabilityProfile(_ImmutableContract):
     action_execution: ActionExecution
     source_store_effect: ProtectedStateEffect
     original_workspace_effect: ProtectedStateEffect
+    protected_state_enforcement: ProtectedStateEnforcement = "not-applicable"
     disposable_state_effect: DisposableStateEffect
+    disposable_state_limit_enforcement: DisposableStateLimitEnforcement = "not-applicable"
+    process_containment: ProcessContainment = "not-applicable"
     supports_timeout: bool
     supports_cancellation: bool
+    cancellation_grace_seconds: Annotated[int, Field(ge=0, le=MAX_CANCELLATION_GRACE_SECONDS)] = 0
     reports_usage: bool
     input_token_limit_enforcement: InputTokenLimitEnforcement = "unavailable"
     provider: Annotated[str | None, Field(min_length=1, max_length=256)] = None
@@ -88,24 +97,12 @@ class CapabilityProfile(_ImmutableContract):
 
     @model_validator(mode="after")
     def validate_profile(self) -> CapabilityProfile:
-        _require_unique("supported_capture_types", self.supported_capture_types)
-        _require_unique("supported_materializations", self.supported_materializations)
-        _require_unique("supported_context_operations", self.supported_context_operations)
-        _require_unique("supported_targets", self.supported_targets)
-        _require_unique("deviations", self.deviations)
-        if self.runtime_harness_version is not None and self.harness is None:
-            raise ValueError("runtime_harness_version requires harness")
-        if "source-backed" in self.supported_materializations and (
-            self.harness is None or self.source_schema is None
-        ):
-            raise ValueError("source-backed materialization requires a harness and source schema")
+        _validate_capability_sequences(self)
+        _validate_capability_source(self)
         _validate_provider_transport(self.provider_transport, self.provider_calls_per_attempt)
-        if self.provider_transport == "required" and (
-            self.provider is None or self.endpoint is None
-        ):
-            raise ValueError("provider transport requires a known provider and endpoint")
-        if self.action_execution == "possible" and self.action_denial == "enforced":
-            raise ValueError("enforced action denial cannot advertise possible action execution")
+        _validate_capability_provider(self)
+        _validate_capability_actions(self)
+        _validate_capability_state(self)
         return self
 
     @property
@@ -135,7 +132,10 @@ class CapabilityProfile(_ImmutableContract):
             action_execution="denied",
             source_store_effect="unchanged",
             original_workspace_effect="unchanged",
+            protected_state_enforcement="not-applicable",
             disposable_state_effect="none",
+            disposable_state_limit_enforcement="not-applicable",
+            process_containment="not-applicable",
             supports_timeout=True,
             supports_cancellation=True,
             reports_usage=False,
@@ -178,7 +178,7 @@ class SafetyPolicy(_ImmutableContract):
 
 
 class ResourceLimits(_ImmutableContract):
-    """Hard per-attempt limits known before runner execution."""
+    """Per-attempt bounds known before runner execution."""
 
     schema_version: Literal[1] = 1
     max_provider_calls: Annotated[int, Field(ge=0, le=MAX_PROVIDER_CALLS_PER_ATTEMPT)] = 0
@@ -186,6 +186,9 @@ class ResourceLimits(_ImmutableContract):
     max_wall_time_seconds: Annotated[int, Field(ge=1, le=MAX_WALL_TIME_SECONDS)] = 30
     max_native_output_bytes: Annotated[int, Field(ge=1, le=MAX_NATIVE_OUTPUT_BYTES)] = 1024 * 1024
     max_disposable_state_bytes: Annotated[int, Field(ge=0, le=MAX_DISPOSABLE_STATE_BYTES)] = 0
+    max_disposable_state_entries: Annotated[int, Field(ge=0, le=MAX_DISPOSABLE_STATE_ENTRIES)] = (
+        10_000
+    )
 
     @property
     def digest(self) -> str:
@@ -254,6 +257,7 @@ type PreflightIssueCode = Literal[
     "action-execution-possible",
     "source-store-may-change",
     "workspace-may-change",
+    "protected-state-enforcement-insufficient",
     "timeout-unsupported",
     "cancellation-unsupported",
     "runner-unavailable",
@@ -331,16 +335,32 @@ def _validate_resolved_effects(plan: ResolvedExecutionPlan) -> None:
         raise ValueError("deterministic execution plan cannot contain a sampled runner")
     if capability.tool_network_access != "forbidden":
         raise ValueError("execution plan permits tool network access")
+    _validate_resolved_actions(plan)
+    _validate_resolved_state(capability)
+    if not capability.supports_timeout or not capability.supports_cancellation:
+        raise ValueError("execution plan must support timeout and cancellation")
+
+
+def _validate_resolved_actions(plan: ResolvedExecutionPlan) -> None:
+    capability = plan.capability
     if capability.action_denial != "enforced" or capability.action_execution != "denied":
         raise ValueError("execution plan does not enforce action denial")
     if plan.target_type == "shell-action" and capability.action_visibility != "visible":
         raise ValueError("shell-action execution plan must keep the action visible")
+
+
+def _validate_resolved_state(capability: CapabilityProfile) -> None:
     if capability.source_store_effect != "unchanged":
         raise ValueError("execution plan may change the preserved source session")
     if capability.original_workspace_effect != "unchanged":
         raise ValueError("execution plan may change the original workspace")
-    if not capability.supports_timeout or not capability.supports_cancellation:
-        raise ValueError("execution plan must support timeout and cancellation")
+    if (
+        capability.process_containment != "not-applicable"
+        and capability.protected_state_enforcement != "preventive"
+    ):
+        raise ValueError("process execution requires preventive protected-state isolation")
+    if capability.protected_state_enforcement == "postcondition":
+        raise ValueError("execution plan detects protected-state changes but cannot prevent them")
 
 
 def _validate_resolved_limits(plan: ResolvedExecutionPlan) -> None:
@@ -365,3 +385,41 @@ def _validate_provider_transport(transport: ProviderTransport, calls: int) -> No
         raise ValueError("a runner without provider transport cannot make provider calls")
     if transport == "required" and calls == 0:
         raise ValueError("required provider transport needs at least one provider call")
+
+
+def _validate_capability_sequences(profile: CapabilityProfile) -> None:
+    _require_unique("supported_capture_types", profile.supported_capture_types)
+    _require_unique("supported_materializations", profile.supported_materializations)
+    _require_unique("supported_context_operations", profile.supported_context_operations)
+    _require_unique("supported_targets", profile.supported_targets)
+    _require_unique("deviations", profile.deviations)
+
+
+def _validate_capability_source(profile: CapabilityProfile) -> None:
+    if profile.runtime_harness_version is not None and profile.harness is None:
+        raise ValueError("runtime_harness_version requires harness")
+    if "source-backed" in profile.supported_materializations and (
+        profile.harness is None or profile.source_schema is None
+    ):
+        raise ValueError("source-backed materialization requires a harness and source schema")
+
+
+def _validate_capability_provider(profile: CapabilityProfile) -> None:
+    if profile.provider_transport == "required" and (
+        profile.provider is None or profile.endpoint is None
+    ):
+        raise ValueError("provider transport requires a known provider and endpoint")
+
+
+def _validate_capability_actions(profile: CapabilityProfile) -> None:
+    if profile.action_execution == "possible" and profile.action_denial == "enforced":
+        raise ValueError("enforced action denial cannot advertise possible action execution")
+
+
+def _validate_capability_state(profile: CapabilityProfile) -> None:
+    state_is_absent = profile.disposable_state_effect == "none"
+    limit_is_not_applicable = profile.disposable_state_limit_enforcement == "not-applicable"
+    if state_is_absent != limit_is_not_applicable:
+        raise ValueError("disposable-state writes require a declared limit enforcement")
+    if profile.process_containment != "not-applicable" and profile.cancellation_grace_seconds == 0:
+        raise ValueError("process containment requires a cancellation grace period")

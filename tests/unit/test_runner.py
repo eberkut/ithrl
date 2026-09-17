@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 
 import pytest
@@ -27,6 +27,7 @@ from ithrl.runner import (
     PreparedAttempt,
     ProviderAcceptanceState,
     RunAccounting,
+    RunnerCancelled,
     RunnerError,
     RunnerErrorCode,
     RunnerRegistry,
@@ -142,12 +143,19 @@ def test_disposable_state_without_cleanup_proof_blocks_retry(tmp_path: Path) -> 
         evidence,
         resource_limits=ResourceLimits(max_disposable_state_bytes=1),
     )
-    candidate = prepare_candidate(evidence, prepared.execution_plan)
+    profile = prepared.execution_plan.capability.model_copy(
+        update={
+            "disposable_state_effect": "writes",
+            "disposable_state_limit_enforcement": "observed",
+        }
+    )
+    plan = prepared.execution_plan.model_copy(update={"capability": profile})
+    candidate = prepare_candidate(evidence, plan)
     attempt = PreparedAttempt(
         evidence=evidence,
         candidate=candidate,
         target=prepared.experiment.target,
-        execution_plan=prepared.execution_plan,
+        execution_plan=plan,
         safety_policy=prepared.safety_policy,
         resource_limits=prepared.resource_limits,
         phase="calibration",
@@ -156,12 +164,109 @@ def test_disposable_state_without_cleanup_proof_blocks_retry(tmp_path: Path) -> 
     error = RunnerError(
         RunnerErrorCode.PREPARATION,
         "disposable state remains",
-        accounting=RunAccounting(disposable_state_bytes=1),
+        accounting=RunAccounting(
+            disposable_state_bytes=1,
+            residual_disposable_state_bytes=1,
+            cleanup_outcome="failed",
+        ),
     )
 
     attempt_evidence = AttemptEvidence.from_error(attempt, error)
 
     assert not attempt_evidence.automatic_retry_safe
+
+
+@pytest.mark.parametrize(
+    ("limit_enforcement", "retry_safe"),
+    [("enforced", True), ("observed", False)],
+)
+def test_disposable_state_retry_requires_an_enforced_limit(
+    tmp_path: Path,
+    limit_enforcement: str,
+    retry_safe: bool,
+) -> None:
+    evidence = _synthetic_evidence(tmp_path)
+    prepared = prepare_experiment(
+        evidence,
+        resource_limits=ResourceLimits(max_disposable_state_bytes=64),
+    )
+    profile = prepared.execution_plan.capability.model_copy(
+        update={
+            "disposable_state_effect": "writes",
+            "disposable_state_limit_enforcement": limit_enforcement,
+        }
+    )
+    plan = prepared.execution_plan.model_copy(update={"capability": profile})
+    candidate = prepare_candidate(evidence, plan)
+    attempt = PreparedAttempt(
+        evidence=evidence,
+        candidate=candidate,
+        target=prepared.experiment.target,
+        execution_plan=plan,
+        safety_policy=prepared.safety_policy,
+        resource_limits=prepared.resource_limits,
+        phase="calibration",
+        arm="baseline",
+    )
+    error = RunnerError(
+        RunnerErrorCode.STARTUP,
+        "runner did not start",
+        accounting=RunAccounting(
+            disposable_state_bytes=64,
+            cleanup_outcome="verified",
+        ),
+    )
+
+    attempt_evidence = AttemptEvidence.from_error(attempt, error)
+
+    assert attempt_evidence.automatic_retry_safe is retry_safe
+
+
+def test_cleanup_or_process_uncertainty_blocks_safe_retry(tmp_path: Path) -> None:
+    _, attempt = _attempt(_synthetic_evidence(tmp_path))
+
+    for accounting in (
+        RunAccounting(process_outcome="unknown"),
+        RunAccounting(cleanup_outcome="failed"),
+    ):
+        error = RunnerError(
+            RunnerErrorCode.STARTUP,
+            "runner did not start cleanly",
+            accounting=accounting,
+        )
+        assert not AttemptEvidence.from_error(attempt, error).automatic_retry_safe
+
+
+def test_accounting_preserves_uncertain_termination_and_failed_cleanup(tmp_path: Path) -> None:
+    _, attempt = _attempt(_synthetic_evidence(tmp_path))
+    accounting = RunAccounting(
+        disposable_state_bytes=8,
+        residual_disposable_state_bytes=8,
+        disposable_state_entries=1,
+        residual_disposable_state_entries=1,
+        process_outcome="unknown",
+        forced_termination=True,
+        cleanup_outcome="failed",
+    )
+    error = RunnerError(
+        RunnerErrorCode.INTERNAL,
+        "runtime safety evidence is incomplete",
+        accounting=accounting,
+    )
+
+    classified = validate_runner_error(attempt, error)
+
+    assert classified.code is RunnerErrorCode.SAFETY
+    assert classified.accounting == accounting
+    assert not AttemptEvidence.from_error(attempt, classified).automatic_retry_safe
+
+
+def test_runner_cancellation_requires_cancelled_evidence() -> None:
+    cancelled = RunnerError(RunnerErrorCode.CANCELLED, "runner was cancelled")
+
+    assert RunnerCancelled(cancelled).error is cancelled
+    with pytest.raises(ValueError, match="requires the cancelled error category"):
+        RunnerCancelled(RunnerError(RunnerErrorCode.TIMEOUT, "runner timed out"))
 
 
 def test_source_backed_candidate_retains_native_evidence_without_materializing_it(
@@ -305,6 +410,7 @@ def test_run_result_rejects_executed_action_as_a_safety_failure(tmp_path: Path) 
         ({"elapsed_milliseconds": 30_001}, RunnerErrorCode.TIMEOUT),
         ({"native_output_bytes": 1_048_577}, RunnerErrorCode.OUTPUT_LIMIT),
         ({"disposable_state_bytes": 1}, RunnerErrorCode.OUTPUT_LIMIT),
+        ({"disposable_state_entries": 10_001}, RunnerErrorCode.OUTPUT_LIMIT),
     ],
 )
 def test_run_result_enforces_attempt_safety_and_resource_limits(
@@ -313,6 +419,16 @@ def test_run_result_enforces_attempt_safety_and_resource_limits(
     error_code: RunnerErrorCode,
 ) -> None:
     runner, attempt = _attempt(_synthetic_evidence(tmp_path))
+    if {"disposable_state_bytes", "disposable_state_entries"} & changes.keys():
+        capability = attempt.execution_plan.capability.model_copy(
+            update={
+                "disposable_state_effect": "writes",
+                "disposable_state_limit_enforcement": "enforced",
+            }
+        )
+        execution_plan = attempt.execution_plan.model_copy(update={"capability": capability})
+        candidate = prepare_candidate(attempt.evidence, execution_plan)
+        attempt = replace(attempt, candidate=candidate, execution_plan=execution_plan)
     result = asyncio.run(runner.run(attempt))
     changed = result.model_copy(update={"accounting": result.accounting.model_copy(update=changes)})
 

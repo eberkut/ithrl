@@ -155,6 +155,18 @@ def _check_transport(
     limits: ResourceLimits,
     issues: list[PreflightIssue],
 ) -> None:
+    _check_provider_limits(capability, policy, limits, issues)
+    _check_input_token_limit(capability, limits, issues)
+    _check_provider_destination(capability, policy, issues)
+    _check_execution_lifecycle(capability, issues)
+
+
+def _check_provider_limits(
+    capability: CapabilityProfile,
+    policy: SafetyPolicy,
+    limits: ResourceLimits,
+    issues: list[PreflightIssue],
+) -> None:
     if capability.provider_transport == "required" and policy.provider_transport == "forbidden":
         issues.append(
             PreflightIssue(
@@ -169,6 +181,13 @@ def _check_transport(
                 message="provider-call limit is smaller than the runner requirement",
             )
         )
+
+
+def _check_input_token_limit(
+    capability: CapabilityProfile,
+    limits: ResourceLimits,
+    issues: list[PreflightIssue],
+) -> None:
     if (
         limits.max_input_tokens is not None
         and capability.input_token_limit_enforcement != "pre-dispatch"
@@ -179,6 +198,13 @@ def _check_transport(
                 message="runner cannot enforce the input-token limit before provider dispatch",
             )
         )
+
+
+def _check_provider_destination(
+    capability: CapabilityProfile,
+    policy: SafetyPolicy,
+    issues: list[PreflightIssue],
+) -> None:
     if capability.provider_transport == "required" and (
         capability.provider != policy.allowed_provider
         or capability.endpoint != policy.allowed_endpoint
@@ -189,6 +215,12 @@ def _check_transport(
                 message="runner destination is not allowed by the safety policy",
             )
         )
+
+
+def _check_execution_lifecycle(
+    capability: CapabilityProfile,
+    issues: list[PreflightIssue],
+) -> None:
     if not capability.supports_timeout:
         issues.append(
             PreflightIssue(
@@ -211,6 +243,16 @@ def _check_effects(
     target_type: BehaviorType,
     issues: list[PreflightIssue],
 ) -> None:
+    _check_tool_network(capability, policy, issues)
+    _check_actions(capability, policy, target_type, issues)
+    _check_protected_state(capability, policy, issues)
+
+
+def _check_tool_network(
+    capability: CapabilityProfile,
+    policy: SafetyPolicy,
+    issues: list[PreflightIssue],
+) -> None:
     if capability.tool_network_access != policy.tool_network_access:
         issues.append(
             PreflightIssue(
@@ -218,6 +260,14 @@ def _check_effects(
                 message="runner cannot prove that tool-side network access is forbidden",
             )
         )
+
+
+def _check_actions(
+    capability: CapabilityProfile,
+    policy: SafetyPolicy,
+    target_type: BehaviorType,
+    issues: list[PreflightIssue],
+) -> None:
     if target_type == "shell-action" and capability.action_visibility != "visible":
         issues.append(
             PreflightIssue(
@@ -239,6 +289,13 @@ def _check_effects(
                 message="runner cannot prove that action execution is denied",
             )
         )
+
+
+def _check_protected_state(
+    capability: CapabilityProfile,
+    policy: SafetyPolicy,
+    issues: list[PreflightIssue],
+) -> None:
     if capability.source_store_effect != policy.source_store_effect:
         issues.append(
             PreflightIssue(
@@ -251,5 +308,15 @@ def _check_effects(
             PreflightIssue(
                 code="workspace-may-change",
                 message="runner may change the original workspace",
+            )
+        )
+    if capability.protected_state_enforcement == "postcondition" or (
+        capability.process_containment != "not-applicable"
+        and capability.protected_state_enforcement != "preventive"
+    ):
+        issues.append(
+            PreflightIssue(
+                code="protected-state-enforcement-insufficient",
+                message="process runners require preventive protected-state isolation",
             )
         )

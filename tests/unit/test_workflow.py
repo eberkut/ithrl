@@ -23,6 +23,7 @@ from ithrl.runner import (
     PreparedAttempt,
     ProviderAcceptanceState,
     RunAccounting,
+    RunnerCancelled,
     RunnerError,
     RunnerErrorCode,
     RunResult,
@@ -217,6 +218,83 @@ def test_observation_enforces_the_shared_wall_time_limit(tmp_path: Path) -> None
     assert observation.attempt_evidence.termination_reason == "timeout"
 
 
+def test_cancellation_grace_does_not_extend_the_execution_deadline(tmp_path: Path) -> None:
+    evidence = _evidence(tmp_path)
+    prepared = prepare_experiment(evidence)
+    limits = prepared.resource_limits.model_copy(update={"max_wall_time_seconds": 1})
+    profile = prepared.runner.capability_profile.model_copy(
+        update={"cancellation_grace_seconds": 5}
+    )
+    fingerprint = "cancellation-grace-test"
+    plan = prepared.execution_plan.model_copy(
+        update={
+            "capability": profile,
+            "resource_limits": limits,
+            "runner_fingerprint": fingerprint,
+        }
+    )
+    candidate = prepare_candidate(evidence, plan)
+    attempt = PreparedAttempt(
+        evidence=evidence,
+        candidate=candidate,
+        target=prepared.experiment.target,
+        execution_plan=plan,
+        safety_policy=prepared.safety_policy,
+        resource_limits=limits,
+        phase="calibration",
+        arm="baseline",
+    )
+    identity = prepared.identity.model_copy(
+        update={
+            "execution_plan_digest": plan.digest,
+            "runner_fingerprint": fingerprint,
+        }
+    )
+
+    class CleanupRunner:
+        capability_profile = profile
+
+        @property
+        def fingerprint(self) -> str:
+            return fingerprint
+
+        async def run(self, attempt: PreparedAttempt) -> RunResult:
+            try:
+                await asyncio.sleep(10)
+            except asyncio.CancelledError:
+                raise RunnerCancelled(
+                    RunnerError(
+                        RunnerErrorCode.CANCELLED,
+                        "runner cleanup completed after the deadline",
+                        provider_acceptance_state=ProviderAcceptanceState.NOT_STARTED,
+                        accounting=RunAccounting(
+                            process_outcome="terminated",
+                            cleanup_outcome="verified",
+                        ),
+                        effective_policy_digest=attempt.safety_policy.digest,
+                    )
+                ) from None
+            raise AssertionError("deadline did not cancel runner")
+
+    store = ObservationStore(tmp_path / "cleanup-grace.sqlite")
+    with pytest.raises(RunnerExecutionError, match="timeout"):
+        asyncio.run(
+            observe_once(
+                runner=CleanupRunner(),
+                identity=identity,
+                store=store,
+                attempt=attempt,
+            )
+        )
+
+    [observation] = store.list_for_experiment(prepared.experiment.digest)
+    assert observation.attempt_evidence.termination_reason == "timeout"
+    accounting = observation.attempt_evidence.accounting
+    assert accounting is not None
+    assert accounting.process_outcome == "terminated"
+    assert accounting.cleanup_outcome == "verified"
+
+
 @pytest.mark.parametrize("failure_mode", ["generic", "transport", "accepted"])
 def test_incomplete_provider_attempt_blocks_automatic_retry(
     tmp_path: Path,
@@ -396,7 +474,15 @@ def test_inconsistent_provider_accounting_blocks_automatic_retry(tmp_path: Path)
         ({"source_store_effect": "may-change"}, None, "safety"),
         ({"original_workspace_effect": "may-change"}, None, "safety"),
         ({"native_output_bytes": 1_048_577}, None, "output-limit"),
-        ({"disposable_state_bytes": 1}, None, "output-limit"),
+        (
+            {
+                "disposable_state_bytes": 1,
+                "residual_disposable_state_bytes": 1,
+                "cleanup_outcome": "failed",
+            },
+            None,
+            "contract",
+        ),
         ({}, "another-provider", "safety"),
     ],
 )
@@ -577,3 +663,54 @@ def test_cancelled_attempt_is_persisted_before_cancellation_propagates(tmp_path:
 
     [observation] = store.list_for_experiment(prepared.experiment.digest)
     assert observation.attempt_evidence.termination_reason == "cancelled"
+
+
+def test_cancelled_attempt_preserves_runner_cleanup_evidence(tmp_path: Path) -> None:
+    evidence = _evidence(tmp_path)
+    prepared = prepare_experiment(evidence)
+    candidate = prepare_candidate(evidence, prepared.execution_plan)
+    attempt = PreparedAttempt(
+        evidence=evidence,
+        candidate=candidate,
+        target=prepared.experiment.target,
+        execution_plan=prepared.execution_plan,
+        safety_policy=prepared.safety_policy,
+        resource_limits=prepared.resource_limits,
+        phase="calibration",
+        arm="baseline",
+    )
+
+    class CancelledRunner:
+        fingerprint = prepared.runner.fingerprint
+        capability_profile = prepared.runner.capability_profile
+
+        async def run(self, attempt: PreparedAttempt) -> RunResult:
+            raise RunnerCancelled(
+                RunnerError(
+                    RunnerErrorCode.CANCELLED,
+                    "runner was cancelled",
+                    provider_acceptance_state=ProviderAcceptanceState.NOT_STARTED,
+                    accounting=RunAccounting(
+                        process_outcome="terminated",
+                        cleanup_outcome="verified",
+                    ),
+                    effective_policy_digest=attempt.safety_policy.digest,
+                )
+            )
+
+    store = ObservationStore(tmp_path / "cancelled-with-evidence.sqlite")
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(
+            observe_once(
+                runner=CancelledRunner(),
+                identity=prepared.identity,
+                store=store,
+                attempt=attempt,
+            )
+        )
+
+    [observation] = store.list_for_experiment(prepared.experiment.digest)
+    accounting = observation.attempt_evidence.accounting
+    assert accounting is not None
+    assert accounting.process_outcome == "terminated"
+    assert accounting.cleanup_outcome == "verified"

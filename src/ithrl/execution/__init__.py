@@ -1,7 +1,9 @@
 """Runner capability, policy, limit, and preflight contracts."""
 
 from ithrl.execution.contracts import (
+    MAX_CANCELLATION_GRACE_SECONDS,
     MAX_DISPOSABLE_STATE_BYTES,
+    MAX_DISPOSABLE_STATE_ENTRIES,
     MAX_NATIVE_OUTPUT_BYTES,
     MAX_PROVIDER_CALLS_PER_ATTEMPT,
     MAX_WALL_TIME_SECONDS,
@@ -13,11 +15,14 @@ from ithrl.execution.contracts import (
     CaptureType,
     ContextOperation,
     DisposableStateEffect,
+    DisposableStateLimitEnforcement,
     InputTokenLimitEnforcement,
     PreflightIssue,
     PreflightIssueCode,
     PreflightReport,
+    ProcessContainment,
     ProtectedStateEffect,
+    ProtectedStateEnforcement,
     ProviderTransport,
     ProviderTransportPolicy,
     ResolvedExecutionPlan,
@@ -28,7 +33,9 @@ from ithrl.execution.contracts import (
 from ithrl.execution.preflight import resolve_execution_plan
 
 __all__ = [
+    "MAX_CANCELLATION_GRACE_SECONDS",
     "MAX_DISPOSABLE_STATE_BYTES",
+    "MAX_DISPOSABLE_STATE_ENTRIES",
     "MAX_NATIVE_OUTPUT_BYTES",
     "MAX_PROVIDER_CALLS_PER_ATTEMPT",
     "MAX_WALL_TIME_SECONDS",
@@ -40,11 +47,14 @@ __all__ = [
     "CaptureType",
     "ContextOperation",
     "DisposableStateEffect",
+    "DisposableStateLimitEnforcement",
     "InputTokenLimitEnforcement",
     "PreflightIssue",
     "PreflightIssueCode",
     "PreflightReport",
+    "ProcessContainment",
     "ProtectedStateEffect",
+    "ProtectedStateEnforcement",
     "ProviderTransport",
     "ProviderTransportPolicy",
     "ResolvedExecutionPlan",

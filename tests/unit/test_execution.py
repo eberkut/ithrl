@@ -90,12 +90,82 @@ def test_fake_capability_resolves_bounded_credential_free_plan(tmp_path: Path) -
     assert report.plan.capability.action_execution == "denied"
     assert report.plan.capability.source_store_effect == "unchanged"
     assert report.plan.capability.original_workspace_effect == "unchanged"
+    assert report.plan.capability.cancellation_grace_seconds == 0
     assert report.plan.target_digest == experiment.target.digest
     assert report.plan.experiment_digest == experiment.digest
     assert report.plan.capability == capability
     assert report.plan.safety_policy == policy
     assert report.plan.resource_limits == limits
     assert len(report.plan.digest) == 64
+
+
+def test_capability_requires_explicit_state_limit_and_process_cancellation_facts() -> None:
+    payload = CapabilityProfile.deterministic_fake().model_dump(mode="python")
+
+    with pytest.raises(ValueError, match="limit enforcement"):
+        CapabilityProfile.model_validate({**payload, "disposable_state_effect": "writes"})
+    with pytest.raises(ValueError, match="cancellation grace"):
+        CapabilityProfile.model_validate({**payload, "process_containment": "process-group"})
+
+
+def test_preflight_refuses_postcondition_only_protected_state_checks(tmp_path: Path) -> None:
+    capability = CapabilityProfile.deterministic_fake().model_copy(
+        update={"protected_state_enforcement": "postcondition"}
+    )
+
+    report = resolve_execution_plan(
+        capability,
+        _shell_experiment(),
+        evidence=_evidence(tmp_path),
+        runner_fingerprint="postcondition-only",
+        safety_policy=SafetyPolicy.credential_free(),
+        resource_limits=ResourceLimits.credential_free(),
+    )
+
+    assert not report.ready
+    assert {issue.code for issue in report.issues} == {"protected-state-enforcement-insufficient"}
+
+
+def test_preflight_refuses_process_runner_without_preventive_isolation(tmp_path: Path) -> None:
+    capability = CapabilityProfile.deterministic_fake().model_copy(
+        update={
+            "process_containment": "process-group",
+            "cancellation_grace_seconds": 3,
+        }
+    )
+
+    report = resolve_execution_plan(
+        capability,
+        _shell_experiment(),
+        evidence=_evidence(tmp_path),
+        runner_fingerprint="process-without-isolation",
+        safety_policy=SafetyPolicy.credential_free(),
+        resource_limits=ResourceLimits.credential_free(),
+    )
+
+    assert not report.ready
+    assert {issue.code for issue in report.issues} == {"protected-state-enforcement-insufficient"}
+
+
+def test_preflight_accepts_process_runner_with_preventive_isolation(tmp_path: Path) -> None:
+    capability = CapabilityProfile.deterministic_fake().model_copy(
+        update={
+            "process_containment": "process-group",
+            "protected_state_enforcement": "preventive",
+            "cancellation_grace_seconds": 3,
+        }
+    )
+
+    report = resolve_execution_plan(
+        capability,
+        _shell_experiment(),
+        evidence=_evidence(tmp_path),
+        runner_fingerprint="process-with-isolation",
+        safety_policy=SafetyPolicy.credential_free(),
+        resource_limits=ResourceLimits.credential_free(),
+    )
+
+    assert report.ready
 
 
 def test_preflight_collects_every_incompatible_execution_fact(tmp_path: Path) -> None:
@@ -119,6 +189,7 @@ def test_preflight_collects_every_incompatible_execution_fact(tmp_path: Path) ->
         source_store_effect="may-change",
         original_workspace_effect="may-change",
         disposable_state_effect="writes",
+        disposable_state_limit_enforcement="observed",
         supports_timeout=False,
         supports_cancellation=False,
         reports_usage=False,
@@ -182,6 +253,7 @@ def test_preflight_accounts_for_allowed_provider_transport_separately(
         source_store_effect="unchanged",
         original_workspace_effect="unchanged",
         disposable_state_effect="writes",
+        disposable_state_limit_enforcement="observed",
         supports_timeout=True,
         supports_cancellation=True,
         reports_usage=True,

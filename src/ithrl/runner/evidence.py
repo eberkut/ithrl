@@ -197,24 +197,41 @@ def _error_retry_safe(
     accounting = error.accounting
     if accounting is None or not _has_retryable_start(error, acceptance, accounting):
         return False
+    if not _retry_limits_allow(attempt, error, accounting):
+        return False
+    if not _retry_plan_matches(attempt, error):
+        return False
+    return _native_output_is_consistent(error.native_output, accounting.native_output_bytes)
+
+
+def _retry_limits_allow(
+    attempt: PreparedAttempt,
+    error: RunnerError,
+    accounting: RunAccounting,
+) -> bool:
     limits = attempt.resource_limits
-    if accounting.elapsed_milliseconds > limits.max_wall_time_seconds * 1000:
-        return False
-    if accounting.native_output_bytes > limits.max_native_output_bytes:
-        return False
-    if accounting.disposable_state_bytes > limits.max_disposable_state_bytes:
+    within_limits = (
+        accounting.elapsed_milliseconds <= limits.max_wall_time_seconds * 1000,
+        accounting.native_output_bytes <= limits.max_native_output_bytes,
+        accounting.disposable_state_bytes <= limits.max_disposable_state_bytes,
+        accounting.disposable_state_entries <= limits.max_disposable_state_entries,
+        error.usage is None
+        or limits.max_input_tokens is None
+        or error.usage.input_tokens <= limits.max_input_tokens,
+    )
+    return all(within_limits)
+
+
+def _retry_plan_matches(attempt: PreparedAttempt, error: RunnerError) -> bool:
+    capability = attempt.execution_plan.capability
+    if (
+        capability.disposable_state_effect == "writes"
+        and capability.disposable_state_limit_enforcement != "enforced"
+    ):
         return False
     if error.effective_policy_digest not in {None, attempt.safety_policy.digest}:
         return False
-    if not _error_provenance_matches(attempt, error):
-        return False
-    if (
-        error.usage is not None
-        and limits.max_input_tokens is not None
-        and error.usage.input_tokens > limits.max_input_tokens
-    ):
-        return False
-    return _native_output_is_consistent(error.native_output, accounting.native_output_bytes)
+    return _error_provenance_matches(attempt, error)
 
 
 def _has_retryable_start(
@@ -239,16 +256,21 @@ def _error_provenance_matches(attempt: PreparedAttempt, error: RunnerError) -> b
 
 
 def _accounting_has_no_external_effects(accounting: RunAccounting) -> bool:
-    return (
-        accounting.provider_calls_started == 0
-        and accounting.provider_calls_completed == 0
-        and accounting.provider_connections_started == 0
-        and accounting.tool_network_requests == 0
-        and accounting.actions_executed == 0
-        and accounting.actions_denied == accounting.actions_requested
-        and accounting.disposable_state_bytes == 0
-        and accounting.source_store_effect == "unchanged"
-        and accounting.original_workspace_effect == "unchanged"
+    return all(
+        (
+            accounting.provider_calls_started == 0,
+            accounting.provider_calls_completed == 0,
+            accounting.provider_connections_started == 0,
+            accounting.tool_network_requests == 0,
+            accounting.actions_executed == 0,
+            accounting.actions_denied == accounting.actions_requested,
+            accounting.process_outcome != "unknown",
+            accounting.cleanup_outcome in {"not-required", "verified"},
+            accounting.residual_disposable_state_bytes == 0,
+            accounting.residual_disposable_state_entries == 0,
+            accounting.source_store_effect == "unchanged",
+            accounting.original_workspace_effect == "unchanged",
+        )
     )
 
 
