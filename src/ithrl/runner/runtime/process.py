@@ -164,6 +164,7 @@ async def _create_and_run(
     deadline: float,
 ) -> tuple[OwnedAttemptState | None, _ChildOutcome]:
     state: OwnedAttemptState | None = None
+    spec: ProcessSpec | None = None
     try:
         _require_before_deadline(deadline)
         state = OwnedAttemptState.create(state_parent, attempt_id)
@@ -191,6 +192,9 @@ async def _create_and_run(
         return state, _ChildOutcome(
             None, RunnerErrorCode.INTERNAL, False, "not-started", False, False
         )
+    finally:
+        if spec is not None:
+            _close_inherited_fds(spec.inherited_fds)
 
 
 def _finalize_attempt(
@@ -435,9 +439,16 @@ def _start_process(spec: ProcessSpec) -> subprocess.Popen[bytes]:
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        pass_fds=spec.inherited_fds,
         start_new_session=True,
         close_fds=True,
     )
+
+
+def _close_inherited_fds(descriptors: tuple[int, ...]) -> None:
+    for descriptor in descriptors:
+        with contextlib.suppress(OSError):
+            os.close(descriptor)
 
 
 async def _wait_for_process(

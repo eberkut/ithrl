@@ -1,0 +1,1 @@
+{"properties":{"decision":{"$ref":"#/definitions/FileChangeApprovalDecision"}},"definitions":{"FileChangeApprovalDecision":{"oneOf":[{"enum":["decline"],"type":"string"}]}}}

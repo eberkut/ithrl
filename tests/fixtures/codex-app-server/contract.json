@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "observed_codex_version": "0.156.1",
+  "source": "sanitized projection of codex app-server generate-json-schema",
+  "client_methods": {
+    "initialize": "InitializeParams",
+    "thread/inject_items": "ThreadInjectItemsParams",
+    "thread/start": "ThreadStartParams",
+    "turn/start": "TurnStartParams"
+  },
+  "notification_methods": {
+    "account/rateLimits/updated": "AccountRateLimitsUpdatedNotification",
+    "item/agentMessage/delta": "AgentMessageDeltaNotification",
+    "item/completed": "ItemCompletedNotification",
+    "item/plan/delta": "PlanDeltaNotification",
+    "item/reasoning/summaryPartAdded": "ReasoningSummaryPartAddedNotification",
+    "item/reasoning/summaryTextDelta": "ReasoningSummaryTextDeltaNotification",
+    "item/reasoning/textDelta": "ReasoningTextDeltaNotification",
+    "item/started": "ItemStartedNotification",
+    "model/rerouted": "ModelReroutedNotification",
+    "model/verification": "ModelVerificationNotification",
+    "thread/started": "ThreadStartedNotification",
+    "thread/status/changed": "ThreadStatusChangedNotification",
+    "thread/tokenUsage/updated": "ThreadTokenUsageUpdatedNotification",
+    "turn/completed": "TurnCompletedNotification",
+    "turn/started": "TurnStartedNotification"
+  },
+  "server_request_methods": [
+    "item/commandExecution/requestApproval",
+    "item/fileChange/requestApproval",
+    "item/permissions/requestApproval",
+    "item/tool/call",
+    "item/tool/requestUserInput",
+    "mcpServer/elicitation/request"
+  ],
+  "thread_item_types": [
+    "agentMessage",
+    "collabAgentToolCall",
+    "commandExecution",
+    "contextCompaction",
+    "dynamicToolCall",
+    "enteredReviewMode",
+    "exitedReviewMode",
+    "fileChange",
+    "functionCallOutput",
+    "hookPrompt",
+    "imageGeneration",
+    "imageView",
+    "mcpToolCall",
+    "plan",
+    "reasoning",
+    "sleep",
+    "subAgentActivity",
+    "userMessage",
+    "webSearch"
+  ]
+}

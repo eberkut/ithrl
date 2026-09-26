@@ -1,0 +1,1 @@
+{"properties":{"model":{},"serviceTier":{},"thread":{"$ref":"#/definitions/Thread"}},"definitions":{"Thread":{"properties":{"id":{},"model":{}}}}}

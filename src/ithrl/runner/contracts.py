@@ -39,6 +39,8 @@ _DIGEST_PATTERN = r"^[0-9a-f]{64}$"
 MAX_TOOL_ARGUMENT_BYTES = 64 * 1024
 MAX_TOOL_ARGUMENT_DEPTH = 16
 MAX_TOOL_ARGUMENT_ITEMS = 4096
+MAX_MODEL_NAME_LENGTH = 256
+MAX_SERVICE_TIER_LENGTH = 128
 
 
 class _ImmutableContract(BaseModel):
@@ -240,11 +242,17 @@ class RunResult(_ImmutableContract):
     termination_reason: TerminationReason = "completed"
     tool_calls: Annotated[tuple[ToolCall, ...], Field(max_length=MAX_SHELL_ACTIONS)] = ()
     final_text: Annotated[str | None, Field(max_length=MAX_BEHAVIOR_TEXT_LENGTH)] = None
-    model_requested: Annotated[str | None, Field(min_length=1, max_length=256)] = None
-    model_returned: Annotated[str | None, Field(min_length=1, max_length=256)] = None
+    model_requested: Annotated[
+        str | None, Field(min_length=1, max_length=MAX_MODEL_NAME_LENGTH)
+    ] = None
+    model_returned: Annotated[str | None, Field(min_length=1, max_length=MAX_MODEL_NAME_LENGTH)] = (
+        None
+    )
     provider: Annotated[str | None, Field(min_length=1, max_length=256)] = None
     endpoint: Annotated[str | None, Field(min_length=1, max_length=2048)] = None
-    service_tier: Annotated[str | None, Field(min_length=1, max_length=128)] = None
+    service_tier: Annotated[str | None, Field(min_length=1, max_length=MAX_SERVICE_TIER_LENGTH)] = (
+        None
+    )
     usage: TokenUsage | None = None
     accounting: RunAccounting
     native_output: NativeOutputReference | None = None

@@ -331,8 +331,6 @@ def _validate_resolved_transport(plan: ResolvedExecutionPlan) -> None:
 
 def _validate_resolved_effects(plan: ResolvedExecutionPlan) -> None:
     capability = plan.capability
-    if not capability.deterministic:
-        raise ValueError("deterministic execution plan cannot contain a sampled runner")
     if capability.tool_network_access != "forbidden":
         raise ValueError("execution plan permits tool network access")
     _validate_resolved_actions(plan)

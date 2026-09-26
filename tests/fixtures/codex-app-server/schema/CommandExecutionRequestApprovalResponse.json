@@ -1,0 +1,1 @@
+{"properties":{"decision":{"$ref":"#/definitions/CommandExecutionApprovalDecision"}},"definitions":{"CommandExecutionApprovalDecision":{"oneOf":[{"enum":["decline"],"type":"string"}]}}}

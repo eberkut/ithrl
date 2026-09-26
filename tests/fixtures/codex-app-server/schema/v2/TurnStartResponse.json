@@ -1,0 +1,1 @@
+{"properties":{"turn":{"$ref":"#/definitions/Turn"}},"definitions":{"Turn":{"properties":{"id":{}}}}}

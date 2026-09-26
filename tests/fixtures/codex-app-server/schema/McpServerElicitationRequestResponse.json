@@ -1,0 +1,1 @@
+{"properties":{"_meta":{},"action":{"$ref":"#/definitions/Action"},"content":{}},"definitions":{"Action":{"enum":["decline"],"type":"string"}}}

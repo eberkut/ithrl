@@ -25,10 +25,16 @@ class ProcessSpec:
     argv: tuple[str, ...] = field(repr=False)
     cwd: Path = field(repr=False)
     environment: Mapping[str, str] = field(repr=False, compare=False)
+    inherited_fds: tuple[int, ...] = field(default=(), repr=False, compare=False)
 
     def __post_init__(self) -> None:
         _validate_argv(self.argv)
         _validate_cwd(self.cwd)
+        if (
+            any(type(descriptor) is not int or descriptor < 3 for descriptor in self.inherited_fds)
+            or tuple(sorted(set(self.inherited_fds))) != self.inherited_fds
+        ):
+            raise ValueError("inherited file descriptors must be sorted, unique, and at least 3")
         object.__setattr__(self, "environment", _validated_environment(self.environment))
 
 

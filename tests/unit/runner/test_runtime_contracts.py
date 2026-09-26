@@ -25,6 +25,18 @@ def test_process_spec_copies_its_environment(tmp_path: Path) -> None:
         spec.environment["OTHER"] = "value"  # type: ignore[index]
 
 
+def test_process_spec_rejects_standard_stream_as_inherited_descriptor(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValueError, match="at least 3"):
+        ProcessSpec(
+            argv=("/bin/true",),
+            cwd=tmp_path,
+            environment={},
+            inherited_fds=(2,),
+        )
+
+
 @pytest.mark.parametrize(
     ("argv", "cwd", "environment", "message"),
     [

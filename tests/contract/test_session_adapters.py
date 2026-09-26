@@ -200,7 +200,7 @@ def test_runner_core_does_not_depend_on_adapters_cli_or_workflow() -> None:
     package = Path(__file__).parents[2] / "src" / "ithrl" / "runner"
     forbidden = ("ithrl.adapters", "ithrl.cli", "ithrl.workflow")
 
-    for source in package.rglob("*.py"):
+    for source in (*package.glob("*.py"), *(package / "runtime").glob("*.py")):
         tree = ast.parse(source.read_text(encoding="utf-8"))
         imported = _imported_modules(tree)
         assert not {
@@ -208,6 +208,29 @@ def test_runner_core_does_not_depend_on_adapters_cli_or_workflow() -> None:
             for module in imported
             if any(module == blocked or module.startswith(f"{blocked}.") for blocked in forbidden)
         }, source
+
+
+def test_concrete_runners_do_not_depend_on_ui_or_concrete_adapters() -> None:
+    package = Path(__file__).parents[2] / "src" / "ithrl" / "runner"
+
+    for harness in ("codex",):
+        forbidden = ("ithrl.cli", "ithrl.workflow")
+        for source in (package / harness).glob("*.py"):
+            tree = ast.parse(source.read_text(encoding="utf-8"))
+            imported = _imported_modules(tree)
+            assert not {
+                module
+                for module in imported
+                if any(
+                    module == blocked or module.startswith(f"{blocked}.") for blocked in forbidden
+                )
+            }, source
+            assert not {
+                module
+                for module in imported
+                if module.startswith("ithrl.adapters.")
+                and not module.startswith(("ithrl.adapters.contracts", "ithrl.adapters.registry"))
+            }, source
 
 
 def test_workflow_has_no_concrete_runner_selection_branch() -> None:
