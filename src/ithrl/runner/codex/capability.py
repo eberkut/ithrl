@@ -53,6 +53,9 @@ _ISOLATION_PROBE_RESULT = b"ithrl-isolation-ok\n"
 _ISOLATION_HOST_MARKER = b"ithrl-readable-host-marker\n"
 _ISOLATION_AUTH_MARKER = b'{"ithrl_probe":"not-a-credential"}\n'
 _ISOLATION_UNAVAILABLE = "Codex isolation runtime is unavailable or incompatible"
+_ISOLATION_HOST_STORAGE_UNAVAILABLE = (
+    "Codex isolation probe requires writable /var/tmp temporary storage"
+)
 _ISOLATION_HOST_PARENT = Path("/var/tmp")  # noqa: S108 - visible through the read-only root
 _ISOLATION_PROBE_SOURCE = f"""\
 import json
@@ -229,21 +232,26 @@ def _probe_isolation_boundary(runtime: CodexRuntime, root: Path) -> None:
     probe_root: Path | None = None
     protected_root: Path | None = None
     try:
-        with (
-            TemporaryDirectory(prefix="isolation-", dir=root) as temporary,
-            TemporaryDirectory(
-                prefix="ithrl-codex-protected-",
-                dir=_ISOLATION_HOST_PARENT,
-            ) as protected_temporary,
-        ):
-            probe_root = Path(temporary)
-            protected_root = Path(protected_temporary)
-            workspace, worker, request = _prepare_isolation_probe(
-                probe_root,
-                protected_root,
-            )
-            _run_isolation_probe(runtime, probe_root, workspace, worker, request)
-            _verify_isolation_probe(workspace, protected_root)
+        with TemporaryDirectory(prefix="isolation-", dir=root) as temporary:
+            try:
+                protected_directory = TemporaryDirectory(
+                    prefix="ithrl-codex-protected-",
+                    dir=_ISOLATION_HOST_PARENT,
+                )
+            except OSError as error:
+                raise CodexCapabilityError(
+                    CodexCapabilityErrorCode.UNAVAILABLE,
+                    _ISOLATION_HOST_STORAGE_UNAVAILABLE,
+                ) from error
+            with protected_directory as protected_temporary:
+                probe_root = Path(temporary)
+                protected_root = Path(protected_temporary)
+                workspace, worker, request = _prepare_isolation_probe(
+                    probe_root,
+                    protected_root,
+                )
+                _run_isolation_probe(runtime, probe_root, workspace, worker, request)
+                _verify_isolation_probe(workspace, protected_root)
     except CodexCapabilityError:
         raise
     except (CaseError, CodexIsolationError, OSError, ValueError) as error:

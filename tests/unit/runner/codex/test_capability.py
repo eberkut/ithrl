@@ -204,6 +204,24 @@ def test_isolation_probe_reads_host_view_and_cleans_owned_state(
     assert list(root.iterdir()) == []
 
 
+def test_isolation_probe_reports_unavailable_host_temporary_storage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "probe-root"
+    root.mkdir()
+    monkeypatch.setattr(capability, "_ISOLATION_HOST_PARENT", tmp_path / "missing")
+
+    with pytest.raises(
+        CodexCapabilityError,
+        match="requires writable /var/tmp temporary storage",
+    ) as refused:
+        _REAL_ISOLATION_PROBE(_runtime(Path("/bin/true")), root)
+
+    assert refused.value.code is CodexCapabilityErrorCode.UNAVAILABLE
+    assert list(root.iterdir()) == []
+
+
 def test_isolation_probe_closes_authentication_descriptor_after_success(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

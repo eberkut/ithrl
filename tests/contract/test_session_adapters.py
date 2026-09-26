@@ -192,7 +192,14 @@ def test_shared_domain_layers_do_not_depend_on_concrete_harnesses() -> None:
         assert not {
             module
             for module in imported
-            if module.startswith(("ithrl.adapters.codex", "ithrl.adapters.copilot"))
+            if module.startswith(
+                (
+                    "ithrl.adapters.codex",
+                    "ithrl.adapters.copilot",
+                    "ithrl.runner.codex",
+                    "ithrl.runner.copilot",
+                )
+            )
         }, source
 
 
