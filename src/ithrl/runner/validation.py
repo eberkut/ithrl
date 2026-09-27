@@ -52,12 +52,12 @@ def _validate_result_identity(attempt: PreparedAttempt, result: RunResult) -> No
             "failed": RunnerErrorCode.INTERNAL,
         }[result.termination_reason]
         raise RunnerError(code, f"runner terminated with {result.termination_reason}")
-    if (
-        accounting.provider_calls_started
-        != attempt.execution_plan.capability.provider_calls_per_attempt
-    ):
+    planned = attempt.execution_plan.capability.provider_calls_per_attempt
+    if accounting.provider_calls_started > planned:
+        raise RunnerError(RunnerErrorCode.SAFETY, "runner exceeded its planned provider-call count")
+    if planned > 0 and accounting.provider_calls_started == 0:
         raise RunnerError(
-            RunnerErrorCode.CONTRACT, "runner provider-call count differs from its plan"
+            RunnerErrorCode.CONTRACT, "completed provider-backed result has no provider call"
         )
     if accounting.provider_calls_completed != accounting.provider_calls_started:
         raise RunnerError(

@@ -220,7 +220,7 @@ def test_runner_core_does_not_depend_on_adapters_cli_or_workflow() -> None:
 def test_concrete_runners_do_not_depend_on_ui_or_concrete_adapters() -> None:
     package = Path(__file__).parents[2] / "src" / "ithrl" / "runner"
 
-    for harness in ("codex",):
+    for harness in ("codex", "copilot"):
         forbidden = ("ithrl.cli", "ithrl.workflow")
         for source in (package / harness).glob("*.py"):
             tree = ast.parse(source.read_text(encoding="utf-8"))

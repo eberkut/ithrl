@@ -77,6 +77,7 @@ class _ChildOutcome:
     process_outcome: ProcessOutcome
     forced_termination: bool
     output_complete: bool
+    stdout_stop_matched: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,6 +148,7 @@ async def run_isolated_process(
         residual_disposable_state_entries=finalized.residual_entries,
         process_outcome=finalized.child.process_outcome,
         forced_termination=finalized.child.forced_termination,
+        stdout_stop_matched=finalized.child.stdout_stop_matched,
         cleanup_outcome=finalized.cleanup_outcome,
         source_store_effect=source_effect,
         original_workspace_effect=workspace_effect,
@@ -298,6 +300,7 @@ async def _run_child(
             stdout=stdout,
             stderr=stderr,
             output_capacity=capacity,
+            stop_after_stdout_line=spec.stop_after_stdout_line,
             deadline=deadline,
         )
     finally:
@@ -317,10 +320,12 @@ async def _run_child_with_output(
     stdout: BinaryIO,
     stderr: BinaryIO,
     output_capacity: int,
+    stop_after_stdout_line: Callable[[bytes], bool] | None,
     deadline: float,
 ) -> _ChildOutcome:
     process: subprocess.Popen[bytes] | None = None
     waiter: asyncio.Task[None] | None = None
+    stdout_stop_event = asyncio.Event() if stop_after_stdout_line is not None else None
     try:
         _require_before_deadline(deadline)
         process = _start_process(spec)
@@ -333,76 +338,106 @@ async def _run_child_with_output(
                 state=state,
                 usage=usage,
                 output_capacity=output_capacity,
+                stop_after_stdout_line=stop_after_stdout_line,
+                stdout_stop_event=stdout_stop_event,
                 state_capacity=limits.max_disposable_state_bytes,
                 state_entry_capacity=limits.max_disposable_state_entries,
                 deadline=deadline,
             )
         )
-        await asyncio.shield(waiter)
-        process_outcome, forced = await _stop_remaining_group(process)
-        return _ChildOutcome(
-            process.returncode,
-            None,
-            False,
-            process_outcome,
-            forced,
-            True,
+        stdout_stop_matched = await _wait_until_complete_or_stop(waiter, stdout_stop_event)
+        return await _finalize_child(
+            process,
+            waiter,
+            error=None,
+            cancelled=False,
+            drain_output=True,
+            stdout_stop_matched=stdout_stop_matched,
         )
     except asyncio.CancelledError:
         _clear_pending_cancellation()
-        return await _cancelled_child(process, waiter)
-    except Exception as error:
-        return await _failed_child(
+        return await _finalize_child(
             process,
-            code=_child_error_code(error, process_started=process is not None),
+            waiter,
+            error=None,
+            cancelled=True,
+            drain_output=False,
+            stdout_stop_matched=(stdout_stop_event is not None and stdout_stop_event.is_set()),
+        )
+    except Exception as error:
+        return await _finalize_child(
+            process,
+            waiter,
+            error=error,
             cancelled=False,
+            drain_output=False,
+            stdout_stop_matched=(stdout_stop_event is not None and stdout_stop_event.is_set()),
         )
 
 
-async def _cancelled_child(
+async def _wait_until_complete_or_stop(
+    waiter: asyncio.Task[None],
+    stdout_stop_event: asyncio.Event | None,
+) -> bool:
+    if stdout_stop_event is None:
+        await asyncio.shield(waiter)
+        return False
+
+    stop_waiter = asyncio.create_task(stdout_stop_event.wait())
+    try:
+        done, _ = await asyncio.wait(
+            {waiter, stop_waiter},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if waiter in done:
+            await asyncio.shield(waiter)
+        return stdout_stop_event.is_set()
+    finally:
+        await _cancel_and_wait(stop_waiter)
+
+
+async def _finalize_child(
     process: subprocess.Popen[bytes] | None,
     waiter: asyncio.Task[None] | None,
-) -> _ChildOutcome:
-    termination = asyncio.create_task(_stop_after_interruption(process))
-    if waiter is not None and not waiter.done():
-        waiter.cancel()
-    settlement = asyncio.create_task(_settle_task(waiter)) if waiter is not None else None
-    (process_outcome, forced), _ = await _await_despite_cancellation(termination)
-    if settlement is not None:
-        await _await_despite_cancellation(settlement)
-    return _ChildOutcome(
-        process.returncode if process is not None else None,
-        None,
-        True,
-        process_outcome,
-        forced,
-        False,
-    )
-
-
-async def _settle_task(task: asyncio.Task[Any]) -> None:
-    with contextlib.suppress(asyncio.CancelledError, Exception):
-        await task
-
-
-async def _failed_child(
-    process: subprocess.Popen[bytes] | None,
     *,
-    code: RunnerErrorCode | None,
+    error: Exception | None,
     cancelled: bool,
+    drain_output: bool,
+    stdout_stop_matched: bool,
 ) -> _ChildOutcome:
     termination = asyncio.create_task(_stop_after_interruption(process))
+    if waiter is not None and not drain_output and not waiter.done():
+        waiter.cancel()
+    settlement = asyncio.create_task(_settle_waiter(waiter)) if waiter is not None else None
     (process_outcome, forced), cancelled_during_termination = await _await_despite_cancellation(
         termination
     )
+    waiter_error: BaseException | None = None
+    cancelled_during_settlement = False
+    if settlement is not None:
+        waiter_error, cancelled_during_settlement = await _await_despite_cancellation(settlement)
+    effective_error = error or (waiter_error if isinstance(waiter_error, Exception) else None)
     return _ChildOutcome(
         process.returncode if process is not None else None,
-        code,
-        cancelled or cancelled_during_termination,
+        (
+            _child_error_code(effective_error, process_started=process is not None)
+            if effective_error is not None
+            else None
+        ),
+        cancelled or cancelled_during_termination or cancelled_during_settlement,
         process_outcome,
         forced,
-        False,
+        drain_output and waiter_error is None,
+        stdout_stop_matched,
     )
+
+
+async def _settle_waiter(task: asyncio.Task[None]) -> BaseException | None:
+    try:
+        await task
+    except (asyncio.CancelledError, Exception) as error:
+        return error
+    return None
 
 
 async def _await_despite_cancellation[T](task: asyncio.Task[T]) -> tuple[T, bool]:
@@ -459,6 +494,8 @@ async def _wait_for_process(
     state: OwnedAttemptState,
     usage: _Usage,
     output_capacity: int,
+    stop_after_stdout_line: Callable[[bytes], bool] | None,
+    stdout_stop_event: asyncio.Event | None,
     state_capacity: int,
     state_entry_capacity: int,
     deadline: float,
@@ -483,6 +520,8 @@ async def _wait_for_process(
                 usage=usage,
                 output_capacity=output_capacity,
                 output_lock=output_lock,
+                stop_after_stdout_line=stop_after_stdout_line,
+                stdout_stop_event=stdout_stop_event,
             )
         )
         monitor = asyncio.create_task(
@@ -528,10 +567,22 @@ async def _communicate(
     usage: _Usage,
     output_capacity: int,
     output_lock: asyncio.Lock,
+    stop_after_stdout_line: Callable[[bytes], bool] | None,
+    stdout_stop_event: asyncio.Event | None,
 ) -> None:
     tasks = (
         asyncio.create_task(_wait_for_exit(process)),
-        asyncio.create_task(_capture(stdout_reader, stdout, usage, output_capacity, output_lock)),
+        asyncio.create_task(
+            _capture(
+                stdout_reader,
+                stdout,
+                usage,
+                output_capacity,
+                output_lock,
+                stop_after_line=stop_after_stdout_line,
+                stop_event=stdout_stop_event,
+            )
+        ),
         asyncio.create_task(_capture(stderr_reader, stderr, usage, output_capacity, output_lock)),
     )
     try:
@@ -567,16 +618,68 @@ async def _capture(
     usage: _Usage,
     capacity: int,
     lock: asyncio.Lock,
+    stop_after_line: Callable[[bytes], bool] | None = None,
+    stop_event: asyncio.Event | None = None,
 ) -> None:
+    if stop_after_line is not None:
+        if stop_event is None:
+            raise RuntimeError("stdout stop event is unavailable")
+        await _capture_lines(
+            stream,
+            destination,
+            usage,
+            capacity,
+            lock,
+            stop_after_line,
+            stop_event,
+        )
+        return
     while chunk := await stream.read(_OUTPUT_CHUNK_BYTES):
-        async with lock:
-            available = capacity - usage.output_bytes
-            accepted = chunk[: max(available, 0)]
-            if accepted:
-                destination.write(accepted)
-                usage.output_bytes += len(accepted)
-            if len(accepted) != len(chunk):
-                raise _OutputLimitExceeded
+        await _write_output(destination, chunk, usage, capacity, lock)
+
+
+async def _capture_lines(
+    stream: asyncio.StreamReader,
+    destination: BinaryIO,
+    usage: _Usage,
+    capacity: int,
+    lock: asyncio.Lock,
+    stop_after_line: Callable[[bytes], bool],
+    stop_event: asyncio.Event,
+) -> None:
+    pending = bytearray()
+    while chunk := await stream.read(_OUTPUT_CHUNK_BYTES):
+        pending.extend(chunk)
+        if len(pending) > capacity:
+            raise _OutputLimitExceeded
+        matched_in_chunk = False
+        while (line_end := pending.find(b"\n")) >= 0:
+            encoded = bytes(pending[: line_end + 1])
+            del pending[: line_end + 1]
+            await _write_output(destination, encoded, usage, capacity, lock)
+            if stop_after_line(encoded.removesuffix(b"\n").removesuffix(b"\r")):
+                matched_in_chunk = True
+        if matched_in_chunk:
+            stop_event.set()
+    if pending:
+        await _write_output(destination, bytes(pending), usage, capacity, lock)
+
+
+async def _write_output(
+    destination: BinaryIO,
+    chunk: bytes,
+    usage: _Usage,
+    capacity: int,
+    lock: asyncio.Lock,
+) -> None:
+    async with lock:
+        available = capacity - usage.output_bytes
+        accepted = chunk[: max(available, 0)]
+        if accepted:
+            destination.write(accepted)
+            usage.output_bytes += len(accepted)
+        if len(accepted) != len(chunk):
+            raise _OutputLimitExceeded
 
 
 async def _monitor_state(
@@ -619,14 +722,6 @@ async def _measure_state_without_abandoning(
         with contextlib.suppress(AttemptStateError):
             await _await_despite_cancellation(measurement)
         raise asyncio.CancelledError from None
-
-
-async def _stop_remaining_group(
-    process: subprocess.Popen[bytes],
-) -> tuple[ProcessOutcome, bool]:
-    if not _process_group_exists(process.pid):
-        return "exited", False
-    return await _terminate_group(process)
 
 
 async def _stop_after_interruption(
@@ -837,6 +932,7 @@ def _replace_error(child: _ChildOutcome, code: RunnerErrorCode) -> _ChildOutcome
         child.process_outcome,
         child.forced_termination,
         child.output_complete,
+        child.stdout_stop_matched,
     )
 
 
@@ -848,6 +944,7 @@ def _mark_output_incomplete(child: _ChildOutcome) -> _ChildOutcome:
         child.process_outcome,
         child.forced_termination,
         False,
+        child.stdout_stop_matched,
     )
 
 

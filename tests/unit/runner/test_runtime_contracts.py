@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from ithrl.runner import RunAccounting, RunResult, ToolCall
 from ithrl.runner.runtime.contracts import ProcessSpec, RuntimeReport, require_process_group_support
 
 
@@ -34,6 +35,16 @@ def test_process_spec_rejects_standard_stream_as_inherited_descriptor(
             cwd=tmp_path,
             environment={},
             inherited_fds=(2,),
+        )
+
+
+def test_process_spec_rejects_non_callable_stdout_stop_condition(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="stop condition"):
+        ProcessSpec(
+            argv=("/bin/true",),
+            cwd=tmp_path,
+            environment={},
+            stop_after_stdout_line=object(),  # type: ignore[arg-type]
         )
 
 
@@ -74,10 +85,24 @@ def test_runtime_report_rejects_impossible_sizes() -> None:
             residual_disposable_state_entries=0,
             process_outcome="not-started",
             forced_termination=False,
+            stdout_stop_matched=False,
             cleanup_outcome="failed",
             source_store_effect="unchanged",
             original_workspace_effect="unchanged",
         )
+
+
+def test_normalized_result_repr_omits_model_content() -> None:
+    result = RunResult(
+        attempt_id="attempt-0123456789abcdef0123456789abcdef",
+        effective_policy_digest="0" * 64,
+        tool_calls=(ToolCall(name="bash", arguments={"command": "private-command"}),),
+        final_text="private-response",
+        accounting=RunAccounting(),
+    )
+
+    assert "private-command" not in repr(result)
+    assert "private-response" not in repr(result)
 
 
 def test_process_group_support_matches_the_host() -> None:

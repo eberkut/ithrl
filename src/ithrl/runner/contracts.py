@@ -130,7 +130,7 @@ class ToolCall(_ImmutableContract):
     """A normalized tool call emitted by a runner."""
 
     name: Annotated[str, Field(min_length=1, max_length=MAX_TOOL_NAME_LENGTH)]
-    arguments: JsonObject = Field(default_factory=dict)
+    arguments: JsonObject = Field(default_factory=dict, repr=False)
 
     @field_validator("arguments", mode="before")
     @classmethod
@@ -240,8 +240,10 @@ class RunResult(_ImmutableContract):
     attempt_id: Annotated[str, Field(min_length=1, max_length=128)]
     effective_policy_digest: Annotated[str, Field(pattern=_DIGEST_PATTERN)]
     termination_reason: TerminationReason = "completed"
-    tool_calls: Annotated[tuple[ToolCall, ...], Field(max_length=MAX_SHELL_ACTIONS)] = ()
-    final_text: Annotated[str | None, Field(max_length=MAX_BEHAVIOR_TEXT_LENGTH)] = None
+    tool_calls: Annotated[
+        tuple[ToolCall, ...], Field(max_length=MAX_SHELL_ACTIONS, repr=False)
+    ] = ()
+    final_text: Annotated[str | None, Field(max_length=MAX_BEHAVIOR_TEXT_LENGTH, repr=False)] = None
     model_requested: Annotated[
         str | None, Field(min_length=1, max_length=MAX_MODEL_NAME_LENGTH)
     ] = None

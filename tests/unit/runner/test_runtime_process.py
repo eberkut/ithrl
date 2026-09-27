@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable
+from io import BytesIO
 from pathlib import Path
 from typing import Any, BinaryIO
 
@@ -124,6 +125,81 @@ def test_nonzero_exit_is_complete_process_output(tmp_path: Path) -> None:
     assert result.returncode == 7
     assert result.native_output is not None
     assert store.read(result.native_output).complete
+
+
+def test_stdout_stop_terminates_after_the_matching_complete_line(tmp_path: Path) -> None:
+    def prepare(state: OwnedAttemptState) -> ProcessSpec:
+        work = state.member("work")
+        work.mkdir(mode=0o700)
+        return ProcessSpec(
+            argv=(sys.executable, str(HELPER), "lines", "before", "stop", "after"),
+            cwd=work,
+            environment={},
+            stop_after_stdout_line=lambda line: line == b"stop",
+        )
+
+    store, result = asyncio.run(_run(tmp_path, prepare))
+
+    assert result.native_output is not None
+    output = store.read(result.native_output)
+    assert output.stdout == b"before\nstop\n"
+    assert output.complete
+    assert result.report.stdout_stop_matched
+    assert result.report.process_outcome == "terminated"
+    assert not result.report.forced_termination
+
+
+def test_stdout_stop_preserves_every_complete_line_in_the_matching_chunk() -> None:
+    async def capture() -> tuple[bytes, bool]:
+        stream = asyncio.StreamReader()
+        stream.feed_data(b"before\nstop\nafter\npartial")
+        stream.feed_eof()
+        destination = BytesIO()
+        stop_event = asyncio.Event()
+        await runtime_process._capture_lines(
+            stream,
+            destination,
+            runtime_process._Usage(),
+            4096,
+            asyncio.Lock(),
+            lambda line: line == b"stop",
+            stop_event,
+        )
+        return destination.getvalue(), stop_event.is_set()
+
+    output, matched = asyncio.run(capture())
+
+    assert output == b"before\nstop\nafter\npartial"
+    assert matched
+
+
+def test_stdout_stop_preserves_buffered_lines_and_drains_stderr(tmp_path: Path) -> None:
+    script = (
+        "import os, time; "
+        "os.write(2, b'before-error\\nafter-error\\n'); "
+        "os.write(1, b'before\\nstop\\nafter\\n'); "
+        "time.sleep(60)"
+    )
+
+    def prepare(state: OwnedAttemptState) -> ProcessSpec:
+        work = state.member("work")
+        work.mkdir(mode=0o700)
+        return ProcessSpec(
+            argv=(sys.executable, "-c", script),
+            cwd=work,
+            environment={},
+            stop_after_stdout_line=lambda line: line == b"stop",
+        )
+
+    store, result = asyncio.run(_run(tmp_path, prepare))
+
+    assert result.native_output is not None
+    output = store.read(result.native_output)
+    assert output.stdout == b"before\nstop\nafter\n"
+    assert output.stderr == b"before-error\nafter-error\n"
+    assert output.complete
+    assert result.report.stdout_stop_matched
+    assert result.report.process_outcome == "terminated"
 
 
 def test_output_close_failure_marks_the_artifact_incomplete(
@@ -312,6 +388,85 @@ def test_cancellation_waits_for_termination_and_cleanup(tmp_path: Path) -> None:
     assert cancelled.report.cleanup_outcome == "verified"
     assert cancelled.report.residual_disposable_state_bytes == 0
     assert not (tmp_path / "state" / ATTEMPT_ID).exists()
+
+
+def test_cancellation_during_normal_completion_preserves_finalization_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stop_after_interruption = runtime_process._stop_after_interruption
+    termination_started = asyncio.Event()
+    release_termination = asyncio.Event()
+
+    async def delayed_termination(
+        process: subprocess.Popen[bytes] | None,
+    ) -> tuple[ProcessOutcome, bool]:
+        termination_started.set()
+        await release_termination.wait()
+        return await stop_after_interruption(process)
+
+    monkeypatch.setattr(runtime_process, "_stop_after_interruption", delayed_termination)
+
+    async def cancel_during_termination() -> ProcessRuntimeCancelled:
+        task = asyncio.create_task(_run(tmp_path, _prepare("exit", "0")))
+        await asyncio.wait_for(termination_started.wait(), timeout=2)
+        task.cancel()
+        release_termination.set()
+        with pytest.raises(ProcessRuntimeCancelled) as raised:
+            await task
+        return raised.value
+
+    cancelled = asyncio.run(cancel_during_termination())
+
+    assert cancelled.native_output is not None
+    assert cancelled.native_output.complete
+    assert cancelled.report.process_outcome == "exited"
+    assert cancelled.report.cleanup_outcome == "verified"
+
+
+def test_cancellation_during_stdout_stop_preserves_finalization_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stop_after_interruption = runtime_process._stop_after_interruption
+    termination_started = asyncio.Event()
+    release_termination = asyncio.Event()
+
+    async def delayed_termination(
+        process: subprocess.Popen[bytes] | None,
+    ) -> tuple[ProcessOutcome, bool]:
+        termination_started.set()
+        await release_termination.wait()
+        return await stop_after_interruption(process)
+
+    monkeypatch.setattr(runtime_process, "_stop_after_interruption", delayed_termination)
+
+    def prepare(state: OwnedAttemptState) -> ProcessSpec:
+        work = state.member("work")
+        work.mkdir(mode=0o700)
+        return ProcessSpec(
+            argv=(sys.executable, str(HELPER), "lines", "stop", "after"),
+            cwd=work,
+            environment={},
+            stop_after_stdout_line=lambda line: line == b"stop",
+        )
+
+    async def cancel_during_termination() -> ProcessRuntimeCancelled:
+        task = asyncio.create_task(_run(tmp_path, prepare))
+        await asyncio.wait_for(termination_started.wait(), timeout=2)
+        task.cancel()
+        release_termination.set()
+        with pytest.raises(ProcessRuntimeCancelled) as raised:
+            await task
+        return raised.value
+
+    cancelled = asyncio.run(cancel_during_termination())
+
+    assert cancelled.native_output is not None
+    assert cancelled.native_output.complete
+    assert cancelled.report.stdout_stop_matched
+    assert cancelled.report.process_outcome == "terminated"
+    assert cancelled.report.cleanup_outcome == "verified"
 
 
 def test_repeated_cancellation_cannot_interrupt_forced_termination(tmp_path: Path) -> None:

@@ -63,6 +63,7 @@ class CapabilityProfile(_ImmutableContract):
     ]
     supported_targets: Annotated[tuple[BehaviorType, ...], Field(min_length=1)]
     provider_transport: ProviderTransport
+    # Conservative maximum used for policy and budget checks.
     provider_calls_per_attempt: Annotated[int, Field(ge=0, le=MAX_PROVIDER_CALLS_PER_ATTEMPT)]
     tool_network_access: ToolNetworkAccess
     action_visibility: ActionVisibility

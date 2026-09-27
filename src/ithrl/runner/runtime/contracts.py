@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
@@ -26,6 +26,11 @@ class ProcessSpec:
     cwd: Path = field(repr=False)
     environment: Mapping[str, str] = field(repr=False, compare=False)
     inherited_fds: tuple[int, ...] = field(default=(), repr=False, compare=False)
+    stop_after_stdout_line: Callable[[bytes], bool] | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
 
     def __post_init__(self) -> None:
         _validate_argv(self.argv)
@@ -35,6 +40,8 @@ class ProcessSpec:
             or tuple(sorted(set(self.inherited_fds))) != self.inherited_fds
         ):
             raise ValueError("inherited file descriptors must be sorted, unique, and at least 3")
+        if self.stop_after_stdout_line is not None and not callable(self.stop_after_stdout_line):
+            raise ValueError("stdout stop condition must be callable")
         object.__setattr__(self, "environment", _validated_environment(self.environment))
 
 
@@ -50,6 +57,7 @@ class RuntimeReport:
     residual_disposable_state_entries: int
     process_outcome: ProcessOutcome
     forced_termination: bool
+    stdout_stop_matched: bool
     cleanup_outcome: CleanupOutcome
     source_store_effect: ProtectedStateEffect
     original_workspace_effect: ProtectedStateEffect

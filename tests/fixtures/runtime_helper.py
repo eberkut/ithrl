@@ -33,6 +33,12 @@ def main() -> None:
         sys.stderr.buffer.write(b"e" * stderr_bytes)
         sys.stderr.buffer.flush()
         return
+    if action == "lines":
+        for value in arguments:
+            sys.stdout.write(value + "\n")
+            sys.stdout.flush()
+            time.sleep(0.1)
+        return
     if action == "sleep":
         time.sleep(float(arguments[0]))
         return
