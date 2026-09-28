@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from ithrl.case import CaseEvidence
+from ithrl.context import content_digest
 from ithrl.execution import (
     PreflightIssue,
     PreflightReport,
@@ -16,7 +17,12 @@ from ithrl.execution import (
     SafetyPolicy,
     resolve_execution_plan,
 )
-from ithrl.experiment import ExperimentDefinition
+from ithrl.experiment import (
+    AnyExperimentDefinition,
+    ExperimentDefinition,
+    SampledExperimentDefinition,
+    parse_experiment_toml,
+)
 from ithrl.measurement import RunnerExecutionError, observe_once
 from ithrl.observations import (
     Observation,
@@ -60,11 +66,16 @@ class ConflictingObservationError(WorkflowError):
     """Stored deterministic observations disagree for the same identity."""
 
 
+SAMPLED_CALIBRATION_ALGORITHM_DIGEST = content_digest(
+    {"name": "sampled-full-context-calibration", "version": "1"}
+)
+
+
 @dataclass(frozen=True, slots=True)
 class PreparedExperiment:
     """Validated local services and identities for one case experiment."""
 
-    experiment: ExperimentDefinition
+    experiment: AnyExperimentDefinition
     runner: Runner
     execution_plan: ResolvedExecutionPlan
     safety_policy: SafetyPolicy
@@ -104,7 +115,7 @@ def prepare_experiment(
 ) -> PreparedExperiment:
     """Parse, protect, and resolve the built-in credential-free experiment."""
 
-    experiment = ExperimentDefinition.from_toml(evidence.default_experiment)
+    experiment = parse_experiment_toml(evidence.default_experiment)
     decision = evidence.decision
     if decision is not None and experiment.target != decision.selected_target:
         raise PreflightRefusedError(
@@ -147,7 +158,11 @@ def prepare_experiment(
         runner_fingerprint=runner.fingerprint,
         execution_plan_digest=report.plan.digest,
         target_digest=experiment.target.digest,
-        algorithm_digest=ALGORITHM_DIGEST,
+        algorithm_digest=(
+            SAMPLED_CALIBRATION_ALGORITHM_DIGEST
+            if isinstance(experiment, SampledExperimentDefinition)
+            else ALGORITHM_DIGEST
+        ),
     )
     return PreparedExperiment(
         experiment=experiment,
@@ -169,6 +184,9 @@ def run_phases(
     progress: Callable[[str], None] | None = None,
 ) -> PhaseOutcome:
     """Run all requested phases in one event loop."""
+
+    if not isinstance(prepared.experiment, ExperimentDefinition):
+        raise WorkflowError("sampled calibration cannot enter deterministic search phases")
 
     state = _PhaseState()
     stop_reason: Literal["completed", "user-interrupt", "operational-error"] = "completed"
@@ -271,6 +289,9 @@ async def calibrate(
 ) -> Observation:
     """Measure the original case, reusing only matching deterministic observations."""
 
+    if not isinstance(prepared.experiment, ExperimentDefinition):
+        raise WorkflowError("sampled calibration requires its dedicated calibration service")
+
     candidate = prepare_candidate(evidence, prepared.execution_plan)
     compatible = store.list_compatible(
         prepared.identity,
@@ -313,6 +334,9 @@ async def confirm(
 ) -> Observation:
     """Take a new final measurement of the candidate selected by the search."""
 
+    if not isinstance(prepared.experiment, ExperimentDefinition):
+        raise WorkflowError("sampled calibration cannot enter deterministic confirmation")
+
     candidate = prepare_candidate(evidence, prepared.execution_plan, removed_context_ids)
     return await observe_once(
         runner=prepared.runner,
@@ -333,7 +357,7 @@ async def confirm(
 
 def _validate_oracle_prerequisites(
     evidence: CaseEvidence,
-    experiment: ExperimentDefinition,
+    experiment: AnyExperimentDefinition,
 ) -> None:
     by_id = evidence.context.by_id
     missing = [item for item in experiment.oracle.protected_context_ids if item not in by_id]

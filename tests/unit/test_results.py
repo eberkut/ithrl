@@ -16,15 +16,31 @@ from ithrl.execution import (
     SafetyPolicy,
     resolve_execution_plan,
 )
-from ithrl.experiment import ExperimentDefinition
+from ithrl.experiment import (
+    ExperimentDefinition,
+    NativeRunnerConfig,
+    SampledCalibrationPhase,
+    SampledExperimentDefinition,
+)
+from ithrl.observations import Observation, ObservationArm, ObservationOutcome, ObservationRole
 from ithrl.reduce import ALGORITHM_DIGEST, CandidateTrial, ReductionCheckpoint
 from ithrl.results import (
+    CalibrationSummary,
     ResultSnapshotError,
     ResultSummary,
+    calibration_summary_from_observations,
+    load_calibration_snapshot,
     load_result_snapshot,
+    write_calibration_snapshot,
     write_result_snapshot,
 )
-from ithrl.runner import Candidate
+from ithrl.runner import (
+    AttemptEvidence,
+    Candidate,
+    ProviderAcceptanceState,
+    RunAccounting,
+    TokenUsage,
+)
 
 _EXPERIMENT = """\
 schema_version = 1
@@ -238,6 +254,461 @@ def _write(destination: Path, *, summary: ResultSummary | None = None) -> Path:
         execution_plan=_plan(),
         checkpoint=checkpoint,
     )
+
+
+def _calibration_base(**overrides: object) -> dict[str, object]:
+    plan = _sampled_plan()
+    nodes = tuple(
+        _node(node_id, f"/input/{index}")
+        for index, node_id in enumerate(("ctx-a", "ctx-b", "ctx-c"))
+    )
+    candidate = Candidate(
+        case_digest=plan.case_digest,
+        execution_plan_digest=plan.digest,
+        retained_context_ids=tuple(node.id for node in nodes),
+        removed_context_ids=(),
+        materialization="exact-request",
+    )
+    provenance = {
+        "schema_version": 1,
+        "source": "synthetic.json",
+        "inference_call_id": "inference-001",
+        "trace_schema": "synthetic-v1",
+    }
+    outcome = overrides.get("outcome", "incomplete")
+    stop_reason = (
+        "valid-sample-limit"
+        if outcome in {"measurable", "not-measurable", "inconclusive"}
+        else "safety-refusal"
+        if outcome == "refused"
+        else "user-interrupt"
+    )
+    values: dict[str, object] = {
+        "run_id": "calibration-001",
+        "outcome": outcome,
+        "stop_reason": stop_reason,
+        "case_digest": plan.case_digest,
+        "experiment_digest": _sampled_experiment().digest,
+        "target_digest": plan.target_digest,
+        "execution_plan_digest": plan.digest,
+        "candidate_digest": candidate.digest,
+        "candidate_materialization": "exact-request",
+        "request_digest": content_digest(_request()),
+        "retained_context_digest": content_digest([node.model_dump(mode="json") for node in nodes]),
+        "provenance_digest": content_digest(provenance),
+        "runner_fingerprint": plan.runner_fingerprint,
+        "algorithm_digest": ALGORITHM_DIGEST,
+        "original_context_ids": tuple(node.id for node in nodes),
+        "retained_context_ids": tuple(node.id for node in nodes),
+        "source_case": "/private/cases/case-001",
+    }
+    values.update(overrides)
+    return values
+
+
+def _sampled_experiment() -> SampledExperimentDefinition:
+    capability = _plan().capability.model_copy(
+        update={
+            "runner_type": "codex",
+            "deterministic": False,
+            "provider_transport": "required",
+            "provider_calls_per_attempt": 1,
+            "provider": "fixture-provider",
+            "endpoint": "https://provider.invalid",
+            "reports_usage": True,
+        }
+    )
+    return SampledExperimentDefinition(
+        schema_version=2,
+        target=_experiment().target,
+        oracle=_experiment().oracle,
+        runner=NativeRunnerConfig(type="codex", required_capability_digest=capability.digest),
+        calibration=SampledCalibrationPhase(required_valid=2, minimum_matches=2, max_attempts=3),
+    )
+
+
+def _sampled_plan() -> ResolvedExecutionPlan:
+    base = _plan()
+    capability = base.capability.model_copy(
+        update={
+            "runner_type": "codex",
+            "deterministic": False,
+            "provider_transport": "required",
+            "provider_calls_per_attempt": 1,
+            "provider": "fixture-provider",
+            "endpoint": "https://provider.invalid",
+            "reports_usage": True,
+        }
+    )
+    plan = base.model_copy(
+        update={
+            "capability": capability,
+            "runner_fingerprint": "fixture-codex:v1",
+            "safety_policy": SafetyPolicy(
+                provider_transport="allowed",
+                allowed_provider="fixture-provider",
+                allowed_endpoint="https://provider.invalid",
+            ),
+            "resource_limits": ResourceLimits(max_provider_calls=1),
+            "experiment_digest": _sampled_experiment().digest,
+        }
+    )
+    return ResolvedExecutionPlan.model_validate(plan.model_dump(mode="python"))
+
+
+def _calibration_observation(
+    attempt: int,
+    outcome: ObservationOutcome,
+    *,
+    accounting: RunAccounting | None = None,
+    usage: TokenUsage | None = None,
+    acceptance: ProviderAcceptanceState = ProviderAcceptanceState.NOT_STARTED,
+    possible: int = 0,
+    policy_known: bool = True,
+) -> Observation:
+    base = _calibration_base()
+    return Observation(
+        observation_id=f"obs-calibration-{attempt}",
+        case_digest=str(base["case_digest"]),
+        candidate_digest=str(base["candidate_digest"]),
+        experiment_digest=str(base["experiment_digest"]),
+        runner_fingerprint=str(base["runner_fingerprint"]),
+        execution_plan_digest=str(base["execution_plan_digest"]),
+        target_digest=str(base["target_digest"]),
+        algorithm_digest=str(base["algorithm_digest"]),
+        role=ObservationRole.CALIBRATION,
+        arm=ObservationArm.BASELINE,
+        attempt=attempt,
+        outcome=outcome,
+        error_category="runner-error" if outcome is ObservationOutcome.RUNNER_ERROR else None,
+        attempt_evidence=AttemptEvidence(
+            attempt_id=f"attempt-{attempt:032x}",
+            attempt_digest=content_digest({"attempt": attempt}),
+            termination_reason=(
+                "failed" if outcome is ObservationOutcome.RUNNER_ERROR else "completed"
+            ),
+            provider_acceptance_state=acceptance,
+            provider_calls_possible=possible,
+            effective_policy_digest=_sampled_plan().safety_policy.digest if policy_known else None,
+            accounting=accounting,
+            usage=usage,
+        ),
+    )
+
+
+def _write_calibration(destination: Path, summary: CalibrationSummary) -> Path:
+    nodes = tuple(
+        _node(node_id, f"/input/{index}")
+        for index, node_id in enumerate(("ctx-a", "ctx-b", "ctx-c"))
+    )
+    return write_calibration_snapshot(
+        destination=destination,
+        summary=summary,
+        request=_request(),
+        retained_context_lines=tuple(node.model_dump_json() for node in nodes),
+        experiment_source=_sampled_experiment().to_toml(),
+        provenance={
+            "source": "synthetic.json",
+            "inference_call_id": "inference-001",
+            "trace_schema": "synthetic-v1",
+        },
+        execution_plan=_sampled_plan(),
+    )
+
+
+def test_calibration_snapshot_round_trip_preserves_unknown_accounting(tmp_path: Path) -> None:
+    complete = _calibration_observation(
+        1,
+        ObservationOutcome.MATCH,
+        accounting=RunAccounting(provider_calls_started=1, provider_calls_completed=1),
+        usage=TokenUsage(input_tokens=8, output_tokens=3),
+        acceptance=ProviderAcceptanceState.ACCEPTED,
+    )
+    ambiguous = _calibration_observation(
+        2,
+        ObservationOutcome.RUNNER_ERROR,
+        acceptance=ProviderAcceptanceState.UNKNOWN,
+        possible=1,
+        policy_known=False,
+    )
+    summary = calibration_summary_from_observations(
+        base=_calibration_base(),
+        observations=(complete, ambiguous),
+        expected_policy_digest=_sampled_plan().safety_policy.digest,
+        max_provider_calls_per_attempt=_sampled_plan().capability.provider_calls_per_attempt,
+    )
+    destination = tmp_path / "results" / "calibration"
+
+    assert _write_calibration(destination, summary) == destination
+    loaded = load_calibration_snapshot(destination)
+
+    assert loaded.summary == summary
+    assert loaded.summary.stop_reason == "user-interrupt"
+    assert loaded.summary.terminal_error_category == "runner-error"
+    assert loaded.summary.calibration_observation_ids == ("obs-calibration-1", "obs-calibration-2")
+    assert (loaded.summary.matches, loaded.summary.runner_errors) == (1, 1)
+    assert loaded.summary.provider_calls_started is None
+    assert loaded.summary.provider_calls_completed is None
+    assert loaded.summary.provider_calls_possible == 1
+    assert loaded.summary.provider_calls_may_have_started == 2
+    assert loaded.summary.actions_requested is None
+    assert loaded.summary.actions_denied is None
+    assert loaded.summary.actions_executed is None
+    assert loaded.summary.tool_network_requests is None
+    assert loaded.summary.usage is None
+    assert loaded.summary.elapsed_milliseconds is None
+    assert loaded.summary.effective_policy_digest is None
+    assert loaded.summary.source_store_effect == "unknown"
+    assert loaded.summary.original_workspace_effect == "unknown"
+    assert "checkpoint.json" not in {path.name for path in destination.iterdir()}
+
+
+def test_calibration_ambiguous_provider_acceptance_does_not_double_count_known_starts() -> None:
+    ambiguous = _calibration_observation(
+        1,
+        ObservationOutcome.RUNNER_ERROR,
+        accounting=RunAccounting(provider_calls_started=1),
+        acceptance=ProviderAcceptanceState.UNKNOWN,
+        possible=1,
+    )
+
+    summary = calibration_summary_from_observations(
+        base=_calibration_base(stop_reason="unsafe-retry"),
+        observations=(ambiguous,),
+        expected_policy_digest=_sampled_plan().safety_policy.digest,
+        max_provider_calls_per_attempt=_sampled_plan().capability.provider_calls_per_attempt,
+    )
+
+    assert summary.provider_calls_started == 1
+    assert summary.provider_calls_completed == 0
+    assert summary.provider_calls_possible == 1
+    assert summary.provider_calls_may_have_started == 1
+
+
+def test_calibration_accepted_call_keeps_possible_continuation_in_upper_bound() -> None:
+    completed = _calibration_observation(
+        1,
+        ObservationOutcome.MATCH,
+        accounting=RunAccounting(provider_calls_started=1, provider_calls_completed=1),
+        acceptance=ProviderAcceptanceState.ACCEPTED,
+    )
+
+    summary = calibration_summary_from_observations(
+        base=_calibration_base(),
+        observations=(completed,),
+        expected_policy_digest=_sampled_plan().safety_policy.digest,
+        max_provider_calls_per_attempt=2,
+    )
+
+    assert summary.provider_calls_started == 1
+    assert summary.provider_calls_possible == 0
+    assert summary.provider_calls_may_have_started == 2
+
+
+def test_calibration_snapshot_rejects_nonrefused_provider_bound_over_plan(tmp_path: Path) -> None:
+    completed = _calibration_observation(
+        1,
+        ObservationOutcome.MATCH,
+        accounting=RunAccounting(provider_calls_started=1, provider_calls_completed=1),
+        acceptance=ProviderAcceptanceState.ACCEPTED,
+    )
+    summary = calibration_summary_from_observations(
+        base=_calibration_base(),
+        observations=(completed,),
+        expected_policy_digest=_sampled_plan().safety_policy.digest,
+        max_provider_calls_per_attempt=_sampled_plan().capability.provider_calls_per_attempt,
+    )
+
+    with pytest.raises(ResultSnapshotError, match="provider-call bound exceeds"):
+        _write_calibration(
+            tmp_path / "over-plan",
+            summary.model_copy(update={"provider_calls_may_have_started": 2}),
+        )
+
+
+def test_calibration_snapshot_rejects_wrong_schema_and_tampering(tmp_path: Path) -> None:
+    summary = calibration_summary_from_observations(
+        base=_calibration_base(),
+        observations=(),
+        expected_policy_digest=_sampled_plan().safety_policy.digest,
+        max_provider_calls_per_attempt=_sampled_plan().capability.provider_calls_per_attempt,
+    )
+    destination = tmp_path / "results" / "calibration"
+    _write_calibration(destination, summary)
+
+    with pytest.raises(ResultSnapshotError, match="schema_version"):
+        load_result_snapshot(destination)
+    (destination / "checkpoint.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(ResultSnapshotError, match="unexpected entries"):
+        load_calibration_snapshot(destination)
+    (destination / "checkpoint.json").unlink()
+    summary_data = json.loads((destination / "summary.json").read_text(encoding="utf-8"))
+    summary_data["candidate_digest"] = "f" * 64
+    (destination / "summary.json").write_text(json.dumps(summary_data), encoding="utf-8")
+    with pytest.raises(ResultSnapshotError, match="candidate_digest"):
+        load_calibration_snapshot(destination)
+
+
+def test_calibration_snapshot_rejects_inconsistent_stop_reason(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="completed calibration requires"):
+        calibration_summary_from_observations(
+            base=_calibration_base(outcome="measurable", stop_reason="attempt-limit"),
+            observations=(),
+            expected_policy_digest=_sampled_plan().safety_policy.digest,
+            max_provider_calls_per_attempt=_sampled_plan().capability.provider_calls_per_attempt,
+        )
+    summary = calibration_summary_from_observations(
+        base=_calibration_base(stop_reason="attempt-limit"),
+        observations=(),
+        expected_policy_digest=_sampled_plan().safety_policy.digest,
+        max_provider_calls_per_attempt=_sampled_plan().capability.provider_calls_per_attempt,
+    )
+    with pytest.raises(ResultSnapshotError, match="attempt-limit stop reason"):
+        _write_calibration(tmp_path / "early-limit", summary)
+    refused = calibration_summary_from_observations(
+        base=_calibration_base(outcome="refused"),
+        observations=(),
+        expected_policy_digest=_sampled_plan().safety_policy.digest,
+        max_provider_calls_per_attempt=_sampled_plan().capability.provider_calls_per_attempt,
+    )
+    with pytest.raises(ResultSnapshotError, match="safety-refusal stop reason"):
+        _write_calibration(tmp_path / "unsupported-refusal", refused)
+    generic_error = _calibration_observation(
+        1, ObservationOutcome.RUNNER_ERROR, accounting=RunAccounting()
+    )
+    refused_for_generic_error = calibration_summary_from_observations(
+        base=_calibration_base(outcome="refused"),
+        observations=(generic_error,),
+        expected_policy_digest=_sampled_plan().safety_policy.digest,
+        max_provider_calls_per_attempt=_sampled_plan().capability.provider_calls_per_attempt,
+    )
+    with pytest.raises(ResultSnapshotError, match="safety-refusal stop reason"):
+        _write_calibration(tmp_path / "generic-error-refusal", refused_for_generic_error)
+    unsafe = calibration_summary_from_observations(
+        base=_calibration_base(stop_reason="unsafe-retry"),
+        observations=(),
+        expected_policy_digest=_sampled_plan().safety_policy.digest,
+        max_provider_calls_per_attempt=_sampled_plan().capability.provider_calls_per_attempt,
+    )
+    with pytest.raises(ResultSnapshotError, match="unsafe-retry stop reason"):
+        _write_calibration(tmp_path / "unsupported-retry", unsafe)
+
+
+def test_calibration_aggregate_uses_only_complete_reported_usage() -> None:
+    observations = (
+        _calibration_observation(
+            1,
+            ObservationOutcome.MATCH,
+            accounting=RunAccounting(
+                elapsed_milliseconds=11, actions_requested=1, actions_denied=1
+            ),
+            usage=TokenUsage(input_tokens=3, output_tokens=2, cached_input_tokens=1),
+        ),
+        _calibration_observation(
+            2,
+            ObservationOutcome.NO_MATCH,
+            accounting=RunAccounting(elapsed_milliseconds=17),
+            usage=TokenUsage(input_tokens=5, output_tokens=4),
+        ),
+    )
+    summary = calibration_summary_from_observations(
+        base=_calibration_base(),
+        observations=observations,
+        expected_policy_digest=_sampled_plan().safety_policy.digest,
+        max_provider_calls_per_attempt=_sampled_plan().capability.provider_calls_per_attempt,
+    )
+
+    assert summary.provider_calls_started == 0
+    assert summary.provider_calls_completed == 0
+    assert (summary.actions_requested, summary.actions_denied, summary.actions_executed) == (
+        1,
+        1,
+        0,
+    )
+    assert summary.tool_network_requests == 0
+    assert summary.elapsed_milliseconds == 28
+    assert summary.usage == TokenUsage(input_tokens=8, output_tokens=6)
+    assert summary.effective_policy_digest == _sampled_plan().safety_policy.digest
+
+
+def test_calibration_aggregate_preserves_may_change_protected_effect() -> None:
+    observation = _calibration_observation(
+        1,
+        ObservationOutcome.RUNNER_ERROR,
+        accounting=RunAccounting(
+            source_store_effect="may-change",
+            original_workspace_effect="may-change",
+        ),
+    )
+    summary = calibration_summary_from_observations(
+        base=_calibration_base(outcome="refused"),
+        observations=(observation,),
+        expected_policy_digest=_sampled_plan().safety_policy.digest,
+        max_provider_calls_per_attempt=_sampled_plan().capability.provider_calls_per_attempt,
+    )
+
+    assert summary.source_store_effect == "may-change"
+    assert summary.original_workspace_effect == "may-change"
+
+
+def test_calibration_aggregate_rejects_mismatched_or_unordered_observations() -> None:
+    valid = _calibration_observation(1, ObservationOutcome.MATCH, accounting=RunAccounting())
+    wrong_arm = valid.model_copy(update={"arm": ObservationArm.CANDIDATE})
+    with pytest.raises(ValueError, match="role, arm, or candidate"):
+        calibration_summary_from_observations(
+            base=_calibration_base(),
+            observations=(wrong_arm,),
+            expected_policy_digest=_sampled_plan().safety_policy.digest,
+            max_provider_calls_per_attempt=_sampled_plan().capability.provider_calls_per_attempt,
+        )
+    with pytest.raises(ValueError, match="unique and ordered"):
+        calibration_summary_from_observations(
+            base=_calibration_base(),
+            observations=(valid, valid),
+            expected_policy_digest=_sampled_plan().safety_policy.digest,
+            max_provider_calls_per_attempt=_sampled_plan().capability.provider_calls_per_attempt,
+        )
+
+
+@pytest.mark.parametrize(
+    ("outcome", "observed", "accepted"),
+    [
+        ("measurable", (ObservationOutcome.MATCH, ObservationOutcome.MATCH), True),
+        ("not-measurable", (ObservationOutcome.NO_MATCH, ObservationOutcome.NO_MATCH), True),
+        ("inconclusive", (ObservationOutcome.MATCH, ObservationOutcome.NO_MATCH), True),
+        ("measurable", (ObservationOutcome.MATCH, ObservationOutcome.NO_MATCH), False),
+        ("not-measurable", (ObservationOutcome.MATCH, ObservationOutcome.NO_MATCH), False),
+        ("incomplete", (ObservationOutcome.MATCH, ObservationOutcome.MATCH), False),
+    ],
+)
+def test_calibration_outcome_uses_sampled_experiment_thresholds(
+    tmp_path: Path,
+    outcome: str,
+    observed: tuple[ObservationOutcome, ObservationOutcome],
+    accepted: bool,
+) -> None:
+    observations = tuple(
+        _calibration_observation(
+            attempt,
+            verdict,
+            accounting=RunAccounting(provider_calls_started=1, provider_calls_completed=1),
+            acceptance=ProviderAcceptanceState.ACCEPTED,
+        )
+        for attempt, verdict in enumerate(observed, start=1)
+    )
+    summary = calibration_summary_from_observations(
+        base=_calibration_base(outcome=outcome),
+        observations=observations,
+        expected_policy_digest=_sampled_plan().safety_policy.digest,
+        max_provider_calls_per_attempt=_sampled_plan().capability.provider_calls_per_attempt,
+    )
+    destination = tmp_path / outcome
+    if accepted:
+        _write_calibration(destination, summary)
+        assert load_calibration_snapshot(destination).summary.outcome == outcome
+    else:
+        with pytest.raises(ResultSnapshotError, match="outcome"):
+            _write_calibration(destination, summary)
 
 
 def test_result_snapshot_round_trip_is_complete_and_immutable(tmp_path: Path) -> None:

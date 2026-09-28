@@ -32,6 +32,7 @@ RUNTIME_MODULES = frozenset(
         PurePosixPath("ithrl/adapters/discovery.py"),
         PurePosixPath("ithrl/adapters/registry.py"),
         PurePosixPath("ithrl/behavior.py"),
+        PurePosixPath("ithrl/calibration.py"),
         PurePosixPath("ithrl/case/__init__.py"),
         PurePosixPath("ithrl/case/contracts.py"),
         PurePosixPath("ithrl/case/evidence.py"),

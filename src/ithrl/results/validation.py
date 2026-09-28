@@ -22,9 +22,19 @@ from ithrl.context import (
     validate_json_limits,
 )
 from ithrl.execution import ResolvedExecutionPlan
-from ithrl.experiment import ExperimentDefinition, ExperimentFormatError
+from ithrl.experiment import (
+    ExperimentDefinition,
+    ExperimentFormatError,
+    SampledExperimentDefinition,
+)
 from ithrl.reduce import CandidateTrial, ReductionCheckpoint
-from ithrl.results.models import ResultSnapshot, ResultSnapshotError, ResultSummary
+from ithrl.results.models import (
+    CalibrationSnapshot,
+    CalibrationSummary,
+    ResultSnapshot,
+    ResultSnapshotError,
+    ResultSummary,
+)
 from ithrl.runner import Candidate
 
 
@@ -90,6 +100,104 @@ def validate_contents(
     )
 
 
+def validate_calibration_contents(
+    *,
+    root: Path,
+    summary: CalibrationSummary,
+    request: Mapping[str, Any] | None,
+    retained_context_lines: tuple[str, ...],
+    experiment_source: str,
+    provenance: Mapping[str, Any],
+    execution_plan: ResolvedExecutionPlan | Mapping[str, Any],
+) -> CalibrationSnapshot:
+    """Validate schema-2 files and the full-context candidate identity."""
+
+    try:
+        request_data = json_object(request, label="request") if request is not None else None
+        provenance_model = ProvenanceFacts.model_validate(provenance)
+        plan_data = (
+            execution_plan.model_dump(mode="python")
+            if isinstance(execution_plan, ResolvedExecutionPlan)
+            else execution_plan
+        )
+        plan_model = ResolvedExecutionPlan.model_validate(plan_data)
+        experiment = SampledExperimentDefinition.from_toml(experiment_source)
+        context_lines, context_nodes, context_digest = validate_context_lines(
+            retained_context_lines
+        )
+    except (ValidationError, ExperimentFormatError, ValueError) as error:
+        if isinstance(error, ResultSnapshotError):
+            raise
+        raise ResultSnapshotError(f"invalid calibration snapshot content: {error}") from error
+
+    _validate_plan_identity(summary, experiment, plan_model)
+    _validate_candidate_identity(summary, request_data, plan_model)
+    _validate_calibration_outcome(summary, experiment)
+    if summary.outcome != "refused" and summary.provider_calls_may_have_started > (
+        summary.observations_recorded * plan_model.capability.provider_calls_per_attempt
+    ):
+        raise ResultSnapshotError("calibration provider-call bound exceeds the execution plan")
+    if context_digest != summary.retained_context_digest:
+        raise ResultSnapshotError(
+            "summary retained_context_digest does not match retained-context.jsonl"
+        )
+    if tuple(node.id for node in context_nodes) != summary.retained_context_ids:
+        raise ResultSnapshotError(
+            "retained-context.jsonl IDs or order do not match summary retained_context_ids"
+        )
+    if content_digest(provenance_model.model_dump(mode="json")) != summary.provenance_digest:
+        raise ResultSnapshotError("summary provenance_digest does not match provenance.json")
+    if summary.effective_policy_digest not in {None, plan_model.safety_policy.digest}:
+        raise ResultSnapshotError("summary effective policy does not match execution plan")
+    return CalibrationSnapshot(
+        root=root,
+        summary=summary,
+        request=request_data,
+        retained_context_lines=context_lines,
+        experiment_source=experiment_source,
+        experiment=experiment,
+        provenance=provenance_model,
+        execution_plan=plan_model,
+    )
+
+
+def _validate_calibration_outcome(
+    summary: CalibrationSummary, experiment: SampledExperimentDefinition
+) -> None:
+    phase = experiment.calibration
+    valid = summary.matches + summary.no_matches
+    if summary.observations_recorded > phase.max_attempts:
+        raise ResultSnapshotError("calibration observations exceed max_attempts")
+    enough_valid = valid >= phase.required_valid
+    if summary.outcome == "measurable" and not (
+        enough_valid and summary.matches >= phase.minimum_matches
+    ):
+        raise ResultSnapshotError("measurable outcome requires enough valid matches")
+    if summary.outcome == "not-measurable" and not (enough_valid and summary.matches == 0):
+        raise ResultSnapshotError("not-measurable outcome requires enough valid non-matches")
+    if summary.outcome == "inconclusive" and not (
+        enough_valid and 0 < summary.matches < phase.minimum_matches
+    ):
+        raise ResultSnapshotError("inconclusive outcome requires a partial valid match block")
+    if summary.outcome == "incomplete" and enough_valid:
+        raise ResultSnapshotError("incomplete outcome conflicts with enough valid observations")
+    if (
+        summary.stop_reason == "attempt-limit"
+        and summary.observations_recorded != phase.max_attempts
+    ):
+        raise ResultSnapshotError("attempt-limit stop reason requires max_attempts observations")
+    if summary.stop_reason == "safety-refusal" and summary.terminal_error_category not in {
+        "safety",
+        "contract",
+    }:
+        raise ResultSnapshotError("safety-refusal stop reason requires a safety error")
+    if summary.stop_reason == "unsafe-retry" and (
+        summary.terminal_error_category is None
+        or summary.terminal_error_category in {"safety", "contract"}
+    ):
+        raise ResultSnapshotError("unsafe-retry stop reason requires a non-safety error")
+
+
 def _validate_content_identities(
     *,
     summary: ResultSummary,
@@ -109,8 +217,8 @@ def _validate_content_identities(
 
 
 def _validate_plan_identity(
-    summary: ResultSummary,
-    experiment: ExperimentDefinition,
+    summary: ResultSummary | CalibrationSummary,
+    experiment: ExperimentDefinition | SampledExperimentDefinition,
     execution_plan: ResolvedExecutionPlan,
 ) -> None:
     if experiment.digest != summary.experiment_digest:
@@ -132,10 +240,15 @@ def _validate_plan_identity(
         raise ResultSnapshotError("execution plan and summary target identities differ")
     if execution_plan.runner_fingerprint != summary.runner_fingerprint:
         raise ResultSnapshotError("execution plan and summary runner identities differ")
+    if isinstance(experiment, SampledExperimentDefinition):
+        if experiment.runner.type != execution_plan.capability.runner_type:
+            raise ResultSnapshotError("experiment runner type does not match execution plan")
+        if experiment.runner.required_capability_digest != execution_plan.capability.digest:
+            raise ResultSnapshotError("experiment capability does not match execution plan")
 
 
 def _validate_candidate_identity(
-    summary: ResultSummary,
+    summary: ResultSummary | CalibrationSummary,
     request_data: JsonObject | None,
     execution_plan: ResolvedExecutionPlan,
 ) -> None:
@@ -145,7 +258,9 @@ def _validate_candidate_identity(
             execution_plan_digest=summary.execution_plan_digest,
             source_artifact_digests=summary.source_artifact_digests,
             retained_context_ids=summary.retained_context_ids,
-            removed_context_ids=summary.removed_context_ids,
+            removed_context_ids=(
+                summary.removed_context_ids if isinstance(summary, ResultSummary) else ()
+            ),
             materialization=summary.candidate_materialization,
         )
     except ValidationError as error:
@@ -156,10 +271,18 @@ def _validate_candidate_identity(
         raise ResultSnapshotError("summary candidate_digest does not match its context partition")
     if candidate.materialization != execution_plan.candidate_materialization:
         raise ResultSnapshotError("summary candidate materialization differs from execution plan")
+    request_digest = (
+        summary.reduced_request_digest
+        if isinstance(summary, ResultSummary)
+        else summary.request_digest
+    )
     if summary.candidate_materialization == "exact-request":
-        if request_data is None or content_digest(request_data) != summary.reduced_request_digest:
-            raise ResultSnapshotError("summary reduced_request_digest does not match request.json")
-    elif request_data is not None or summary.reduced_request_digest is not None:
+        if request_data is None or content_digest(request_data) != request_digest:
+            name = (
+                "reduced_request_digest" if isinstance(summary, ResultSummary) else "request_digest"
+            )
+            raise ResultSnapshotError(f"summary {name} does not match request.json")
+    elif request_data is not None or request_digest is not None:
         raise ResultSnapshotError("source-backed results cannot contain a materialized request")
 
 

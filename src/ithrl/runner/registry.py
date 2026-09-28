@@ -7,11 +7,11 @@ from dataclasses import dataclass
 
 from ithrl.case import CaseEvidence
 from ithrl.execution import PreflightIssue
-from ithrl.experiment import FakeRunnerConfig, RunnerConfig, UnavailableRunnerConfig
+from ithrl.experiment import AnyRunnerConfig, FakeRunnerConfig, UnavailableRunnerConfig
 from ithrl.runner.contracts import Runner
 from ithrl.runner.fake import FakeRunner
 
-type RunnerFactory = Callable[[RunnerConfig, CaseEvidence], Runner | PreflightIssue]
+type RunnerFactory = Callable[[AnyRunnerConfig, CaseEvidence], Runner | PreflightIssue]
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,7 +34,7 @@ class RunnerRegistry:
             raise ValueError("runner registry requires named factories")
         self._factories = dict(factories)
 
-    def resolve(self, config: RunnerConfig, evidence: CaseEvidence) -> RunnerResolution:
+    def resolve(self, config: AnyRunnerConfig, evidence: CaseEvidence) -> RunnerResolution:
         """Construct the configured runner without starting external work."""
 
         if isinstance(config, UnavailableRunnerConfig):
@@ -76,7 +76,7 @@ def built_in_runner_registry() -> RunnerRegistry:
     return RunnerRegistry({"fake": _create_fake_runner})
 
 
-def _create_fake_runner(config: RunnerConfig, _evidence: CaseEvidence) -> Runner:
+def _create_fake_runner(config: AnyRunnerConfig, _evidence: CaseEvidence) -> Runner:
     if not isinstance(config, FakeRunnerConfig):
         raise TypeError("fake runner factory requires FakeRunnerConfig")
     return FakeRunner(

@@ -16,10 +16,17 @@ from pydantic import ValidationError
 from ithrl.context import JsonObject
 from ithrl.execution import ResolvedExecutionPlan
 from ithrl.reduce import ReductionCheckpoint
-from ithrl.results.models import ResultSnapshot, ResultSnapshotError, ResultSummary
+from ithrl.results.models import (
+    CalibrationSnapshot,
+    CalibrationSummary,
+    ResultSnapshot,
+    ResultSnapshotError,
+    ResultSummary,
+)
 from ithrl.results.validation import (
     json_object,
     loads_json,
+    validate_calibration_contents,
     validate_contents,
     validation_message,
 )
@@ -35,6 +42,7 @@ _SNAPSHOT_FILES = frozenset(
     }
 )
 _MAX_RESULT_FILE_BYTES = 64 * 1024 * 1024
+_CALIBRATION_FILES = _SNAPSHOT_FILES - {"checkpoint.json"}
 
 
 def write_result_snapshot(
@@ -143,6 +151,111 @@ def load_result_snapshot(root: Path) -> ResultSnapshot:
         provenance=provenance,
         execution_plan=execution_plan,
         checkpoint=checkpoint,
+    )
+
+
+def write_calibration_snapshot(
+    *,
+    destination: Path,
+    summary: CalibrationSummary,
+    request: Mapping[str, Any] | None,
+    retained_context_lines: tuple[str, ...],
+    experiment_source: Path | str,
+    provenance: Mapping[str, Any],
+    execution_plan: ResolvedExecutionPlan | Mapping[str, Any],
+) -> Path:
+    """Atomically create a private schema-2 calibration result directory."""
+
+    destination = _absolute_path(destination)
+    if destination.exists() or destination.is_symlink():
+        raise FileExistsError(f"result destination already exists: {destination}")
+    _prepare_private_parent(destination.parent)
+    experiment_text = (
+        _read_regular_text(experiment_source, label="experiment source")
+        if isinstance(experiment_source, Path)
+        else experiment_source
+    )
+    if len(experiment_text.encode("utf-8")) > _MAX_RESULT_FILE_BYTES:
+        raise ResultSnapshotError(
+            f"experiment source exceeds the {_MAX_RESULT_FILE_BYTES}-byte limit"
+        )
+    validated = validate_calibration_contents(
+        root=destination,
+        summary=summary,
+        request=request,
+        retained_context_lines=retained_context_lines,
+        experiment_source=experiment_text,
+        provenance=provenance,
+        execution_plan=execution_plan,
+    )
+
+    staging = Path(tempfile.mkdtemp(prefix=f".{destination.name}-", dir=destination.parent))
+    if os.name == "posix":
+        staging.chmod(0o700)
+    try:
+        _write_json(staging / "summary.json", validated.summary.model_dump(mode="json"))
+        if validated.request is not None:
+            _write_json(staging / "request.json", validated.request)
+        _write_text(
+            staging / "retained-context.jsonl",
+            "".join(f"{line.rstrip()}\n" for line in validated.retained_context_lines),
+        )
+        _write_text(staging / "experiment.toml", validated.experiment_source)
+        _write_json(staging / "provenance.json", validated.provenance.model_dump(mode="json"))
+        _write_json(
+            staging / "execution-plan.json",
+            validated.execution_plan.model_dump(mode="json"),
+        )
+        _restrict_tree(staging)
+        staging.rename(destination)
+        _sync_directory(destination.parent)
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    return destination
+
+
+def load_calibration_snapshot(root: Path) -> CalibrationSnapshot:
+    """Load and cross-check a private schema-2 calibration result directory."""
+
+    root = _absolute_path(root)
+    _require_private_directory(root)
+    entries = {entry.name: entry for entry in root.iterdir()}
+    if "summary.json" not in entries:
+        raise ResultSnapshotError("result snapshot is missing: summary.json")
+    _require_private_file(entries["summary.json"], label="summary.json")
+    summary_data = _read_json_object(entries["summary.json"])
+    try:
+        summary = CalibrationSummary.model_validate_json(json.dumps(summary_data))
+    except ValidationError as error:
+        raise ResultSnapshotError(f"invalid summary.json: {validation_message(error)}") from error
+    expected_files = _CALIBRATION_FILES | (
+        {"request.json"} if summary.candidate_materialization == "exact-request" else set()
+    )
+    missing = sorted(expected_files - entries.keys())
+    unexpected = sorted(entries.keys() - expected_files)
+    if missing:
+        raise ResultSnapshotError(f"result snapshot is missing: {', '.join(missing)}")
+    if unexpected:
+        raise ResultSnapshotError(
+            f"result snapshot contains unexpected entries: {', '.join(unexpected)}"
+        )
+    for name, path in entries.items():
+        _require_private_file(path, label=name)
+
+    request = (
+        _read_json_object(entries["request.json"])
+        if summary.candidate_materialization == "exact-request"
+        else None
+    )
+    return validate_calibration_contents(
+        root=root,
+        summary=summary,
+        request=request,
+        retained_context_lines=_read_context_lines(entries["retained-context.jsonl"]),
+        experiment_source=_read_regular_text(entries["experiment.toml"], label="experiment.toml"),
+        provenance=_read_json_object(entries["provenance.json"]),
+        execution_plan=_read_json_object(entries["execution-plan.json"]),
     )
 
 

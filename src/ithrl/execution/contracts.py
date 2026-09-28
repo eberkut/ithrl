@@ -248,6 +248,8 @@ type PreflightIssueCode = Literal[
     "unsupported-materialization",
     "unsupported-target",
     "sampled-execution-unsupported",
+    "sampled-runner-required",
+    "capability-profile-mismatch",
     "provider-transport-forbidden",
     "provider-call-limit-too-small",
     "input-token-limit-unenforceable",

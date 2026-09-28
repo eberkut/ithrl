@@ -13,12 +13,18 @@ from ithrl.execution.contracts import (
     ResourceLimits,
     SafetyPolicy,
 )
-from ithrl.experiment import ExperimentDefinition, UnavailableRunnerConfig
+from ithrl.experiment import (
+    AnyExperimentDefinition,
+    ExperimentDefinition,
+    NativeRunnerConfig,
+    SampledExperimentDefinition,
+    UnavailableRunnerConfig,
+)
 
 
 def resolve_execution_plan(
     capability: CapabilityProfile,
-    experiment: ExperimentDefinition,
+    experiment: AnyExperimentDefinition,
     *,
     evidence: CaseEvidence,
     runner_fingerprint: str,
@@ -66,13 +72,31 @@ def resolve_execution_plan(
                 message=f"runner does not support target {experiment.target.type!r}",
             )
         )
-    if not capability.deterministic:
+    if isinstance(experiment, ExperimentDefinition) and not capability.deterministic:
         issues.append(
             PreflightIssue(
                 code="sampled-execution-unsupported",
                 message="sampled runners require the later sampled calibration contract",
             )
         )
+    if isinstance(experiment, SampledExperimentDefinition):
+        if capability.deterministic:
+            issues.append(
+                PreflightIssue(
+                    code="sampled-runner-required",
+                    message="sampled calibration requires a nondeterministic runner profile",
+                )
+            )
+        native_runner = experiment.runner
+        if not isinstance(native_runner, NativeRunnerConfig):
+            raise TypeError("schema-v2 experiment requires a native runner configuration")
+        if capability.digest != native_runner.required_capability_digest:
+            issues.append(
+                PreflightIssue(
+                    code="capability-profile-mismatch",
+                    message="runner capability profile does not match the experiment",
+                )
+            )
     _check_transport(capability, safety_policy, resource_limits, issues)
     _check_effects(capability, safety_policy, experiment.target.type, issues)
     if issues:
@@ -90,7 +114,7 @@ def resolve_execution_plan(
 
 def _resolved_report(
     capability: CapabilityProfile,
-    experiment: ExperimentDefinition,
+    experiment: AnyExperimentDefinition,
     *,
     evidence: CaseEvidence,
     runner_fingerprint: str,
@@ -122,7 +146,7 @@ def _resolved_report(
 
 def _check_runner_identity(
     capability: CapabilityProfile,
-    experiment: ExperimentDefinition,
+    experiment: AnyExperimentDefinition,
     evidence: CaseEvidence,
     issues: list[PreflightIssue],
 ) -> None:

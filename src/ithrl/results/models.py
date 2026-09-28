@@ -10,8 +10,9 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from ithrl.case import ProvenanceFacts
 from ithrl.context import JsonObject
 from ithrl.execution import CandidateMaterialization, ResolvedExecutionPlan
-from ithrl.experiment import ExperimentDefinition
+from ithrl.experiment import ExperimentDefinition, SampledExperimentDefinition
 from ithrl.reduce import MAX_CANDIDATE_RUNS, ReductionCheckpoint
+from ithrl.runner.contracts import TokenUsage
 
 _DIGEST_PATTERN = r"^[0-9a-f]{64}$"
 
@@ -101,3 +102,82 @@ class ResultSnapshot(_StrictImmutableModel):
     provenance: ProvenanceFacts
     execution_plan: ResolvedExecutionPlan
     checkpoint: ReductionCheckpoint
+
+
+type CalibrationOutcome = Literal[
+    "measurable", "not-measurable", "inconclusive", "incomplete", "refused"
+]
+type CalibrationStopReason = Literal[
+    "valid-sample-limit", "attempt-limit", "unsafe-retry", "safety-refusal", "user-interrupt"
+]
+type CalibrationProtectedEffect = Literal["unchanged", "may-change", "unknown"]
+
+
+class CalibrationSummary(_StrictImmutableModel):
+    """Schema-2 summary for bounded full-context calibration only."""
+
+    schema_version: Literal[2] = 2
+    run_id: Annotated[str, Field(min_length=1, max_length=128)]
+    outcome: CalibrationOutcome
+    stop_reason: CalibrationStopReason
+    case_digest: Annotated[str, Field(pattern=_DIGEST_PATTERN)]
+    experiment_digest: Annotated[str, Field(pattern=_DIGEST_PATTERN)]
+    target_digest: Annotated[str, Field(pattern=_DIGEST_PATTERN)]
+    execution_plan_digest: Annotated[str, Field(pattern=_DIGEST_PATTERN)]
+    candidate_digest: Annotated[str, Field(pattern=_DIGEST_PATTERN)]
+    candidate_materialization: CandidateMaterialization
+    source_artifact_digests: tuple[Annotated[str, Field(pattern=_DIGEST_PATTERN)], ...] = ()
+    request_digest: Annotated[str | None, Field(pattern=_DIGEST_PATTERN)] = None
+    retained_context_digest: Annotated[str, Field(pattern=_DIGEST_PATTERN)]
+    provenance_digest: Annotated[str, Field(pattern=_DIGEST_PATTERN)]
+    runner_fingerprint: Annotated[str, Field(min_length=1, max_length=512)]
+    algorithm_digest: Annotated[str, Field(min_length=1, max_length=512)]
+    original_context_ids: tuple[Annotated[str, Field(min_length=1)], ...]
+    retained_context_ids: tuple[Annotated[str, Field(min_length=1)], ...]
+    calibration_observation_ids: tuple[Annotated[str, Field(min_length=1)], ...]
+    observations_recorded: Annotated[int, Field(ge=0)]
+    matches: Annotated[int, Field(ge=0)]
+    no_matches: Annotated[int, Field(ge=0)]
+    invalid_observations: Annotated[int, Field(ge=0)]
+    runner_errors: Annotated[int, Field(ge=0)]
+    terminal_error_category: Annotated[
+        str | None, Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+    ] = None
+    provider_calls_started: Annotated[int | None, Field(ge=0)]
+    provider_calls_completed: Annotated[int | None, Field(ge=0)]
+    provider_calls_possible: Annotated[int, Field(ge=0)]
+    provider_calls_may_have_started: Annotated[int, Field(ge=0)]
+    actions_requested: Annotated[int | None, Field(ge=0)]
+    actions_denied: Annotated[int | None, Field(ge=0)]
+    actions_executed: Annotated[int | None, Field(ge=0)]
+    tool_network_requests: Annotated[int | None, Field(ge=0)]
+    usage: TokenUsage | None
+    elapsed_milliseconds: Annotated[int | None, Field(ge=0)]
+    effective_policy_digest: Annotated[str | None, Field(pattern=_DIGEST_PATTERN)]
+    source_store_effect: CalibrationProtectedEffect
+    original_workspace_effect: CalibrationProtectedEffect
+    source_case: Annotated[str, Field(min_length=1)]
+    resume_of: Annotated[str | None, Field(min_length=1, max_length=128)] = None
+    next_action: Annotated[str | None, Field(min_length=1)] = None
+    next_command: Annotated[str | None, Field(min_length=1)] = None
+    next_command_shell: Literal["posix", "powershell"] | None = None
+
+    @model_validator(mode="after")
+    def validate_summary(self) -> CalibrationSummary:
+        from ithrl.results.summary import validate_calibration_summary
+
+        validate_calibration_summary(self)
+        return self
+
+
+class CalibrationSnapshot(_StrictImmutableModel):
+    """Validated contents of one schema-2 calibration result directory."""
+
+    root: Path
+    summary: CalibrationSummary
+    request: JsonObject | None
+    retained_context_lines: tuple[str, ...]
+    experiment_source: str
+    experiment: SampledExperimentDefinition
+    provenance: ProvenanceFacts
+    execution_plan: ResolvedExecutionPlan

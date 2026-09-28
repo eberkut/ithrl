@@ -80,8 +80,22 @@ class UnavailableRunnerConfig(_ImmutableContract):
     reason_code: Literal["runner-not-implemented"] = "runner-not-implemented"
 
 
+class NativeRunnerConfig(_ImmutableContract):
+    """A native runner bound to one exact, locally detected capability profile."""
+
+    type: Literal["codex", "copilot"]
+    required_capability_digest: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+
+
 type RunnerConfig = Annotated[
     FakeRunnerConfig | UnavailableRunnerConfig,
+    Field(discriminator="type"),
+]
+
+# Consumers accepting both persisted versions can use this; schema v1 remains
+# restricted to RunnerConfig and cannot silently acquire native execution.
+type AnyRunnerConfig = Annotated[
+    FakeRunnerConfig | UnavailableRunnerConfig | NativeRunnerConfig,
     Field(discriminator="type"),
 ]
 
@@ -144,6 +158,74 @@ class ExperimentDefinition(_ImmutableContract):
         """Render canonical TOML whose round trip preserves the experiment digest."""
 
         return _render_experiment(self)
+
+
+# One explicit local calibration may make at most 16 attempts, including invalid retries.
+MAX_CALIBRATION_ATTEMPTS = 16
+
+
+class SampledCalibrationPhase(_ImmutableContract):
+    """Explicit bounded full-context sampling; no candidate search is implied."""
+
+    role: Literal["calibration"] = "calibration"
+    required_valid: Annotated[int, Field(ge=1, le=MAX_CALIBRATION_ATTEMPTS)]
+    minimum_matches: Annotated[int, Field(ge=1, le=MAX_CALIBRATION_ATTEMPTS)]
+    max_attempts: Annotated[int, Field(ge=1, le=MAX_CALIBRATION_ATTEMPTS)]
+
+    @model_validator(mode="after")
+    def validate_sample_counts(self) -> SampledCalibrationPhase:
+        if not self.minimum_matches <= self.required_valid <= self.max_attempts:
+            raise ValueError(
+                "calibration requires minimum_matches <= required_valid <= max_attempts"
+            )
+        return self
+
+
+class SampledExperimentDefinition(_ImmutableContract):
+    """Schema-v2 native calibration experiment without search or confirmation."""
+
+    schema_version: Literal[2]
+    target: BehaviorTarget
+    oracle: StructuralOracleConfig
+    runner: NativeRunnerConfig
+    calibration: SampledCalibrationPhase
+
+    @property
+    def digest(self) -> str:
+        """Return the content identity of the complete resolved experiment."""
+
+        return content_digest(self.model_dump(mode="json", exclude_none=True))
+
+    @classmethod
+    def from_toml(cls, source: str) -> SampledExperimentDefinition:
+        """Parse a strict schema-v2 native calibration document."""
+
+        try:
+            return cls.model_validate(_normalize_toml(tomllib.loads(source)))
+        except (tomllib.TOMLDecodeError, ValidationError, TypeError, ValueError) as error:
+            if isinstance(error, ExperimentFormatError):
+                raise
+            raise ExperimentFormatError(_format_error(error)) from error
+
+    def to_toml(self) -> str:
+        """Render canonical TOML whose round trip preserves the experiment digest."""
+
+        return _render_sampled_experiment(self)
+
+
+type AnyExperimentDefinition = ExperimentDefinition | SampledExperimentDefinition
+
+
+def parse_experiment_toml(source: str) -> AnyExperimentDefinition:
+    """Select the strict experiment contract by its persisted schema version."""
+
+    try:
+        version = tomllib.loads(source).get("schema_version")
+    except tomllib.TOMLDecodeError as error:
+        raise ExperimentFormatError(_format_error(error)) from error
+    if version == 2 and not isinstance(version, bool):
+        return SampledExperimentDefinition.from_toml(source)
+    return ExperimentDefinition.from_toml(source)
 
 
 def _normalize_toml(raw: dict[str, Any]) -> dict[str, Any]:
@@ -222,6 +304,41 @@ def _render_experiment(experiment: ExperimentDefinition) -> str:
         ("confirmation", experiment.confirmation),
     ):
         lines.extend(("", f"[{name}]", f"role = {_toml_string(phase.role)}", "runs = 1"))
+    return "\n".join(lines) + "\n"
+
+
+def _render_sampled_experiment(experiment: SampledExperimentDefinition) -> str:
+    lines = ["schema_version = 2", "", "[target]"]
+    target = experiment.target
+    lines.append(f"type = {_toml_string(target.type)}")
+    if isinstance(target, FinalResponseTarget):
+        _append_optional_string(lines, "text_equals", target.text_equals)
+        _append_optional_string(lines, "text_contains", target.text_contains)
+    else:
+        _append_optional_string(lines, "tool_name_equals", target.tool_name_equals)
+        _append_optional_string(lines, "command_equals", target.command_equals)
+        _append_optional_string(lines, "command_contains", target.command_contains)
+        if target.count is not None:
+            lines.append(f"count = {target.count}")
+
+    lines.extend(("", "[oracle]", 'type = "structural"'))
+    lines.append(f"protected_context_ids = {_toml_value(experiment.oracle.protected_context_ids)}")
+
+    runner = experiment.runner
+    lines.extend(
+        (
+            "",
+            "[runner]",
+            f"type = {_toml_string(runner.type)}",
+            f"required_capability_digest = {_toml_string(runner.required_capability_digest)}",
+            "",
+            "[calibration]",
+            'role = "calibration"',
+            f"required_valid = {experiment.calibration.required_valid}",
+            f"minimum_matches = {experiment.calibration.minimum_matches}",
+            f"max_attempts = {experiment.calibration.max_attempts}",
+        )
+    )
     return "\n".join(lines) + "\n"
 
 
