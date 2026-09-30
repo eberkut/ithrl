@@ -110,7 +110,7 @@ def validate_calibration_contents(
     provenance: Mapping[str, Any],
     execution_plan: ResolvedExecutionPlan | Mapping[str, Any],
 ) -> CalibrationSnapshot:
-    """Validate schema-2 files and the full-context candidate identity."""
+    """Validate calibration files and the full-context candidate identity."""
 
     try:
         request_data = json_object(request, label="request") if request is not None else None

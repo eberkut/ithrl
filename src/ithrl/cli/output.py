@@ -9,10 +9,10 @@ import sys
 from collections.abc import Callable, Sequence
 from enum import IntEnum, StrEnum
 from functools import wraps
-from typing import Any, Literal, Never, override
+from typing import Annotated, Any, Literal, Never, override
 
 import typer
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rich.console import Console
 from rich.text import Text
 from typer._click import ClickException
@@ -36,10 +36,16 @@ class OutputFormat(StrEnum):
     JSON = "json"
 
 
-class CommandOutput(BaseModel):
+class _OutputEnvelope(BaseModel):
+    """Strict envelope for the current CLI output format."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[1] = 1
+
+
+class CommandOutput(_OutputEnvelope):
+    kind: Literal["deterministic"] = "deterministic"
     command: Literal["extract", "shrink"]
     status: Literal[
         "case-created",
@@ -82,6 +88,7 @@ class CommandOutput(BaseModel):
     protected_context_ids: tuple[str, ...] = ()
     run_state_path: str | None = None
     network_calls: Literal[0] = 0
+    provider_call_accounting: Literal["not-started"] = "not-started"
     provider_calls: Literal[0] = 0
     actions_executed: Literal[0] = 0
     next_action: str | None = None
@@ -89,18 +96,159 @@ class CommandOutput(BaseModel):
     next_command_shell: Literal["posix", "powershell"] | None = None
 
 
-class ErrorOutput(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    schema_version: Literal[1] = 1
+class ErrorOutput(_OutputEnvelope):
+    kind: Literal["deterministic"] = "deterministic"
     command: Literal["ithrl", "extract", "shrink"]
     status: Literal["error"] = "error"
     exit_code: int
     error_code: str
     message: str
     network_calls: Literal[0] = 0
+    provider_call_accounting: Literal["not-started"] = "not-started"
     provider_calls: Literal[0] = 0
     actions_executed: Literal[0] = 0
+
+
+class SampledOutput(_OutputEnvelope):
+    """Content-free result contract for a sampled shrink run."""
+
+    kind: Literal["sampled"] = "sampled"
+    command: Literal["shrink"] = "shrink"
+    status: Literal[
+        "ready",
+        "measurable",
+        "not-measurable",
+        "inconclusive",
+        "incomplete",
+        "refused",
+        "interrupted",
+    ]
+    harness_started: bool | None = None
+    plan_digest: str = Field(min_length=1, max_length=128)
+    capability_digest: str = Field(min_length=1, max_length=128)
+    harness: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9._-]+$")
+    harness_version: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9._+-]+$")
+    target: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9._:-]+$")
+    controlled_surface: str = Field(min_length=1, max_length=120, pattern=r"^[A-Za-z0-9._:-]+$")
+    decision_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    requested_model: str | None = Field(
+        default=None, min_length=1, max_length=256, pattern=r"^[A-Za-z0-9._:/+-]+$"
+    )
+    supported_context_operations: tuple[
+        Annotated[str, Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9._:-]+$")], ...
+    ] = ()
+    protected_state_enforcement: Literal["not-applicable", "postcondition", "preventive"] = (
+        "not-applicable"
+    )
+    disposable_state_limit_enforcement: Literal["not-applicable", "observed", "enforced"] = (
+        "not-applicable"
+    )
+    process_containment: Literal["not-applicable", "process-group", "process-tree"] = (
+        "not-applicable"
+    )
+    input_token_limit_enforcement: Literal["unavailable", "pre-dispatch"] = "unavailable"
+    action_visibility: Literal["not-applicable", "visible", "unknown"] = "unknown"
+    action_denial: Literal["not-applicable", "enforced", "unverified"] = "unverified"
+    deviations: tuple[
+        Annotated[str, Field(min_length=1, max_length=256, pattern=r"^[\x20-\x7e]+$")], ...
+    ] = Field(default=(), max_length=16)
+    safety_policy_digest: str = Field(min_length=1, max_length=128)
+    safety_effects: tuple[
+        Annotated[str, Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9._:-]+$")], ...
+    ] = Field(default=(), max_length=16)
+    provider: str | None = Field(default=None, max_length=80, pattern=r"^[A-Za-z0-9._-]+$")
+    endpoint: str | None = Field(
+        default=None,
+        max_length=200,
+        pattern=(
+            r"^(?:https?://[A-Za-z0-9.-]+(?::[0-9]{1,5})?"
+            r"(?:/[A-Za-z0-9._~/-]{0,160})?|copilot://managed)$"
+        ),
+    )
+    max_attempts: int = Field(ge=0)
+    required_valid: int | None = Field(default=None, ge=1)
+    minimum_matches: int | None = Field(default=None, ge=1)
+    max_provider_calls: int = Field(ge=0)
+    max_runner_seconds: float = Field(ge=0)
+    max_tokens: int | None = Field(default=None, ge=0)
+    attempt_timeout_seconds: int | None = Field(default=None, ge=1)
+    max_native_output_bytes: int | None = Field(default=None, ge=1)
+    max_disposable_state_bytes: int | None = Field(default=None, ge=0)
+    max_disposable_state_entries: int | None = Field(default=None, ge=0)
+    provider_call_accounting: Literal["not-started", "started-unknown", "accounted"]
+    provider_calls: int | None = Field(default=None, ge=0)
+    attempts_used: int | None = Field(default=None, ge=0)
+    runner_seconds: float | None = Field(default=None, ge=0)
+    stop_reason: (
+        Literal[
+            "valid-sample-limit",
+            "attempt-limit",
+            "unsafe-retry",
+            "safety-refusal",
+            "user-interrupt",
+        ]
+        | None
+    ) = None
+    matches: int | None = Field(default=None, ge=0)
+    no_matches: int | None = Field(default=None, ge=0)
+    invalid_observations: int | None = Field(default=None, ge=0)
+    runner_errors: int | None = Field(default=None, ge=0)
+    actions_executed: int | None = Field(default=None, ge=0)
+    result_path: str | None = Field(default=None, max_length=240)
+    next_action: str | None = Field(default=None, max_length=240)
+    next_command: str | None = Field(default=None, max_length=2048)
+    next_command_shell: Literal["posix", "powershell"] | None = None
+
+    @model_validator(mode="after")
+    def validate_accounting(self) -> SampledOutput:
+        _validate_provider_accounting(self.provider_call_accounting, self.provider_calls)
+        if self.provider_call_accounting == "not-started" and self.attempts_used not in (None, 0):
+            raise ValueError("an unstarted run cannot report completed work")
+        if self.attempts_used is not None and self.attempts_used > self.max_attempts:
+            raise ValueError("attempt count exceeds the preflight bound")
+        if self.provider_calls is not None and self.provider_calls > self.max_provider_calls:
+            raise ValueError("provider calls exceed the preflight bound")
+        if self.status == "ready" and self.provider_call_accounting != "not-started":
+            raise ValueError("a ready plan cannot have started execution")
+        if self.required_valid is not None and self.required_valid > self.max_attempts:
+            raise ValueError("required valid samples exceed the attempt bound")
+        if (
+            self.minimum_matches is not None
+            and self.required_valid is not None
+            and self.minimum_matches > self.required_valid
+        ):
+            raise ValueError("match threshold exceeds required valid samples")
+        return self
+
+
+class SampledErrorOutput(_OutputEnvelope):
+    """Safe sampled-run error/refusal envelope with no exception text."""
+
+    kind: Literal["sampled"] = "sampled"
+    command: Literal["shrink"] = "shrink"
+    status: Literal["refused", "incomplete", "interrupted"]
+    exit_code: int
+    error_code: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9._-]+$")
+    harness_started: bool | None = None
+    provider_call_accounting: Literal["not-started", "started-unknown"] = "started-unknown"
+    provider_calls: Literal[0] | None = None
+    next_action: str | None = Field(default=None, max_length=240)
+
+    @model_validator(mode="after")
+    def validate_accounting(self) -> SampledErrorOutput:
+        _validate_provider_accounting(self.provider_call_accounting, self.provider_calls)
+        return self
+
+
+def _validate_provider_accounting(
+    accounting: Literal["not-started", "started-unknown", "accounted"], calls: int | None
+) -> None:
+    if accounting == "not-started" and calls != 0:
+        raise ValueError("an unstarted run must report zero provider calls")
+    if accounting == "started-unknown" and calls is not None:
+        raise ValueError("unknown provider calls cannot have a count")
+    if accounting == "accounted" and calls is None:
+        raise ValueError("accounted provider calls require a count")
 
 
 console = Console()
@@ -254,6 +402,188 @@ def render(report: CommandOutput, output_format: OutputFormat) -> None:
         _render_extract(report)
     else:
         _render_shrink(report)
+
+
+def render_sampled(report: SampledOutput, output_format: OutputFormat) -> None:
+    """Render a sampled result without implying unmeasured calls."""
+    if output_format is OutputFormat.JSON:
+        typer.echo(json.dumps(report.model_dump(mode="json"), sort_keys=True))
+        return
+
+    print_plain(console, f"Sampled shrink: {report.status}")
+    print_plain(console, f"  harness         {report.harness} {report.harness_version}")
+    print_plain(console, f"  target          {report.target}")
+    print_plain(console, f"  surface         {report.controlled_surface}")
+    if report.decision_digest is not None:
+        print_plain(console, f"  decision digest {report.decision_digest}")
+    if report.requested_model is not None:
+        print_plain(console, f"  requested model {report.requested_model}")
+    if report.harness_started is not None:
+        print_plain(console, f"  harness started {report.harness_started}")
+    if report.supported_context_operations:
+        print_plain(console, f"  context edits   {', '.join(report.supported_context_operations)}")
+    print_plain(console, f"  containment     {report.process_containment}")
+    print_plain(console, f"  protected state {report.protected_state_enforcement}")
+    print_plain(console, f"  state bound     {report.disposable_state_limit_enforcement}")
+    print_plain(
+        console, f"  actions         {report.action_visibility}; denial {report.action_denial}"
+    )
+    print_plain(console, f"  plan digest     {report.plan_digest[:12]}")
+    print_plain(console, f"  capability      {report.capability_digest[:12]}")
+    print_plain(console, f"  safety policy   {report.safety_policy_digest[:12]}")
+    if report.safety_effects:
+        print_plain(console, f"  safety effects  {', '.join(report.safety_effects)}")
+    for deviation in report.deviations:
+        print_plain(console, f"  deviation       {deviation}", soft_wrap=True)
+    if report.provider is not None:
+        print_plain(console, f"  provider        {report.provider}")
+    if report.endpoint is not None:
+        print_plain(console, f"  endpoint        {report.endpoint}", soft_wrap=True)
+    print_plain(console, f"  attempt bound   {report.max_attempts}")
+    if report.required_valid is not None:
+        print_plain(console, f"  valid samples   {report.required_valid}")
+    if report.minimum_matches is not None:
+        print_plain(console, f"  match threshold {report.minimum_matches}")
+    print_plain(console, f"  call bound      {report.max_provider_calls}")
+    print_plain(console, f"  runner bound    {report.max_runner_seconds:g}s")
+    print_plain(
+        console,
+        f"  token bound     {report.max_tokens if report.max_tokens is not None else 'unknown'}",
+    )
+    print_plain(console, f"  token enforcement {report.input_token_limit_enforcement}")
+    if report.attempt_timeout_seconds is not None:
+        print_plain(console, f"  attempt timeout {report.attempt_timeout_seconds}s")
+    if report.max_native_output_bytes is not None:
+        print_plain(console, f"  output cap      {report.max_native_output_bytes} bytes")
+    if report.max_disposable_state_bytes is not None:
+        print_plain(console, f"  state cap       {report.max_disposable_state_bytes} bytes")
+    if report.max_disposable_state_entries is not None:
+        print_plain(console, f"  state entries   {report.max_disposable_state_entries}")
+    if report.stop_reason is not None:
+        print_plain(console, f"  stop reason     {report.stop_reason}")
+    if report.matches is not None:
+        print_plain(
+            console, f"  samples         {report.matches} matches; {report.no_matches} no matches"
+        )
+    if report.invalid_observations is not None:
+        print_plain(console, f"  invalid samples {report.invalid_observations}")
+    if report.runner_errors is not None:
+        print_plain(console, f"  runner errors   {report.runner_errors}")
+    if report.actions_executed is not None:
+        print_plain(console, f"  actions executed {report.actions_executed}")
+    if report.attempts_used is not None:
+        print_plain(console, f"  attempts used   {report.attempts_used}")
+    if report.runner_seconds is not None:
+        print_plain(console, f"  runner time     {report.runner_seconds:g}s")
+    if report.provider_call_accounting == "not-started":
+        print_plain(console, "  provider calls  0 (execution did not start)")
+    elif report.provider_call_accounting == "accounted":
+        print_plain(console, f"  provider calls  {report.provider_calls}")
+    else:
+        print_plain(console, "  provider calls  unknown (execution started)")
+    if report.result_path is not None:
+        print_plain(console, f"  result          {report.result_path}", soft_wrap=True)
+    if report.next_action is not None or report.next_command is not None:
+        console.print()
+        print_plain(console, "Next step")
+        if report.next_action is not None:
+            print_plain(console, f"  {report.next_action}")
+        if report.next_command is not None:
+            print_plain(
+                console,
+                f"  Command ({report.next_command_shell}): {report.next_command}",
+                soft_wrap=True,
+            )
+
+
+def render_sampled_error(report: SampledErrorOutput, output_format: OutputFormat) -> None:
+    """Render a sampled error without exposing exception messages or paths."""
+    if output_format is OutputFormat.JSON:
+        typer.echo(json.dumps(report.model_dump(mode="json"), sort_keys=True))
+        return
+    message = {
+        "refused": "Sampled run refused before calibration.",
+        "incomplete": "Sampled run did not complete; provider-call accounting may be incomplete.",
+        "interrupted": "Sampled run interrupted; provider-call accounting may be incomplete.",
+    }[report.status]
+    print_plain(error_console, f"{message} ({report.error_code})")
+    if report.harness_started is not None:
+        state = "started" if report.harness_started else "not started"
+        print_plain(error_console, f"Local harness probe: {state}.")
+    if report.provider_call_accounting == "not-started":
+        print_plain(error_console, "Provider calls: 0 (model execution did not start).")
+    else:
+        print_plain(error_console, "Provider calls: unknown (execution may have started).")
+    if report.next_action is not None:
+        print_plain(error_console, report.next_action, soft_wrap=True)
+
+
+def fail_sampled(
+    *,
+    error_code: str,
+    code: ExitCode,
+    output_format: OutputFormat,
+    status: Literal["refused", "incomplete", "interrupted"],
+    harness_started: bool | None = None,
+    provider_call_accounting: Literal["not-started", "started-unknown"] = "started-unknown",
+) -> Never:
+    """Emit a content-free sampled error and exit with its public code."""
+    try:
+        render_sampled_error(
+            SampledErrorOutput(
+                status=status,
+                exit_code=code,
+                error_code=error_code,
+                harness_started=harness_started,
+                provider_call_accounting=provider_call_accounting,
+                provider_calls=0 if provider_call_accounting == "not-started" else None,
+                next_action=_sampled_error_next_action(error_code),
+            ),
+            output_format,
+        )
+    except (OSError, KeyboardInterrupt):
+        # A closed output stream must not reach the deterministic command boundary,
+        # which would incorrectly assert that no provider calls were made.
+        raise typer.Exit(code) from None
+    raise typer.Exit(code)
+
+
+def _sampled_error_next_action(error_code: str) -> str:
+    """Give stable guidance without echoing private diagnostics."""
+
+    if error_code in {"acknowledgement-required", "acknowledgement-declined"}:
+        return "Inspect the dry-run plan, then use --calibrate-only --acknowledge-model-execution when ready."
+    if error_code in {"original-workspace-required", "original-workspace-unavailable"}:
+        return "Supply --original-workspace with the existing original workspace directory."
+    if error_code in {"sampling-options-required", "calibration-settings-required"}:
+        return (
+            "Supply --required-valid, --minimum-matches, and --max-attempts for native calibration."
+        )
+    if error_code == "runtime-unavailable":
+        return "Make the selected harness executable and the required isolation runtime available, then rerun --dry-run."
+    if error_code in {"codex-authentication-unavailable", "copilot-authentication-unavailable"}:
+        return "Configure local harness authentication without adding credentials to the case, then rerun --dry-run."
+    if error_code in {"codex-probe-failed", "copilot-probe-failed"}:
+        return "Check the local harness version and isolation runtime, then rerun --dry-run."
+    if error_code == "input-token-limit-unenforceable":
+        return "This profile cannot enforce --max-input-tokens. Choose a profile that can, or explicitly omit that cap."
+    if error_code in {"provider-call-limit-too-small", "provider-call-budget-too-small"}:
+        return (
+            "Use a call budget that covers the displayed attempt bound, or reduce --max-attempts."
+        )
+    if error_code in {"capability-profile-mismatch", "runner-evidence-mismatch"}:
+        return "Use a harness profile compatible with this case and rerun --dry-run before calibration."
+    if error_code in {
+        "calibration-incomplete",
+        "calibration-interrupted",
+        "calibration-accounting-invalid",
+    }:
+        return "Inspect private calibration evidence and unresolved attempt state before any further provider execution."
+    if error_code == "sampled-search-unavailable":
+        return "Use --dry-run or --calibrate-only; sampled context search is not available yet."
+    if error_code == "observation-store-unavailable":
+        return "Supply --observation-store with a writable private location, then rerun --dry-run."
+    return "Resolve the reported preflight refusal and rerun --dry-run before calibration."
 
 
 def _render_extract(report: CommandOutput) -> None:

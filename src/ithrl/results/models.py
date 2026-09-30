@@ -42,6 +42,7 @@ class ResultSummary(_StrictImmutableModel):
     """Versioned evidence summary that is useful without the observation store."""
 
     schema_version: Literal[1] = 1
+    kind: Literal["reduction"] = "reduction"
     run_id: Annotated[str, Field(min_length=1, max_length=128)]
     status: ResultStatus
     case_digest: Annotated[str, Field(pattern=_DIGEST_PATTERN)]
@@ -114,9 +115,10 @@ type CalibrationProtectedEffect = Literal["unchanged", "may-change", "unknown"]
 
 
 class CalibrationSummary(_StrictImmutableModel):
-    """Schema-2 summary for bounded full-context calibration only."""
+    """Versioned summary for bounded full-context calibration only."""
 
-    schema_version: Literal[2] = 2
+    schema_version: Literal[1] = 1
+    kind: Literal["calibration"] = "calibration"
     run_id: Annotated[str, Field(min_length=1, max_length=128)]
     outcome: CalibrationOutcome
     stop_reason: CalibrationStopReason
@@ -171,7 +173,7 @@ class CalibrationSummary(_StrictImmutableModel):
 
 
 class CalibrationSnapshot(_StrictImmutableModel):
-    """Validated contents of one schema-2 calibration result directory."""
+    """Validated contents of one calibration result directory."""
 
     root: Path
     summary: CalibrationSummary

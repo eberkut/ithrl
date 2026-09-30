@@ -30,6 +30,7 @@ from ithrl.context import ContextNode, content_digest
 
 EXPERIMENT = """\
 schema_version = 1
+kind = "deterministic"
 
 [oracle]
 type = "tool-call"

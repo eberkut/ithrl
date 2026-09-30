@@ -44,6 +44,7 @@ from ithrl.runner import (
 
 _EXPERIMENT = """\
 schema_version = 1
+kind = "deterministic"
 
 [target]
 type = "shell-action"
@@ -319,7 +320,7 @@ def _sampled_experiment() -> SampledExperimentDefinition:
         }
     )
     return SampledExperimentDefinition(
-        schema_version=2,
+        schema_version=1,
         target=_experiment().target,
         oracle=_experiment().oracle,
         runner=NativeRunnerConfig(type="codex", required_capability_digest=capability.digest),
@@ -443,6 +444,8 @@ def test_calibration_snapshot_round_trip_preserves_unknown_accounting(tmp_path: 
     loaded = load_calibration_snapshot(destination)
 
     assert loaded.summary == summary
+    assert loaded.summary.schema_version == 1
+    assert loaded.summary.kind == "calibration"
     assert loaded.summary.stop_reason == "user-interrupt"
     assert loaded.summary.terminal_error_category == "runner-error"
     assert loaded.summary.calibration_observation_ids == ("obs-calibration-1", "obs-calibration-2")
@@ -526,7 +529,7 @@ def test_calibration_snapshot_rejects_nonrefused_provider_bound_over_plan(tmp_pa
         )
 
 
-def test_calibration_snapshot_rejects_wrong_schema_and_tampering(tmp_path: Path) -> None:
+def test_calibration_snapshot_rejects_wrong_kind_and_tampering(tmp_path: Path) -> None:
     summary = calibration_summary_from_observations(
         base=_calibration_base(),
         observations=(),
@@ -536,7 +539,7 @@ def test_calibration_snapshot_rejects_wrong_schema_and_tampering(tmp_path: Path)
     destination = tmp_path / "results" / "calibration"
     _write_calibration(destination, summary)
 
-    with pytest.raises(ResultSnapshotError, match="schema_version"):
+    with pytest.raises(ResultSnapshotError, match="kind"):
         load_result_snapshot(destination)
     (destination / "checkpoint.json").write_text("{}", encoding="utf-8")
     with pytest.raises(ResultSnapshotError, match="unexpected entries"):
@@ -546,6 +549,55 @@ def test_calibration_snapshot_rejects_wrong_schema_and_tampering(tmp_path: Path)
     summary_data["candidate_digest"] = "f" * 64
     (destination / "summary.json").write_text(json.dumps(summary_data), encoding="utf-8")
     with pytest.raises(ResultSnapshotError, match="candidate_digest"):
+        load_calibration_snapshot(destination)
+
+
+@pytest.mark.parametrize("kind", ["reduction", "calibration"])
+@pytest.mark.parametrize(
+    ("field", "value", "remove"),
+    [
+        ("kind", None, True),
+        ("kind", "unknown", False),
+        ("kind", 1, False),
+        ("schema_version", None, True),
+        ("schema_version", 2, False),
+        ("schema_version", True, False),
+        ("schema_version", "1", False),
+    ],
+)
+def test_snapshot_loaders_require_current_version_and_explicit_kind(
+    tmp_path: Path, kind: str, field: str, value: object, remove: bool
+) -> None:
+    destination = tmp_path / "result"
+    if kind == "reduction":
+        _write(destination)
+        loader = load_result_snapshot
+    else:
+        summary = calibration_summary_from_observations(
+            base=_calibration_base(),
+            observations=(),
+            expected_policy_digest=_sampled_plan().safety_policy.digest,
+            max_provider_calls_per_attempt=_sampled_plan().capability.provider_calls_per_attempt,
+        )
+        _write_calibration(destination, summary)
+        loader = load_calibration_snapshot
+    summary_path = destination / "summary.json"
+    summary_data = json.loads(summary_path.read_text(encoding="utf-8"))
+    if remove:
+        summary_data.pop(field)
+    else:
+        summary_data[field] = value
+    summary_path.write_text(json.dumps(summary_data), encoding="utf-8")
+
+    with pytest.raises(ResultSnapshotError, match=field):
+        loader(destination)
+
+
+def test_calibration_loader_rejects_reduction_result_kind(tmp_path: Path) -> None:
+    destination = tmp_path / "reduction"
+    _write(destination)
+
+    with pytest.raises(ResultSnapshotError, match="kind"):
         load_calibration_snapshot(destination)
 
 
@@ -719,6 +771,8 @@ def test_result_snapshot_round_trip_is_complete_and_immutable(tmp_path: Path) ->
 
     assert loaded.root == destination
     assert loaded.summary == _summary()
+    assert loaded.summary.schema_version == 1
+    assert loaded.summary.kind == "reduction"
     assert loaded.summary.status == "reduced"
     assert loaded.reduced_request is not None
     assert loaded.reduced_request["model"] == "fake"

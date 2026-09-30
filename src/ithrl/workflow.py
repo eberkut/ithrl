@@ -112,10 +112,12 @@ def prepare_experiment(
     registry: RunnerRegistry | None = None,
     safety_policy: SafetyPolicy | None = None,
     resource_limits: ResourceLimits | None = None,
+    experiment: AnyExperimentDefinition | None = None,
 ) -> PreparedExperiment:
-    """Parse, protect, and resolve the built-in credential-free experiment."""
+    """Protect and resolve a persisted or explicitly supplied typed experiment."""
 
-    experiment = parse_experiment_toml(evidence.default_experiment)
+    if experiment is None:
+        experiment = parse_experiment_toml(evidence.default_experiment)
     decision = evidence.decision
     if decision is not None and experiment.target != decision.selected_target:
         raise PreflightRefusedError(

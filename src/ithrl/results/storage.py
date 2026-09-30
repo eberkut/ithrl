@@ -107,30 +107,7 @@ def write_result_snapshot(
 def load_result_snapshot(root: Path) -> ResultSnapshot:
     """Load and cross-check a complete private result snapshot for safe resumption."""
 
-    root = _absolute_path(root)
-    _require_private_directory(root)
-    entries = {entry.name: entry for entry in root.iterdir()}
-    if "summary.json" not in entries:
-        raise ResultSnapshotError("result snapshot is missing: summary.json")
-    _require_private_file(entries["summary.json"], label="summary.json")
-    summary_data = _read_json_object(entries["summary.json"])
-    try:
-        summary = ResultSummary.model_validate_json(json.dumps(summary_data))
-    except ValidationError as error:
-        raise ResultSnapshotError(f"invalid summary.json: {validation_message(error)}") from error
-    expected_files = _SNAPSHOT_FILES | (
-        {"request.json"} if summary.candidate_materialization == "exact-request" else set()
-    )
-    missing = sorted(expected_files - entries.keys())
-    unexpected = sorted(entries.keys() - expected_files)
-    if missing:
-        raise ResultSnapshotError(f"result snapshot is missing: {', '.join(missing)}")
-    if unexpected:
-        raise ResultSnapshotError(
-            f"result snapshot contains unexpected entries: {', '.join(unexpected)}"
-        )
-    for name, path in entries.items():
-        _require_private_file(path, label=name)
+    root, entries, summary = _load_snapshot_entries(root, ResultSummary, _SNAPSHOT_FILES)
 
     request = (
         _read_json_object(entries["request.json"])
@@ -164,7 +141,7 @@ def write_calibration_snapshot(
     provenance: Mapping[str, Any],
     execution_plan: ResolvedExecutionPlan | Mapping[str, Any],
 ) -> Path:
-    """Atomically create a private schema-2 calibration result directory."""
+    """Atomically create a private calibration result directory."""
 
     destination = _absolute_path(destination)
     if destination.exists() or destination.is_symlink():
@@ -216,33 +193,9 @@ def write_calibration_snapshot(
 
 
 def load_calibration_snapshot(root: Path) -> CalibrationSnapshot:
-    """Load and cross-check a private schema-2 calibration result directory."""
+    """Load and cross-check a private calibration result directory."""
 
-    root = _absolute_path(root)
-    _require_private_directory(root)
-    entries = {entry.name: entry for entry in root.iterdir()}
-    if "summary.json" not in entries:
-        raise ResultSnapshotError("result snapshot is missing: summary.json")
-    _require_private_file(entries["summary.json"], label="summary.json")
-    summary_data = _read_json_object(entries["summary.json"])
-    try:
-        summary = CalibrationSummary.model_validate_json(json.dumps(summary_data))
-    except ValidationError as error:
-        raise ResultSnapshotError(f"invalid summary.json: {validation_message(error)}") from error
-    expected_files = _CALIBRATION_FILES | (
-        {"request.json"} if summary.candidate_materialization == "exact-request" else set()
-    )
-    missing = sorted(expected_files - entries.keys())
-    unexpected = sorted(entries.keys() - expected_files)
-    if missing:
-        raise ResultSnapshotError(f"result snapshot is missing: {', '.join(missing)}")
-    if unexpected:
-        raise ResultSnapshotError(
-            f"result snapshot contains unexpected entries: {', '.join(unexpected)}"
-        )
-    for name, path in entries.items():
-        _require_private_file(path, label=name)
-
+    root, entries, summary = _load_snapshot_entries(root, CalibrationSummary, _CALIBRATION_FILES)
     request = (
         _read_json_object(entries["request.json"])
         if summary.candidate_materialization == "exact-request"
@@ -257,6 +210,43 @@ def load_calibration_snapshot(root: Path) -> CalibrationSnapshot:
         provenance=_read_json_object(entries["provenance.json"]),
         execution_plan=_read_json_object(entries["execution-plan.json"]),
     )
+
+
+def _load_snapshot_entries[Summary: ResultSummary | CalibrationSummary](
+    root: Path, summary_type: type[Summary], required_files: frozenset[str]
+) -> tuple[Path, dict[str, Path], Summary]:
+    """Read the explicit result kind and enforce the complete private file set."""
+
+    root = _absolute_path(root)
+    _require_private_directory(root)
+    entries = {entry.name: entry for entry in root.iterdir()}
+    if "summary.json" not in entries:
+        raise ResultSnapshotError("result snapshot is missing: summary.json")
+    _require_private_file(entries["summary.json"], label="summary.json")
+    summary_data = _read_json_object(entries["summary.json"])
+    if "schema_version" not in summary_data or "kind" not in summary_data:
+        raise ResultSnapshotError("summary.json requires explicit schema_version and kind")
+    if type(summary_data["schema_version"]) is not int or summary_data["schema_version"] != 1:
+        raise ResultSnapshotError("summary.json requires schema_version 1")
+    try:
+        summary = summary_type.model_validate_json(json.dumps(summary_data))
+    except ValidationError as error:
+        raise ResultSnapshotError(f"invalid summary.json: {validation_message(error)}") from error
+    expected_files = required_files | (
+        {"request.json"} if summary.candidate_materialization == "exact-request" else set()
+    )
+    missing = sorted(expected_files - entries.keys())
+    unexpected = sorted(entries.keys() - expected_files)
+    if missing:
+        raise ResultSnapshotError(f"result snapshot is missing: {', '.join(missing)}")
+    if unexpected:
+        raise ResultSnapshotError(
+            f"result snapshot contains unexpected entries: {', '.join(unexpected)}"
+        )
+    for name, path in entries.items():
+        _require_private_file(path, label=name)
+
+    return root, entries, summary
 
 
 def _read_context_lines(path: Path) -> tuple[str, ...]:

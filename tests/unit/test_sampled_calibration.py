@@ -19,6 +19,7 @@ from ithrl.calibration import (
     save_sampled_calibration_result,
 )
 from ithrl.case import CaseEvidence, CaseWorkspace
+from ithrl.cli.shrink import prepare_shrink
 from ithrl.execution import CapabilityProfile
 from ithrl.experiment import (
     ExperimentDefinition,
@@ -122,7 +123,7 @@ def _prepared(
         command=deterministic.runner.command,
     )
     sampled = SampledExperimentDefinition(
-        schema_version=2,
+        schema_version=1,
         target=deterministic.target,
         oracle=deterministic.oracle,
         runner=NativeRunnerConfig(
@@ -167,6 +168,41 @@ def test_sampled_calibration_collects_exact_valid_block_and_reuses_it(tmp_path: 
     assert [item.attempt for item in result.observations] == [1, 2, 3]
     assert again == result
     assert runner.calls == 3
+
+
+def test_shrink_preparation_accepts_an_injected_sampled_runner_registry(tmp_path: Path) -> None:
+    case, prepared, runner = _prepared(
+        tmp_path,
+        outcomes=(),
+        required_valid=1,
+        minimum_matches=1,
+        max_attempts=2,
+    )
+    workspace = CaseWorkspace.create(
+        tmp_path / "sampled-case",
+        manifest=case.manifest,
+        request=case.request,
+        nodes=case.context.nodes,
+        default_experiment=case.default_experiment,
+        decision=case.decision,
+    )
+
+    loaded_workspace, loaded_case, selected, previous, checkpoint, run_state, _limit = (
+        prepare_shrink(
+            source=workspace.root,
+            resume=False,
+            max_candidates=None,
+            registry=RunnerRegistry({"codex": lambda _config, _evidence: runner}),
+            safety_policy=prepared.safety_policy,
+            resource_limits=prepared.resource_limits,
+        )
+    )
+
+    assert loaded_workspace.root == workspace.root
+    assert loaded_case.digest == case.digest
+    assert selected.identity == prepared.identity
+    assert previous is checkpoint is run_state is None
+    assert runner.calls == 0
 
 
 @pytest.mark.parametrize(
@@ -591,7 +627,8 @@ def test_sampled_calibration_persists_a_private_versioned_snapshot(tmp_path: Pat
         result=result,
     )
 
-    assert snapshot.summary.schema_version == 2
+    assert snapshot.summary.schema_version == 1
+    assert snapshot.summary.kind == "calibration"
     assert snapshot.summary.outcome == "measurable"
     assert snapshot.summary.matches == 2
     assert snapshot.summary.no_matches == 1

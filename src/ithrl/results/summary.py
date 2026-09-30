@@ -287,7 +287,7 @@ def calibration_summary_from_observations(
     expected_policy_digest: str,
     max_provider_calls_per_attempt: int,
 ) -> CalibrationSummary:
-    """Build schema-2 aggregates from exact, ordered calibration observations."""
+    """Build calibration aggregates from exact, ordered calibration observations."""
 
     if _CALIBRATION_DERIVED_FIELDS & base.keys():
         raise ValueError("calibration aggregate fields must come from observations")

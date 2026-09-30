@@ -23,7 +23,8 @@ context that would work, or the cause of the behavior.
 
 `extract` can discover the default Codex and Copilot session stores or read an explicit session
 file. It does not start the coding agent, contact a provider, execute a tool, or change the saved
-session. `shrink` rejects native-session cases because no compatible controlled runner is included.
+session. Native-session experiments remain unsupported: controlled runner code and local preflight
+checks do not establish a validated harness/version/target profile.
 
 The synthetic workflow covers extraction and reduction without provider credentials or network
 access. Its deterministic runner does not execute tool calls.

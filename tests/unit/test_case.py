@@ -21,9 +21,11 @@ from ithrl.case import (
 )
 from ithrl.case import storage as case_storage
 from ithrl.context import ContextNode, content_digest
+from ithrl.experiment import SampledExperimentDefinition, parse_experiment_toml
 
 EXPERIMENT = """\
 schema_version = 1
+kind = "deterministic"
 
 [oracle]
 type = "tool-call"
@@ -292,7 +294,89 @@ def test_workspace_rejects_invalid_experiment_before_writing(tmp_path: Path) -> 
             manifest=_manifest(),
             request=request,
             nodes=_nodes(request),
-            default_experiment="schema_version = 2\n",
+            default_experiment="schema_version = 3\n",
+        )
+    assert not (tmp_path / "case").exists()
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "schema_version = [1, 2]\n",
+        "schema_version = { value = 2 }\n",
+        "schema_version = true\n",
+        "schema_version = 2.0\n",
+    ],
+)
+def test_workspace_rejects_noninteger_schema_versions(tmp_path: Path, source: str) -> None:
+    request = _request()
+    with pytest.raises(CaseFormatError, match="schema_version = 1"):
+        CaseWorkspace.create(
+            tmp_path / "case",
+            manifest=_manifest(),
+            request=request,
+            nodes=_nodes(request),
+            default_experiment=source,
+        )
+    assert not (tmp_path / "case").exists()
+
+
+def test_workspace_loads_sampled_experiment(tmp_path: Path) -> None:
+    request = _request()
+    source = """\
+schema_version = 1
+kind = "sampled"
+
+[target]
+type = "final-response"
+text_contains = "ready"
+
+[oracle]
+type = "structural"
+protected_context_ids = []
+
+[runner]
+type = "codex"
+required_capability_digest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+[calibration]
+role = "calibration"
+required_valid = 1
+minimum_matches = 1
+max_attempts = 2
+"""
+    workspace = CaseWorkspace.create(
+        tmp_path / "sampled-case",
+        manifest=_manifest(),
+        request=request,
+        nodes=_nodes(request),
+        default_experiment=source,
+    )
+
+    loaded = workspace.load()
+
+    assert loaded.default_experiment == source
+    assert isinstance(parse_experiment_toml(loaded.default_experiment), SampledExperimentDefinition)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "schema_version = 1\n",
+        'schema_version = 1\nkind = "unknown"\n',
+        'schema_version = 1\nkind = ["sampled"]\n',
+        'schema_version = 2\nkind = "sampled"\n',
+    ],
+)
+def test_workspace_rejects_missing_kind_and_retired_versions(tmp_path: Path, source: str) -> None:
+    request = _request()
+    with pytest.raises(CaseFormatError):
+        CaseWorkspace.create(
+            tmp_path / "case",
+            manifest=_manifest(),
+            request=request,
+            nodes=_nodes(request),
+            default_experiment=source,
         )
     assert not (tmp_path / "case").exists()
 

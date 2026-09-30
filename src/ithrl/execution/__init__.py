@@ -1,5 +1,6 @@
 """Runner capability, policy, limit, and preflight contracts."""
 
+from ithrl.execution.budget import CalibrationBudgetBounds, calibration_budget_bounds
 from ithrl.execution.contracts import (
     MAX_CANCELLATION_GRACE_SECONDS,
     MAX_DISPOSABLE_STATE_BYTES,
@@ -42,6 +43,7 @@ __all__ = [
     "ActionDenial",
     "ActionExecution",
     "ActionVisibility",
+    "CalibrationBudgetBounds",
     "CandidateMaterialization",
     "CapabilityProfile",
     "CaptureType",
@@ -61,5 +63,6 @@ __all__ = [
     "ResourceLimits",
     "SafetyPolicy",
     "ToolNetworkAccess",
+    "calibration_budget_bounds",
     "resolve_execution_plan",
 ]

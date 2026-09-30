@@ -91,7 +91,7 @@ def _evidence(markers: str = "ABCDEFG") -> CaseEvidence:
         manifest=manifest,
         request=request,
         context=ContextGraph(nodes=nodes),
-        default_experiment="schema_version = 1\n",
+        default_experiment='schema_version = 1\nkind = "deterministic"\n',
     )
 
 

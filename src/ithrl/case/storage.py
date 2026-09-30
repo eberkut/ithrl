@@ -346,8 +346,11 @@ def _validate_experiment(value: str) -> None:
         parsed = tomllib.loads(value)
     except tomllib.TOMLDecodeError as error:
         raise CaseFormatError("default experiment is not valid TOML") from error
-    if parsed.get("schema_version") != 1:
+    version = parsed.get("schema_version")
+    if type(version) is not int or version != 1:
         raise CaseFormatError("default experiment must declare schema_version = 1")
+    if parsed.get("kind") not in ("deterministic", "sampled"):
+        raise CaseFormatError("default experiment must declare a supported kind")
 
 
 def _render_manifest(manifest: CaseManifest) -> str:

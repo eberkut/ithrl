@@ -23,6 +23,7 @@ from ithrl.case import (
     UnsafeCasePathError,
 )
 from ithrl.cli.extract import ExtractionSelectionError, create_case_report
+from ithrl.cli.native import NativeSelection, NativeSelectionError, native_selection
 from ithrl.cli.output import (
     CommandOutput,
     ExitCode,
@@ -31,13 +32,21 @@ from ithrl.cli.output import (
     command_boundary,
     error_console,
     fail,
+    fail_sampled,
     print_plain,
     render,
     shell_command,
 )
 from ithrl.cli.paths import private_data_root
+from ithrl.cli.sampled import handle_sampled_shrink
 from ithrl.cli.shrink import prepare_shrink, save_outcome, validate_phase_observations
-from ithrl.experiment import ExperimentFormatError
+from ithrl.execution.contracts import MAX_PROVIDER_CALLS_PER_ATTEMPT, MAX_WALL_TIME_SECONDS
+from ithrl.experiment import (
+    MAX_CALIBRATION_ATTEMPTS,
+    ExperimentFormatError,
+    SampledCalibrationPhase,
+    SampledExperimentDefinition,
+)
 from ithrl.observations import ObservationStore, ObservationStoreError
 from ithrl.reduce import (
     MAX_CANDIDATE_RUNS,
@@ -239,6 +248,74 @@ def shrink(
             help="Check the case and execution plan without running the experiment.",
         ),
     ] = False,
+    acknowledge_model_execution: Annotated[
+        bool,
+        typer.Option(
+            "--acknowledge-model-execution",
+            help="Allow the selected native runner to send case context to its provider.",
+        ),
+    ] = False,
+    original_workspace: Annotated[
+        Path | None,
+        typer.Option(
+            "--original-workspace",
+            metavar="DIRECTORY",
+            help="Original workspace to protect during native calibration.",
+        ),
+    ] = None,
+    required_valid: Annotated[
+        int | None,
+        typer.Option(
+            "--required-valid",
+            min=1,
+            max=MAX_CALIBRATION_ATTEMPTS,
+            help="Number of valid baseline samples required for native calibration.",
+        ),
+    ] = None,
+    minimum_matches: Annotated[
+        int | None,
+        typer.Option(
+            "--minimum-matches",
+            min=1,
+            max=MAX_CALIBRATION_ATTEMPTS,
+            help="Required matching baseline samples. Set with both other sample limits.",
+        ),
+    ] = None,
+    max_attempts: Annotated[
+        int | None,
+        typer.Option(
+            "--max-attempts",
+            min=1,
+            max=MAX_CALIBRATION_ATTEMPTS,
+            help="Total calibration attempt limit, including operational failures.",
+        ),
+    ] = None,
+    max_provider_calls: Annotated[
+        int | None,
+        typer.Option(
+            "--max-provider-calls",
+            min=1,
+            max=MAX_CALIBRATION_ATTEMPTS * MAX_PROVIDER_CALLS_PER_ATTEMPT,
+            help="Maximum total provider calls reserved for native calibration.",
+        ),
+    ] = None,
+    attempt_timeout: Annotated[
+        int | None,
+        typer.Option(
+            "--attempt-timeout",
+            min=1,
+            max=MAX_WALL_TIME_SECONDS,
+            help="Per-attempt wall-time deadline in seconds. Native default: 300.",
+        ),
+    ] = None,
+    max_input_tokens: Annotated[
+        int | None,
+        typer.Option(
+            "--max-input-tokens",
+            min=1,
+            help="Hard per-attempt input-token cap; refused unless the runner can enforce it.",
+        ),
+    ] = None,
     output_format: Annotated[
         OutputFormat,
         typer.Option("--format", help="Output format."),
@@ -267,6 +344,14 @@ def shrink(
                 output_format=output_format,
                 observation_store=observation_store,
                 active_lock_held=active_lock_held,
+                acknowledge_model_execution=acknowledge_model_execution,
+                original_workspace=original_workspace,
+                required_valid=required_valid,
+                minimum_matches=minimum_matches,
+                max_attempts=max_attempts,
+                max_provider_calls=max_provider_calls,
+                attempt_timeout=attempt_timeout,
+                max_input_tokens=max_input_tokens,
             )
     except RunStateBusyError as error:
         fail(str(error), ExitCode.USAGE, output_format, "shrink", "run-in-use")
@@ -284,6 +369,14 @@ def _shrink(
     output_format: OutputFormat,
     observation_store: Path | None,
     active_lock_held: bool,
+    acknowledge_model_execution: bool = False,
+    original_workspace: Path | None = None,
+    required_valid: int | None = None,
+    minimum_matches: int | None = None,
+    max_attempts: int | None = None,
+    max_provider_calls: int | None = None,
+    attempt_timeout: int | None = None,
+    max_input_tokens: int | None = None,
 ) -> None:
     if resume and (calibrate_only or dry_run):
         fail(
@@ -293,6 +386,54 @@ def _shrink(
             "shrink",
             "invalid-options",
         )
+    native_attempted = False
+    calibration: SampledCalibrationPhase | None = None
+    counts = (required_valid, minimum_matches, max_attempts)
+    if any(count is not None for count in counts):
+        if required_valid is None or minimum_matches is None or max_attempts is None:
+            fail_sampled(
+                error_code="calibration-settings-required",
+                code=ExitCode.USAGE,
+                output_format=output_format,
+                status="refused",
+                harness_started=False,
+                provider_call_accounting="not-started",
+            )
+        try:
+            calibration = SampledCalibrationPhase(
+                required_valid=required_valid,
+                minimum_matches=minimum_matches,
+                max_attempts=max_attempts,
+            )
+        except ValueError:
+            fail_sampled(
+                error_code="calibration-settings-invalid",
+                code=ExitCode.USAGE,
+                output_format=output_format,
+                status="refused",
+                harness_started=False,
+                provider_call_accounting="not-started",
+            )
+
+    def select_native(workspace: CaseWorkspace, evidence: CaseEvidence) -> NativeSelection:
+        nonlocal native_attempted
+        native_attempted = True
+        if resume or max_candidates is not None or not (dry_run or calibrate_only):
+            raise NativeSelectionError(
+                "sampled-search-unavailable", "native execution currently supports calibration only"
+            )
+        if dry_run and calibrate_only:
+            raise NativeSelectionError("invalid-options", "choose dry-run or calibration-only")
+        return native_selection(
+            workspace,
+            evidence,
+            original_workspace=original_workspace,
+            calibration=calibration,
+            max_provider_calls=max_provider_calls,
+            attempt_timeout_seconds=attempt_timeout,
+            max_input_tokens=max_input_tokens,
+        )
+
     try:
         (
             workspace,
@@ -306,6 +447,16 @@ def _shrink(
             source=source,
             resume=resume,
             max_candidates=max_candidates,
+            native_selection_factory=select_native,
+        )
+    except NativeSelectionError as error:
+        fail_sampled(
+            error_code=error.code,
+            code=ExitCode.UNSUPPORTED,
+            output_format=output_format,
+            status="refused",
+            harness_started=error.harness_started,
+            provider_call_accounting="not-started",
         )
     except (
         CaseError,
@@ -314,9 +465,93 @@ def _shrink(
         ResumeMismatchError,
         RunStateError,
     ) as error:
+        if native_attempted:
+            fail_sampled(
+                error_code="invalid-sampled-input",
+                code=ExitCode.USAGE,
+                output_format=output_format,
+                status="refused",
+                harness_started=True,
+                provider_call_accounting="not-started",
+            )
         fail(str(error), ExitCode.USAGE, output_format, "shrink", "invalid-input")
     except (OraclePrerequisiteError, PreflightRefusedError) as error:
+        if native_attempted:
+            issue_code = (
+                error.report.issues[0].code
+                if isinstance(error, PreflightRefusedError) and error.report.issues
+                else "oracle-prerequisite"
+            )
+            fail_sampled(
+                error_code=issue_code,
+                code=ExitCode.UNSUPPORTED,
+                output_format=output_format,
+                status="refused",
+                harness_started=True,
+                provider_call_accounting="not-started",
+            )
         fail(str(error), ExitCode.UNSUPPORTED, output_format, "shrink", "unsupported")
+    except KeyboardInterrupt:
+        if native_attempted:
+            fail_sampled(
+                error_code="native-selection-interrupted",
+                code=ExitCode.CANCELLED,
+                output_format=output_format,
+                status="interrupted",
+                harness_started=None,
+                provider_call_accounting="not-started",
+            )
+        raise
+    except Exception:
+        if native_attempted:
+            fail_sampled(
+                error_code="native-selection-internal",
+                code=ExitCode.INTERNAL,
+                output_format=output_format,
+                status="refused",
+                harness_started=None,
+                provider_call_accounting="not-started",
+            )
+        raise
+
+    if isinstance(prepared.experiment, SampledExperimentDefinition):
+        if max_candidates is not None:
+            fail_sampled(
+                error_code="sampled-search-unavailable",
+                code=ExitCode.USAGE,
+                output_format=output_format,
+                status="refused",
+                harness_started=True,
+                provider_call_accounting="not-started",
+            )
+        handle_sampled_shrink(
+            workspace=workspace,
+            evidence=evidence,
+            prepared=prepared,
+            dry_run=dry_run,
+            calibrate_only=calibrate_only,
+            acknowledge_model_execution=acknowledge_model_execution,
+            original_workspace=original_workspace,
+            observation_store=observation_store,
+            output_format=output_format,
+        )
+        return
+
+    if (
+        acknowledge_model_execution
+        or original_workspace is not None
+        or calibration is not None
+        or max_provider_calls is not None
+        or attempt_timeout is not None
+        or max_input_tokens is not None
+    ):
+        fail(
+            "native calibration options require a native case",
+            ExitCode.USAGE,
+            output_format,
+            "shrink",
+            "invalid-options",
+        )
 
     if dry_run:
         _render_dry_run(

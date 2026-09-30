@@ -13,12 +13,14 @@ from ithrl.execution import (
     PreflightReport,
     ResourceLimits,
     SafetyPolicy,
+    calibration_budget_bounds,
     resolve_execution_plan,
 )
 from ithrl.experiment import (
     DeterministicPhase,
     ExperimentDefinition,
     FakeRunnerConfig,
+    SampledCalibrationPhase,
     StructuralOracleConfig,
 )
 from ithrl.synthetic import extract_inference
@@ -366,6 +368,58 @@ def test_preflight_refuses_an_unenforceable_input_token_limit(tmp_path: Path) ->
     assert accepted.ready
     assert accepted.plan is not None
     assert accepted.plan.capability.input_token_limit_enforcement == "pre-dispatch"
+
+
+def test_sampled_calibration_bounds_do_not_invent_an_input_token_limit() -> None:
+    phase = SampledCalibrationPhase(required_valid=2, minimum_matches=1, max_attempts=3)
+    capability = CapabilityProfile.model_validate(
+        {
+            **CapabilityProfile.deterministic_fake().model_dump(mode="python"),
+            "deterministic": False,
+            "provider_transport": "required",
+            "provider_calls_per_attempt": 2,
+            "provider": "fixture-provider",
+            "endpoint": "https://provider.invalid",
+            "cancellation_grace_seconds": 4,
+        }
+    )
+
+    bounds = calibration_budget_bounds(
+        phase, capability, ResourceLimits(max_provider_calls=2, max_wall_time_seconds=12)
+    )
+
+    assert bounds.attempts == 3
+    assert bounds.provider_calls == 6
+    assert bounds.input_tokens is None
+    assert bounds.runner_seconds == 48
+
+
+def test_sampled_calibration_bounds_require_enforceable_per_attempt_limits() -> None:
+    phase = SampledCalibrationPhase(required_valid=1, minimum_matches=1, max_attempts=2)
+    capability = CapabilityProfile.model_validate(
+        {
+            **CapabilityProfile.deterministic_fake().model_dump(mode="python"),
+            "deterministic": False,
+            "provider_transport": "required",
+            "provider_calls_per_attempt": 1,
+            "provider": "fixture-provider",
+            "endpoint": "https://provider.invalid",
+        }
+    )
+
+    with pytest.raises(ValueError, match="provider-call limit"):
+        calibration_budget_bounds(phase, capability, ResourceLimits())
+    with pytest.raises(ValueError, match="input-token limit"):
+        calibration_budget_bounds(
+            phase, capability, ResourceLimits(max_provider_calls=1, max_input_tokens=100)
+        )
+
+    bounded = calibration_budget_bounds(
+        phase,
+        capability.model_copy(update={"input_token_limit_enforcement": "pre-dispatch"}),
+        ResourceLimits(max_provider_calls=1, max_input_tokens=100),
+    )
+    assert bounded.input_tokens == 200
 
 
 def test_preflight_requires_action_denial_for_final_response(tmp_path: Path) -> None:

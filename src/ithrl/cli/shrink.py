@@ -2,14 +2,22 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 from uuid import uuid4
 
 from ithrl.case import CaseEvidence, CaseWorkspace
+from ithrl.cli.native import NativeSelection
 from ithrl.cli.output import CommandOutput, ExitCode, shell_command
 from ithrl.context import JsonObject, content_digest
+from ithrl.execution import ResourceLimits, SafetyPolicy
+from ithrl.experiment import (
+    SampledExperimentDefinition,
+    UnavailableRunnerConfig,
+    parse_experiment_toml,
+)
 from ithrl.extraction import load_extracted_case
 from ithrl.measurement import RunnerExecutionError
 from ithrl.observations import (
@@ -37,7 +45,7 @@ from ithrl.results import (
     write_result_snapshot,
 )
 from ithrl.run_state import RunStateError, RunStateFile
-from ithrl.runner import prepare_candidate
+from ithrl.runner import RunnerRegistry, prepare_candidate
 from ithrl.workflow import (
     PhaseOutcome,
     PreparedExperiment,
@@ -324,6 +332,11 @@ def prepare_shrink(
     source: Path,
     resume: bool,
     max_candidates: int | None,
+    registry: RunnerRegistry | None = None,
+    safety_policy: SafetyPolicy | None = None,
+    resource_limits: ResourceLimits | None = None,
+    native_selection_factory: Callable[[CaseWorkspace, CaseEvidence], NativeSelection]
+    | None = None,
 ) -> tuple[
     CaseWorkspace,
     CaseEvidence,
@@ -337,7 +350,27 @@ def prepare_shrink(
     evidence = load_extracted_case(workspace)
     if previous is not None:
         _validate_result_case(previous, evidence)
-    prepared = prepare_experiment(evidence)
+    experiment = parse_experiment_toml(evidence.default_experiment)
+    if (
+        native_selection_factory is not None
+        and registry is None
+        and (
+            isinstance(experiment, SampledExperimentDefinition)
+            or isinstance(experiment.runner, UnavailableRunnerConfig)
+        )
+    ):
+        selection = native_selection_factory(workspace, evidence)
+        registry = selection.registry
+        safety_policy = selection.safety_policy
+        resource_limits = selection.resource_limits
+        experiment = selection.experiment
+    prepared = prepare_experiment(
+        evidence,
+        registry=registry,
+        safety_policy=safety_policy,
+        resource_limits=resource_limits,
+        experiment=experiment,
+    )
     checkpoint = (
         run_state.load().checkpoint
         if run_state is not None
