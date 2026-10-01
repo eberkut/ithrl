@@ -321,6 +321,97 @@ def test_unknown_notification_fails_closed() -> None:
     assert outcome.error_code == "unsupported-notification"
 
 
+def test_thread_warning_is_informational_and_preserved_only_in_the_audit() -> None:
+    message = "Sanitized fixture warning."
+    warning = {"method": "warning", "params": {"threadId": THREAD_ID, "message": message}}
+    outcome, _, audit = _run([*_prefix(), warning, _usage(), _final_item(), _turn_completed()])
+
+    assert outcome.status == "completed"
+    assert outcome.provider_calls_started == outcome.provider_calls_completed == 1
+    assert {"kind": "server", "value": warning} in audit
+    assert message not in repr(outcome)
+    assert parse_transcript(_server_bytes(audit)) == outcome
+
+
+@pytest.mark.parametrize(
+    ("params", "code"),
+    [
+        ({"threadId": "other-thread", "message": "Fixture warning."}, "identity-mismatch"),
+        ({"message": "Fixture warning."}, "identity-mismatch"),
+        ({"threadId": THREAD_ID}, "invalid-message"),
+        ({"threadId": THREAD_ID, "message": ""}, "invalid-message"),
+        ({"threadId": THREAD_ID, "message": True}, "invalid-message"),
+    ],
+)
+def test_warning_requires_the_selected_thread_and_nonempty_text(params: Message, code: str) -> None:
+    outcome, _, _ = _run([*_prefix(), {"method": "warning", "params": params}])
+
+    assert outcome.error_code == code
+    assert outcome.provider_calls_completed == 0
+
+
+@pytest.mark.parametrize(
+    "params",
+    [{"authMode": None}, {"authMode": "chatgpt"}, {"authMode": "chatgpt", "planType": "plus"}],
+)
+def test_account_updates_are_informational(params: Message) -> None:
+    exchange = _successful_exchange()
+    outcome, _, audit = _run(
+        [exchange[0], {"method": "account/updated", "params": params}, *exchange[1:]]
+    )
+
+    assert outcome.status == "completed"
+    assert outcome.provider_acceptance == "accepted"
+    assert outcome.provider_calls_started == outcome.provider_calls_completed == 1
+    assert parse_transcript(_server_bytes(audit)) == outcome
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {},
+        {"authMode": ""},
+        {"authMode": False},
+        {"authMode": None, "planType": ""},
+        {"authMode": "chatgpt", "planType": 1},
+    ],
+)
+def test_account_updates_require_well_formed_optional_identity_fields(params: Message) -> None:
+    outcome, _, _ = _run([_prefix()[0], {"method": "account/updated", "params": params}])
+
+    assert outcome.error_code == "invalid-message"
+    assert outcome.provider_acceptance == "not-started"
+    assert outcome.provider_calls_started == outcome.provider_calls_completed == 0
+
+
+@pytest.mark.parametrize("position", [1, len(_prefix())])
+def test_disabled_remote_control_notification_preserves_the_exchange(position: int) -> None:
+    exchange = _successful_exchange()
+    notification = {"method": "remoteControl/status/changed", "params": {"status": "disabled"}}
+    outcome, _, audit = _run([*exchange[:position], notification, *exchange[position:]])
+
+    assert outcome.status == "completed"
+    assert outcome.provider_calls_started == outcome.provider_calls_completed == 1
+    assert outcome.actions_requested == outcome.actions_denied == 0
+    assert parse_transcript(_server_bytes(audit)) == outcome
+
+
+@pytest.mark.parametrize("status", [None, True, "enabled", "connected", "future-status"])
+@pytest.mark.parametrize("position", [1, len(_prefix())])
+def test_non_disabled_remote_control_stops_without_continuing(
+    status: object, position: int
+) -> None:
+    exchange = _successful_exchange()
+    notification = {"method": "remoteControl/status/changed", "params": {"status": status}}
+    outcome, client, _ = _run([*exchange[:position], notification, *exchange[position:]])
+
+    assert outcome.status == "error"
+    assert outcome.error_code == "remote-control-active"
+    assert outcome.provider_calls_completed == 0
+    assert outcome.provider_calls_started == int(position != 1)
+    assert client[-1]["method"] == ("thread/start" if position == 1 else "turn/start")
+
+
 @pytest.mark.parametrize(
     ("method", "fields"),
     [

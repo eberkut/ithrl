@@ -100,7 +100,7 @@ def render_runner_configuration(
         'approval_policy = "never"',
         'sandbox_mode = "read-only"',
         'web_search = "disabled"',
-        'cli_auth_credentials_store = "ephemeral"',
+        'cli_auth_credentials_store = "file"',
         "",
         f"[model_providers.{RUNTIME_PROVIDER_ID}]",
         'name = "ithrl isolated provider"',
@@ -156,7 +156,7 @@ def validate_runner_configuration(
         "approval_policy": "never",
         "sandbox_mode": "read-only",
         "web_search": "disabled",
-        "cli_auth_credentials_store": "ephemeral",
+        "cli_auth_credentials_store": "file",
     }
     if any(
         document[name] != value for name, value in expected_root.items()

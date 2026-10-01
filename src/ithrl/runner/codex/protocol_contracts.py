@@ -75,13 +75,16 @@ SUPPORTED_NOTIFICATION_METHODS = frozenset(
         *PASSIVE_NOTIFICATIONS,
         *THREAD_PASSIVE_NOTIFICATIONS,
         "account/rateLimits/updated",
+        "account/updated",
         "item/completed",
         "item/started",
         "model/rerouted",
+        "remoteControl/status/changed",
         "thread/started",
         "thread/tokenUsage/updated",
         "turn/completed",
         "turn/started",
+        "warning",
     }
 )
 

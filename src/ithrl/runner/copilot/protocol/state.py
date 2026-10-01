@@ -29,6 +29,7 @@ class ProtocolState:
     idle_seen: bool = False
     result_seen: bool = False
     denial_seen: bool = False
+    continuation_started: bool = False
     final_text: str | None = None
     tool_call_id: str | None = None
     tool_call: ToolCall | None = None

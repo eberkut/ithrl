@@ -174,6 +174,48 @@ uv build --sdist --wheel --no-sources
 The default test suite and synthetic walkthrough do not use provider credentials or make network
 requests.
 
+### Opt-in native smoke tests
+
+The three native smoke profiles are `codex-final`, `copilot-final`, and `copilot-shell`.
+They are skipped by default and refuse opt-in when `CI` or `GITHUB_ACTIONS` is set. Passing mock
+tests does not change the availability table above.
+
+Before running either live mode, obtain approval for the exact profile, model, provider, and
+private evidence parent outside the checkout. The installed harness and Bubblewrap must pass the
+local isolation and capability checks. Use an existing private evidence parent and configured
+harness authentication; do not put credentials in arguments or case content.
+
+Run structural preflight first. This starts bounded local harness probes but no model turn or
+provider call. Native structural commands run with network access denied, the host filesystem and
+harness executable read-only, and writable state restricted to private disposable directories:
+
+```bash
+uv run pytest -o addopts= tests/live -m native_smoke -s \
+  --native-smoke preflight --native-profile PROFILE \
+  --native-model MODEL --native-provider PROVIDER \
+  --native-smoke-root /absolute/private/evidence-parent
+```
+
+Inspect the printed plan and private `preflight.json`, then obtain separate approval for provider
+execution using its exact `capability_digest`. For Copilot, `PROVIDER` must be `github-copilot`.
+
+```bash
+uv run pytest -o addopts= tests/live -m native_smoke -s \
+  --native-smoke run --native-profile PROFILE \
+  --native-model MODEL --native-provider PROVIDER \
+  --native-smoke-root /absolute/private/evidence-parent \
+  --native-capability-digest APPROVED_DIGEST
+```
+
+Each invocation uses a fresh private directory, harmless synthetic session content, and an empty
+original workspace. Calibration requires two matching independent attempts, permits no more than
+two attempts, and bounds each attempt at 120 seconds plus the profile's cancellation grace.
+Final-response profiles permit at most two provider calls; Copilot shell-action permits at most
+four, with `pwd` visible but denied. Returned actions never execute; hosted tools, MCP, and
+tool-side network effects remain forbidden. These profiles cannot enforce an input-token cap.
+The private evidence records exact counts where known and uncertainty where acceptance cannot
+be established. Unsupported or unsuccessful profiles fail the test rather than skip or retry.
+
 ## Research basis
 
 The design draws on published research and preprints:

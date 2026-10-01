@@ -247,6 +247,7 @@ def _calibration_report(
     accounting: Literal["accounted", "started-unknown"] = (
         "accounted"
         if summary.provider_calls_started is not None
+        and summary.provider_calls_possible == 0
         and summary.provider_calls_may_have_started == summary.provider_calls_started
         and summary.provider_calls_started <= preflight.max_provider_calls
         else "started-unknown"

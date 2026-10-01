@@ -6,6 +6,8 @@ import hashlib
 import json
 import os
 import stat
+import sys
+import sysconfig
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -32,6 +34,7 @@ class CodexRuntime:
     bubblewrap: Path = field(repr=False)
     python: Path = field(repr=False)
     _digests: tuple[str, str, str] = field(init=False, repr=False)
+    _python_prefix: Path | None = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         programs = tuple(
@@ -41,6 +44,7 @@ class CodexRuntime:
         object.__setattr__(self, "bubblewrap", programs[1][0])
         object.__setattr__(self, "python", programs[2][0])
         object.__setattr__(self, "_digests", tuple(program[1] for program in programs))
+        object.__setattr__(self, "_python_prefix", _python_runtime_prefix(self.python))
 
     @property
     def identity(self) -> str:
@@ -49,6 +53,9 @@ class CodexRuntime:
                 "codex": self._digests[0],
                 "bubblewrap": self._digests[1],
                 "python": self._digests[2],
+                "python_runtime_prefix": (
+                    None if self._python_prefix is None else os.fspath(self._python_prefix)
+                ),
             }
         )
 
@@ -56,7 +63,7 @@ class CodexRuntime:
         current = tuple(
             _read_executable(path)[1] for path in (self.codex, self.bubblewrap, self.python)
         )
-        if current != self._digests:
+        if current != self._digests or _python_runtime_prefix(self.python) != self._python_prefix:
             raise CodexIsolationError("a required Codex runtime executable changed")
 
 
@@ -147,37 +154,8 @@ def _bubblewrap_argv(
     request: str,
     auth_descriptor: int | None,
 ) -> tuple[str, ...]:
-    codex = runtime.codex.resolve(strict=True)
     python = runtime.python.resolve(strict=True)
-    arguments = (
-        os.fspath(runtime.bubblewrap.resolve(strict=True)),
-        "--die-with-parent",
-        "--new-session",
-        "--unshare-pid",
-        "--unshare-ipc",
-        "--unshare-uts",
-        "--ro-bind",
-        "/",
-        "/",
-        "--tmpfs",
-        "/home",
-        "--tmpfs",
-        "/tmp",  # noqa: S108 - private tmpfs inside the process sandbox
-        "--tmpfs",
-        "/run",
-        "--proc",
-        "/proc",
-        "--dev",
-        "/dev",
-        "--dir",
-        SANDBOX_ROOT,
-        "--bind",
-        os.fspath(state),
-        SANDBOX_ROOT,
-        "--ro-bind",
-        os.fspath(codex),
-        f"{SANDBOX_ROOT}/runner/codex",
-    )
+    arguments = _bubblewrap_boundary(runtime, state=state)
     if auth_descriptor is not None:
         arguments += (
             "--perms",
@@ -195,6 +173,84 @@ def _bubblewrap_argv(
         f"{SANDBOX_ROOT}/{request}",
         f"{SANDBOX_ROOT}/runner/codex",
     )
+
+
+def _bubblewrap_boundary(runtime: CodexRuntime, *, state: Path) -> tuple[str, ...]:
+    """Mount one disposable root and the exact executable runtime read-only."""
+
+    runtime.assert_unchanged()
+    prefix = runtime._python_prefix
+    if prefix is not None and (
+        state.resolve().is_relative_to(prefix) or prefix.is_relative_to(state.resolve())
+    ):
+        raise CodexIsolationError("Codex Python runtime overlaps disposable state")
+    arguments = (
+        os.fspath(runtime.bubblewrap.resolve(strict=True)),
+        "--die-with-parent",
+        "--new-session",
+        "--unshare-pid",
+        "--unshare-ipc",
+        "--unshare-uts",
+        "--ro-bind",
+        "/",
+        "/",
+        "--tmpfs",
+        "/home",
+        "--tmpfs",
+        "/root",
+        "--tmpfs",
+        "/tmp",  # noqa: S108 - private tmpfs inside the process sandbox
+        "--tmpfs",
+        "/run",
+        "--proc",
+        "/proc",
+        "--dev",
+        "/dev",
+        "--dir",
+        SANDBOX_ROOT,
+        "--bind",
+        os.fspath(state),
+        SANDBOX_ROOT,
+        "--ro-bind",
+        os.fspath(runtime.codex),
+        f"{SANDBOX_ROOT}/runner/codex",
+    )
+    if prefix is not None:
+        arguments += (
+            "--ro-bind",
+            os.fspath(prefix),
+            os.fspath(prefix),
+        )
+    return arguments
+
+
+def _python_runtime_prefix(python: Path) -> Path | None:
+    """Expose only a proven current interpreter installation hidden by tmpfs."""
+
+    masked = (Path("/home"), Path("/root"), Path("/tmp"), Path("/run"))  # noqa: S108
+    if not any(python.is_relative_to(root) for root in masked):
+        return None
+    try:
+        prefix = Path(sys.base_prefix).resolve(strict=True)
+        stdlib = Path(sysconfig.get_path("stdlib")).resolve(strict=True)
+        expected_stdlib = (
+            prefix / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}"
+        )
+        encodings = (stdlib / "encodings" / "__init__.py").resolve(strict=True)
+        if (
+            python != Path(sys.executable).resolve(strict=True)
+            or python.parent != prefix / "bin"
+            or stdlib != expected_stdlib
+            or not encodings.is_relative_to(prefix)
+            or not encodings.is_file()
+            or prefix in masked
+            or prefix.parent == Path("/home")
+            or prefix == Path.home().resolve()
+        ):
+            raise CodexIsolationError("Codex Python runtime layout cannot be safely exposed")
+    except (OSError, TypeError) as error:
+        raise CodexIsolationError("Codex Python runtime layout is unavailable") from error
+    return prefix
 
 
 def _worker_environment(

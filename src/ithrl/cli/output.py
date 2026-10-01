@@ -222,7 +222,7 @@ class SampledOutput(_OutputEnvelope):
 
 
 class SampledErrorOutput(_OutputEnvelope):
-    """Safe sampled-run error/refusal envelope with no exception text."""
+    """Safe sampled-run refusal with fixed probe reasons, never native output."""
 
     kind: Literal["sampled"] = "sampled"
     command: Literal["shrink"] = "shrink"
@@ -233,6 +233,10 @@ class SampledErrorOutput(_OutputEnvelope):
     provider_call_accounting: Literal["not-started", "started-unknown"] = "started-unknown"
     provider_calls: Literal[0] | None = None
     next_action: str | None = Field(default=None, max_length=240)
+    probe_stage: str | None = Field(default=None, max_length=40, pattern=r"^[a-z-]+$")
+    probe_exit_code: int | None = None
+    probe_reason: str | None = Field(default=None, max_length=240)
+    diagnostic_path: str | None = None
 
     @model_validator(mode="after")
     def validate_accounting(self) -> SampledErrorOutput:
@@ -497,7 +501,7 @@ def render_sampled(report: SampledOutput, output_format: OutputFormat) -> None:
 
 
 def render_sampled_error(report: SampledErrorOutput, output_format: OutputFormat) -> None:
-    """Render a sampled error without exposing exception messages or paths."""
+    """Render safe refusal metadata and an explicit private diagnostic location."""
     if output_format is OutputFormat.JSON:
         typer.echo(json.dumps(report.model_dump(mode="json"), sort_keys=True))
         return
@@ -516,6 +520,16 @@ def render_sampled_error(report: SampledErrorOutput, output_format: OutputFormat
         print_plain(error_console, "Provider calls: unknown (execution may have started).")
     if report.next_action is not None:
         print_plain(error_console, report.next_action, soft_wrap=True)
+    if report.probe_stage is not None:
+        print_plain(error_console, f"Failing probe stage: {report.probe_stage}.")
+    if report.probe_exit_code is not None:
+        print_plain(error_console, f"Probe exit code: {report.probe_exit_code}.")
+    if report.probe_reason is not None:
+        print_plain(error_console, report.probe_reason)
+    if report.diagnostic_path is not None:
+        print_plain(
+            error_console, f"Private probe diagnostic: {report.diagnostic_path}", soft_wrap=True
+        )
 
 
 def fail_sampled(
@@ -526,6 +540,10 @@ def fail_sampled(
     status: Literal["refused", "incomplete", "interrupted"],
     harness_started: bool | None = None,
     provider_call_accounting: Literal["not-started", "started-unknown"] = "started-unknown",
+    probe_stage: str | None = None,
+    probe_exit_code: int | None = None,
+    probe_reason: str | None = None,
+    diagnostic_path: str | None = None,
 ) -> Never:
     """Emit a content-free sampled error and exit with its public code."""
     try:
@@ -538,6 +556,10 @@ def fail_sampled(
                 provider_call_accounting=provider_call_accounting,
                 provider_calls=0 if provider_call_accounting == "not-started" else None,
                 next_action=_sampled_error_next_action(error_code),
+                probe_stage=probe_stage,
+                probe_exit_code=probe_exit_code,
+                probe_reason=probe_reason,
+                diagnostic_path=diagnostic_path,
             ),
             output_format,
         )

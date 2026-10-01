@@ -30,7 +30,7 @@ DISABLED_FEATURES = frozenset(
 # Codex may force its unified-exec backend on. Disabling ``shell_tool`` prevents that
 # backend from being registered as a model tool, which is the safety-relevant fact.
 
-POLICY_VERSION = "codex-final-response-no-actions-v1"
+POLICY_VERSION = "codex-final-response-isolated-discovery-v2"
 RUNNER_VERSION = "1"
 CAPTURE_TYPE = "logical-session"
 CONTEXT_OPERATION = "dependency-closed-removal"

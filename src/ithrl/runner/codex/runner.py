@@ -428,7 +428,12 @@ def _outcome_error(
     code = (
         RunnerErrorCode.SAFETY
         if outcome.error_code
-        in {"action-requested", "unintercepted-action", "unsupported-server-request"}
+        in {
+            "action-requested",
+            "remote-control-active",
+            "unintercepted-action",
+            "unsupported-server-request",
+        }
         else RunnerErrorCode.PROTOCOL
     )
     acceptance = ProviderAcceptanceState(outcome.provider_acceptance)

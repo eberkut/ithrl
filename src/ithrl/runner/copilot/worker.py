@@ -123,7 +123,7 @@ def _validate_request(request: dict[str, object]) -> None:
         raise WorkerError("Copilot worker request has invalid fields")
 
 
-def _import_session(executable: Path, request: dict[str, object]) -> str:
+def _import_session(executable: Path, request: dict[str, object]) -> str | None:
     semantic_session = cast(str, request["semanticSession"])
     workspace = cast(str, request["workspace"])
     argv = (
@@ -217,7 +217,7 @@ def _stop_import(process: subprocess.Popen[bytes]) -> None:
             process.stderr.close()
 
 
-def _parse_import_output(output: bytes) -> str:
+def _parse_import_output(output: bytes) -> str | None:
     try:
         document = json.loads(
             output,
@@ -236,13 +236,21 @@ def _parse_import_output(output: bytes) -> str:
         or len(session_id) > 256
     ):
         raise WorkerError("Copilot semantic session import returned invalid output")
+    imported = document.get("imported")
+    if isinstance(imported, dict) and all(
+        type(imported.get(name)) is int and imported[name] == 0
+        for name in ("messages", "toolCalls", "toolResults", "attachments")
+    ):
+        # Metadata-only imports have no native events and cannot be resumed.
+        # Only this explicitly empty history may start a fresh controlled session.
+        return None
     return session_id
 
 
 def _resume_session(
     executable: Path,
     request: dict[str, object],
-    session_id: str,
+    session_id: str | None,
 ) -> int:
     flags = cast(list[str], request["commandFlags"])
     model = cast(str, request["model"])
@@ -253,8 +261,7 @@ def _resume_session(
         *flags,
         "--model",
         model,
-        "--resume",
-        session_id,
+        *(("--resume", session_id) if session_id is not None else ()),
     )
     try:
         process = subprocess.Popen(  # noqa: S603 - validated executable and fixed arguments

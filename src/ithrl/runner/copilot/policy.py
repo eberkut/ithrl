@@ -17,6 +17,7 @@ PROTOCOL_VERSION = "copilot-jsonl-v1"
 PROVIDER = "github-copilot"
 ENDPOINT = "copilot://managed"
 POLICY_VERSION = "copilot-controlled-session-v1"
+DISCOVERY_POLICY_VERSION = "copilot-isolated-discovery-v1"
 
 # Copilot treats --available-tools as an allowlist. A name which cannot identify a
 # built-in or configured tool therefore gives the final-response profile an empty
@@ -92,6 +93,7 @@ def policy_deviation(target: CopilotTarget) -> str:
 __all__ = [
     "CAPTURE_TYPE",
     "CONTEXT_OPERATION",
+    "DISCOVERY_POLICY_VERSION",
     "ENDPOINT",
     "MATERIALIZATION",
     "NO_TOOLS_SENTINEL",

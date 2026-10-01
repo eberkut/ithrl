@@ -76,6 +76,8 @@ if arguments[:3] == ["--no-auto-update", "sessions", "import"]:
         "code": os.environ.get("ITHRL_IMPORT_CODE", "session_imported"),
         "sessionId": os.environ.get("ITHRL_SESSION_ID", "session-123"),
     }
+    if "ITHRL_IMPORTED_COUNTS" in os.environ:
+        document["imported"] = json.loads(os.environ["ITHRL_IMPORTED_COUNTS"])
     stdin = None
 else:
     behavior = "resume"
@@ -133,6 +135,82 @@ def test_main_imports_then_resumes_with_fixed_direct_arguments_and_private_stdin
         },
     ]
     assert "private trigger" not in json.dumps(_records(record)[1]["argv"])
+
+
+def test_explicit_empty_import_starts_a_fresh_controlled_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request, _, _ = _write_request(tmp_path)
+    executable = _fake_copilot(tmp_path)
+    record = tmp_path / "record.jsonl"
+    monkeypatch.setenv("ITHRL_WORKER_RECORD", os.fspath(record))
+    monkeypatch.setenv(
+        "ITHRL_IMPORTED_COUNTS",
+        json.dumps(dict.fromkeys(("messages", "toolCalls", "toolResults", "attachments"), 0)),
+    )
+
+    assert worker.main([os.fspath(request), os.fspath(executable)]) == 0
+
+    calls = _records(record)
+    assert len(calls) == 2
+    assert calls[1] == {
+        "argv": ["--output-format=json", "--stream=off", "--model", "fixture-model"],
+        "stdin": "private trigger\n",
+    }
+
+
+@pytest.mark.parametrize("field", ["messages", "toolCalls", "toolResults", "attachments"])
+@pytest.mark.parametrize("value", [1, False, "0", None])
+def test_import_counts_must_be_explicit_integer_zeros_for_fresh_session(
+    field: str, value: object
+) -> None:
+    imported: dict[str, object] = dict.fromkeys(
+        ("messages", "toolCalls", "toolResults", "attachments"), 0
+    )
+    imported[field] = value
+    receipt = {
+        "ok": True,
+        "code": "session_imported",
+        "sessionId": "session-123",
+        "imported": imported,
+    }
+
+    assert worker._parse_import_output(json.dumps(receipt).encode()) == "session-123"
+
+
+@pytest.mark.parametrize("imported", [{}, {"messages": 0, "toolCalls": 0, "toolResults": 0}, None])
+def test_incomplete_counts_do_not_select_empty_history_fallback(imported: object) -> None:
+    receipt = {
+        "ok": True,
+        "code": "session_imported",
+        "sessionId": "session-123",
+        "imported": imported,
+    }
+
+    assert worker._parse_import_output(json.dumps(receipt).encode()) == "session-123"
+
+
+def test_nonempty_import_resume_failure_does_not_start_a_fresh_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request, _, _ = _write_request(tmp_path)
+    executable = _fake_copilot(tmp_path)
+    record = tmp_path / "record.jsonl"
+    monkeypatch.setenv("ITHRL_WORKER_RECORD", os.fspath(record))
+    monkeypatch.setenv(
+        "ITHRL_IMPORTED_COUNTS", '{"messages":1,"toolCalls":0,"toolResults":0,"attachments":0}'
+    )
+    monkeypatch.setenv("ITHRL_RESUME_RETURN_CODE", "23")
+
+    assert worker.main([os.fspath(request), os.fspath(executable)]) == 23
+
+    calls = _records(record)
+    assert len(calls) == 2
+    arguments = calls[1]["argv"]
+    assert isinstance(arguments, list)
+    assert arguments[-2:] == ["--resume", "session-123"]
 
 
 @pytest.mark.parametrize(

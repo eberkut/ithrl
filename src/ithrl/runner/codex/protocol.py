@@ -317,8 +317,25 @@ def _handle_server_request(
 
 
 def _validate_notification(method: str, params: dict[str, object], state: _SessionState) -> None:
+    if method == "remoteControl/status/changed":
+        if params.get("status") != "disabled":
+            raise CodexProtocolError(
+                "remote-control-active", "Codex remote control is not disabled"
+            )
+        return
     if method == "thread/started":
         _validate_thread_started(params, state)
+        return
+    if method == "warning":
+        _require_identity(params, state, require_turn=False)
+        _require_string(params.get("message"), "warning notification")
+        return
+    if method == "account/updated":
+        if "authMode" not in params:
+            raise CodexProtocolError("invalid-message", "Codex account notification is invalid")
+        for field_name in ("authMode", "planType"):
+            if params.get(field_name) is not None:
+                _require_string(params[field_name], "account notification")
         return
     if method == "account/rateLimits/updated":
         if "rateLimits" not in params:

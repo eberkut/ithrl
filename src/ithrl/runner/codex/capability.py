@@ -22,6 +22,7 @@ from ithrl.runner.codex.isolation import (
     CodexIsolationError,
     CodexRuntime,
     _bubblewrap_argv,
+    _bubblewrap_boundary,
     _memory_file,
     _worker_environment,
 )
@@ -38,6 +39,7 @@ from ithrl.runner.codex.policy import (
     configuration_deviation,
     runtime_deviation,
 )
+from ithrl.runner.codex.protocol import SANDBOX_ROOT
 from ithrl.runner.codex.runtime_configuration import validate_runner_configuration
 from ithrl.runner.codex.schema import CodexSchemaError, verify_schema_bundle
 from ithrl.runner.runtime import PROCESS_CANCELLATION_GRACE_SECONDS
@@ -148,6 +150,8 @@ def detect_codex_capability(
         home = _private_directory(root / "home")
         workspace = _private_directory(root / "workspace")
         schema = _private_directory(root / "schema")
+        _private_directory(root / "runner")
+        _private_directory(root / "tmp")
         try:
             atomic_write_bytes(codex_home / "config.toml", configuration.rendered_config)
         except CaseError as error:
@@ -162,9 +166,9 @@ def detect_codex_capability(
             configuration.environment_names,
         )
         _probe_isolation_boundary(runtime, root)
-        version = _probe_version(runtime.codex, environment, workspace)
-        _verify_policy(runtime.codex, environment, workspace)
-        _generate_schema(runtime.codex, environment, workspace, schema)
+        version = _probe_version(runtime, environment, workspace)
+        _verify_policy(runtime, environment, workspace)
+        _generate_schema(runtime, environment, workspace)
         _require_bounded_schema(schema)
         try:
             protocol_digest = verify_schema_bundle(schema)
@@ -211,6 +215,7 @@ def detect_codex_capability(
             "context is reconstructed through an ephemeral app-server thread",
             "provider request and stream retries are disabled",
             "all model-returned actions are rejected",
+            "structural discovery is host-write isolated and network denied",
             f"runner policy {POLICY_VERSION}",
             configuration_deviation(configuration.public_digest),
             runtime_deviation(runtime.identity),
@@ -353,9 +358,12 @@ def _isolation_probe_cleaned(
     )
 
 
-def _probe_version(executable: Path, environment: Mapping[str, str], cwd: Path) -> str:
-    result = _run_probe((os.fspath(executable), "--version"), environment, cwd)
-    match = _VERSION.fullmatch(result.stdout.decode("utf-8", errors="strict").strip())
+def _probe_version(runtime: CodexRuntime, environment: Mapping[str, str], cwd: Path) -> str:
+    result = _run_structural_probe(runtime, ("--version",), environment, cwd)
+    try:
+        match = _VERSION.fullmatch(result.stdout.decode("utf-8", errors="strict").strip())
+    except UnicodeDecodeError:
+        match = None
     if match is None:
         raise CodexCapabilityError(
             CodexCapabilityErrorCode.UNAVAILABLE,
@@ -364,9 +372,10 @@ def _probe_version(executable: Path, environment: Mapping[str, str], cwd: Path) 
     return match.group("version")
 
 
-def _verify_policy(executable: Path, environment: Mapping[str, str], cwd: Path) -> None:
-    result = _run_probe(
-        (os.fspath(executable), "features", "list"),
+def _verify_policy(runtime: CodexRuntime, environment: Mapping[str, str], cwd: Path) -> None:
+    result = _run_structural_probe(
+        runtime,
+        ("features", "list"),
         environment,
         cwd,
         failure_code=CodexCapabilityErrorCode.UNSAFE_POLICY,
@@ -391,23 +400,68 @@ def _verify_policy(executable: Path, environment: Mapping[str, str], cwd: Path) 
 
 
 def _generate_schema(
-    executable: Path,
+    runtime: CodexRuntime,
     environment: Mapping[str, str],
     cwd: Path,
-    destination: Path,
 ) -> None:
-    _run_probe(
+    _run_structural_probe(
+        runtime,
         (
-            os.fspath(executable),
             "app-server",
             "generate-json-schema",
             "--out",
-            os.fspath(destination),
+            f"{SANDBOX_ROOT}/schema",
         ),
         environment,
         cwd,
         failure_code=CodexCapabilityErrorCode.UNSUPPORTED_PROTOCOL,
-        state_root=destination,
+    )
+
+
+def _run_structural_probe(
+    runtime: CodexRuntime,
+    arguments: tuple[str, ...],
+    environment: Mapping[str, str],
+    cwd: Path,
+    *,
+    failure_code: CodexCapabilityErrorCode = CodexCapabilityErrorCode.UNAVAILABLE,
+) -> subprocess.CompletedProcess[bytes]:
+    """Run credential-free CLI introspection inside a preventive host boundary."""
+
+    try:
+        argv = (
+            *_bubblewrap_boundary(runtime, state=cwd.parent),
+            "--remount-ro",
+            "/home",
+            "--remount-ro",
+            "/root",
+            "--remount-ro",
+            "/tmp",  # noqa: S108 - discovery scratch must stay in bounded owned state
+            "--remount-ro",
+            "/run",
+            "--unshare-net",
+            "--chdir",
+            f"{SANDBOX_ROOT}/workspace",
+            f"{SANDBOX_ROOT}/runner/codex",
+            *arguments,
+        )
+    except (CodexIsolationError, OSError, ValueError) as error:
+        raise CodexCapabilityError(
+            CodexCapabilityErrorCode.UNAVAILABLE,
+            _ISOLATION_UNAVAILABLE,
+        ) from error
+    isolated_environment = dict(environment)
+    isolated_environment.update(
+        HOME=f"{SANDBOX_ROOT}/home",
+        CODEX_HOME=f"{SANDBOX_ROOT}/codex-home",
+        TMPDIR=f"{SANDBOX_ROOT}/tmp",  # noqa: S108 - bounded private discovery scratch
+    )
+    return _run_probe(
+        argv,
+        isolated_environment,
+        cwd,
+        failure_code=failure_code,
+        state_root=cwd.parent,
     )
 
 
@@ -504,11 +558,11 @@ def _wait_for_probe(
             raise TimeoutError
         _require_bounded_probe_output(stdout.tell(), stderr.tell(), failure_code)
         if state_root is not None:
-            _require_bounded_schema(state_root)
+            _require_bounded_discovery_state(state_root)
         time.sleep(_PROBE_POLL_SECONDS)
     _require_bounded_probe_output(stdout.tell(), stderr.tell(), failure_code)
     if state_root is not None:
-        _require_bounded_schema(state_root)
+        _require_bounded_discovery_state(state_root)
     return process.wait()
 
 
@@ -579,10 +633,27 @@ def _probe_environment(
 
 
 def _require_bounded_schema(root: Path) -> None:
+    _require_bounded_tree(root, allow_symlinks=False)
+
+
+def _require_bounded_discovery_state(root: Path) -> None:
+    _require_bounded_tree(root, allow_symlinks=True)
+
+
+def _require_bounded_tree(root: Path, *, allow_symlinks: bool) -> None:
     entries = 0
     size = 0
     try:
-        for directory, names, files in root.walk(top_down=True, follow_symlinks=False):
+        if not stat.S_ISDIR(root.lstat().st_mode):
+            raise CodexCapabilityError(
+                CodexCapabilityErrorCode.UNSUPPORTED_PROTOCOL,
+                "Codex capability state root is not a directory",
+            )
+        for directory, names, files in root.walk(
+            top_down=True,
+            on_error=_raise_walk_error,
+            follow_symlinks=False,
+        ):
             entries += len(names) + len(files)
             if entries > _MAX_SCHEMA_ENTRIES:
                 raise CodexCapabilityError(
@@ -590,13 +661,20 @@ def _require_bounded_schema(root: Path) -> None:
                     "Codex app-server schema exceeds the file limit",
                 )
             for name in (*names, *files):
-                metadata = (directory / name).lstat()
+                path = directory / name
+                metadata = path.lstat()
                 if stat.S_ISLNK(metadata.st_mode):
+                    if not allow_symlinks:
+                        raise CodexCapabilityError(
+                            CodexCapabilityErrorCode.UNSUPPORTED_PROTOCOL,
+                            "Codex app-server schema contains a symbolic link",
+                        )
+                elif not (stat.S_ISREG(metadata.st_mode) or stat.S_ISDIR(metadata.st_mode)):
                     raise CodexCapabilityError(
                         CodexCapabilityErrorCode.UNSUPPORTED_PROTOCOL,
-                        "Codex app-server schema contains a symbolic link",
+                        "Codex capability state contains an unsupported file type",
                     )
-                size += metadata.st_size if stat.S_ISREG(metadata.st_mode) else 0
+                size += metadata.st_size if not stat.S_ISDIR(metadata.st_mode) else 0
                 if size > _MAX_SCHEMA_TOTAL_BYTES:
                     raise CodexCapabilityError(
                         CodexCapabilityErrorCode.UNSUPPORTED_PROTOCOL,
@@ -607,6 +685,10 @@ def _require_bounded_schema(root: Path) -> None:
             CodexCapabilityErrorCode.UNSUPPORTED_PROTOCOL,
             "Codex app-server schema could not be inspected",
         ) from error
+
+
+def _raise_walk_error(error: OSError) -> None:
+    raise error
 
 
 def _private_directory(path: Path) -> Path:

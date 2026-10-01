@@ -4,14 +4,19 @@ import os
 import stat
 import subprocess
 import sys
+import sysconfig
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import MappingProxyType
 
 import pytest
 
+import ithrl.runner.codex.isolation as isolation
 from ithrl.runner.codex.configuration import CodexProviderConfiguration
 from ithrl.runner.codex.isolation import (
+    CodexIsolationError,
     CodexRuntime,
+    _bubblewrap_boundary,
     prepare_codex_process,
     program_digest,
 )
@@ -141,3 +146,161 @@ def test_configuration_rejects_undeclared_environment_fields() -> None:
 def test_configuration_rejects_caller_selected_child_environment_name() -> None:
     with pytest.raises(ValueError, match="unsafe name"):
         _configuration(environment={"LD_PRELOAD": "private"})
+
+
+def test_current_managed_python_is_exposed_read_only_without_host_home(
+    tmp_path: Path,
+) -> None:
+    runtime = CodexRuntime(
+        codex=Path("/bin/true"),
+        bubblewrap=Path("/usr/bin/bwrap"),
+        python=Path(sys.executable),
+    )
+    root = tmp_path / "state"
+    root.mkdir()
+    (root / "runner").mkdir()
+    hidden = tmp_path / "hidden-home-marker"
+    hidden.write_text("private", encoding="utf-8")
+    script = (
+        "import json,encodings,sys; from pathlib import Path; "
+        f"assert not Path({str(hidden)!r}).exists(); "
+        "assert Path(sys.executable).is_file(); "
+        "Path('/tmp/ithrl-state/proof').write_text('ok')"
+    )
+    completed = subprocess.run(  # noqa: S603 - fixed test interpreter and synthetic code
+        (*_bubblewrap_boundary(runtime, state=root), str(runtime.python), "-c", script),
+        env={"PATH": "/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE": "1"},
+        capture_output=True,
+        timeout=5,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr.decode(errors="replace")
+    assert (root / "proof").read_text() == "ok"
+    assert hidden.read_text() == "private"
+    if runtime._python_prefix is not None:
+        assert str(runtime._python_prefix) in completed.args
+        assert sysconfig.get_path("stdlib").startswith(str(runtime._python_prefix))
+
+
+def test_refuses_unproven_python_installation_under_a_hidden_home(tmp_path: Path) -> None:
+    pretend_python = _program(tmp_path / "python")
+    with pytest.raises(CodexIsolationError, match="cannot be safely exposed"):
+        CodexRuntime(
+            codex=Path("/bin/true"),
+            bubblewrap=Path("/usr/bin/bwrap"),
+            python=pretend_python,
+        )
+
+
+def test_refuses_interpreter_prefix_overlapping_disposable_state(tmp_path: Path) -> None:
+    runtime = CodexRuntime(
+        codex=Path("/bin/true"),
+        bubblewrap=Path("/usr/bin/bwrap"),
+        python=Path(sys.executable),
+    )
+    if runtime._python_prefix is None:
+        pytest.skip("current interpreter is outside masked directories")
+    with pytest.raises(CodexIsolationError, match="overlaps disposable state"):
+        _bubblewrap_boundary(runtime, state=runtime._python_prefix / "state")
+
+
+def test_system_python_needs_no_hidden_runtime_mount() -> None:
+    runtime = CodexRuntime(
+        codex=Path("/bin/true"),
+        bubblewrap=Path("/usr/bin/bwrap"),
+        python=Path("/usr/bin/python3"),
+    )
+    assert runtime._python_prefix is None
+
+
+@pytest.mark.parametrize("parent_kind", ["temporary", "checkout"])
+@pytest.mark.parametrize("venv_symlink", [False, True])
+def test_proves_current_runtime_layout_independent_of_installed_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    parent_kind: str,
+    venv_symlink: bool,
+) -> None:
+    parent = tmp_path if parent_kind == "temporary" else Path.cwd()
+    with TemporaryDirectory(prefix=".ithrl-test-runtime-", dir=parent) as temporary:
+        prefix = Path(temporary)
+        if not prefix.is_relative_to("/tmp") and not prefix.is_relative_to("/home"):  # noqa: S108
+            pytest.skip("checkout is outside the masked runtime roots")
+        (prefix / "bin").mkdir()
+        python = _program(prefix / "bin" / "python")
+        stdlib = prefix / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}"
+        (stdlib / "encodings").mkdir(parents=True)
+        (stdlib / "encodings" / "__init__.py").write_text("", encoding="utf-8")
+        selected = python
+        if venv_symlink:
+            (prefix / "venv" / "bin").mkdir(parents=True)
+            selected = prefix / "venv" / "bin" / "python"
+            selected.symlink_to(python)
+        monkeypatch.setattr(isolation.sys, "executable", str(selected))
+        monkeypatch.setattr(isolation.sys, "base_prefix", str(prefix))
+
+        def stdlib_path(_name: str) -> str:
+            return str(stdlib)
+
+        monkeypatch.setattr(isolation.sysconfig, "get_path", stdlib_path)
+
+        runtime = CodexRuntime(
+            codex=Path("/bin/true"),
+            bubblewrap=Path("/usr/bin/bwrap"),
+            python=selected,
+        )
+        assert runtime.python == python
+        assert runtime._python_prefix == prefix
+        runtime.assert_unchanged()
+
+
+@pytest.mark.parametrize("prefix", [Path("/tmp"), Path("/home/fixture-account"), Path.home()])  # noqa: S108
+def test_refuses_broad_runtime_prefixes(
+    monkeypatch: pytest.MonkeyPatch,
+    prefix: Path,
+) -> None:
+    python = prefix / "bin" / "python"
+    stdlib = prefix / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}"
+    monkeypatch.setattr(isolation.sys, "executable", str(python))
+    monkeypatch.setattr(isolation.sys, "base_prefix", str(prefix))
+
+    def stdlib_path(_name: str) -> str:
+        return str(stdlib)
+
+    def resolved(self: Path, strict: bool = False) -> Path:
+        del strict
+        return self
+
+    def existing_file(_self: Path) -> bool:
+        return True
+
+    monkeypatch.setattr(isolation.sysconfig, "get_path", stdlib_path)
+    monkeypatch.setattr(Path, "resolve", resolved)
+    monkeypatch.setattr(Path, "is_file", existing_file)
+
+    with pytest.raises(CodexIsolationError, match="cannot be safely exposed"):
+        isolation._python_runtime_prefix(python)
+
+
+def test_refuses_stdlib_encodings_symlink_escaping_exact_runtime_prefix(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prefix = tmp_path / "runtime"
+    (prefix / "bin").mkdir(parents=True)
+    python = _program(prefix / "bin" / "python")
+    stdlib = prefix / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}"
+    (stdlib / "encodings").mkdir(parents=True)
+    outside = tmp_path / "outside.py"
+    outside.write_text("", encoding="utf-8")
+    (stdlib / "encodings" / "__init__.py").symlink_to(outside)
+    monkeypatch.setattr(isolation.sys, "executable", str(python))
+    monkeypatch.setattr(isolation.sys, "base_prefix", str(prefix))
+
+    def stdlib_path(_name: str) -> str:
+        return str(stdlib)
+
+    monkeypatch.setattr(isolation.sysconfig, "get_path", stdlib_path)
+
+    with pytest.raises(CodexIsolationError, match="cannot be safely exposed"):
+        isolation._python_runtime_prefix(python)

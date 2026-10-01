@@ -6,10 +6,12 @@ import json
 import os
 import re
 import signal
+import stat
 import subprocess
 import time
 from dataclasses import dataclass, field
 from enum import StrEnum
+from operator import itemgetter
 from pathlib import Path
 from tempfile import TemporaryDirectory, TemporaryFile
 from typing import BinaryIO
@@ -19,14 +21,18 @@ from ithrl.case.filesystem import atomic_write_bytes
 from ithrl.execution import CapabilityProfile
 from ithrl.runner.copilot.configuration import CopilotConfiguration
 from ithrl.runner.copilot.isolation import (
+    DEFAULT_DISPOSABLE_STATE_BYTES,
+    SANDBOX_ROOT,
     CopilotIsolationError,
     CopilotRuntime,
     _bubblewrap_argv,
+    _discovery_argv,
     _worker_environment,
 )
 from ithrl.runner.copilot.policy import (
     CAPTURE_TYPE,
     CONTEXT_OPERATION,
+    DISCOVERY_POLICY_VERSION,
     ENDPOINT,
     MATERIALIZATION,
     POLICY_VERSION,
@@ -45,6 +51,9 @@ _PROBE_TIMEOUT_SECONDS = 15
 _PROBE_POLL_SECONDS = 0.05
 _PROBE_TERMINATION_GRACE_SECONDS = 1.0
 _MAX_PROBE_OUTPUT_BYTES = 1024 * 1024
+_MAX_PROBE_STATE_BYTES = DEFAULT_DISPOSABLE_STATE_BYTES
+_MAX_PROBE_STATE_ENTRIES = 2_000
+_MAX_PROBE_STATE_DEPTH = 64
 _VERSION = re.compile(r"^GitHub Copilot CLI (?P<version>[^\s]+)$")
 _OPTION = re.compile(r"(?<![\w-])--[a-z][a-z0-9-]*")
 _IMPORT_OPTIONS = frozenset({"--dry-run", "--output", "--working-directory"})
@@ -101,15 +110,32 @@ class CopilotCapabilityErrorCode(StrEnum):
 class CopilotCapabilityError(RuntimeError):
     """The installed Copilot runtime cannot satisfy the runner contract."""
 
-    def __init__(self, code: CopilotCapabilityErrorCode, message: str) -> None:
+    def __init__(
+        self,
+        code: CopilotCapabilityErrorCode,
+        message: str,
+        *,
+        probe_stage: str | None = None,
+        probe_exit_code: int | None = None,
+        stdout: bytes = b"",
+        stderr: bytes = b"",
+        state_limit_details: dict[str, int | str] | None = None,
+        state_files: tuple[tuple[str, int], ...] = (),
+    ) -> None:
         super().__init__(message)
         self.code = code
+        self.probe_stage = probe_stage
+        self.probe_exit_code = probe_exit_code
+        self.stdout = stdout[:_MAX_PROBE_OUTPUT_BYTES]
+        self.stderr = stderr[:_MAX_PROBE_OUTPUT_BYTES]
+        self.state_limit_details = state_limit_details
+        self.state_files = state_files[:16]
 
 
 @dataclass(frozen=True, slots=True)
 class _CommandResult:
-    stdout: bytes
-    stderr: bytes
+    stdout: bytes = field(repr=False)
+    stderr: bytes = field(repr=False)
 
 
 def detect_copilot_capability(
@@ -123,10 +149,12 @@ def detect_copilot_capability(
     _require_runtime_unchanged(runtime)
     with TemporaryDirectory(prefix="ithrl-copilot-capability-") as temporary:
         root = Path(temporary)
-        home = _private_directory(root / "home")
+        _private_directory(root / "home")
         copilot_home = _private_directory(root / "copilot-home")
-        cache = _private_directory(root / "copilot-cache")
+        _private_directory(root / "copilot-cache")
         workspace = _private_directory(root / "workspace")
+        _private_directory(root / "runner")
+        _private_directory(root / "tmp")
         transcript = root / "session.jsonl"
         try:
             atomic_write_bytes(copilot_home / "settings.json", configuration.settings_data)
@@ -136,27 +164,43 @@ def detect_copilot_capability(
                 CopilotCapabilityErrorCode.PROBE_FAILED,
                 "Copilot capability state could not be prepared",
             ) from error
-        environment = _probe_environment(home, copilot_home, cache)
+        environment = _discovery_environment()
         _probe_isolation_boundary(runtime, root)
-        version = _probe_version(runtime.copilot, environment, workspace)
-        root_help = _probe_help(runtime.copilot, environment, workspace, ("--help",))
-        _require_root_options(root_help, configuration, target)
-        permission_help = _probe_help(
-            runtime.copilot,
+        version = _probe_version(runtime, environment, workspace)
+        root_help, root_result = _probe_help(
+            runtime, environment, workspace, ("--help",), probe_stage="root-help"
+        )
+        try:
+            _require_root_options(root_help, configuration, target)
+        except CopilotCapabilityError as error:
+            _attach_result(error, root_result, "root-help")
+            raise
+        permission_help, permission_result = _probe_help(
+            runtime,
             environment,
             workspace,
             ("help", "permissions"),
+            probe_stage="permissions-help",
         )
-        _require_permission_contract(permission_help)
-        import_help = _probe_help(
-            runtime.copilot,
+        try:
+            _require_permission_contract(permission_help)
+        except CopilotCapabilityError as error:
+            _attach_result(error, permission_result, "permissions-help")
+            raise
+        import_help, import_result = _probe_help(
+            runtime,
             environment,
             workspace,
             ("sessions", "import", "--help"),
+            probe_stage="import-help",
         )
-        _require_import_options(import_help)
+        try:
+            _require_import_options(import_help)
+        except CopilotCapabilityError as error:
+            _attach_result(error, import_result, "import-help")
+            raise
         _probe_semantic_import(
-            runtime.copilot,
+            runtime,
             environment,
             workspace,
             transcript,
@@ -192,6 +236,10 @@ def _profile(
         "remote session sync and export are disabled",
         policy_deviation(target),
         f"runner policy {POLICY_VERSION}",
+        f"credential-free structural discovery is filesystem-isolated and network-denied; "
+        f"discovery policy {DISCOVERY_POLICY_VERSION}",
+        f"structural discovery state is bounded to {_MAX_PROBE_STATE_BYTES // (1024 * 1024)} MiB "
+        f"and {_MAX_PROBE_STATE_ENTRIES:,} entries",
         f"configuration {configuration.public_digest}",
         f"runtime executables {runtime.identity}",
         "native event and target behavior require live calibration before application selection",
@@ -239,6 +287,7 @@ def _profile(
 def _probe_isolation_boundary(runtime: CopilotRuntime, root: Path) -> None:
     probe_root: Path | None = None
     protected_root: Path | None = None
+    result: _CommandResult | None = None
     try:
         with (
             TemporaryDirectory(prefix="isolation-", dir=root) as temporary,
@@ -253,24 +302,34 @@ def _probe_isolation_boundary(runtime: CopilotRuntime, root: Path) -> None:
                 probe_root,
                 protected_root,
             )
-            _run_probe(
+            result = _run_probe(
                 _bubblewrap_argv(
                     runtime,
                     state=probe_root,
                     worker=worker.name,
+                    network_denied=True,
                 ),
-                _worker_environment({}),
+                _discovery_environment(),
                 workspace,
                 failure_code=CopilotCapabilityErrorCode.UNAVAILABLE,
+                state_root=probe_root,
+                probe_stage="isolation",
             )
             _verify_isolation_probe(workspace, protected_root)
-    except CopilotCapabilityError:
+    except CopilotCapabilityError as error:
+        error.probe_stage = "isolation"
+        if result is not None:
+            _attach_result(error, result, "isolation")
         raise
     except (CaseError, CopilotIsolationError, OSError, ValueError) as error:
-        raise CopilotCapabilityError(
+        refusal = CopilotCapabilityError(
             CopilotCapabilityErrorCode.UNAVAILABLE,
             _ISOLATION_UNAVAILABLE,
-        ) from error
+            probe_stage="isolation",
+        )
+        if result is not None:
+            _attach_result(refusal, result, "isolation")
+        raise refusal from error
     if (
         probe_root is None
         or protected_root is None
@@ -280,6 +339,7 @@ def _probe_isolation_boundary(runtime: CopilotRuntime, root: Path) -> None:
         raise CopilotCapabilityError(
             CopilotCapabilityErrorCode.UNAVAILABLE,
             "Copilot isolation runtime could not clean up its temporary state",
+            probe_stage="isolation",
         )
 
 
@@ -288,7 +348,7 @@ def _prepare_isolation_probe(
     protected_root: Path,
 ) -> tuple[Path, Path]:
     workspace = _private_directory(probe_root / "workspace")
-    for name in ("home", "copilot-home", "copilot-cache", "runner"):
+    for name in ("home", "copilot-home", "copilot-cache", "runner", "tmp"):
         _private_directory(probe_root / name)
     worker = probe_root / "worker"
     request = probe_root / "request.json"
@@ -318,14 +378,18 @@ def _verify_isolation_probe(workspace: Path, protected_root: Path) -> None:
         )
 
 
-def _probe_version(executable: Path, environment: dict[str, str], cwd: Path) -> str:
-    result = _run_probe((os.fspath(executable), "--version"), environment, cwd)
+def _probe_version(runtime: CopilotRuntime, environment: dict[str, str], cwd: Path) -> str:
+    result = _run_discovery(runtime, ("--version",), environment, cwd, probe_stage="version")
     try:
         text = result.stdout.decode("utf-8").strip()
     except UnicodeError as error:
         raise CopilotCapabilityError(
             CopilotCapabilityErrorCode.UNSUPPORTED_PROTOCOL,
             "Copilot returned an invalid version",
+            probe_stage="version",
+            probe_exit_code=0,
+            stdout=result.stdout,
+            stderr=result.stderr,
         ) from error
     lines = text.splitlines()
     match = _VERSION.fullmatch(lines[0]) if lines else None
@@ -333,23 +397,33 @@ def _probe_version(executable: Path, environment: dict[str, str], cwd: Path) -> 
         raise CopilotCapabilityError(
             CopilotCapabilityErrorCode.UNSUPPORTED_PROTOCOL,
             "Copilot returned an unsupported version shape",
+            probe_stage="version",
+            probe_exit_code=0,
+            stdout=result.stdout,
+            stderr=result.stderr,
         )
     return match.group("version").removesuffix(".")
 
 
 def _probe_help(
-    executable: Path,
+    runtime: CopilotRuntime,
     environment: dict[str, str],
     cwd: Path,
     arguments: tuple[str, ...],
-) -> str:
-    result = _run_probe((os.fspath(executable), *arguments), environment, cwd)
+    *,
+    probe_stage: str,
+) -> tuple[str, _CommandResult]:
+    result = _run_discovery(runtime, arguments, environment, cwd, probe_stage=probe_stage)
     try:
-        return result.stdout.decode("utf-8")
+        return result.stdout.decode("utf-8"), result
     except UnicodeError as error:
         raise CopilotCapabilityError(
             CopilotCapabilityErrorCode.UNSUPPORTED_PROTOCOL,
             "Copilot returned invalid help output",
+            probe_stage=probe_stage,
+            probe_exit_code=0,
+            stdout=result.stdout,
+            stderr=result.stderr,
         ) from error
 
 
@@ -395,25 +469,26 @@ def _help_options(help_text: str) -> frozenset[str]:
 
 
 def _probe_semantic_import(
-    executable: Path,
+    runtime: CopilotRuntime,
     environment: dict[str, str],
     cwd: Path,
     transcript: Path,
 ) -> None:
-    result = _run_probe(
+    result = _run_discovery(
+        runtime,
         (
-            os.fspath(executable),
             "sessions",
             "import",
             "--dry-run",
             "--output",
             "json",
             "--working-directory",
-            os.fspath(cwd),
-            os.fspath(transcript),
+            f"{SANDBOX_ROOT}/workspace",
+            f"{SANDBOX_ROOT}/{transcript.name}",
         ),
         environment,
         cwd,
+        probe_stage="semantic-import",
     )
     try:
         document = json.loads(result.stdout)
@@ -421,12 +496,46 @@ def _probe_semantic_import(
         raise CopilotCapabilityError(
             CopilotCapabilityErrorCode.UNSUPPORTED_PROTOCOL,
             "Copilot semantic import returned invalid output",
+            probe_stage="semantic-import",
+            probe_exit_code=0,
+            stdout=result.stdout,
+            stderr=result.stderr,
         ) from error
     if not isinstance(document, dict) or document.get("ok") is not True:
         raise CopilotCapabilityError(
             CopilotCapabilityErrorCode.UNSUPPORTED_PROTOCOL,
             "Copilot semantic session import is unsupported",
+            probe_stage="semantic-import",
+            probe_exit_code=0,
+            stdout=result.stdout,
+            stderr=result.stderr,
         )
+
+
+def _run_discovery(
+    runtime: CopilotRuntime,
+    arguments: tuple[str, ...],
+    environment: dict[str, str],
+    cwd: Path,
+    *,
+    probe_stage: str,
+) -> _CommandResult:
+    try:
+        argv = _discovery_argv(runtime, state=cwd.parent, arguments=arguments)
+    except (CopilotIsolationError, OSError, ValueError) as error:
+        raise CopilotCapabilityError(
+            CopilotCapabilityErrorCode.UNAVAILABLE,
+            _ISOLATION_UNAVAILABLE,
+            probe_stage=probe_stage,
+        ) from error
+    return _run_probe(argv, environment, cwd, state_root=cwd.parent, probe_stage=probe_stage)
+
+
+def _attach_result(error: CopilotCapabilityError, result: _CommandResult, stage: str) -> None:
+    error.probe_stage = stage
+    error.probe_exit_code = 0
+    error.stdout = result.stdout[:_MAX_PROBE_OUTPUT_BYTES]
+    error.stderr = result.stderr[:_MAX_PROBE_OUTPUT_BYTES]
 
 
 def _run_probe(
@@ -435,10 +544,14 @@ def _run_probe(
     cwd: Path,
     *,
     failure_code: CopilotCapabilityErrorCode = CopilotCapabilityErrorCode.PROBE_FAILED,
+    state_root: Path | None = None,
+    probe_stage: str | None = None,
 ) -> _CommandResult:
     process: subprocess.Popen[bytes] | None = None
     with TemporaryFile() as stdout, TemporaryFile() as stderr:
         try:
+            if state_root is not None:
+                _require_bounded_probe_state(state_root)
             process = subprocess.Popen(  # noqa: S603 - validated executable and fixed arguments
                 argv,
                 cwd=cwd,
@@ -448,34 +561,35 @@ def _run_probe(
                 stderr=stderr,
                 start_new_session=True,
             )
-            returncode = _wait_for_probe(process, stdout, stderr, failure_code)
-        except CopilotCapabilityError:
+            returncode = _wait_for_probe(process, stdout, stderr, failure_code, state_root)
+        except CopilotCapabilityError as error:
+            refusal = error
             if process is not None and not _stop_probe_group(process):
-                raise CopilotCapabilityError(
+                refusal = CopilotCapabilityError(
                     failure_code,
                     "Copilot capability probe processes could not be stopped",
-                ) from None
-            raise
+                )
+            _capture_probe_error(refusal, process, stdout, stderr, probe_stage)
+            raise refusal from None
         except TimeoutError:
+            message = "Copilot capability probe timed out"
             if process is not None and not _stop_probe_group(process):
-                raise CopilotCapabilityError(
-                    failure_code,
-                    "Copilot capability probe processes could not be stopped",
-                ) from None
-            raise CopilotCapabilityError(
-                failure_code,
-                "Copilot capability probe timed out",
-            ) from None
+                message = "Copilot capability probe processes could not be stopped"
+            refusal = CopilotCapabilityError(failure_code, message)
+            _capture_probe_error(refusal, process, stdout, stderr, probe_stage)
+            raise refusal from None
         except OSError as error:
-            if process is not None and not _stop_probe_group(process):
-                raise CopilotCapabilityError(
-                    failure_code,
-                    "Copilot capability probe processes could not be stopped",
-                ) from error
-            raise CopilotCapabilityError(
+            refusal = CopilotCapabilityError(
                 CopilotCapabilityErrorCode.UNAVAILABLE,
                 "Copilot capability probe could not start",
-            ) from error
+            )
+            if process is not None and not _stop_probe_group(process):
+                refusal = CopilotCapabilityError(
+                    failure_code,
+                    "Copilot capability probe processes could not be stopped",
+                )
+            _capture_probe_error(refusal, process, stdout, stderr, probe_stage)
+            raise refusal from error
         except BaseException:
             if process is not None:
                 _stop_probe_group(process)
@@ -487,17 +601,46 @@ def _run_probe(
                 if stopped
                 else "Copilot capability probe processes could not be stopped"
             )
-            raise CopilotCapabilityError(failure_code, message)
-        stdout.seek(0)
-        stderr.seek(0)
-        output = stdout.read(_MAX_PROBE_OUTPUT_BYTES + 1)
-        errors = stderr.read(_MAX_PROBE_OUTPUT_BYTES + 1)
-    if returncode != 0:
-        raise CopilotCapabilityError(
-            failure_code,
-            "Copilot capability probe failed",
-        )
+            refusal = CopilotCapabilityError(failure_code, message)
+            _capture_probe_error(refusal, process, stdout, stderr, probe_stage)
+            raise refusal
+        if returncode != 0:
+            refusal = CopilotCapabilityError(failure_code, "Copilot capability probe failed")
+            _capture_probe_error(refusal, process, stdout, stderr, probe_stage)
+            raise refusal
+        try:
+            stdout.seek(0)
+            stderr.seek(0)
+            output = stdout.read(_MAX_PROBE_OUTPUT_BYTES)
+            errors = stderr.read(_MAX_PROBE_OUTPUT_BYTES)
+        except (OSError, ValueError) as error:
+            refusal = CopilotCapabilityError(
+                failure_code,
+                "Copilot capability probe output could not be read",
+            )
+            _capture_probe_error(refusal, process, stdout, stderr, probe_stage)
+            raise refusal from error
     return _CommandResult(stdout=output, stderr=errors)
+
+
+def _capture_probe_error(
+    error: CopilotCapabilityError,
+    process: subprocess.Popen[bytes] | None,
+    stdout: BinaryIO,
+    stderr: BinaryIO,
+    probe_stage: str | None,
+) -> None:
+    """Retain only bounded private bytes after the process termination attempt."""
+
+    error.probe_stage = probe_stage
+    error.probe_exit_code = process.returncode if process is not None else None
+    for name, stream in (("stdout", stdout), ("stderr", stderr)):
+        try:
+            stream.seek(0)
+            content = stream.read(_MAX_PROBE_OUTPUT_BYTES)
+        except (OSError, ValueError):
+            content = b""
+        setattr(error, name, content)
 
 
 def _wait_for_probe(
@@ -505,6 +648,7 @@ def _wait_for_probe(
     stdout: BinaryIO,
     stderr: BinaryIO,
     failure_code: CopilotCapabilityErrorCode,
+    state_root: Path | None,
 ) -> int:
     deadline = time.monotonic() + _PROBE_TIMEOUT_SECONDS
     while process.poll() is None:
@@ -515,13 +659,97 @@ def _wait_for_probe(
                 failure_code,
                 "Copilot capability probe exceeded its output limit",
             )
+        if state_root is not None:
+            _require_bounded_probe_state(state_root)
         time.sleep(_PROBE_POLL_SECONDS)
     if stdout.tell() > _MAX_PROBE_OUTPUT_BYTES or stderr.tell() > _MAX_PROBE_OUTPUT_BYTES:
         raise CopilotCapabilityError(
             failure_code,
             "Copilot capability probe exceeded its output limit",
         )
+    if state_root is not None:
+        _require_bounded_probe_state(state_root)
     return process.wait()
+
+
+def _require_bounded_probe_state(root: Path) -> None:
+    """Inspect bounded disposable state using no-follow directory descriptors."""
+
+    entries = 0
+    size = 0
+    files: list[tuple[str, int]] = []
+    if not all(hasattr(os, name) for name in ("O_DIRECTORY", "O_NOFOLLOW")):
+        raise CopilotCapabilityError(
+            CopilotCapabilityErrorCode.UNAVAILABLE,
+            "Copilot capability state inspection is unavailable",
+        )
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+
+    def inspect(descriptor: int, depth: int, relative: Path) -> None:
+        nonlocal entries, size
+        with os.scandir(descriptor) as iterator:
+            for entry in iterator:
+                entries += 1
+                if entries > _MAX_PROBE_STATE_ENTRIES:
+                    raise CopilotCapabilityError(
+                        CopilotCapabilityErrorCode.PROBE_FAILED,
+                        "Copilot capability state exceeded its entry limit",
+                    )
+                metadata = entry.stat(follow_symlinks=False)
+                if stat.S_ISDIR(metadata.st_mode):
+                    if depth >= _MAX_PROBE_STATE_DEPTH:
+                        raise CopilotCapabilityError(
+                            CopilotCapabilityErrorCode.PROBE_FAILED,
+                            "Copilot capability state exceeded its nesting limit",
+                        )
+                    child = os.open(entry.name, flags, dir_fd=descriptor)
+                    try:
+                        opened = os.fstat(child)
+                        if (opened.st_dev, opened.st_ino) != (metadata.st_dev, metadata.st_ino):
+                            raise CopilotCapabilityError(
+                                CopilotCapabilityErrorCode.PROBE_FAILED,
+                                "Copilot capability state changed during inspection",
+                            )
+                        inspect(child, depth + 1, relative / entry.name)
+                    finally:
+                        os.close(child)
+                elif stat.S_ISREG(metadata.st_mode):
+                    size += metadata.st_size
+                    files.append(((relative / entry.name).as_posix(), metadata.st_size))
+                    if size > _MAX_PROBE_STATE_BYTES:
+                        raise CopilotCapabilityError(
+                            CopilotCapabilityErrorCode.PROBE_FAILED,
+                            "Copilot capability state exceeded its byte limit",
+                            state_limit_details={
+                                "limit_bytes": _MAX_PROBE_STATE_BYTES,
+                                "accounted_bytes": size,
+                                "file_path": (relative / entry.name).as_posix(),
+                                "file_bytes": metadata.st_size,
+                            },
+                            state_files=tuple(sorted(files, key=itemgetter(1), reverse=True)[:16]),
+                        )
+                else:
+                    raise CopilotCapabilityError(
+                        CopilotCapabilityErrorCode.PROBE_FAILED,
+                        "Copilot capability state contains an unsafe entry",
+                    )
+
+    try:
+        descriptor = os.open(root, flags)
+        try:
+            if stat.S_IMODE(os.fstat(descriptor).st_mode) != 0o700:
+                raise CopilotCapabilityError(
+                    CopilotCapabilityErrorCode.PROBE_FAILED,
+                    "Copilot capability state lost its private permissions",
+                )
+            inspect(descriptor, 0, Path())
+        finally:
+            os.close(descriptor)
+    except OSError as error:
+        raise CopilotCapabilityError(
+            CopilotCapabilityErrorCode.PROBE_FAILED,
+            "Copilot capability state could not be inspected",
+        ) from error
 
 
 def _stop_probe_group(process: subprocess.Popen[bytes]) -> bool:
@@ -560,16 +788,10 @@ def _probe_group_exists(process_group: int) -> bool:
     return True
 
 
-def _probe_environment(home: Path, copilot_home: Path, cache: Path) -> dict[str, str]:
+def _discovery_environment() -> dict[str, str]:
     return {
-        "COPILOT_AUTO_UPDATE": "false",
-        "COPILOT_CACHE_HOME": os.fspath(cache),
-        "COPILOT_HOME": os.fspath(copilot_home),
-        "HOME": os.fspath(home),
-        "LANG": "C.UTF-8",
-        "LC_ALL": "C.UTF-8",
-        "NO_COLOR": "1",
-        "PATH": "/usr/bin:/bin",
+        **_worker_environment({}),
+        "TMPDIR": f"{SANDBOX_ROOT}/tmp",  # noqa: S108 - bounded private state
     }
 
 

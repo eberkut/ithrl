@@ -40,10 +40,8 @@ def parse_output(output: bytes, *, expected: ExpectedOutcome) -> CopilotProtocol
     for index, event in enumerate(events):
         event_type = cast(str, event["type"])
         if state.denial_seen:
-            raise CopilotProtocolError(
-                "continued-after-denial",
-                "Copilot continued after the denied action",
-            )
+            _handle_post_denial_event(state, event_type, event_data(event))
+            continue
         _handle_event(state, event_type, event)
         if event_type == "result" and index != len(events) - 1:
             raise CopilotProtocolError(
@@ -51,6 +49,32 @@ def parse_output(output: bytes, *, expected: ExpectedOutcome) -> CopilotProtocol
                 "Copilot emitted events after its result",
             )
     return _finish(state)
+
+
+def _handle_post_denial_event(
+    state: ProtocolState, event_type: str, data: dict[str, object]
+) -> None:
+    # Bounded draining can retain lifecycle records emitted during group shutdown.
+    # They do not invalidate the observed denial or prove another provider call.
+    if event_type == "assistant.turn_end" and not state.turn_ended:
+        require_matching_turn(state, data)
+        state.turn_ended = True
+        return
+    if event_type == "assistant.turn_start" and state.turn_ended and not state.continuation_started:
+        required_string(data, "turnId", max_length=MAX_ID_LENGTH)
+        state.continuation_started = True
+        return
+    if event_type == "session.background_tasks_changed" and not data:
+        return
+    if event_type == "model.call_final_result" and not state.turn_ended:
+        _handle_call_final_result(state, data)
+        return
+    if event_type == "session.usage_checkpoint" and state.turn_ended:
+        return
+    raise CopilotProtocolError(
+        "continued-after-denial",
+        "Copilot continued after the denied action",
+    )
 
 
 def is_denied_tool_completion(line: bytes) -> bool:
@@ -254,6 +278,22 @@ def _handle_turn_end(state: ProtocolState, data: dict[str, object]) -> None:
     state.turn_ended = True
 
 
+def _handle_call_final_result(state: ProtocolState, data: dict[str, object]) -> None:
+    if not state.call_finished or state.turn_ended:
+        invalid_sequence()
+    bind_model(state, required_string(data, "model", max_length=MAX_MODEL_LENGTH))
+    if data.get("result") != "success" or data.get("isByok") is not False:
+        raise CopilotProtocolError(
+            "provider-failure", "Copilot did not report a successful managed provider call"
+        )
+
+
+def _handle_usage_checkpoint(state: ProtocolState, _data: dict[str, object]) -> None:
+    if not state.turn_ended or state.idle_seen:
+        invalid_sequence()
+    # Session billing/cache telemetry is not per-call token or provider accounting.
+
+
 def _handle_idle(state: ProtocolState, _data: dict[str, object]) -> None:
     if state.expected != "final-response" or not state.turn_ended or state.idle_seen:
         invalid_sequence()
@@ -327,12 +367,14 @@ _EVENT_HANDLERS: dict[str, Callable[[ProtocolState, dict[str, object]], None]] =
     "user.message": _handle_user_message,
     "model.call_start": _handle_call_start,
     "model.call_finished": _handle_call_finished,
+    "model.call_final_result": _handle_call_final_result,
     "assistant.turn_start": _handle_turn_start,
     "assistant.usage": _handle_usage,
     "assistant.message": _handle_message,
     "tool.execution_start": _handle_tool_start,
     "tool.execution_complete": _handle_tool_complete,
     "session.background_tasks_changed": _handle_background_tasks,
+    "session.usage_checkpoint": _handle_usage_checkpoint,
     "assistant.turn_end": _handle_turn_end,
     "assistant.idle": _handle_idle,
 }

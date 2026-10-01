@@ -169,6 +169,73 @@ def test_parse_final_response_preserves_reported_token_usage() -> None:
     )
 
 
+@pytest.mark.parametrize("usage", [None, {"model": MODEL, "inputTokens": 100, "outputTokens": 12}])
+def test_optional_completion_and_session_telemetry_do_not_add_calls_or_token_usage(
+    usage: Event | None,
+) -> None:
+    events = _final_events(usage=usage)
+    events.insert(
+        -3,
+        _event("model.call_final_result", {"model": MODEL, "result": "success", "isByok": False}),
+    )
+    events.insert(
+        -2,
+        _event(
+            "session.usage_checkpoint",
+            {"premiumRequests": 10, "inputTokens": 999, "outputTokens": 999, "modelCacheState": []},
+        ),
+    )
+
+    outcome = parse_output(_jsonl(events), expected="final-response")
+
+    assert outcome.provider_calls_started == outcome.provider_calls_completed == 1
+    assert outcome.usage == (TokenUsage(input_tokens=100, output_tokens=12) if usage else None)
+    assert outcome.final_text == FINAL_TEXT
+
+
+@pytest.mark.parametrize(
+    ("fields", "code"),
+    [
+        ({"model": "different-model", "result": "success", "isByok": False}, "model-mismatch"),
+        ({"model": MODEL, "result": "failure", "isByok": False}, "provider-failure"),
+        ({"model": MODEL, "result": "success", "isByok": True}, "provider-failure"),
+    ],
+)
+def test_optional_call_completion_cannot_override_model_or_provider_evidence(
+    fields: Event, code: str
+) -> None:
+    events = _final_events()
+    events.insert(-3, _event("model.call_final_result", fields))
+
+    with pytest.raises(CopilotProtocolError) as raised:
+        parse_output(_jsonl(events), expected="final-response")
+
+    assert raised.value.code == code
+
+
+@pytest.mark.parametrize(
+    ("event_type", "position"),
+    [
+        ("model.call_final_result", len(_prefix()) - 1),
+        ("model.call_final_result", -2),
+        ("session.usage_checkpoint", -3),
+        ("session.usage_checkpoint", -1),
+    ],
+)
+def test_optional_telemetry_requires_its_valid_lifecycle_position(
+    event_type: str, position: int
+) -> None:
+    events = _final_events()
+    events.insert(
+        position, _event(event_type, {"model": MODEL, "result": "success", "isByok": False})
+    )
+
+    with pytest.raises(CopilotProtocolError) as raised:
+        parse_output(_jsonl(events), expected="final-response")
+
+    assert raised.value.code == "invalid-sequence"
+
+
 def test_parse_shell_action_requires_matching_denied_execution() -> None:
     outcome = parse_output(_jsonl(_shell_events()), expected="shell-action")
 
@@ -304,13 +371,56 @@ def test_successful_tool_execution_is_never_a_denied_action() -> None:
     assert raised.value.code == "action-not-denied"
 
 
-def test_any_event_after_denial_is_rejected_as_continuation() -> None:
+@pytest.mark.parametrize(
+    "event_type", ["model.call_start", "tool.execution_start", "assistant.message"]
+)
+def test_provider_call_or_action_after_denial_is_rejected_as_continuation(event_type: str) -> None:
     events = [
         *_shell_events(),
-        _event("model.call_start", {"turnId": TURN_ID, "model": MODEL}),
+        _event(event_type, {"turnId": TURN_ID, "model": MODEL}),
     ]
 
     with pytest.raises(CopilotProtocolError, match="continued") as raised:
+        parse_output(_jsonl(events), expected="shell-action")
+
+    assert raised.value.code == "continued-after-denial"
+
+
+def test_shutdown_lifecycle_after_denial_preserves_the_observed_action() -> None:
+    events = [
+        *_shell_events(),
+        _event("model.call_final_result", {"model": MODEL, "result": "success", "isByok": False}),
+        _event("assistant.turn_end", {"turnId": TURN_ID}),
+        _event("session.usage_checkpoint", {"premiumRequests": 10}),
+        _event("session.background_tasks_changed", {}),
+        _event("assistant.turn_start", {"turnId": "continuation-turn"}),
+    ]
+
+    result = parse_output(_jsonl(events), expected="shell-action")
+
+    assert result.actions_requested == result.actions_denied == 1
+    assert result.actions_executed == 0
+    assert result.provider_calls_started == result.provider_calls_completed == 1
+
+
+def test_shutdown_turn_end_must_match_the_selected_turn() -> None:
+    events = [*_shell_events(), _event("assistant.turn_end", {"turnId": "different-turn"})]
+
+    with pytest.raises(CopilotProtocolError) as raised:
+        parse_output(_jsonl(events), expected="shell-action")
+
+    assert raised.value.code == "turn-mismatch"
+
+
+def test_multiple_continuation_turns_after_denial_are_rejected() -> None:
+    events = [
+        *_shell_events(),
+        _event("assistant.turn_end", {"turnId": TURN_ID}),
+        _event("assistant.turn_start", {"turnId": "continuation-turn"}),
+        _event("assistant.turn_start", {"turnId": "another-turn"}),
+    ]
+
+    with pytest.raises(CopilotProtocolError) as raised:
         parse_output(_jsonl(events), expected="shell-action")
 
     assert raised.value.code == "continued-after-denial"

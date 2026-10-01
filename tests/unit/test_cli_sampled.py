@@ -250,6 +250,7 @@ def test_outcomes_have_truthful_accounting_and_only_safe_continuations(
     summary = SimpleNamespace(
         provider_calls_started=2,
         provider_calls_may_have_started=2,
+        provider_calls_possible=0,
         stop_reason=stop_reason,
         outcome=outcome,
         observations_recorded=2 if remaining else 3,
@@ -399,12 +400,16 @@ def test_human_dry_run_distinguishes_probe_from_provider_calls(
         service.assert_not_called()
 
 
-@pytest.mark.parametrize("accounted", [None, 7])
+@pytest.mark.parametrize(
+    ("accounted", "may_have_started", "possible"), [(None, 7, 1), (7, 7, 0), (2, 2, 1)]
+)
 def test_ambiguous_or_overbound_summary_cannot_be_rendered_as_known_calls(
     prepared_case: tuple[CaseWorkspace, CaseEvidence, Any, Path, Path],
     services: tuple[Mock, Mock, Mock],
     capsys: pytest.CaptureFixture[str],
     accounted: int | None,
+    may_have_started: int,
+    possible: int,
 ) -> None:
     services[1].side_effect = None
     services[1].return_value = SimpleNamespace(observations=())
@@ -413,7 +418,8 @@ def test_ambiguous_or_overbound_summary_cannot_be_rendered_as_known_calls(
         root=prepared_case[0].root / "results/fixture",
         summary=SimpleNamespace(
             provider_calls_started=accounted,
-            provider_calls_may_have_started=7,
+            provider_calls_may_have_started=may_have_started,
+            provider_calls_possible=possible,
             outcome="incomplete",
             stop_reason="unsafe-retry",
             observations_recorded=3,
@@ -425,9 +431,11 @@ def test_ambiguous_or_overbound_summary_cannot_be_rendered_as_known_calls(
             elapsed_milliseconds=None,
         ),
     )
-    with pytest.raises(typer.Exit):
+    with pytest.raises(typer.Exit) as raised:
         _invoke(prepared_case, acknowledge_model_execution=True)
+    assert raised.value.exit_code == ExitCode.PROVIDER
     report = json.loads(capsys.readouterr().out)
+    assert report["status"] == "incomplete"
     assert report["provider_call_accounting"] == "started-unknown"
     assert report["provider_calls"] is None
     assert report["next_command"] is None

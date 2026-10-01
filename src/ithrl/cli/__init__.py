@@ -457,6 +457,12 @@ def _shrink(
             status="refused",
             harness_started=error.harness_started,
             provider_call_accounting="not-started",
+            probe_stage=error.probe_stage,
+            probe_exit_code=error.probe_exit_code,
+            probe_reason=error.probe_reason,
+            diagnostic_path=str(error.diagnostic_path)
+            if error.diagnostic_path is not None
+            else None,
         )
     except (
         CaseError,

@@ -9,17 +9,23 @@ belong to the separately acknowledged calibration command.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+from tempfile import mkdtemp
 from typing import Literal
 
 from platformdirs import user_data_path
 
-from ithrl.case import CaseEvidence, CaseWorkspace
-from ithrl.case.filesystem import reject_symlink_components
+from ithrl.case import CaseError, CaseEvidence, CaseWorkspace
+from ithrl.case.filesystem import (
+    atomic_write_bytes,
+    prepare_private_directory,
+    reject_symlink_components,
+)
 from ithrl.cli.paths import private_data_root
 from ithrl.execution import PreflightIssue, ResourceLimits, SafetyPolicy, calibration_budget_bounds
 from ithrl.experiment import (
@@ -48,6 +54,9 @@ from ithrl.runner.copilot import (
 )
 from ithrl.runner.copilot.capability import CopilotCapabilityError
 from ithrl.runner.copilot.configuration import CopilotConfigurationError
+from ithrl.runner.copilot.isolation import (
+    DEFAULT_DISPOSABLE_STATE_BYTES as COPILOT_DISPOSABLE_STATE_BYTES,
+)
 from ithrl.runner.copilot.isolation import CopilotIsolationError
 from ithrl.runner.copilot.policy import CopilotTarget
 from ithrl.runner.runtime import NativeOutputStoreError, ProtectedPath
@@ -61,10 +70,24 @@ _MAX_DISPOSABLE_STATE_ENTRIES = 10_000
 class NativeSelectionError(RuntimeError):
     """Content-safe refusal before a native runner attempt begins."""
 
-    def __init__(self, code: str, message: str, *, harness_started: bool | None = False) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        harness_started: bool | None = False,
+        probe_stage: str | None = None,
+        probe_exit_code: int | None = None,
+        probe_reason: str | None = None,
+        diagnostic_path: Path | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.harness_started = harness_started
+        self.probe_stage = probe_stage
+        self.probe_exit_code = probe_exit_code
+        self.probe_reason = probe_reason
+        self.diagnostic_path = diagnostic_path
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,7 +198,9 @@ def native_selection(
             else _MAX_WALL_TIME_SECONDS
         ),
         max_native_output_bytes=_MAX_NATIVE_OUTPUT_BYTES,
-        max_disposable_state_bytes=_MAX_DISPOSABLE_STATE_BYTES,
+        max_disposable_state_bytes=(
+            COPILOT_DISPOSABLE_STATE_BYTES if harness == "copilot" else _MAX_DISPOSABLE_STATE_BYTES
+        ),
         max_disposable_state_entries=_MAX_DISPOSABLE_STATE_ENTRIES,
     )
     if max_input_tokens is not None and capability.input_token_limit_enforcement != "pre-dispatch":
@@ -325,6 +350,10 @@ def _copilot_runner(
             f"copilot-{error.code.value}",
             "local Copilot capability cannot be established",
             harness_started=None,
+            probe_stage=error.probe_stage,
+            probe_exit_code=error.probe_exit_code,
+            probe_reason=str(error),
+            diagnostic_path=_copilot_probe_diagnostic(error, output_root),
         ) from error
     except (CopilotIsolationError, OSError, ValueError) as error:
         raise NativeSelectionError(
@@ -353,6 +382,29 @@ def _copilot_runner(
         raise NativeSelectionError(
             "runner-unavailable", "Copilot runner cannot be prepared", harness_started=True
         ) from error
+
+
+def _copilot_probe_diagnostic(error: CopilotCapabilityError, output_root: Path) -> Path | None:
+    """Keep bounded native output private without changing the original refusal."""
+
+    try:
+        parent = prepare_private_directory(output_root / "probe-diagnostics")
+        directory = Path(mkdtemp(prefix="copilot-", dir=parent))
+        destination = directory / "probe.json"
+        document = {
+            "stage": error.probe_stage,
+            "exit_code": error.probe_exit_code,
+            "reason": str(error),
+            "stdout": error.stdout.decode("utf-8", errors="replace"),
+            "stderr": error.stderr.decode("utf-8", errors="replace"),
+            "state_limit": error.state_limit_details,
+            "state_files": error.state_files,
+        }
+        atomic_write_bytes(destination, json.dumps(document, ensure_ascii=True).encode())
+        return destination
+    except (CaseError, OSError, ValueError):
+        # Diagnostic storage is best-effort, never a reason to retry a native probe.
+        return None
 
 
 def _original_workspace(path: Path | None) -> Path:

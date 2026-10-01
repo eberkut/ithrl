@@ -71,7 +71,7 @@ def test_sampled_human_reports_zero_calls_only_before_execution(
     assert "provider calls  0 (execution did not start)" in capsys.readouterr().out
 
 
-def test_sampled_error_has_no_free_form_message_or_private_path(
+def test_sampled_error_without_probe_has_content_safe_defaults(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     error = SampledErrorOutput(status="refused", exit_code=3, error_code="unsafe-action-category")
@@ -80,11 +80,15 @@ def test_sampled_error_has_no_free_form_message_or_private_path(
     payload = json.loads(capsys.readouterr().out)
     assert payload == {
         "command": "shrink",
+        "diagnostic_path": None,
         "error_code": "unsafe-action-category",
         "exit_code": 3,
         "harness_started": None,
         "kind": "sampled",
         "next_action": None,
+        "probe_exit_code": None,
+        "probe_reason": None,
+        "probe_stage": None,
         "provider_call_accounting": "started-unknown",
         "provider_calls": None,
         "schema_version": 1,

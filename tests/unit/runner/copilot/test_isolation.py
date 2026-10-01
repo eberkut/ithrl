@@ -13,6 +13,7 @@ from ithrl.runner.copilot.configuration import (
 from ithrl.runner.copilot.isolation import (
     CopilotIsolationError,
     CopilotRuntime,
+    _discovery_argv,
     prepare_copilot_process,
     program_digest,
 )
@@ -20,6 +21,20 @@ from ithrl.runner.copilot.policy import CopilotTarget, target_policy
 from ithrl.runner.runtime import OwnedAttemptState
 
 ATTEMPT_ID = "attempt-00000000000000000000000000000001"
+
+
+def test_discovery_uses_same_filesystem_boundary_with_network_denied(tmp_path: Path) -> None:
+    runtime = _runtime(tmp_path)
+
+    argv = _discovery_argv(runtime, state=tmp_path / "state", arguments=("--help",))
+
+    assert "--unshare-net" in argv
+    assert "--unshare-pid" in argv
+    assert "--new-session" in argv
+    assert argv[argv.index("--ro-bind") + 1 : argv.index("--ro-bind") + 3] == ("/", "/")
+    assert argv[-2:] == ("/tmp/ithrl-state/runner/copilot", "--help")  # noqa: S108
+    assert argv.count(str(runtime.copilot)) == 1
+    assert argv.count("--remount-ro") == 4
 
 
 def _program(path: Path, content: str = "#!/bin/sh\nexit 0\n") -> Path:
@@ -80,6 +95,8 @@ def test_prepares_private_target_specific_worker_state(
     )
     assert spec.environment["HOME"] == "/tmp/ithrl-state/home"  # noqa: S108
     assert "--tmpfs" in spec.argv
+    assert "--unshare-net" not in spec.argv
+    assert "--remount-ro" not in spec.argv
     assert "/home" in spec.argv
     assert "/tmp" in spec.argv  # noqa: S108
     assert "/run" in spec.argv

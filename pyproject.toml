@@ -67,9 +67,11 @@ packages = ["src/ithrl"]
 preset = "strict"
 project-includes = ["src", "tests"]
 python-version = "3.12"
-search-path = ["src"]
+search-path = ["src", "tests"]
 
 [tool.pytest]
+pythonpath = ["tests"]
+markers = ["native_smoke(profile): explicit approved native harness/provider test, never default CI"]
 addopts = [
   "--strict-config",
   "--strict-markers",

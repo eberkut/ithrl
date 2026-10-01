@@ -6,10 +6,11 @@ import os
 import re
 import shutil
 import signal
+import socket
 import stat
 import subprocess
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import suppress
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -71,7 +72,7 @@ def _configuration() -> CodexProviderConfiguration:
 approval_policy = "never"
 sandbox_mode = "read-only"
 web_search = "disabled"
-cli_auth_credentials_store = "ephemeral"
+cli_auth_credentials_store = "file"
 
 [model_providers.ithrl]
 name = "fixture"
@@ -107,6 +108,11 @@ def _fake_codex(
 ) -> Path:
     executable = tmp_path / "codex"
     feature_lines = "\n".join(f"{name} stable false" for name in sorted(disabled_features))
+    schema_files = {
+        str(path.relative_to(schema)): path.read_bytes()
+        for path in schema.rglob("*")
+        if path.is_file()
+    }
     source = f"""#!/usr/bin/python3
 import os
 import shutil
@@ -114,6 +120,12 @@ import signal
 import sys
 import time
 from pathlib import Path
+
+def _write_schema(destination):
+    for name, content in {schema_files!r}.items():
+        path = destination / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
 
 arguments = sys.argv[1:]
 if arguments == ["--version"]:
@@ -124,7 +136,7 @@ if arguments == ["features", "list"]:
     raise SystemExit(0)
 if arguments[:2] == ["app-server", "generate-json-schema"]:
     destination = Path(arguments[arguments.index("--out") + 1])
-    shutil.copytree({str(schema)!r}, destination, dirs_exist_ok=True)
+    _write_schema(destination)
     raise SystemExit(0)
 raise SystemExit(64)
 """
@@ -422,6 +434,341 @@ def test_capability_probe_never_serializes_credential_values(tmp_path: Path) -> 
     assert "private-value" not in repr(configuration)
 
 
+def test_every_structural_probe_denies_host_writes_home_reads_and_network(
+    tmp_path: Path,
+) -> None:
+    schema = tmp_path / "fixture-schema"
+    shutil.copytree(SCHEMA_FIXTURE, schema)
+    executable = _fake_codex(tmp_path, schema)
+    hidden = tmp_path / "private-host-home"
+    hidden.write_text("private-host-content", encoding="utf-8")
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        port = listener.getsockname()[1]
+        adversarial = f"""
+import socket
+assert os.environ['ITHRL_PROVIDER_SECRET_0'] == 'ithrl-capability-probe'
+assert not Path({str(hidden)!r}).exists()
+for forbidden in (
+    Path(sys.argv[0]), Path('/etc/ithrl-unexpected-write'),
+    Path('/tmp/unbounded-scratch'), Path('/run/unbounded-scratch'),
+    Path('/home/unbounded-scratch'), Path('/root/unbounded-scratch'),
+):
+    try:
+        forbidden.write_bytes(b'unsafe')
+    except OSError:
+        pass
+    else:
+        raise SystemExit(71)
+with socket.socket() as connection:
+    connection.settimeout(0.2)
+    try:
+        connection.connect(('127.0.0.1', {port}))
+    except OSError:
+        pass
+    else:
+        raise SystemExit(72)
+Path(os.environ['HOME']).joinpath('private-state-ok').write_bytes(b'ok')
+Path(os.environ['TMPDIR']).joinpath('private-scratch-ok').write_bytes(b'ok')
+"""
+        executable.write_text(
+            executable.read_text().replace(
+                "arguments = sys.argv[1:]", adversarial + "\narguments = sys.argv[1:]"
+            ),
+            encoding="utf-8",
+        )
+        before = executable.read_bytes()
+        profile = detect_codex_capability(_runtime(executable), _configuration())
+    assert executable.read_bytes() == before
+    assert hidden.read_text() == "private-host-content"
+    assert "structural discovery is host-write isolated and network denied" in profile.deviations
+
+
+def test_structural_discovery_refuses_unavailable_bubblewrap(tmp_path: Path) -> None:
+    executable = _fake_codex(tmp_path, SCHEMA_FIXTURE)
+    runtime = CodexRuntime(
+        codex=executable,
+        bubblewrap=Path("/bin/false"),
+        python=Path("/usr/bin/python3"),
+    )
+    with pytest.raises(CodexCapabilityError, match="did not pass") as refused:
+        detect_codex_capability(runtime, _configuration())
+    assert refused.value.code is CodexCapabilityErrorCode.UNAVAILABLE
+
+
+@pytest.mark.parametrize("kind", ["oversized-home", "fifo"])
+def test_bounds_and_validates_all_private_structural_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+) -> None:
+    executable = _fake_codex(tmp_path, SCHEMA_FIXTURE)
+    actions = {
+        "oversized-home": "private.write_bytes(b'x' * 200_000)",
+        "fifo": "os.mkfifo(private)",
+    }
+    executable.write_text(
+        executable.read_text().replace(
+            'print("codex-cli 99.42.7")',
+            "private = Path(os.environ['HOME']) / 'probe-state'\n    "
+            + actions[kind]
+            + '\n    print("codex-cli 99.42.7")',
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(capability, "_MAX_SCHEMA_TOTAL_BYTES", 100_000)
+    with pytest.raises(CodexCapabilityError) as refused:
+        detect_codex_capability(_runtime(executable), _configuration())
+    assert refused.value.code is CodexCapabilityErrorCode.UNSUPPORTED_PROTOCOL
+    assert "private" not in str(refused.value)
+
+
+def test_structural_discovery_accepts_native_startup_symlinks(tmp_path: Path) -> None:
+    executable = _fake_codex(tmp_path, SCHEMA_FIXTURE)
+    startup = """alias_root = Path(os.environ['CODEX_HOME']) / 'tmp/arg0/codex-arg0aB12cD'
+alias_root.mkdir(parents=True, exist_ok=True)
+for name in ('apply_patch', 'applypatch', 'codex-linux-sandbox', 'codex-execve-wrapper'):
+    alias = alias_root / name
+    if not alias.is_symlink():
+        alias.symlink_to('/tmp/ithrl-state/runner/codex')
+"""
+    executable.write_text(
+        executable.read_text().replace(
+            "arguments = sys.argv[1:]", startup + "\narguments = sys.argv[1:]"
+        ),
+        encoding="utf-8",
+    )
+    profile = detect_codex_capability(_runtime(executable), _configuration())
+    assert profile.runtime_harness_version == "99.42.7"
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "target"),
+    [
+        ("home/arbitrary-directory/unknown-helper", "/etc/passwd"),
+        ("codex-home/cache/new-helper", "../../../runner/codex"),
+        ("tmp/dangling-link", "missing-target"),
+    ],
+)
+def test_scratch_symlinks_are_opaque_but_schema_symlinks_are_refused(
+    tmp_path: Path, relative_path: str, target: str
+) -> None:
+    alias = tmp_path / relative_path
+    alias.parent.mkdir(parents=True)
+    alias.symlink_to(target)
+    capability._require_bounded_discovery_state(tmp_path)
+    with pytest.raises(CodexCapabilityError, match="symbolic link") as refused:
+        capability._require_bounded_schema(tmp_path)
+    assert refused.value.code is CodexCapabilityErrorCode.UNSUPPORTED_PROTOCOL
+    assert relative_path not in str(refused.value)
+    assert target not in str(refused.value)
+
+
+@pytest.mark.parametrize("limit", ["bytes", "entries"])
+def test_symlinks_count_toward_discovery_limits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, limit: str
+) -> None:
+    alias = tmp_path / "link"
+    target = "unread-dangling-target"
+    alias.symlink_to(target)
+    if limit == "bytes":
+        monkeypatch.setattr(capability, "_MAX_SCHEMA_TOTAL_BYTES", len(target.encode()) - 1)
+    else:
+        monkeypatch.setattr(capability, "_MAX_SCHEMA_ENTRIES", 0)
+    with pytest.raises(CodexCapabilityError, match="exceeds"):
+        capability._require_bounded_discovery_state(tmp_path)
+
+
+def test_scratch_directory_symlinks_are_neither_read_nor_traversed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "too-large-if-followed").write_bytes(b"x" * 1000)
+    root = tmp_path / "state"
+    root.mkdir()
+    (root / "directory-link").symlink_to(outside, target_is_directory=True)
+    monkeypatch.setattr(capability, "_MAX_SCHEMA_TOTAL_BYTES", 500)
+    monkeypatch.setattr(capability, "_MAX_SCHEMA_ENTRIES", 1)
+
+    def denied_readlink(path: Path) -> str:
+        raise AssertionError("scratch links must remain opaque")
+
+    monkeypatch.setattr(capability.os, "readlink", denied_readlink)
+    capability._require_bounded_discovery_state(root)
+    with pytest.raises(CodexCapabilityError, match="symbolic link"):
+        capability._require_bounded_schema(root)
+
+
+@pytest.mark.parametrize("tree_kind", ["schema", "discovery"])
+@pytest.mark.parametrize("root_kind", ["file", "directory-link", "file-link"])
+def test_validation_root_must_be_a_real_directory(
+    tmp_path: Path, tree_kind: str, root_kind: str
+) -> None:
+    root = tmp_path / "root"
+    if root_kind == "file":
+        root.write_bytes(b"private")
+    else:
+        target = tmp_path / "target"
+        if root_kind == "directory-link":
+            target.mkdir()
+        else:
+            target.write_bytes(b"private")
+        root.symlink_to(target, target_is_directory=root_kind == "directory-link")
+    validate = (
+        capability._require_bounded_schema
+        if tree_kind == "schema"
+        else capability._require_bounded_discovery_state
+    )
+    with pytest.raises(CodexCapabilityError, match="root is not a directory"):
+        validate(root)
+
+
+def test_native_schema_root_symlink_is_refused_before_schema_reading(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    executable = _fake_codex(tmp_path, SCHEMA_FIXTURE)
+    executable.write_text(
+        executable.read_text().replace(
+            "_write_schema(destination)\n    raise SystemExit(0)",
+            "elsewhere = Path(os.environ['HOME']) / 'schema-copy'\n"
+            "    _write_schema(elsewhere)\n"
+            "    destination.rmdir()\n"
+            "    destination.symlink_to(elsewhere, target_is_directory=True)\n"
+            "    raise SystemExit(0)",
+        ),
+        encoding="utf-8",
+    )
+
+    def must_not_read_schema(root: Path) -> str:
+        raise AssertionError("a redirected schema root must not be read")
+
+    monkeypatch.setattr(capability, "verify_schema_bundle", must_not_read_schema)
+    with pytest.raises(CodexCapabilityError, match="root is not a directory"):
+        detect_codex_capability(_runtime(executable), _configuration())
+
+
+@pytest.mark.parametrize("tree_kind", ["schema", "discovery"])
+def test_private_state_walk_errors_refuse_without_exposing_content(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tree_kind: str,
+) -> None:
+    def inaccessible_walk(
+        root: Path,
+        *,
+        top_down: bool,
+        on_error: Callable[[OSError], object] | None,
+        follow_symlinks: bool,
+    ) -> Iterator[tuple[Path, list[str], list[str]]]:
+        assert top_down
+        assert not follow_symlinks
+        yield root, [], []
+        assert on_error is not None
+        on_error(PermissionError("private inaccessible state"))
+
+    monkeypatch.setattr(Path, "walk", inaccessible_walk)
+    validate = (
+        capability._require_bounded_schema
+        if tree_kind == "schema"
+        else capability._require_bounded_discovery_state
+    )
+    with pytest.raises(CodexCapabilityError, match="could not be inspected") as refused:
+        validate(tmp_path)
+    assert refused.value.code is CodexCapabilityErrorCode.UNSUPPORTED_PROTOCOL
+    assert isinstance(refused.value.__cause__, PermissionError)
+    assert "private inaccessible" not in str(refused.value)
+
+
+def test_unreadable_native_state_refuses_and_cleans_disposable_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    permission_check = tmp_path / "permission-check"
+    permission_check.mkdir(mode=0o700)
+    permission_check.chmod(0)
+    try:
+        try:
+            with os.scandir(permission_check):
+                pass
+        except PermissionError:
+            pass
+        else:
+            pytest.skip("process privileges bypass directory read permissions")
+    finally:
+        permission_check.chmod(0o700)
+    executable = _fake_codex(tmp_path, SCHEMA_FIXTURE)
+    executable.write_text(
+        executable.read_text().replace(
+            'print("codex-cli 99.42.7")',
+            "private = Path(os.environ['HOME']) / 'unreadable-state'\n"
+            "    private.mkdir()\n"
+            "    (private / 'native-output').write_bytes(b'private')\n"
+            "    private.chmod(0)\n"
+            '    print("codex-cli 99.42.7")',
+        ),
+        encoding="utf-8",
+    )
+    roots: list[Path] = []
+    original_run_probe = capability._run_probe
+
+    def track_probe(
+        argv: tuple[str, ...],
+        environment: Mapping[str, str],
+        cwd: Path,
+        *,
+        failure_code: CodexCapabilityErrorCode = CodexCapabilityErrorCode.UNAVAILABLE,
+        state_root: Path | None = None,
+        inherited_fds: tuple[int, ...] = (),
+    ) -> subprocess.CompletedProcess[bytes]:
+        assert state_root is not None
+        roots.append(state_root)
+        return original_run_probe(
+            argv,
+            environment,
+            cwd,
+            failure_code=failure_code,
+            state_root=state_root,
+            inherited_fds=inherited_fds,
+        )
+
+    monkeypatch.setattr(capability, "_run_probe", track_probe)
+    with pytest.raises(CodexCapabilityError, match="could not be inspected") as refused:
+        detect_codex_capability(_runtime(executable), _configuration())
+    assert refused.value.code is CodexCapabilityErrorCode.UNSUPPORTED_PROTOCOL
+    assert roots
+    assert all(not root.exists() for root in roots)
+
+
+def test_structural_timeout_stops_namespace_and_cleans_private_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executable = _fake_codex(tmp_path, SCHEMA_FIXTURE)
+    executable.write_text(
+        executable.read_text().replace('print("codex-cli 99.42.7")', "time.sleep(60)"),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(capability, "_PROBE_TIMEOUT_SECONDS", 0.1)
+    processes: list[subprocess.Popen[bytes]] = []
+    roots: list[Path] = []
+    original_popen = subprocess.Popen
+
+    def capture_process(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+        process = original_popen(*args, **kwargs)  # type: ignore[arg-type]
+        processes.append(process)
+        roots.append(Path(str(kwargs["cwd"])).parent)
+        return process
+
+    monkeypatch.setattr(capability.subprocess, "Popen", capture_process)
+    with pytest.raises(CodexCapabilityError, match="did not pass"):
+        detect_codex_capability(_runtime(executable), _configuration())
+    assert processes
+    assert all(process.poll() is not None for process in processes)
+    assert all(not root.exists() for root in roots)
+
+
 def test_stops_probe_when_output_exceeds_limit(tmp_path: Path) -> None:
     schema = tmp_path / "fixture-schema"
     shutil.copytree(SCHEMA_FIXTURE, schema)
@@ -446,7 +793,7 @@ def test_stops_schema_probe_when_file_limit_is_exceeded(tmp_path: Path) -> None:
     shutil.copytree(SCHEMA_FIXTURE, schema)
     executable = _fake_codex(tmp_path, schema)
     content = executable.read_text(encoding="utf-8").replace(
-        f"    shutil.copytree({str(schema)!r}, destination, dirs_exist_ok=True)",
+        "    _write_schema(destination)",
         "    destination.mkdir(parents=True, exist_ok=True)\n"
         "    for index in range(2_100):\n"
         '        (destination / f"{index}.json").write_text("{}")\n'
@@ -486,7 +833,7 @@ def test_refuses_and_stops_probe_that_leaves_a_descendant(tmp_path: Path) -> Non
     child_pid: int | None = None
     try:
         with pytest.raises(CodexCapabilityError, match="descendant process"):
-            detect_codex_capability(_runtime(executable), _configuration())
+            capability._run_probe((str(executable), "--version"), {}, tmp_path)
         child_pid = int(child_pid_path.read_text(encoding="utf-8"))
         deadline = time.monotonic() + 2
         while _process_is_running(child_pid) and time.monotonic() < deadline:

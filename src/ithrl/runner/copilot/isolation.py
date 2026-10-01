@@ -20,6 +20,9 @@ from ithrl.runner.runtime import OwnedAttemptState, ProcessSpec
 
 SANDBOX_ROOT = "/tmp/ithrl-state"  # noqa: S108 - private tmpfs path inside Bubblewrap
 MAX_SEMANTIC_SESSION_BYTES = 64 * 1024 * 1024
+# Bundled tooling is extracted into each isolated cache before even --version.
+# Reserve room for those assets as well as the bounded semantic session and output.
+DEFAULT_DISPOSABLE_STATE_BYTES = 256 * 1024 * 1024
 MAX_TRIGGER_BYTES = 1024 * 1024
 _MAX_WORKER_BYTES = 1024 * 1024
 _MAX_MODEL_BYTES = 1024
@@ -164,6 +167,37 @@ def _bubblewrap_argv(
     *,
     state: Path,
     worker: str,
+    network_denied: bool = False,
+) -> tuple[str, ...]:
+    return (
+        *_boundary_argv(runtime, state=state, network_denied=network_denied),
+        f"{SANDBOX_ROOT}/{worker}",
+        f"{SANDBOX_ROOT}/request.json",
+        f"{SANDBOX_ROOT}/runner/copilot",
+    )
+
+
+def _discovery_argv(
+    runtime: CopilotRuntime,
+    *,
+    state: Path,
+    arguments: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Run a structural command without writable host state or network access."""
+
+    runtime.assert_unchanged()
+    return (
+        *_boundary_argv(runtime, state=state, network_denied=True),
+        f"{SANDBOX_ROOT}/runner/copilot",
+        *arguments,
+    )
+
+
+def _boundary_argv(
+    runtime: CopilotRuntime,
+    *,
+    state: Path,
+    network_denied: bool,
 ) -> tuple[str, ...]:
     copilot = runtime.copilot.resolve(strict=True)
     return (
@@ -173,11 +207,13 @@ def _bubblewrap_argv(
         "--unshare-pid",
         "--unshare-ipc",
         "--unshare-uts",
+        *(("--unshare-net",) if network_denied else ()),
         "--ro-bind",
         "/",
         "/",
         "--tmpfs",
         "/home",
+        *(("--tmpfs", "/root") if network_denied else ()),
         "--tmpfs",
         "/tmp",  # noqa: S108 - private tmpfs inside Bubblewrap
         "--tmpfs",
@@ -194,11 +230,22 @@ def _bubblewrap_argv(
         "--ro-bind",
         os.fspath(copilot),
         f"{SANDBOX_ROOT}/runner/copilot",
+        *(
+            (
+                "--remount-ro",
+                "/home",
+                "--remount-ro",
+                "/root",
+                "--remount-ro",
+                "/tmp",  # noqa: S108 - private tmpfs inside Bubblewrap
+                "--remount-ro",
+                "/run",
+            )
+            if network_denied
+            else ()
+        ),
         "--chdir",
         f"{SANDBOX_ROOT}/workspace",
-        f"{SANDBOX_ROOT}/{worker}",
-        f"{SANDBOX_ROOT}/request.json",
-        f"{SANDBOX_ROOT}/runner/copilot",
     )
 
 
