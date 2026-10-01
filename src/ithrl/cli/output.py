@@ -487,17 +487,7 @@ def render_sampled(report: SampledOutput, output_format: OutputFormat) -> None:
         print_plain(console, "  provider calls  unknown (execution started)")
     if report.result_path is not None:
         print_plain(console, f"  result          {report.result_path}", soft_wrap=True)
-    if report.next_action is not None or report.next_command is not None:
-        console.print()
-        print_plain(console, "Next step")
-        if report.next_action is not None:
-            print_plain(console, f"  {report.next_action}")
-        if report.next_command is not None:
-            print_plain(
-                console,
-                f"  Command ({report.next_command_shell}): {report.next_command}",
-                soft_wrap=True,
-            )
+    _render_next_step(report)
 
 
 def render_sampled_error(report: SampledErrorOutput, output_format: OutputFormat) -> None:
@@ -706,7 +696,7 @@ def _render_phase_results(report: CommandOutput) -> None:
         )
 
 
-def _render_next_step(report: CommandOutput) -> None:
+def _render_next_step(report: CommandOutput | SampledOutput) -> None:
     if report.next_action is not None or report.next_command is not None:
         console.print()
         print_plain(console, "Next step")

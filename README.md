@@ -23,8 +23,9 @@ context that would work, or the cause of the behavior.
 
 `extract` can discover the default Codex and Copilot session stores or read an explicit session
 file. It does not start the coding agent, contact a provider, execute a tool, or change the saved
-session. Native-session experiments remain unsupported: controlled runner code and local preflight
-checks do not establish a validated harness/version/target profile.
+session. Native-session reduction remains unavailable. Bounded full-context calibration is
+implemented for developer validation through the separately approved opt-in smoke tests below;
+it does not search for a smaller context or establish a 1-minimal result.
 
 The synthetic workflow covers extraction and reduction without provider credentials or network
 access. Its deterministic runner does not execute tool calls.
@@ -152,9 +153,10 @@ directory that only the user running ithrl can access.
 
 Content digests detect accidental or inconsistent changes; they are not signatures. ithrl assumes
 that another process running as the same user has not replaced the local case, result, run state,
-or observation database. It rejects source and case paths reached through directories writable
-by other users. On platforms where directory ownership cannot be checked with standard Python
-APIs, custom paths must stay inside the active user profile.
+or observation database. On POSIX systems, it checks directory ownership and write permissions
+for source and case paths; a shared sticky parent is allowed only above a private user-owned
+directory. On platforms where directory ownership cannot be checked with standard Python APIs,
+custom paths must stay inside the active user profile.
 
 ## Development checks
 
@@ -167,12 +169,13 @@ uv run ruff format --check .
 uv run radon cc src/ithrl --min B --show-complexity --total-average
 uv run radon mi src/ithrl --min B --show
 uv run pyrefly check
-uv run pytest
+uv run pytest --ignore=tests/packaging
 uv build --sdist --wheel --no-sources
+ITHRL_DIST_DIR=dist uv run pytest -o addopts= tests/packaging
 ```
 
-The default test suite and synthetic walkthrough do not use provider credentials or make network
-requests.
+The non-packaging tests and synthetic walkthrough do not use provider credentials or make network
+requests. Packaging checks may download build and runtime dependencies.
 
 ### Opt-in native smoke tests
 

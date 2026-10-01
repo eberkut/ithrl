@@ -217,27 +217,26 @@ async def _run_sampled_calibration(
         )
         _reserve_attempt(store, reservation)
         try:
-            try:
-                await observe_once(
-                    runner=prepared.runner,
-                    identity=prepared.identity,
-                    store=store,
-                    attempt=PreparedAttempt(
-                        evidence=evidence,
-                        candidate=candidate,
-                        target=experiment.target,
-                        execution_plan=prepared.execution_plan,
-                        safety_policy=prepared.safety_policy,
-                        resource_limits=prepared.resource_limits,
-                        phase="calibration",
-                        arm="baseline",
-                    ),
-                )
-            except RunnerExecutionError as error:
-                if error.observation is None:
-                    raise
-                # The store owns the attempt number and exact evidence. Re-read it before
-                # deciding whether the next attempt is permitted.
+            await observe_once(
+                runner=prepared.runner,
+                identity=prepared.identity,
+                store=store,
+                attempt=PreparedAttempt(
+                    evidence=evidence,
+                    candidate=candidate,
+                    target=experiment.target,
+                    execution_plan=prepared.execution_plan,
+                    safety_policy=prepared.safety_policy,
+                    resource_limits=prepared.resource_limits,
+                    phase="calibration",
+                    arm="baseline",
+                ),
+            )
+        except RunnerExecutionError as error:
+            if error.observation is None:
+                raise
+            # The store owns the attempt number and exact evidence. Re-read it before
+            # deciding whether the next attempt is permitted.
         finally:
             _reconcile_inflight(store)
 

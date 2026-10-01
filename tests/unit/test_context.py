@@ -271,6 +271,39 @@ def test_materialization_uses_original_list_indices() -> None:
     assert [item["id"] for item in result_input if isinstance(item, dict)] == ["B"]
 
 
+@pytest.mark.parametrize("remove", [False, True])
+def test_materialization_keeps_nested_retained_data_independent(remove: bool) -> None:
+    shared = {"values": [{"name": "original"}]}
+    request: dict[str, Any] = {
+        "input": [{"remove": "discard", "keep": shared}, {"content": [shared]}],
+        "metadata": shared,
+    }
+    graph = ContextGraph(
+        nodes=(
+            ContextNode(
+                id="discard",
+                kind="field",
+                path="/input/0/remove",
+                mutable=True,
+                source="request.json",
+                digest=content_digest("discard"),
+            ),
+        )
+    )
+
+    result: Any = graph.materialize(request, {"discard"} if remove else ())
+
+    assert list(result) == list(request)
+    assert list(result["input"][0]) == (["keep"] if remove else ["remove", "keep"])
+    assert request["input"][0]["remove"] == "discard"
+    result["input"][0]["keep"]["values"][0]["name"] = "candidate"
+    assert shared == {"values": [{"name": "original"}]}
+    shared["values"].append({"name": "source"})
+    assert len(result["input"][0]["keep"]["values"]) == 1
+    assert len(result["input"][1]["content"][0]["values"]) == 1
+    assert len(result["metadata"]["values"]) == 1
+
+
 def test_materialization_supports_escaped_object_keys() -> None:
     request: dict[str, Any] = {"a/b": {"~key": "remove", "keep": True}}
     node = ContextNode(

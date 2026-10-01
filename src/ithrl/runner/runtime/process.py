@@ -10,7 +10,7 @@ import stat
 import subprocess
 import time
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import IO, Any, BinaryIO
 
@@ -925,26 +925,14 @@ def _verify_protected(snapshot: ProtectedPathSnapshot) -> ProtectedStateEffect:
 
 
 def _replace_error(child: _ChildOutcome, code: RunnerErrorCode) -> _ChildOutcome:
-    return _ChildOutcome(
-        child.returncode,
-        code,
-        child.cancelled,
-        child.process_outcome,
-        child.forced_termination,
-        child.output_complete,
-        child.stdout_stop_matched,
-    )
+    return replace(child, error_code=code)
 
 
 def _mark_output_incomplete(child: _ChildOutcome) -> _ChildOutcome:
-    return _ChildOutcome(
-        child.returncode,
-        child.error_code or (None if child.cancelled else RunnerErrorCode.INTERNAL),
-        child.cancelled,
-        child.process_outcome,
-        child.forced_termination,
-        False,
-        child.stdout_stop_matched,
+    return replace(
+        child,
+        error_code=child.error_code or (None if child.cancelled else RunnerErrorCode.INTERNAL),
+        output_complete=False,
     )
 
 

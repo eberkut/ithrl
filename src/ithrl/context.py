@@ -326,7 +326,7 @@ class ContextGraph(BaseModel):
                 branch = branch.setdefault(token, {})
             branch[_TERMINAL] = True
 
-        materialized = _prune(copy.deepcopy(request), trie)
+        materialized = _prune(request, trie)
         if materialized is _REMOVED or not isinstance(materialized, dict):
             raise MaterializationError("a context edit cannot remove the request root")
         return materialized

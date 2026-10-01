@@ -334,12 +334,7 @@ class ObservationStore:
             AND arm = ?
             """,
             (
-                identity.case_digest,
-                identity.experiment_digest,
-                identity.runner_fingerprint,
-                identity.execution_plan_digest,
-                identity.target_digest,
-                identity.algorithm_digest,
+                *_identity_parameters(identity),
                 candidate_digest,
                 role.value,
                 arm.value,
