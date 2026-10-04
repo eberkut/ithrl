@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from fractions import Fraction
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from ithrl.context import JsonObject, content_digest
-from ithrl.observations import ObservationIdentity
+from ithrl.context import MAX_CONTEXT_NODES, JsonObject, content_digest
+from ithrl.experiment import SampledReductionPlan
+from ithrl.observations import ObservationIdentity, SamplingBlockEvidence
+from ithrl.statistics import BinomialSample, FixedSampleOutcome, classify_fixed_sample
 
 ALGORITHM_NAME = "hierarchical-ddmin"
 ALGORITHM_VERSION = "2"
@@ -202,3 +205,225 @@ def trial_key(
             "requested_removals": list(requested_removals),
         }
     )
+
+
+type SampledScreenAction = Literal["admit", "retain", "incomplete"]
+type _SampledNodeId = Annotated[
+    str, Field(min_length=1, max_length=256, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
+]
+
+
+class SampledComparison(BaseModel):
+    """A frozen exploratory screen, never a preservation classification."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    evidence: SamplingBlockEvidence
+    action: SampledScreenAction | None
+
+    @model_validator(mode="after")
+    def validate_action(self) -> SampledComparison:
+        if self.evidence.plan.role != "search":
+            raise ValueError("sampled comparisons require search evidence")
+        expected: SampledScreenAction | None = None
+        if self.evidence.eligible:
+            expected = "incomplete"
+        if self.evidence.complete and self.evidence.eligible:
+            original = self.evidence.original_counts
+            candidate = self.evidence.candidate_counts
+            # Compare count ratios exactly against the frozen margin, without subtracting
+            # rounded rates or introducing a tolerance at the admission boundary.
+            difference = Fraction(candidate.matches, candidate.valid) - Fraction(
+                original.matches, original.valid
+            )
+            expected = (
+                "admit"
+                if difference >= -Fraction(self.evidence.plan.reduction.margin)
+                else "retain"
+            )
+        if self.action != expected:
+            raise ValueError("screen action does not match complete eligible evidence")
+        return self
+
+    @property
+    def operational_refusal(self) -> str | None:
+        """Expose operational refusal separately from the exploratory screen action."""
+
+        return self.evidence.eligibility_refusal
+
+
+class SampledCandidateTrial(BaseModel):
+    """Removal metadata bound to a two-arm exploratory comparison."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    trial_key: str = Field(min_length=1)
+    base_removals: tuple[_SampledNodeId, ...] = Field(max_length=MAX_CONTEXT_NODES)
+    requested_removals: tuple[_SampledNodeId, ...] = Field(max_length=MAX_CONTEXT_NODES)
+    effective_removals: tuple[_SampledNodeId, ...] = Field(max_length=MAX_CONTEXT_NODES)
+    phase: SearchPhase
+    comparison: SampledComparison
+
+    @model_validator(mode="after")
+    def validate_trial(self) -> SampledCandidateTrial:
+        if self.base_removals != tuple(sorted(set(self.base_removals))):
+            raise ValueError("base_removals must contain sorted unique node IDs")
+        if not self.requested_removals or len(set(self.requested_removals)) != len(
+            self.requested_removals
+        ):
+            raise ValueError("requested_removals must contain nonempty unique node IDs")
+        if self.effective_removals != tuple(sorted(set(self.effective_removals))):
+            raise ValueError("effective_removals must contain sorted unique node IDs")
+        requested = set(self.base_removals) | set(self.requested_removals)
+        if not requested <= set(self.effective_removals):
+            raise ValueError("effective_removals must include base and requested removals")
+        if self.trial_key != trial_key(self.phase, self.base_removals, self.requested_removals):
+            raise ValueError("trial_key does not match the trial inputs")
+        return self
+
+
+class SampledReductionCheckpoint(BaseModel):
+    """Sampled search evidence without a scheduler or a minimality claim."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    schema_version: Literal[1] = 1
+    reduction: SampledReductionPlan
+    original_identity: ObservationIdentity
+    original_candidate_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    best_candidate_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    removed_context_ids: tuple[_SampledNodeId, ...] = Field(max_length=MAX_CONTEXT_NODES)
+    trials: tuple[SampledCandidateTrial, ...] = Field(default=(), max_length=MAX_CANDIDATE_RUNS)
+    active_block: SamplingBlockEvidence | None = None
+    final_sweep_complete: bool = False
+    final_sweep_trial_keys: tuple[str, ...] = Field(default=(), max_length=MAX_CANDIDATE_RUNS)
+    expected_final_neighbors: tuple[
+        Annotated[tuple[_SampledNodeId, ...], Field(max_length=MAX_CONTEXT_NODES)], ...
+    ] = Field(default=(), max_length=MAX_CONTEXT_NODES)
+
+    @model_validator(mode="after")
+    def validate_checkpoint(self) -> SampledReductionCheckpoint:
+        if self.removed_context_ids != tuple(sorted(set(self.removed_context_ids))):
+            raise ValueError("removed_context_ids must contain sorted unique node IDs")
+        keys = tuple(trial.trial_key for trial in self.trials)
+        if len(set(keys)) != len(keys):
+            raise ValueError("checkpoint trial keys must not contain duplicates")
+        best = self.original_candidate_digest
+        removed: tuple[str, ...] = ()
+        for trial in self.trials:
+            if trial.base_removals != removed:
+                raise ValueError("trial base removals must match the current best candidate")
+            if trial.comparison.action == "admit":
+                best = trial.comparison.evidence.plan.candidate_digest
+                removed = trial.effective_removals
+        if (self.best_candidate_digest, self.removed_context_ids) != (best, removed):
+            raise ValueError("checkpoint best candidate must match admitted comparisons")
+        blocks = self.blocks
+        if self.active_block is not None and self.active_block.complete:
+            raise ValueError("active block must be partial")
+        for block in blocks:
+            plan = block.plan
+            if plan.role != "search":
+                raise ValueError("sampled checkpoints require search blocks")
+            if (
+                plan.reduction != self.reduction
+                or plan.original_identity != self.original_identity
+                or plan.original_candidate_digest != self.original_candidate_digest
+            ):
+                raise ValueError("checkpoint blocks must share the frozen reduction and original")
+        _validate_unique_sampled_references(blocks)
+        self._validate_final_sweep()
+        return self
+
+    def _validate_final_sweep(self) -> None:
+        """Check the supplied terminal witness; graph coverage belongs to the generator."""
+
+        if not self.final_sweep_complete:
+            if self.final_sweep_trial_keys or self.expected_final_neighbors:
+                raise ValueError("incomplete final sweeps cannot carry a completion witness")
+            return
+        if self.active_block is not None or any(
+            trial.comparison.action in {None, "incomplete"} for trial in self.trials
+        ):
+            raise ValueError("final sweep completion requires complete eligible search evidence")
+        keys = self.final_sweep_trial_keys
+        neighbors = self.expected_final_neighbors
+        if len(set(keys)) != len(keys) or len(set(neighbors)) != len(neighbors):
+            raise ValueError("final sweep witnesses must not contain duplicates")
+        if any(not item or len(set(item)) != len(item) for item in neighbors):
+            raise ValueError("final neighbors must contain nonempty unique node IDs")
+        trials = {trial.trial_key: trial for trial in self.trials}
+        if any(key not in trials for key in keys):
+            raise ValueError("final sweep references must belong to checkpoint trials")
+        selected = tuple(trials[key] for key in keys)
+        if any(
+            trial.phase != "final-sweep"
+            or trial.base_removals != self.removed_context_ids
+            or trial.comparison.action != "retain"
+            for trial in selected
+        ):
+            raise ValueError("final sweep requires complete eligible retained final neighbors")
+        if {trial.requested_removals for trial in selected} != set(neighbors):
+            raise ValueError("final sweep must cover exactly the declared final neighbors")
+
+    @property
+    def blocks(self) -> tuple[SamplingBlockEvidence, ...]:
+        """All search blocks, including a partial dispatch block when present."""
+
+        completed = tuple(trial.comparison.evidence for trial in self.trials)
+        return completed if self.active_block is None else (*completed, self.active_block)
+
+    @property
+    def best_candidate_identity(self) -> ObservationIdentity:
+        """Execution identity of the most recently admitted candidate or original."""
+
+        for trial in reversed(self.trials):
+            if trial.comparison.action == "admit":
+                return trial.comparison.evidence.plan.candidate_identity
+        return self.original_identity
+
+
+class SampledConfirmation(BaseModel):
+    """One fresh final comparison with the fixed-sample statistical outcome."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    evidence: SamplingBlockEvidence
+    outcome: FixedSampleOutcome | None
+
+    @model_validator(mode="after")
+    def validate_outcome(self) -> SampledConfirmation:
+        if self.evidence.plan.role != "confirmation":
+            raise ValueError("sampled confirmation requires confirmation evidence")
+        expected = FixedSampleOutcome.INCOMPLETE if self.evidence.eligible else None
+        if self.evidence.complete and self.evidence.eligible:
+            phase = self.evidence.plan.reduction.confirmation
+            candidate = self.evidence.candidate_counts
+            original = self.evidence.original_counts
+            expected = classify_fixed_sample(
+                BinomialSample(candidate.matches, candidate.valid),
+                BinomialSample(original.matches, original.valid),
+                required_candidate=phase.candidate.required_valid,
+                required_original=phase.original.required_valid,
+                confidence=phase.one_sided_confidence,
+                margin=self.evidence.plan.reduction.margin,
+            ).outcome
+        if self.outcome != expected:
+            raise ValueError("confirmation outcome does not match complete eligible evidence")
+        return self
+
+    @property
+    def operational_refusal(self) -> str | None:
+        """Operational refusal remains separate from the four statistical outcomes."""
+
+        return self.evidence.eligibility_refusal
+
+
+def _validate_unique_sampled_references(blocks: tuple[SamplingBlockEvidence, ...]) -> None:
+    for references, label in (
+        (tuple(block.plan.block_id for block in blocks), "block"),
+        (tuple(item for block in blocks for item in block.observation_ids), "observation"),
+        (tuple(item for block in blocks for item in block.attempt_ids), "attempt"),
+    ):
+        if len(set(references)) != len(references):
+            raise ValueError(f"sampled {label} references must not be reused")

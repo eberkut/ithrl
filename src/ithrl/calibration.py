@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Literal
 from uuid import uuid4
 
-from filelock import FileLock, Timeout
+from filelock import Timeout
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from ithrl.case import CaseEvidence, CaseWorkspace
@@ -27,6 +27,7 @@ from ithrl.observations import (
     ObservationRole,
     ObservationStore,
 )
+from ithrl.path_safety import UnsafePathError, private_file_lock
 from ithrl.results import (
     CalibrationOutcome,
     CalibrationSnapshot,
@@ -325,11 +326,10 @@ def _calibration_lock(store: ObservationStore) -> Generator[None]:
 
     store.initialize()
     lock_path = store.path.with_name(f"{store.path.name}.calibration.lock")
-    if os.path.lexists(lock_path):
-        mode = lock_path.lstat().st_mode
-        if not stat.S_ISREG(mode) or (os.name == "posix" and stat.S_IMODE(mode) != 0o600):
-            raise ValueError("calibration lock file is unsafe")
-    lock = FileLock(lock_path, timeout=0, mode=0o600)
+    try:
+        lock = private_file_lock(lock_path)
+    except UnsafePathError as error:
+        raise ValueError("calibration lock file is unsafe") from error
     try:
         lock.acquire()
     except Timeout as error:

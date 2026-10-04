@@ -19,6 +19,7 @@ from ithrl.observations import (
     ObservationOutcome,
     ObservationRole,
     ObservationStore,
+    ObservationStoreBusyError,
     ObservationStoreError,
     UnsupportedObservationSchemaError,
 )
@@ -467,3 +468,199 @@ def test_store_refuses_a_symbolic_link_ancestor(tmp_path: Path) -> None:
 
     with pytest.raises(ObservationStoreError, match="path contains a symbolic link"):
         ObservationStore(linked / "nested" / "observations.sqlite").initialize()
+
+
+def test_store_resolves_authoritative_observation_references(tmp_path: Path) -> None:
+    store = ObservationStore(tmp_path / "observations.sqlite")
+    observation = _observation(attempt=1)
+    store.append(observation)
+
+    assert store.get(observation.observation_id) == observation
+    assert store.get("missing") is None
+    assert store.get("' OR 1=1 --") is None
+    assert (
+        store.get_attempt(
+            _identity(),
+            candidate_digest="candidate",
+            role=ObservationRole.SEARCH,
+            arm=ObservationArm.CANDIDATE,
+            attempt=1,
+        )
+        == observation
+    )
+
+
+def test_store_batch_reference_resolution_preserves_order(tmp_path: Path) -> None:
+    store = ObservationStore(tmp_path / "observations.sqlite")
+    observations = tuple(_observation(attempt=attempt) for attempt in range(1, 515))
+    store.append_many(observations)
+    references = tuple(item.observation_id for item in reversed(observations))
+
+    assert store.get_many(references) == tuple(reversed(observations))
+    assert store.get_many(()) == ()
+
+
+def test_store_batch_resolution_rejects_missing_and_duplicate_refs(tmp_path: Path) -> None:
+    store = ObservationStore(tmp_path / "observations.sqlite")
+    observation = _observation(attempt=1)
+    store.append(observation)
+
+    with pytest.raises(ObservationStoreError, match="missing evidence"):
+        store.get_many((observation.observation_id, "' OR 1=1 --"))
+    with pytest.raises(ValueError, match="unique"):
+        store.get_many((observation.observation_id, observation.observation_id))
+    with pytest.raises(ValueError, match="nonempty"):
+        store.get_many(("",))
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "case_digest",
+        "experiment_digest",
+        "runner_fingerprint",
+        "execution_plan_digest",
+        "target_digest",
+        "algorithm_digest",
+    ],
+)
+def test_store_reserved_attempt_lookup_requires_exact_identity(tmp_path: Path, field: str) -> None:
+    store = ObservationStore(tmp_path / "observations.sqlite")
+    store.append(_observation(attempt=1))
+
+    assert (
+        store.get_attempt(
+            _identity(**{field: "different"}),
+            candidate_digest="candidate",
+            role=ObservationRole.SEARCH,
+            arm=ObservationArm.CANDIDATE,
+            attempt=1,
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize("field", ["candidate_digest", "role", "arm", "attempt"])
+def test_store_reserved_attempt_lookup_requires_exact_arm(tmp_path: Path, field: str) -> None:
+    store = ObservationStore(tmp_path / "observations.sqlite")
+    store.append(_observation(attempt=1))
+
+    assert (
+        store.get_attempt(
+            _identity(),
+            candidate_digest="different" if field == "candidate_digest" else "candidate",
+            role=ObservationRole.CONFIRMATION if field == "role" else ObservationRole.SEARCH,
+            arm=ObservationArm.BASELINE if field == "arm" else ObservationArm.CANDIDATE,
+            attempt=2 if field == "attempt" else 1,
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize("attempt", [0, -1, True, 1.0])
+def test_store_reserved_attempt_lookup_rejects_invalid_ordinal(
+    tmp_path: Path, attempt: int
+) -> None:
+    store = ObservationStore(tmp_path / "observations.sqlite")
+
+    with pytest.raises(ValueError, match="positive integer"):
+        store.get_attempt(
+            _identity(),
+            candidate_digest="candidate",
+            role=ObservationRole.SEARCH,
+            arm=ObservationArm.CANDIDATE,
+            attempt=attempt,
+        )
+    assert not store.path.exists()
+
+
+def test_reference_lookup_does_not_recreate_missing_database(tmp_path: Path) -> None:
+    store = ObservationStore(tmp_path / "missing" / "observations.sqlite")
+
+    with pytest.raises(ObservationStoreError, match="unavailable"):
+        store.get("missing")
+    with pytest.raises(ObservationStoreError, match="unavailable"):
+        store.get_many(())
+    with pytest.raises(ObservationStoreError, match="unavailable"), store.acquire_sampling_lock():
+        pytest.fail("missing evidence store was recreated")
+    with pytest.raises(ObservationStoreError, match="unavailable"):
+        store.get_attempt(
+            _identity(),
+            candidate_digest="candidate",
+            role=ObservationRole.SEARCH,
+            arm=ObservationArm.CANDIDATE,
+            attempt=1,
+        )
+    assert not store.path.parent.exists()
+
+
+def test_sampling_store_lock_excludes_another_owner(tmp_path: Path) -> None:
+    store = ObservationStore(tmp_path / "observations.sqlite")
+    other = ObservationStore(store.path)
+    store.initialize()
+
+    with (
+        store.acquire_sampling_lock(),
+        pytest.raises(ObservationStoreBusyError, match="another sampled run"),
+        other.acquire_sampling_lock(),
+    ):
+        pytest.fail("second owner acquired the sampling store")
+    with other.acquire_sampling_lock():
+        pass
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permission contract")
+def test_sampling_store_lock_refuses_unsafe_mode(tmp_path: Path) -> None:
+    store = ObservationStore(tmp_path / "observations.sqlite")
+    store.initialize()
+    lock_path = store.path.with_name(f"{store.path.name}.sampling.lock")
+    lock_path.touch(mode=0o644)
+
+    with (
+        pytest.raises(ObservationStoreError, match="sampling lock file is unsafe"),
+        store.acquire_sampling_lock(),
+    ):
+        pytest.fail("unsafe sampling lock was accepted")
+
+
+def test_sampling_store_lock_refuses_symbolic_link(tmp_path: Path) -> None:
+    store = ObservationStore(tmp_path / "observations.sqlite")
+    store.initialize()
+    target = tmp_path / "target"
+    target.touch(mode=0o600)
+    lock_path = store.path.with_name(f"{store.path.name}.sampling.lock")
+    lock_path.symlink_to(target)
+
+    with (
+        pytest.raises(ObservationStoreError, match="symbolic link"),
+        store.acquire_sampling_lock(),
+    ):
+        pytest.fail("linked sampling lock was accepted")
+    assert target.read_bytes() == b""
+
+
+@pytest.mark.parametrize("target_kind", ["database", "private-evidence"])
+def test_sampling_store_lock_refuses_hard_link_without_truncating_evidence(
+    tmp_path: Path, target_kind: str
+) -> None:
+    store = ObservationStore(tmp_path / "observations.sqlite")
+    observation = _observation(attempt=1)
+    store.append(observation)
+    target = store.path
+    if target_kind == "private-evidence":
+        target = tmp_path / "protected-evidence.json"
+        target.write_bytes(b'{"synthetic": "unchanged"}\n')
+        target.chmod(0o600)
+    original = target.read_bytes()
+    lock_path = store.path.with_name(f"{store.path.name}.sampling.lock")
+    lock_path.hardlink_to(target)
+
+    with (
+        pytest.raises(ObservationStoreError, match="sampling lock file is unsafe"),
+        store.acquire_sampling_lock(),
+    ):
+        pytest.fail("hard-linked sampling lock was accepted")
+
+    assert target.read_bytes() == original
+    assert lock_path.read_bytes() == original
+    assert store.get(observation.observation_id) == observation

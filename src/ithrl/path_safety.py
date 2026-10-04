@@ -1,4 +1,4 @@
-"""Validate filesystem paths against cross-user directory replacement."""
+"""Validate controlling directories and private lock-file layouts."""
 
 from __future__ import annotations
 
@@ -6,9 +6,32 @@ import os
 import stat
 from pathlib import Path
 
+from filelock import FileLock
+
 
 class UnsafePathError(ValueError):
-    """A path has an unsafe or untrusted controlling directory."""
+    """A path has an unsafe layout or an untrusted controlling directory."""
+
+
+def private_file_lock(path: Path) -> FileLock:
+    """Build a nonblocking private lock after checking its existing leaf.
+
+    Callers retain their directory checks. Reject hard links before FileLock can
+    truncate a lock file and thereby damage an aliased database or state file.
+    """
+
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        pass
+    except OSError as error:
+        raise UnsafePathError("private lock file is unavailable") from error
+    else:
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            raise UnsafePathError("private lock must be a single-link regular file")
+        if os.name == "posix" and stat.S_IMODE(metadata.st_mode) != 0o600:
+            raise UnsafePathError("private lock must have mode 0600")
+    return FileLock(path, timeout=0, mode=0o600)
 
 
 def validate_directory_chain(path: Path) -> None:

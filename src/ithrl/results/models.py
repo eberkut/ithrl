@@ -2,16 +2,23 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ithrl.case import ProvenanceFacts
 from ithrl.context import JsonObject
 from ithrl.execution import CandidateMaterialization, ResolvedExecutionPlan
 from ithrl.experiment import ExperimentDefinition, SampledExperimentDefinition
-from ithrl.reduce import MAX_CANDIDATE_RUNS, ReductionCheckpoint
+from ithrl.observations import SamplingBlockEvidence
+from ithrl.reduce import (
+    MAX_CANDIDATE_RUNS,
+    ReductionCheckpoint,
+    SampledConfirmation,
+    SampledReductionCheckpoint,
+)
 from ithrl.runner.contracts import TokenUsage
 
 _DIGEST_PATTERN = r"^[0-9a-f]{64}$"
@@ -183,3 +190,83 @@ class CalibrationSnapshot(_StrictImmutableModel):
     experiment: SampledExperimentDefinition
     provenance: ProvenanceFacts
     execution_plan: ResolvedExecutionPlan
+
+
+class SampledReductionEvidence(_StrictImmutableModel):
+    """Content-safe sampled claims, separate from integrated result-directory snapshots.
+
+    The checkpoint validates the declared terminal-neighbor witness. Establishing that the
+    generator enumerated every dependency-valid neighbor remains an integration requirement.
+    """
+
+    schema_version: Literal[1] = 1
+    kind: Literal["sampled-reduction-evidence"] = "sampled-reduction-evidence"
+    checkpoint: SampledReductionCheckpoint
+    search_result: Literal["search-reduced", "search-incomplete"]
+    selected_candidate_digest: Annotated[str, Field(pattern=_DIGEST_PATTERN)]
+    selected_at: datetime
+    calibration_observation_ids: tuple[Annotated[str, Field(min_length=1)], ...] = ()
+    calibration_attempt_ids: tuple[Annotated[str, Field(min_length=1)], ...] = ()
+    confirmation: SampledConfirmation | None = None
+
+    @field_validator("selected_at")
+    @classmethod
+    def normalize_selected_at(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("selected_at must include a UTC offset")
+        return value.astimezone(UTC)
+
+    @model_validator(mode="after")
+    def validate_sampled_claims(self) -> SampledReductionEvidence:
+        checkpoint = self.checkpoint
+        expected = "search-reduced" if checkpoint.final_sweep_complete else "search-incomplete"
+        if self.search_result != expected:
+            raise ValueError("sampled search result must match the final sweep witness")
+        if self.selected_candidate_digest != checkpoint.best_candidate_digest:
+            raise ValueError("selected candidate must match the checkpoint best candidate")
+        search_blocks = checkpoint.blocks
+        if any(
+            self.selected_at < block.plan.frozen_at
+            or any(self.selected_at < item.observation.recorded_at for item in block.attempts)
+            for block in search_blocks
+        ):
+            raise ValueError("candidate selection must follow all search evidence")
+        blocks = search_blocks
+        if self.confirmation is not None:
+            if any(not block.eligible for block in search_blocks):
+                raise ValueError("ineligible search evidence forbids final confirmation")
+            confirmation = self.confirmation.evidence
+            plan = confirmation.plan
+            if (
+                plan.reduction != checkpoint.reduction
+                or plan.original_identity != checkpoint.original_identity
+                or plan.original_candidate_digest != checkpoint.original_candidate_digest
+                or plan.candidate_digest != self.selected_candidate_digest
+                or plan.candidate_identity != checkpoint.best_candidate_identity
+            ):
+                raise ValueError(
+                    "confirmation must bind the frozen original and selected candidate"
+                )
+            if plan.frozen_at <= self.selected_at:
+                raise ValueError("confirmation must be frozen after candidate selection")
+            blocks = (*blocks, confirmation)
+        self._validate_evidence_reuse(blocks)
+        return self
+
+    def _validate_evidence_reuse(self, blocks: tuple[SamplingBlockEvidence, ...]) -> None:
+        for references, label in (
+            (tuple(block.plan.block_id for block in blocks), "block"),
+            (
+                (
+                    *self.calibration_observation_ids,
+                    *(i for b in blocks for i in b.observation_ids),
+                ),
+                "observation",
+            ),
+            (
+                (*self.calibration_attempt_ids, *(i for b in blocks for i in b.attempt_ids)),
+                "attempt",
+            ),
+        ):
+            if len(set(references)) != len(references):
+                raise ValueError(f"calibration, search and confirmation cannot reuse {label} IDs")

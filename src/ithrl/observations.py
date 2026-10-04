@@ -7,15 +7,20 @@ import sqlite3
 import stat
 from collections.abc import Generator, Iterable
 from contextlib import closing, contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
-from typing import Annotated
+from random import Random
+from typing import Annotated, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from filelock import Timeout
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
+from ithrl.context import content_digest
+from ithrl.experiment import MAX_SAMPLING_ATTEMPTS, SampledReductionPlan, SamplingArmTarget
+from ithrl.path_safety import UnsafePathError, private_file_lock
 from ithrl.runner.evidence import AttemptEvidence
 
 _STORE_SCHEMA_VERSION = 2
@@ -49,6 +54,10 @@ class UnsupportedObservationSchemaError(ObservationStoreError):
 
 class ObservationConflictError(ObservationStoreError):
     """An observation conflicts with an existing append-only record."""
+
+
+class ObservationStoreBusyError(ObservationStoreError):
+    """Another sampled run owns dispatch and reconciliation against this store."""
 
 
 class ObservationRole(StrEnum):
@@ -182,11 +191,357 @@ class AttemptCounts(BaseModel):
     next_attempt: int = Field(ge=1)
 
 
+type SamplingArm = Literal["baseline", "candidate"]
+type SamplingRole = Literal["search", "confirmation"]
+type _Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+
+
+class _SamplingContract(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+
+class SamplingBlockPlan(_SamplingContract):
+    """One frozen strict two-arm block, independent of administrative run allowances.
+
+    The original candidate identity must come from the protected full-context materialization.
+    Execution identities remain arm-specific; a budget extension cannot change this plan.
+    The recorded order includes replacement slots, which are skipped once an arm is complete.
+    """
+
+    block_id: Annotated[str, Field(min_length=1, max_length=128)]
+    role: SamplingRole
+    reduction: SampledReductionPlan
+    original_identity: ObservationIdentity
+    candidate_identity: ObservationIdentity
+    original_candidate_digest: _Digest
+    candidate_digest: _Digest
+    frozen_at: datetime
+    schedule_seed: Annotated[int, Field(ge=0, le=2**64 - 1)]
+    schedule: Annotated[tuple[SamplingArm, ...], Field(max_length=2 * MAX_SAMPLING_ATTEMPTS)]
+    provider_calls_per_attempt: Annotated[int, Field(ge=1, le=2)]
+
+    @field_validator("frozen_at")
+    @classmethod
+    def normalize_frozen_at(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("frozen_at must include a UTC offset")
+        return value.astimezone(UTC)
+
+    @model_validator(mode="after")
+    def validate_block(self) -> SamplingBlockPlan:
+        original = self.original_identity.model_dump(exclude={"execution_plan_digest"})
+        candidate = self.candidate_identity.model_dump(exclude={"execution_plan_digest"})
+        if original != candidate:
+            raise ValueError("both arms must share case, experiment, runner, target and algorithm")
+        if self.schedule != sampling_schedule(
+            self.targets_for("baseline").max_attempts,
+            self.targets_for("candidate").max_attempts,
+            self.schedule_seed,
+        ):
+            raise ValueError("schedule must match the frozen seeded two-arm order")
+        return self
+
+    def targets_for(self, arm: SamplingArm) -> SamplingArmTarget:
+        phase = self.reduction.search if self.role == "search" else self.reduction.confirmation
+        return phase.original if arm == "baseline" else phase.candidate
+
+    @property
+    def digest(self) -> str:
+        return content_digest(self.model_dump(mode="json"))
+
+    @property
+    def expires_at(self) -> datetime:
+        return self.frozen_at + timedelta(seconds=self.reduction.freshness_seconds)
+
+    @property
+    def required_provider_call_budget(self) -> int:
+        """Conservative capacity for every frozen attempt, including replacement slots."""
+
+        return len(self.schedule) * self.provider_calls_per_attempt
+
+
+def sampling_schedule(
+    original_max_attempts: int, candidate_max_attempts: int, seed: int
+) -> tuple[SamplingArm, ...]:
+    """Canonical seeded slot order; this constructs no attempts and dispatches no work."""
+
+    for count in (original_max_attempts, candidate_max_attempts):
+        if type(count) is not int or not 1 <= count <= MAX_SAMPLING_ATTEMPTS:
+            raise ValueError("schedule counts must be bounded positive integers")
+    if type(seed) is not int or not 0 <= seed <= 2**64 - 1:
+        raise ValueError("schedule seed must be a bounded nonnegative integer")
+    arms: list[SamplingArm] = ["baseline" for _ in range(original_max_attempts)]
+    arms.extend("candidate" for _ in range(candidate_max_attempts))
+    Random(seed).shuffle(arms)  # noqa: S311 -- reproducible experimental ordering, not secrets.
+    return tuple(arms)
+
+
+class SamplingAttempt(_SamplingContract):
+    """Dispatch position and a content-safe observation, without a behavioral error verdict.
+
+    Independence evidence references a separately verified exclusion justification. A digest
+    cannot itself prove independence; runtime collection must establish the frozen policy.
+    """
+
+    schedule_position: Annotated[int, Field(ge=0, lt=2 * MAX_SAMPLING_ATTEMPTS)]
+    observation: Observation = Field(repr=False)
+    independence_evidence_digest: _Digest | None = None
+
+    @model_validator(mode="after")
+    def validate_exclusion_reference(self) -> SamplingAttempt:
+        if self.independence_evidence_digest is not None and self.observation.valid:
+            raise ValueError("valid observations cannot carry exclusion evidence")
+        return self
+
+    @property
+    def replaceable(self) -> bool:
+        """Whether the record satisfies the narrow safe-preaccept exclusion contract."""
+
+        observation = self.observation
+        return (
+            observation.outcome is ObservationOutcome.RUNNER_ERROR
+            and observation.error_category in {"preparation", "startup", "transport"}
+            and observation.attempt_evidence.retry_safe
+            and self.independence_evidence_digest is not None
+        )
+
+
+class SamplingArmCounts(_SamplingContract):
+    """Behavior conditional on validity and execution reliability remain separate counts."""
+
+    dispatched: Annotated[int, Field(ge=0)]
+    valid: Annotated[int, Field(ge=0)]
+    matches: Annotated[int, Field(ge=0)]
+    no_matches: Annotated[int, Field(ge=0)]
+    invalid_observations: Annotated[int, Field(ge=0)]
+    runner_errors: Annotated[int, Field(ge=0)]
+
+    @model_validator(mode="after")
+    def validate_counts(self) -> SamplingArmCounts:
+        if self.valid != self.matches + self.no_matches:
+            raise ValueError("valid count must equal matches plus no_matches")
+        if self.dispatched != self.valid + self.invalid_observations + self.runner_errors:
+            raise ValueError("dispatched count must include every operational outcome")
+        return self
+
+
+class SamplingBlockEvidence(_SamplingContract):
+    """Ordered evidence for a frozen block, including partial or refused collection.
+
+    Counts and eligibility are derived from the referenced observations rather than trusted
+    persisted summary flags. Storage publication and continuation ownership are separate duties.
+    """
+
+    plan: SamplingBlockPlan
+    attempts: Annotated[tuple[SamplingAttempt, ...], Field(max_length=2 * MAX_SAMPLING_ATTEMPTS)]
+
+    @model_validator(mode="after")
+    def validate_membership(self) -> SamplingBlockEvidence:
+        positions = tuple(item.schedule_position for item in self.attempts)
+        if positions != tuple(sorted(set(positions))):
+            raise ValueError("attempts must have unique increasing schedule positions")
+        if len(set(self.observation_ids)) != len(self.attempts):
+            raise ValueError("block observation IDs must be unique")
+        if len(set(self.attempt_ids)) != len(self.attempts):
+            raise ValueError("block attempt IDs must be unique")
+        valid = {"baseline": 0, "candidate": 0}
+        previous_attempt: dict[str, int] = {}
+        next_position = 0
+        previous_time = self.plan.frozen_at
+        for item in self.attempts:
+            if item.schedule_position >= len(self.plan.schedule):
+                raise ValueError("attempt position exceeds the frozen schedule")
+            arm = self.plan.schedule[item.schedule_position]
+            observation = item.observation
+            for skipped_arm in self.plan.schedule[next_position : item.schedule_position]:
+                if valid[skipped_arm] != self.plan.targets_for(skipped_arm).required_valid:
+                    raise ValueError("only completed arms may skip scheduled slots")
+            next_position = item.schedule_position + 1
+            if observation.recorded_at < previous_time:
+                raise ValueError("observations must follow dispatch time order")
+            previous_time = observation.recorded_at
+            if arm in previous_attempt and observation.attempt != previous_attempt[arm] + 1:
+                raise ValueError("arm-local observation attempts must be consecutive")
+            previous_attempt[arm] = observation.attempt
+            identity = (
+                self.plan.original_identity if arm == "baseline" else self.plan.candidate_identity
+            )
+            digest = (
+                self.plan.original_candidate_digest
+                if arm == "baseline"
+                else self.plan.candidate_digest
+            )
+            if (
+                observation.identity != identity
+                or observation.candidate_digest != digest
+                or observation.arm.value != arm
+                or observation.role.value != self.plan.role
+            ):
+                raise ValueError("observation does not belong to the frozen arm and role")
+            if valid[arm] == self.plan.targets_for(arm).required_valid:
+                raise ValueError("completed arms cannot dispatch additional attempts")
+            valid[arm] += int(observation.valid)
+        return self
+
+    @property
+    def observation_ids(self) -> tuple[str, ...]:
+        return tuple(item.observation.observation_id for item in self.attempts)
+
+    @property
+    def attempt_ids(self) -> tuple[str, ...]:
+        return tuple(item.observation.attempt_evidence.attempt_id for item in self.attempts)
+
+    def counts_for(self, arm: SamplingArm) -> SamplingArmCounts:
+        observations = tuple(
+            item.observation for item in self.attempts if item.observation.arm.value == arm
+        )
+        matches = sum(item.outcome is ObservationOutcome.MATCH for item in observations)
+        no_matches = sum(item.outcome is ObservationOutcome.NO_MATCH for item in observations)
+        return SamplingArmCounts(
+            dispatched=len(observations),
+            valid=matches + no_matches,
+            matches=matches,
+            no_matches=no_matches,
+            invalid_observations=sum(
+                item.outcome is ObservationOutcome.INVALID_OBSERVATION for item in observations
+            ),
+            runner_errors=sum(
+                item.outcome is ObservationOutcome.RUNNER_ERROR for item in observations
+            ),
+        )
+
+    @property
+    def original_counts(self) -> SamplingArmCounts:
+        return self.counts_for("baseline")
+
+    @property
+    def candidate_counts(self) -> SamplingArmCounts:
+        return self.counts_for("candidate")
+
+    @property
+    def complete(self) -> bool:
+        return all(
+            self.counts_for(arm).valid == self.plan.targets_for(arm).required_valid
+            for arm in ("baseline", "candidate")
+        )
+
+    @property
+    def eligibility_refusal(self) -> str | None:
+        for item in self.attempts:
+            observation = item.observation
+            if not self.plan.frozen_at <= observation.recorded_at < self.plan.expires_at:
+                return "stale-observation"
+            if not observation.valid:
+                if not item.replaceable:
+                    return "ineligible-exclusion"
+                continue
+            accounting = observation.attempt_evidence.accounting
+            if accounting is None or not (
+                accounting.actions_executed == 0
+                and accounting.tool_network_requests == 0
+                and accounting.actions_requested == accounting.actions_denied
+                and accounting.process_outcome != "unknown"
+                and accounting.cleanup_outcome in {"not-required", "verified"}
+                and accounting.residual_disposable_state_bytes == 0
+                and accounting.residual_disposable_state_entries == 0
+                and accounting.source_store_effect == "unchanged"
+                and accounting.original_workspace_effect == "unchanged"
+            ):
+                return "unsafe-attempt"
+            if accounting.provider_calls_started > self.plan.provider_calls_per_attempt:
+                return "provider-call-bound-exceeded"
+        return None
+
+    @property
+    def eligible(self) -> bool:
+        return self.eligibility_refusal is None
+
+    @property
+    def point_difference(self) -> float | None:
+        if not self.complete or not self.eligible:
+            return None
+        original, candidate = self.original_counts, self.candidate_counts
+        return candidate.matches / candidate.valid - original.matches / original.valid
+
+
+class SamplingBudgetAllowance(_SamplingContract):
+    """Administrative limits and confirmation capacity, outside frozen statistical identities.
+
+    The overall wall-time limit is separate from frozen per-attempt deadlines and the known
+    runner-time confirmation reserve. This record does not authorize execution. Token accounting
+    is observed/estimated; current profiles cannot enforce an overall hard input-token guarantee
+    before dispatch.
+    """
+
+    run_id: Annotated[str, Field(min_length=1, max_length=128)]
+    max_provider_calls: Annotated[int, Field(ge=1)]
+    max_wall_time_seconds: Annotated[int, Field(ge=1)]
+    max_candidate_comparisons: Annotated[int, Field(ge=1, le=10_000)]
+    confirmation_provider_calls: Annotated[int, Field(ge=1)]
+    confirmation_runner_seconds: Annotated[int, Field(ge=1)]
+    max_tokens: Annotated[int | None, Field(ge=1)] = None
+    token_accounting: Literal["observed-or-estimated"] = "observed-or-estimated"
+
+    @model_validator(mode="after")
+    def validate_confirmation_capacity(self) -> SamplingBudgetAllowance:
+        if self.confirmation_provider_calls > self.max_provider_calls:
+            raise ValueError("confirmation budget exceeds maximum provider calls")
+        if self.confirmation_runner_seconds > self.max_wall_time_seconds:
+            raise ValueError("confirmation budget exceeds maximum wall-time seconds")
+        return self
+
+    def validate_confirmation_plan(
+        self, plan: SamplingBlockPlan, *, attempt_timeout_seconds: int
+    ) -> None:
+        """Check the declared reserve against every frozen confirmation attempt.
+
+        Collection must separately prove remaining capacity before dispatch; this neither
+        reserves resources nor authorizes execution.
+        """
+
+        if plan.role != "confirmation":
+            raise ValueError("confirmation budget requires a confirmation plan")
+        if type(attempt_timeout_seconds) is not int or attempt_timeout_seconds < 1:
+            raise ValueError("attempt timeout must be a positive integer")
+        if self.confirmation_provider_calls < plan.required_provider_call_budget:
+            raise ValueError("confirmation provider-call budget cannot cover every planned attempt")
+        if self.confirmation_runner_seconds < len(plan.schedule) * attempt_timeout_seconds:
+            raise ValueError("confirmation runner-time budget cannot cover every planned attempt")
+
+
 class ObservationStore:
     """Append-only SQLite store with private local file permissions."""
 
     def __init__(self, path: Path) -> None:
         self.path = path
+
+    @contextmanager
+    def acquire_sampling_lock(self) -> Generator[None]:
+        """Serialize sampled ownership across reconciliation and progress publication.
+
+        SQLite transactions still protect individual appends. This wider lock belongs to
+        sampled run storage and must be held across a reservation's dispatch lifecycle.
+        """
+
+        if not os.path.lexists(self.path):
+            raise ObservationStoreError("observation database is unavailable")
+        self.initialize()
+        lock_path = self.path.with_name(f"{self.path.name}.sampling.lock")
+        _reject_symlink_components(lock_path)
+        try:
+            lock = private_file_lock(lock_path)
+        except UnsafePathError as error:
+            raise ObservationStoreError("sampling lock file is unsafe") from error
+        try:
+            lock.acquire()
+        except Timeout as error:
+            raise ObservationStoreBusyError(
+                "another sampled run is using the observation store"
+            ) from error
+        try:
+            yield
+        finally:
+            lock.release()
 
     def initialize(self) -> None:
         """Create a new store or validate the exact supported schema."""
@@ -350,6 +705,93 @@ class ObservationStore:
         self.initialize()
         return self._select("experiment_digest = ?", (experiment_digest,))
 
+    def get(self, observation_id: str) -> Observation | None:
+        """Resolve one durable reference without creating a missing evidence store."""
+
+        if not observation_id:
+            raise ValueError("observation_id must not be empty")
+        if not os.path.lexists(self.path):
+            raise ObservationStoreError("observation database is unavailable")
+        self.initialize()
+        try:
+            observations = self._select("observation_id = ?", (observation_id,))
+        except (ValidationError, ValueError) as error:
+            raise ObservationStoreError("stored observation is invalid") from error
+        return observations[0] if observations else None
+
+    def get_many(self, observation_ids: Iterable[str]) -> tuple[Observation, ...]:
+        """Resolve a complete ordered reference set in one consistent read transaction."""
+
+        references = tuple(observation_ids)
+        if any(not reference for reference in references) or len(set(references)) != len(
+            references
+        ):
+            raise ValueError("observation references must be nonempty and unique")
+        if not os.path.lexists(self.path):
+            raise ObservationStoreError("observation database is unavailable")
+        self.initialize()
+        observations: dict[str, Observation] = {}
+        columns = ", ".join(_OBSERVATION_COLUMNS)
+        try:
+            with self._connection() as connection:
+                connection.execute("BEGIN")
+                # Keep below older SQLite parameter limits, including on Python 3.12.
+                for start in range(0, len(references), 512):
+                    batch = references[start : start + 512]
+                    placeholders = ", ".join("?" for _ in batch)
+                    query = f"SELECT {columns} FROM observations WHERE observation_id IN ({placeholders})"  # noqa: S608 -- identifiers/placeholders are constants; reference IDs are bound.
+                    rows = connection.execute(
+                        query,
+                        batch,
+                    ).fetchall()
+                    for row in rows:
+                        observation = _from_row(row)
+                        observations[observation.observation_id] = observation
+        except sqlite3.Error as error:
+            raise ObservationStoreError("cannot resolve observation references") from error
+        except (ValidationError, ValueError) as error:
+            raise ObservationStoreError("stored observation is invalid") from error
+        if len(observations) != len(references):
+            raise ObservationStoreError("observation references include missing evidence")
+        return tuple(observations[reference] for reference in references)
+
+    def get_attempt(
+        self,
+        identity: ObservationIdentity,
+        *,
+        candidate_digest: str,
+        role: ObservationRole,
+        arm: ObservationArm,
+        attempt: int,
+    ) -> Observation | None:
+        """Resolve a reserved arm ordinal; callers must verify its prepared-attempt binding."""
+
+        if not candidate_digest:
+            raise ValueError("candidate_digest must not be empty")
+        if type(attempt) is not int or attempt < 1:
+            raise ValueError("attempt must be a positive integer")
+        if not os.path.lexists(self.path):
+            raise ObservationStoreError("observation database is unavailable")
+        self.initialize()
+        try:
+            observations = self._select(
+                """
+                case_digest = ? AND experiment_digest = ? AND runner_fingerprint = ?
+                AND execution_plan_digest = ? AND target_digest = ? AND algorithm_digest = ?
+                AND candidate_digest = ? AND role = ? AND arm = ? AND attempt = ?
+                """,
+                (
+                    *_identity_parameters(identity),
+                    candidate_digest,
+                    role.value,
+                    arm.value,
+                    attempt,
+                ),
+            )
+        except (ValidationError, ValueError) as error:
+            raise ObservationStoreError("stored observation is invalid") from error
+        return observations[0] if observations else None
+
     def attempt_counts(
         self,
         identity: ObservationIdentity,
@@ -407,7 +849,7 @@ class ObservationStore:
     def _select(
         self,
         where: str,
-        parameters: Iterable[str],
+        parameters: Iterable[str | int],
         *,
         order_by: str = "recorded_at, observation_id",
     ) -> tuple[Observation, ...]:

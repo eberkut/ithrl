@@ -136,3 +136,23 @@ def test_run_state_lock_refuses_a_concurrent_owner(tmp_path: Path) -> None:
         RunStateFile.open(state_file.path.parent).acquire_lock(),
     ):
         pytest.fail("concurrent lock acquisition succeeded")
+
+
+def test_run_state_lock_rejects_hard_link_without_modifying_state(tmp_path: Path) -> None:
+    case = tmp_path / "case"
+    case.mkdir()
+    state_file = RunStateFile.create(
+        case_root=case,
+        run_id="run-001",
+        observation_store=tmp_path / "observations.sqlite",
+        checkpoint=_checkpoint(),
+    )
+    original = state_file.path.read_bytes()
+    lock_path = state_file.path.with_name("run.lock")
+    os.link(state_file.path, lock_path)
+
+    with pytest.raises(RunStateError, match="run lock file is unsafe"), state_file.acquire_lock():
+        pytest.fail("hard-linked state was accepted as a lock")
+
+    assert state_file.path.read_bytes() == lock_path.read_bytes() == original
+    assert state_file.load().checkpoint == _checkpoint()

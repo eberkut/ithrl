@@ -160,6 +160,11 @@ class ExperimentDefinition(_ImmutableContract):
 # One explicit local calibration may make at most 16 attempts, including invalid retries.
 MAX_CALIBRATION_ATTEMPTS = 16
 
+# Finite contract ceilings bound a block's persisted attempts and freshness window.
+# They do not recommend practical sample counts or a useful sampling duration.
+MAX_SAMPLING_ATTEMPTS = 10_000
+MAX_SAMPLING_FRESHNESS_SECONDS = 24 * 60 * 60
+
 
 class SampledCalibrationPhase(_ImmutableContract):
     """Explicit bounded full-context sampling; no candidate search is implied."""
@@ -178,8 +183,55 @@ class SampledCalibrationPhase(_ImmutableContract):
         return self
 
 
+class SamplingArmTarget(_ImmutableContract):
+    """Frozen valid-observation target and total-attempt ceiling for one arm."""
+
+    required_valid: Annotated[int, Field(ge=1, le=MAX_SAMPLING_ATTEMPTS)]
+    max_attempts: Annotated[int, Field(ge=1, le=MAX_SAMPLING_ATTEMPTS)]
+
+    @model_validator(mode="after")
+    def validate_sample_counts(self) -> SamplingArmTarget:
+        if self.required_valid > self.max_attempts:
+            raise ValueError("sampling arm requires required_valid <= max_attempts")
+        return self
+
+
+class SampledSearchPhase(_ImmutableContract):
+    """Fixed independent arms used only for exploratory point screening."""
+
+    role: Literal["search"] = "search"
+    original: SamplingArmTarget
+    candidate: SamplingArmTarget
+    screen_rule: Literal["point-difference"] = "point-difference"
+
+
+class SampledConfirmationPhase(_ImmutableContract):
+    """Fresh independent arms with an explicit nominal one-sided confidence."""
+
+    role: Literal["confirmation"] = "confirmation"
+    original: SamplingArmTarget
+    candidate: SamplingArmTarget
+    method: Literal["newcombe-method-10"] = "newcombe-method-10"
+    one_sided_confidence: Annotated[float, Field(gt=0.5, lt=1, allow_inf_nan=False)]
+
+
+class SampledReductionPlan(_ImmutableContract):
+    """Complete strict sampled search and separate final-confirmation policy."""
+
+    search: SampledSearchPhase
+    confirmation: SampledConfirmationPhase
+    margin: Annotated[float, Field(ge=0, lt=1, allow_inf_nan=False)]
+    baseline_policy: Literal["strict-fresh-original"] = "strict-fresh-original"
+    estimand: Literal["valid-only"] = "valid-only"
+    eligibility_policy: Literal["independent-safe-preaccept-only"] = (
+        "independent-safe-preaccept-only"
+    )
+    schedule_policy: Literal["seeded-interleaving"] = "seeded-interleaving"
+    freshness_seconds: Annotated[int, Field(ge=1, le=MAX_SAMPLING_FRESHNESS_SECONDS)]
+
+
 class SampledExperimentDefinition(_ImmutableContract):
-    """Native calibration experiment without search or confirmation."""
+    """Native calibration with an optional complete sampled reduction plan."""
 
     schema_version: Literal[1] = 1
     kind: Literal["sampled"] = "sampled"
@@ -187,6 +239,7 @@ class SampledExperimentDefinition(_ImmutableContract):
     oracle: StructuralOracleConfig
     runner: NativeRunnerConfig
     calibration: SampledCalibrationPhase
+    reduction: SampledReductionPlan | None = None
 
     @property
     def digest(self) -> str:
@@ -196,7 +249,7 @@ class SampledExperimentDefinition(_ImmutableContract):
 
     @classmethod
     def from_toml(cls, source: str) -> SampledExperimentDefinition:
-        """Parse a strict sampled native calibration document."""
+        """Parse a strict sampled native experiment document."""
 
         experiment = parse_experiment_toml(source)
         if not isinstance(experiment, cls):
@@ -321,7 +374,32 @@ def _render_experiment(experiment: AnyExperimentDefinition) -> str:
                 f"max_attempts = {experiment.calibration.max_attempts}",
             )
         )
+        if experiment.reduction is not None:
+            _render_sampled_reduction(lines, experiment.reduction)
     return "\n".join(lines) + "\n"
+
+
+def _render_sampled_reduction(lines: list[str], reduction: SampledReductionPlan) -> None:
+    lines.extend(("", "[reduction]", f"margin = {reduction.margin!r}"))
+    for name in ("baseline_policy", "estimand", "eligibility_policy", "schedule_policy"):
+        lines.append(f"{name} = {_toml_string(getattr(reduction, name))}")
+    lines.append(f"freshness_seconds = {reduction.freshness_seconds}")
+    for name, phase in (("search", reduction.search), ("confirmation", reduction.confirmation)):
+        lines.extend(("", f"[reduction.{name}]", f"role = {_toml_string(phase.role)}"))
+        if isinstance(phase, SampledSearchPhase):
+            lines.append(f"screen_rule = {_toml_string(phase.screen_rule)}")
+        else:
+            lines.append(f"method = {_toml_string(phase.method)}")
+            lines.append(f"one_sided_confidence = {phase.one_sided_confidence!r}")
+        for arm_name, arm in (("original", phase.original), ("candidate", phase.candidate)):
+            lines.extend(
+                (
+                    "",
+                    f"[reduction.{name}.{arm_name}]",
+                    f"required_valid = {arm.required_valid}",
+                    f"max_attempts = {arm.max_attempts}",
+                )
+            )
 
 
 def _append_optional_string(lines: list[str], name: str, value: str | None) -> None:
@@ -353,6 +431,10 @@ def _format_error(error: Exception) -> str:
             NativeRunnerConfig,
             DeterministicPhase,
             SampledCalibrationPhase,
+            SamplingArmTarget,
+            SampledSearchPhase,
+            SampledConfirmationPhase,
+            SampledReductionPlan,
         ):
             known_fields.update(contract.model_fields)
         details = "; ".join(

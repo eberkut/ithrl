@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Event
@@ -46,6 +47,23 @@ from ithrl.synthetic import extract_inference
 from ithrl.workflow import PreflightRefusedError, WorkflowError, prepare_experiment, run_phases
 
 FIXTURE = Path(__file__).parents[1] / "fixtures/synthetic-trace.json"
+
+
+def test_calibration_lock_rejects_hard_link_without_modifying_store(tmp_path: Path) -> None:
+    store = ObservationStore(tmp_path / "observations.sqlite")
+    store.initialize()
+    original = store.path.read_bytes()
+    lock_path = store.path.with_name(f"{store.path.name}.calibration.lock")
+    os.link(store.path, lock_path)
+
+    with (
+        pytest.raises(ValueError, match="calibration lock file is unsafe"),
+        calibration_module._calibration_lock(store),
+    ):
+        pytest.fail("hard-linked database was accepted as a lock")
+
+    assert store.path.read_bytes() == lock_path.read_bytes() == original
+    store.initialize()
 
 
 class SequenceRunner:
