@@ -92,15 +92,13 @@ class PreparedAttempt:
     attempt_id: str = field(default_factory=lambda: f"attempt-{uuid4().hex}")
 
     def __post_init__(self) -> None:
-        expected_phase_arms = {
-            "calibration": "baseline",
-            "search": "candidate",
-            "confirmation": "selected",
+        allowed_phase_arms = {
+            "calibration": ("baseline",),
+            "search": ("baseline", "candidate"),
+            "confirmation": ("baseline", "candidate", "selected"),
         }
-        if expected_phase_arms[self.phase] != self.arm:
-            raise ValueError(
-                f"{self.phase} attempts require the {expected_phase_arms[self.phase]} arm"
-            )
+        if self.phase not in allowed_phase_arms or self.arm not in allowed_phase_arms[self.phase]:
+            raise ValueError("attempt arm is not allowed for its phase")
         prefix, separator, value = self.attempt_id.partition("-")
         if prefix != "attempt" or separator != "-" or len(value) != 32 or not value.isascii():
             raise ValueError("attempt_id must use the generated attempt identifier format")

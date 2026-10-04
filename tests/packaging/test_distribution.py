@@ -69,6 +69,7 @@ RUNTIME_MODULES = frozenset(
         PurePosixPath("ithrl/results/summary.py"),
         PurePosixPath("ithrl/results/validation.py"),
         PurePosixPath("ithrl/run_state.py"),
+        PurePosixPath("ithrl/sampling.py"),
         PurePosixPath("ithrl/runner/__init__.py"),
         PurePosixPath("ithrl/runner/contracts.py"),
         PurePosixPath("ithrl/runner/codex/__init__.py"),

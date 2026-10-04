@@ -426,6 +426,25 @@ class SamplingBlockEvidence(_SamplingContract):
         )
 
     @property
+    def next_schedule_position(self) -> int | None:
+        """Next frozen slot, skipping only arms with their full valid target."""
+
+        start = 0 if not self.attempts else self.attempts[-1].schedule_position + 1
+        finished = {
+            arm
+            for arm in ("baseline", "candidate")
+            if self.counts_for(arm).valid == self.plan.targets_for(arm).required_valid
+        }
+        return next(
+            (
+                position
+                for position in range(start, len(self.plan.schedule))
+                if self.plan.schedule[position] not in finished
+            ),
+            None,
+        )
+
+    @property
     def eligibility_refusal(self) -> str | None:
         for item in self.attempts:
             observation = item.observation

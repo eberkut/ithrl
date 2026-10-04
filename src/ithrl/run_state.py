@@ -755,13 +755,10 @@ class SampledRunStateFile:
 
     @staticmethod
     def _next_position(block: SamplingBlockEvidence) -> int:
-        position = 0 if not block.attempts else block.attempts[-1].schedule_position + 1
-        while position < len(block.plan.schedule):
-            arm = block.plan.schedule[position]
-            if block.counts_for(arm).valid < block.plan.targets_for(arm).required_valid:
-                return position
-            position += 1
-        raise RunStateError("frozen sampling schedule is exhausted")
+        position = block.next_schedule_position
+        if position is None:
+            raise RunStateError("frozen sampling schedule is exhausted")
+        return position
 
     def append_observation(
         self,

@@ -39,6 +39,7 @@ from ithrl.runner import (
     validate_run_result,
     validate_runner_error,
 )
+from ithrl.runner.contracts import AttemptArm, AttemptPhase
 from ithrl.synthetic import extract_inference
 from ithrl.workflow import prepare_experiment
 
@@ -91,6 +92,38 @@ def test_public_runner_imports_execute_a_prepared_candidate(tmp_path: Path) -> N
     assert result.attempt_id == attempt.attempt_id
     assert result.accounting.actions_executed == 0
     assert result.accounting.tool_network_requests == 0
+
+
+@pytest.mark.parametrize(
+    ("phase", "arm"),
+    [
+        ("search", "baseline"),
+        ("search", "candidate"),
+        ("confirmation", "baseline"),
+        ("confirmation", "candidate"),
+        ("confirmation", "selected"),
+    ],
+)
+def test_prepared_attempt_supports_fresh_sampling_arms(
+    tmp_path: Path, phase: AttemptPhase, arm: AttemptArm
+) -> None:
+    _, attempt = _attempt(_synthetic_evidence(tmp_path))
+    sampled = replace(attempt, phase=phase, arm=arm)
+    assert sampled.phase == phase
+    assert sampled.arm == arm
+    assert sampled.digest != attempt.digest
+
+
+@pytest.mark.parametrize(
+    ("phase", "arm"),
+    [("calibration", "candidate"), ("calibration", "selected"), ("search", "selected")],
+)
+def test_prepared_attempt_rejects_wrong_sampling_arm(
+    tmp_path: Path, phase: AttemptPhase, arm: AttemptArm
+) -> None:
+    _, attempt = _attempt(_synthetic_evidence(tmp_path))
+    with pytest.raises(ValueError, match="arm is not allowed"):
+        replace(attempt, phase=phase, arm=arm)
 
 
 def test_runner_package_preserves_the_previous_public_imports() -> None:
