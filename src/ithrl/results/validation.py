@@ -490,7 +490,7 @@ def loads_json(source: str, *, label: str) -> object:
             object_pairs_hook=reject_duplicate,
             parse_constant=reject_constant,
         )
-        validate_json_limits(value)  # type: ignore[arg-type]
+        validate_json_limits(value)
         return value
     except (json.JSONDecodeError, RecursionError, UnicodeError, ValueError) as error:
         if isinstance(error, ResultSnapshotError):

@@ -8,6 +8,7 @@ import json
 import math
 from collections import defaultdict, deque
 from collections.abc import Iterable, Mapping, Sequence
+from enum import Enum, auto
 from itertools import pairwise
 from pathlib import PurePosixPath
 from typing import Annotated, Any, Literal, cast
@@ -18,7 +19,12 @@ type JsonScalar = bool | int | float | str | None
 type JsonValue = JsonScalar | list[JsonValue] | dict[str, JsonValue]
 type JsonObject = dict[str, JsonValue]
 
-_REMOVED = object()
+
+class _PruneMarker(Enum):
+    REMOVED = auto()
+
+
+_REMOVED = _PruneMarker.REMOVED
 _TERMINAL = object()
 MAX_CONTEXT_NODES = 20_000
 MAX_DEPENDENCIES_PER_NODE = 256
@@ -434,7 +440,7 @@ def _resolve_pointer(request: JsonValue, tokens: Sequence[str], pointer: str) ->
     return current
 
 
-def _prune(value: JsonValue, trie: dict[object, Any]) -> JsonValue | object:
+def _prune(value: JsonValue, trie: dict[object, Any]) -> JsonValue | Literal[_PruneMarker.REMOVED]:
     if _TERMINAL in trie:
         return _REMOVED
     if isinstance(value, dict):
@@ -443,7 +449,7 @@ def _prune(value: JsonValue, trie: dict[object, Any]) -> JsonValue | object:
             branch = trie.get(key)
             transformed = copy.deepcopy(child) if branch is None else _prune(child, branch)
             if transformed is not _REMOVED:
-                result[key] = transformed  # type: ignore[assignment]
+                result[key] = transformed
         return result
     if isinstance(value, list):
         result_list: list[JsonValue] = []
@@ -452,7 +458,7 @@ def _prune(value: JsonValue, trie: dict[object, Any]) -> JsonValue | object:
             branch = trie.get(str(index))
             transformed = copy.deepcopy(child) if branch is None else _prune(child, branch)
             if transformed is not _REMOVED:
-                result_list.append(transformed)  # type: ignore[arg-type]
+                result_list.append(transformed)
         return result_list
     if trie:
         raise MaterializationError("context path traverses a scalar value")

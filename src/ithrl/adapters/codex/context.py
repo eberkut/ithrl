@@ -141,7 +141,7 @@ def _dependencies(
     item_type = _string(payload.get("type"))
     call_id = _string(payload.get("call_id"))
     if record_type == "response_item" and item_type in _OUTPUT_TYPES and call_id in calls:
-        return (calls[cast(str, call_id)],)
+        return (calls[call_id],)
     return ()
 
 

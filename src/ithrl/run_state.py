@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 import stat
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Annotated, Literal
@@ -131,7 +131,7 @@ class RunStateFile:
         self._write(current.model_copy(update={"checkpoint": checkpoint}))
 
     @contextmanager
-    def acquire_lock(self) -> Iterator[None]:
+    def acquire_lock(self) -> Generator[None]:
         """Prevent concurrent execution against the active run."""
 
         lock_path = self.path.with_name("run.lock")

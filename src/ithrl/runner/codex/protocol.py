@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass, field
-from typing import BinaryIO, TextIO, cast
+from typing import TYPE_CHECKING, BinaryIO, TextIO, cast
 
-if __package__:
+if TYPE_CHECKING or __package__:
     from ithrl.runner.codex.protocol_contracts import (
         ACTION_ITEM_TYPES,
         ACTION_REQUEST_METHODS,
@@ -29,7 +29,7 @@ if __package__:
         validate_protocol_json,
     )
 else:
-    from protocol_contracts import (  # type: ignore[import-not-found]
+    from protocol_contracts import (
         ACTION_ITEM_TYPES,
         ACTION_REQUEST_METHODS,
         ACTION_RESPONSES,

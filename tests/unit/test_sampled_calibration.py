@@ -514,7 +514,7 @@ def test_concurrent_calibration_cannot_start_an_extra_attempt(tmp_path: Path) ->
             raise RuntimeError("test runner was not released")
         return await original(attempt)
 
-    runner.run = blocking_run  # type: ignore[method-assign]
+    runner.run = blocking_run
     with ThreadPoolExecutor(max_workers=1) as pool:
         first = pool.submit(run_sampled_calibration, evidence=case, prepared=prepared, store=store)
         assert entered.wait(5)

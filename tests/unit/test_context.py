@@ -12,6 +12,8 @@ from ithrl.context import (
     ContextGraph,
     ContextGraphError,
     ContextNode,
+    JsonObject,
+    JsonScalar,
     MaterializationError,
     SourceRecordSelector,
     UnsafeRemovalError,
@@ -271,6 +273,38 @@ def test_materialization_uses_original_list_indices() -> None:
     assert [item["id"] for item in result_input if isinstance(item, dict)] == ["B"]
 
 
+@pytest.mark.parametrize("retained", [None, False, True, 0, 1, 1.5, ""])
+def test_materialization_preserves_json_scalars_when_removing_siblings(
+    retained: JsonScalar,
+) -> None:
+    request: JsonObject = {
+        "object": {"remove": "discard", "keep": retained},
+        "array": ["discard", retained],
+    }
+    graph = ContextGraph(
+        nodes=tuple(
+            ContextNode(
+                id=node_id,
+                kind="field",
+                path=path,
+                mutable=True,
+                source="request.json",
+                digest=content_digest("discard"),
+            )
+            for node_id, path in (("field", "/object/remove"), ("item", "/array/0"))
+        )
+    )
+
+    assert graph.materialize(request, {"field", "item"}) == {
+        "object": {"keep": retained},
+        "array": [retained],
+    }
+    assert request == {
+        "object": {"remove": "discard", "keep": retained},
+        "array": ["discard", retained],
+    }
+
+
 @pytest.mark.parametrize("remove", [False, True])
 def test_materialization_keeps_nested_retained_data_independent(remove: bool) -> None:
     shared = {"values": [{"name": "original"}]}
@@ -368,9 +402,12 @@ def test_context_graph_resource_limits_are_enforced() -> None:
 
 
 def test_json_nesting_limit_is_enforced() -> None:
-    value: Any = []
+    value: list[object] = []
+    current = value
     for _ in range(130):
-        value = [value]
+        child: list[object] = []
+        current.append(child)
+        current = child
 
     with pytest.raises(ValueError, match="JSON nesting exceeds"):
         validate_json_limits(value)

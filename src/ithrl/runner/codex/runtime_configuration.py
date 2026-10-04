@@ -194,7 +194,7 @@ def _valid_rendered_provider(
 
 def _valid_rendered_destination(provider: dict[str, object], endpoint: str) -> bool:
     base_url = provider["base_url"]
-    return bool(
+    return (
         isinstance(base_url, str)
         and _is_supported_url_shape(urlsplit(base_url))
         and responses_endpoint(base_url) == endpoint

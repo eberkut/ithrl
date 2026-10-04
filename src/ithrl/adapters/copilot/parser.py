@@ -114,7 +114,7 @@ def _validate_envelopes(records: tuple[JsonObject, ...]) -> tuple[_Record, ...]:
             _Record(
                 line=line,
                 record_id=record_id,
-                parent_id=cast(str | None, parent),
+                parent_id=parent,
                 record_type=record_type,
                 data=cast(JsonObject, data),
             )

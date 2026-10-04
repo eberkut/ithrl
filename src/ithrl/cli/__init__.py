@@ -296,7 +296,7 @@ def shrink(
             "--max-provider-calls",
             min=1,
             max=MAX_CALIBRATION_ATTEMPTS * MAX_PROVIDER_CALLS_PER_ATTEMPT,
-            help="Maximum total provider calls reserved for native calibration.",
+            help="Maximum total provider calls allowed for native calibration.",
         ),
     ] = None,
     attempt_timeout: Annotated[

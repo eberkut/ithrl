@@ -108,6 +108,7 @@ RUNTIME_MODULES = frozenset(
         PurePosixPath("ithrl/runner/runtime/state.py"),
         PurePosixPath("ithrl/runner/validation.py"),
         PurePosixPath("ithrl/synthetic.py"),
+        PurePosixPath("ithrl/statistics.py"),
         PurePosixPath("ithrl/timestamps.py"),
         PurePosixPath("ithrl/workflow.py"),
     }

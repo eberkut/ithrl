@@ -524,7 +524,7 @@ def test_tool_call_rejects_oversized_or_deep_arguments() -> None:
     for _ in range(17):
         nested = {"child": nested}
     with pytest.raises(ValidationError, match="nesting"):
-        ToolCall(name="shell", arguments=nested)  # type: ignore[arg-type]
+        ToolCall(name="shell", arguments=nested)
 
     with pytest.raises(ValidationError, match="item"):
         ToolCall(name="shell", arguments={"items": [None] * 4097})
