@@ -6,6 +6,7 @@ import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
 from ithrl.case import CaseEvidence
 from ithrl.execution.budget import (
@@ -31,7 +32,9 @@ from ithrl.run_state import (
     SamplingDispatchReservation,
 )
 from ithrl.runner import Candidate, PreparedAttempt, prepare_candidate
-from ithrl.workflow import PreparedExperiment
+
+if TYPE_CHECKING:
+    from ithrl.workflow import PreparedExperiment
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,169 +80,189 @@ async def collect_sampling_block(
     current shared execution contracts do not provide, and are explicitly refused here.
     """
 
+    with state_file.acquire_lock(store):
+        return await _collect_sampling_block_owned(
+            evidence=evidence,
+            original=original,
+            candidate=candidate,
+            removed_context_ids=removed_context_ids,
+            plan=plan,
+            state_file=state_file,
+            store=store,
+            clock=clock,
+            verify_independence=verify_independence,
+        )
+
+
+async def _collect_sampling_block_owned(
+    *,
+    evidence: CaseEvidence,
+    original: PreparedExperiment,
+    candidate: PreparedExperiment,
+    removed_context_ids: tuple[str, ...],
+    plan: SamplingBlockPlan,
+    state_file: SampledRunStateFile,
+    store: ObservationStore,
+    clock: Callable[[], datetime] = _now,
+    verify_independence: Callable[[Observation], str | None] | None = None,
+) -> SamplingCollectionResult:
+    """Collect while the caller owns run/store locks across the composed search."""
+
+    state_file._require_lock(store)
     originals = prepare_candidate(evidence, original.execution_plan)
     selected = prepare_candidate(evidence, candidate.execution_plan, removed_context_ids)
     inputs = {"baseline": (original, originals), "candidate": (candidate, selected)}
     _validate_inputs(evidence, plan, inputs)
     cost = sampling_attempt_cost(original.runner.capability_profile, original.resource_limits)
-    with state_file.acquire_lock(store):
-        state = state_file.load(store)
-        if (
-            state.original_identity != plan.original_identity
-            or state.original_candidate_digest != plan.original_candidate_digest
-            or state.provider_calls_per_attempt != plan.provider_calls_per_attempt
-        ):
-            raise ValueError("sampling block does not match the original run identity")
-        if state.pending is not None:
-            pending_plan = state.blocks[-1].plan
-            if pending_plan.digest != plan.digest:
-                raise ValueError("continuation requires the exact frozen block")
-            pending = state.pending
-            prepared = inputs[pending.arm][0]
-            digest = (
-                plan.original_candidate_digest
-                if pending.arm == "baseline"
-                else plan.candidate_digest
-            )
-            observation = store.get_attempt(
-                prepared.identity,
-                candidate_digest=digest,
-                role=ObservationRole(plan.role),
-                arm=ObservationArm(pending.arm),
-                attempt=pending.attempt,
-            )
-            if observation is None:
-                return _result(state_file, store, plan, clock(), "unresolved-dispatch")
-            state = state_file.reconcile(
-                store, independence_evidence_digest=_independence(observation, verify_independence)
-            )
-
-        active = bool(state.blocks and not state.blocks[-1].archived)
-        if active and state.blocks[-1].plan.digest != plan.digest:
+    state = state_file.load(store)
+    if (
+        state.original_identity != plan.original_identity
+        or state.original_candidate_digest != plan.original_candidate_digest
+        or state.provider_calls_per_attempt != plan.provider_calls_per_attempt
+    ):
+        raise ValueError("sampling block does not match the original run identity")
+    if state.pending is not None:
+        pending_plan = state.blocks[-1].plan
+        if pending_plan.digest != plan.digest:
             raise ValueError("continuation requires the exact frozen block")
-        block = (
-            state_file.evidence(store)[-1]
-            if active
-            else SamplingBlockEvidence(plan=plan, attempts=())
+        pending = state.pending
+        prepared = inputs[pending.arm][0]
+        digest = (
+            plan.original_candidate_digest if pending.arm == "baseline" else plan.candidate_digest
         )
-        if not active and any(progress.plan.block_id == plan.block_id for progress in state.blocks):
-            raise ValueError("archived sampling blocks cannot be collected again")
-        if not active and any(progress.plan.role == "confirmation" for progress in state.blocks):
-            return _result(state_file, store, plan, clock(), "confirmation-already-started", block)
-        # An unsafe earlier block cannot be hidden by archiving it and drawing a new block.
-        prior_blocks = state_file.evidence(store)
-        if any(not earlier.eligible for earlier in prior_blocks):
-            return _result(state_file, store, plan, clock(), "ineligible-prior-block", block)
-        if (
-            not active
-            and plan.role == "search"
-            and any(not earlier.complete for earlier in prior_blocks)
-        ):
-            return _result(state_file, store, plan, clock(), "unfinished-prior-block", block)
+        observation = store.get_attempt(
+            prepared.identity,
+            candidate_digest=digest,
+            role=ObservationRole(plan.role),
+            arm=ObservationArm(pending.arm),
+            attempt=pending.attempt,
+        )
+        if observation is None:
+            return _result(state_file, store, plan, clock(), "unresolved-dispatch")
+        state = state_file.reconcile(
+            store, independence_evidence_digest=_independence(observation, verify_independence)
+        )
 
-        while True:
-            now = clock()
-            if now.tzinfo is None or now.utcoffset() is None:
-                raise ValueError("sampling clock must include a UTC offset")
-            usage = state_file.usage(store, now=now)
-            reason = block.eligibility_refusal
-            if reason is None and not plan.frozen_at <= now < plan.expires_at:
-                reason = "freshness-expired"
-            if (
-                reason is None
-                and block.attempts
-                and now < block.attempts[-1].observation.recorded_at
-            ):
-                reason = "clock-precedes-progress"
-            if reason is None and usage.wall_time_seconds > state.allowance.max_wall_time_seconds:
-                reason = "wall-time-exhausted"
-            if reason is None and state.allowance.max_tokens is not None:
-                reason = "token-estimate-unavailable"
-            if reason is not None:
-                return SamplingCollectionResult(block, usage, reason)
-            if block.complete:
-                return SamplingCollectionResult(block, usage, None)
+    active = bool(state.blocks and not state.blocks[-1].archived)
+    if active and state.blocks[-1].plan.digest != plan.digest:
+        raise ValueError("continuation requires the exact frozen block")
+    block = (
+        state_file.evidence(store)[-1] if active else SamplingBlockEvidence(plan=plan, attempts=())
+    )
+    if not active and any(progress.plan.block_id == plan.block_id for progress in state.blocks):
+        raise ValueError("archived sampling blocks cannot be collected again")
+    if not active and any(progress.plan.role == "confirmation" for progress in state.blocks):
+        return _result(state_file, store, plan, clock(), "confirmation-already-started", block)
+    # An unsafe earlier block cannot be hidden by archiving it and drawing a new block.
+    prior_blocks = state_file.evidence(store)
+    if any(not earlier.eligible for earlier in prior_blocks):
+        return _result(state_file, store, plan, clock(), "ineligible-prior-block", block)
+    if (
+        not active
+        and plan.role == "search"
+        and any(not earlier.complete for earlier in prior_blocks)
+    ):
+        return _result(state_file, store, plan, clock(), "unfinished-prior-block", block)
 
-            position = block.next_schedule_position
-            if position is None:
-                return SamplingCollectionResult(block, usage, "attempt-limit")
-            unfinished = {
-                arm
-                for arm in ("baseline", "candidate")
-                if block.counts_for(arm).valid < plan.targets_for(arm).required_valid
-            }
-            remaining = sum(arm in unfinished for arm in plan.schedule[position:])
-            reason = _budget_reason(state, plan, usage, remaining, cost, active)
-            if reason is not None:
-                return SamplingCollectionResult(block, usage, reason)
-            arm = plan.schedule[position]
-            prepared, partition = inputs[arm]
-            previous = store.list_compatible(
+    while True:
+        now = clock()
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("sampling clock must include a UTC offset")
+        usage = state_file.usage(store, now=now)
+        reason = block.eligibility_refusal
+        if reason is None and not plan.frozen_at <= now < plan.expires_at:
+            reason = "freshness-expired"
+        if reason is None and block.attempts and now < block.attempts[-1].observation.recorded_at:
+            reason = "clock-precedes-progress"
+        if reason is None and usage.wall_time_seconds > state.allowance.max_wall_time_seconds:
+            reason = "wall-time-exhausted"
+        if reason is None and state.allowance.max_tokens is not None:
+            reason = "token-estimate-unavailable"
+        if reason is not None:
+            return SamplingCollectionResult(block, usage, reason)
+        if block.complete:
+            return SamplingCollectionResult(block, usage, None)
+
+        position = block.next_schedule_position
+        if position is None:
+            return SamplingCollectionResult(block, usage, "attempt-limit")
+        unfinished = {
+            arm
+            for arm in ("baseline", "candidate")
+            if block.counts_for(arm).valid < plan.targets_for(arm).required_valid
+        }
+        remaining = sum(arm in unfinished for arm in plan.schedule[position:])
+        reason = _budget_reason(state, plan, usage, remaining, cost, active)
+        if reason is not None:
+            return SamplingCollectionResult(block, usage, reason)
+        arm = plan.schedule[position]
+        prepared, partition = inputs[arm]
+        previous = store.list_compatible(
+            prepared.identity,
+            candidate_digest=partition.digest,
+            role=ObservationRole(plan.role),
+            arm=ObservationArm(arm),
+        )
+        if any(not item.attempt_evidence.automatic_retry_safe for item in previous):
+            return SamplingCollectionResult(block, usage, "unsafe-prior-attempt")
+        attempt = _attempt(evidence, prepared, partition, plan, arm)
+        # Preparation is outside the runner deadline; include its elapsed time before
+        # publishing a dispatch. Synchronous publication itself has no hard time bound.
+        reserved_at = clock()
+        refreshed = state_file.usage(store, now=reserved_at)
+        reason = _budget_reason(state, plan, refreshed, remaining, cost, active)
+        if reason is not None:
+            return SamplingCollectionResult(block, refreshed, reason)
+        if not plan.frozen_at <= reserved_at < plan.expires_at:
+            return SamplingCollectionResult(
+                block, state_file.usage(store, now=reserved_at), "freshness-expired"
+            )
+        if not active:
+            state = state_file.admit_block(store, plan)
+            active = True
+        state_file.reserve_dispatch(
+            store,
+            SamplingDispatchReservation(
+                block_id=plan.block_id,
+                block_digest=plan.digest,
+                schedule_position=position,
+                arm=arm,
+                attempt=1 + max((item.attempt for item in previous), default=0),
+                attempt_id=attempt.attempt_id,
+                attempt_digest=attempt.digest,
+                reserved_at=reserved_at,
+                provider_calls=cost.provider_calls,
+                runner_seconds=cost.runner_seconds,
+            ),
+        )
+        interrupted = False
+        try:
+            observation = await observe_once(
+                runner=prepared.runner, identity=prepared.identity, store=store, attempt=attempt
+            )
+        except RunnerExecutionError as error:
+            if error.observation is None:
+                return _result(state_file, store, plan, clock(), "unresolved-dispatch")
+            observation = error.observation
+        except asyncio.CancelledError:
+            interrupted = True
+            # observe_once records cancellation when possible. Exact reconciliation below
+            # preserves its effects; missing evidence leaves the full dispatch charged.
+            observation = store.get_attempt(
                 prepared.identity,
                 candidate_digest=partition.digest,
                 role=ObservationRole(plan.role),
                 arm=ObservationArm(arm),
+                attempt=1 + max((item.attempt for item in previous), default=0),
             )
-            if any(not item.attempt_evidence.automatic_retry_safe for item in previous):
-                return SamplingCollectionResult(block, usage, "unsafe-prior-attempt")
-            attempt = _attempt(evidence, prepared, partition, plan, arm)
-            # Preparation is outside the runner deadline; include its elapsed time before
-            # publishing a dispatch. Synchronous publication itself has no hard time bound.
-            reserved_at = clock()
-            refreshed = state_file.usage(store, now=reserved_at)
-            reason = _budget_reason(state, plan, refreshed, remaining, cost, active)
-            if reason is not None:
-                return SamplingCollectionResult(block, refreshed, reason)
-            if not plan.frozen_at <= reserved_at < plan.expires_at:
-                return SamplingCollectionResult(
-                    block, state_file.usage(store, now=reserved_at), "freshness-expired"
-                )
-            if not active:
-                state = state_file.admit_block(store, plan)
-                active = True
-            state_file.reserve_dispatch(
-                store,
-                SamplingDispatchReservation(
-                    block_id=plan.block_id,
-                    block_digest=plan.digest,
-                    schedule_position=position,
-                    arm=arm,
-                    attempt=1 + max((item.attempt for item in previous), default=0),
-                    attempt_id=attempt.attempt_id,
-                    attempt_digest=attempt.digest,
-                    reserved_at=reserved_at,
-                    provider_calls=cost.provider_calls,
-                    runner_seconds=cost.runner_seconds,
-                ),
-            )
-            interrupted = False
-            try:
-                observation = await observe_once(
-                    runner=prepared.runner, identity=prepared.identity, store=store, attempt=attempt
-                )
-            except RunnerExecutionError as error:
-                if error.observation is None:
-                    return _result(state_file, store, plan, clock(), "unresolved-dispatch")
-                observation = error.observation
-            except asyncio.CancelledError:
-                interrupted = True
-                # observe_once records cancellation when possible. Exact reconciliation below
-                # preserves its effects; missing evidence leaves the full dispatch charged.
-                observation = store.get_attempt(
-                    prepared.identity,
-                    candidate_digest=partition.digest,
-                    role=ObservationRole(plan.role),
-                    arm=ObservationArm(arm),
-                    attempt=1 + max((item.attempt for item in previous), default=0),
-                )
-                if observation is None:
-                    return _result(state_file, store, plan, clock(), "unresolved-dispatch")
-            state = state_file.reconcile(
-                store, independence_evidence_digest=_independence(observation, verify_independence)
-            )
-            block = state_file.evidence(store)[-1]
-            if interrupted:
-                return _result(state_file, store, plan, clock(), "user-interrupt")
+            if observation is None:
+                return _result(state_file, store, plan, clock(), "unresolved-dispatch")
+        state = state_file.reconcile(
+            store, independence_evidence_digest=_independence(observation, verify_independence)
+        )
+        block = state_file.evidence(store)[-1]
+        if interrupted:
+            return _result(state_file, store, plan, clock(), "user-interrupt")
 
 
 def _validate_inputs(

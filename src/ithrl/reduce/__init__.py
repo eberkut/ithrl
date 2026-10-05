@@ -1,4 +1,4 @@
-"""Resumable deterministic context reduction with dependency checks."""
+"""Resumable deterministic and sampled context reduction with dependency checks."""
 
 from ithrl.reduce.contracts import (
     ALGORITHM_DIGEST,
@@ -14,14 +14,16 @@ from ithrl.reduce.contracts import (
     SampledCandidateTrial,
     SampledComparison,
     SampledConfirmation,
+    SampledInvalidCandidateTrial,
     SampledReductionCheckpoint,
     SampledScreenAction,
+    SampledTrial,
     SearchClassification,
     SearchPhase,
     SearchStatus,
     validate_checkpoint_identity,
 )
-from ithrl.reduce.engine import DeterministicReducer
+from ithrl.reduce.engine import DeterministicReducer, SampledReducer, SampledSearchResult
 
 __all__ = [
     "ALGORITHM_DIGEST",
@@ -38,8 +40,12 @@ __all__ = [
     "SampledCandidateTrial",
     "SampledComparison",
     "SampledConfirmation",
+    "SampledInvalidCandidateTrial",
+    "SampledReducer",
     "SampledReductionCheckpoint",
     "SampledScreenAction",
+    "SampledSearchResult",
+    "SampledTrial",
     "SearchClassification",
     "SearchPhase",
     "SearchStatus",

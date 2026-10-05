@@ -1,22 +1,29 @@
-"""Budgeted deterministic reduction and exact checkpoint continuation."""
+"""Dependency-aware deterministic and sampled reduction with exact continuation."""
 
 from __future__ import annotations
 
 from collections import deque
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Literal
 
 from ithrl.behavior import BehaviorTarget
 from ithrl.case import CaseEvidence
-from ithrl.context import ContextGraphError
+from ithrl.context import ContextGraphError, content_digest
 from ithrl.execution import ResolvedExecutionPlan, ResourceLimits, SafetyPolicy
+from ithrl.experiment import SampledExperimentDefinition
 from ithrl.measurement import RunnerExecutionError, observe_once
 from ithrl.observations import (
+    Observation,
     ObservationArm,
     ObservationIdentity,
     ObservationOutcome,
     ObservationRole,
     ObservationStore,
+    SamplingBlockEvidence,
+    SamplingBlockPlan,
+    sampling_schedule,
 )
 from ithrl.reduce.contracts import (
     ALGORITHM_DIGEST,
@@ -26,12 +33,21 @@ from ithrl.reduce.contracts import (
     ReductionError,
     ReductionResult,
     ResumeMismatchError,
+    SampledCandidateTrial,
+    SampledComparison,
+    SampledInvalidCandidateTrial,
+    SampledReductionCheckpoint,
+    SampledTrial,
     SearchPhase,
     trial_key,
     validate_checkpoint_identity,
 )
 from ithrl.reduce.search import run_search
 from ithrl.runner import Candidate, PreparedAttempt, Runner, prepare_candidate
+
+if TYPE_CHECKING:
+    from ithrl.run_state import SampledRunState, SampledRunStateFile, SampledRunUsage
+    from ithrl.workflow import PreparedExperiment
 
 
 @dataclass(slots=True)
@@ -440,3 +456,408 @@ def _take_prior_trial(
     if prior.trial_key != expected_key:
         raise ResumeMismatchError("checkpoint trials do not follow the deterministic search order")
     return prior_trials.popleft()
+
+
+@dataclass(frozen=True, slots=True)
+class SampledSearchResult:
+    """Exploratory search progress; fresh statistical confirmation is a separate phase."""
+
+    checkpoint: SampledReductionCheckpoint
+    usage: SampledRunUsage
+    stop_reason: str | None
+
+    @property
+    def status(self) -> Literal["search-reduced", "search-incomplete"]:
+        return "search-reduced" if self.checkpoint.final_sweep_complete else "search-incomplete"
+
+
+class SampledReducer:
+    """Apply completed exploratory screens through the existing candidate generator."""
+
+    def __init__(
+        self,
+        *,
+        prepared: PreparedExperiment,
+        state_file: SampledRunStateFile,
+        observation_store: ObservationStore,
+        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        verify_independence: Callable[[Observation], str | None] | None = None,
+    ) -> None:
+        experiment = prepared.experiment
+        if not isinstance(experiment, SampledExperimentDefinition) or experiment.reduction is None:
+            raise ValueError("sampled reduction requires a frozen reduction plan")
+        if prepared.runner.capability_profile.deterministic:
+            raise ValueError("sampled reduction requires a nondeterministic runner")
+        self._prepared = prepared
+        self._experiment = experiment
+        self._reduction = experiment.reduction
+        self._state_file = state_file
+        self._store = observation_store
+        self._clock = clock
+        self._verify_independence = verify_independence
+        self._state: SampledRunState | None = None
+        self._resume: SampledReductionCheckpoint | None = None
+        self._unclassified: SamplingBlockEvidence | None = None
+        self._active: SamplingBlockEvidence | None = None
+        self._stop_reason: str | None = None
+
+    async def validate_resume(self, evidence: CaseEvidence) -> None:
+        """Validate authoritative membership and generator order without runner execution."""
+
+        with self._state_file.acquire_lock(self._store):
+            await self._load_and_validate(evidence)
+
+    async def reduce(self, evidence: CaseEvidence) -> SampledSearchResult:
+        """Continue the same sampled run, preserving both evidence and confirmation capacity."""
+
+        with self._state_file.acquire_lock(self._store):
+            await self._load_and_validate(evidence)
+            self._archive_classified_block(self._loaded_state, self._resume)
+            self._stop_reason = None
+            self._active = None
+            outcome = await self._run_search(evidence, publish=True)
+            checkpoint = self._publish_checkpoint(
+                outcome.removed, outcome.trials, outcome.complete, evidence=evidence
+            )
+            return SampledSearchResult(
+                checkpoint,
+                self._state_file.usage(self._store, now=self._clock()),
+                self._stop_reason,
+            )
+
+    async def _load_and_validate(self, evidence: CaseEvidence) -> None:
+        state = self._state_file.load(self._store)
+        prepared = self._prepared
+        original = prepare_candidate(evidence, prepared.execution_plan)
+        if (
+            state.original_identity != prepared.identity
+            or prepared.identity.case_digest != evidence.digest
+            or state.original_candidate_digest != original.digest
+            or prepared.execution_plan.capability != prepared.runner.capability_profile
+            or prepared.identity.runner_fingerprint != prepared.runner.fingerprint
+            or prepared.identity.execution_plan_digest != prepared.execution_plan.digest
+            or prepared.identity.experiment_digest != prepared.experiment.digest
+            or prepared.identity.target_digest != prepared.experiment.target.digest
+        ):
+            raise ResumeMismatchError("sampled run does not match the prepared original")
+        self._validate_calibration(state)
+        blocks = self._state_file.evidence(self._store)
+        if any(block.plan.role != "search" for block in blocks):
+            raise ResumeMismatchError("search cannot continue after confirmation starts")
+        checkpoint = state.checkpoint
+        published = (
+            ()
+            if checkpoint is None
+            else tuple(
+                trial.comparison.evidence
+                for trial in checkpoint.trials
+                if isinstance(trial, SampledCandidateTrial)
+            )
+        )
+        if blocks[: len(published)] != published or len(blocks) > len(published) + 1:
+            raise ResumeMismatchError("checkpoint omits or reorders authoritative search blocks")
+        if checkpoint is not None and checkpoint.reduction != self._reduction:
+            raise ResumeMismatchError("checkpoint uses another frozen reduction plan")
+        self._state = state
+        self._resume = checkpoint
+        self._active = None
+        self._unclassified = blocks[-1] if len(blocks) > len(published) else None
+        if self._unclassified is not None and state.blocks[-1].archived:
+            raise ResumeMismatchError("unclassified search blocks cannot be archived or redrawn")
+        outcome = await self._run_search(evidence, publish=False)
+        if checkpoint is not None:
+            if checkpoint.final_sweep_complete and self._unclassified is not None:
+                raise ResumeMismatchError("completed search contains an unclassified block")
+            expected = self._make_checkpoint(
+                outcome.removed, outcome.trials, outcome.complete, evidence=evidence
+            )
+            if (
+                checkpoint.removed_context_ids != expected.removed_context_ids
+                or checkpoint.best_candidate_digest != expected.best_candidate_digest
+                or (
+                    checkpoint.final_sweep_complete
+                    and (
+                        not outcome.complete
+                        or checkpoint.final_sweep_trial_keys != expected.final_sweep_trial_keys
+                        or checkpoint.expected_final_neighbors != expected.expected_final_neighbors
+                    )
+                )
+            ):
+                raise ResumeMismatchError(
+                    "checkpoint selection or final sweep differs from the generator"
+                )
+
+    def _validate_calibration(self, state: SampledRunState) -> None:
+        phase = self._experiment.calibration
+        observations = self._store.get_many(state.calibration_observation_ids)
+        compatible = self._store.list_compatible(
+            state.original_identity,
+            candidate_digest=state.original_candidate_digest,
+            role=ObservationRole.CALIBRATION,
+            arm=ObservationArm.BASELINE,
+        )
+        if observations != compatible:
+            raise ReductionError("calibration references omit authoritative observations")
+        if (
+            not observations
+            or len(observations) > phase.max_attempts
+            or sum(item.valid for item in observations) != phase.required_valid
+            or sum(item.outcome is ObservationOutcome.MATCH for item in observations)
+            < phase.minimum_matches
+            or any(not item.attempt_evidence.automatic_retry_safe for item in observations)
+        ):
+            raise ReductionError("sampled search requires successful safe full-context calibration")
+        valid = 0
+        for index, item in enumerate(observations, start=1):
+            if item.attempt != index or valid >= phase.required_valid:
+                raise ReductionError(
+                    "calibration references do not form the frozen complete sequence"
+                )
+            valid += item.valid
+
+    async def _run_search(self, evidence: CaseEvidence, *, publish: bool):
+        prior = deque(self._resume.trials if self._resume is not None else ())
+        outcome = await run_search(
+            evidence,
+            removable=[
+                node.id for node in evidence.context.nodes if node.mutable and not node.protected
+            ],
+            classify=self._classify,
+            prior_trials=prior,
+            publish=publish,
+            publish_checkpoint=lambda removed, trials, complete: self._publish_checkpoint(
+                removed, trials, complete, evidence=evidence
+            ),
+        )
+        if prior:
+            raise ResumeMismatchError("sampled trials do not follow the existing candidate order")
+        return outcome
+
+    async def _classify(
+        self,
+        *,
+        evidence: CaseEvidence,
+        base_removals: frozenset[str],
+        requested_removals: Sequence[str],
+        phase: SearchPhase,
+        prior_trials: deque[SampledTrial],
+        completed_trials: Sequence[SampledTrial],
+        publish: bool,
+    ) -> SampledTrial | None:
+        key = trial_key(phase, base_removals, tuple(requested_removals))
+        prior = prior_trials.popleft() if prior_trials else None
+        if prior is not None and prior.trial_key != key:
+            raise ResumeMismatchError("sampled trials do not follow the existing candidate order")
+        base = tuple(sorted(base_removals))
+        requested = tuple(requested_removals)
+        if prior is None and publish and len(completed_trials) >= MAX_CANDIDATE_RUNS:
+            self._stop_reason = "trial-limit"
+            return None
+        if prior is None and publish:
+            usage = self._state_file.usage(self._store, now=self._clock())
+            if usage.wall_time_seconds > self._loaded_state.allowance.max_wall_time_seconds:
+                self._stop_reason = "wall-time-exhausted"
+                return None
+        try:
+            effective = evidence.context.dependency_closure((*base_removals, *requested))
+        except ContextGraphError:
+            invalid = SampledInvalidCandidateTrial(
+                trial_key=key,
+                base_removals=base,
+                requested_removals=requested,
+                effective_removals=base,
+                phase=phase,
+                classification="invalid",
+            )
+            if prior is not None:
+                if prior != invalid:
+                    raise ResumeMismatchError(
+                        "invalid trial does not match the context graph"
+                    ) from None
+                return prior
+            if not publish:
+                if self._unclassified is not None:
+                    raise ResumeMismatchError(
+                        "sampling block belongs to an invalid graph candidate"
+                    ) from None
+                return None
+            return invalid
+        candidate = prepare_candidate(evidence, self._prepared.execution_plan, effective)
+        if prior is not None:
+            if (
+                not isinstance(prior, SampledCandidateTrial)
+                or prior.base_removals != base
+                or prior.requested_removals != requested
+                or prior.effective_removals != tuple(sorted(effective))
+                or prior.phase != phase
+                or prior.comparison.evidence.plan.candidate_digest != candidate.digest
+            ):
+                raise ResumeMismatchError(
+                    "sampled trial differs from dependency-valid construction"
+                )
+            self._validate_plan(prior.comparison.evidence.plan, key, candidate.digest)
+            return prior
+        plan = (
+            self._unclassified.plan
+            if self._unclassified is not None
+            else self._plan(key, candidate.digest)
+        )
+        self._validate_plan(plan, key, candidate.digest)
+        if not publish:
+            return None
+        # State imports reduction contracts through the public package. Defer the
+        # collector import until composition to keep that dependency acyclic.
+        from ithrl.sampling import _collect_sampling_block_owned
+
+        result = await _collect_sampling_block_owned(
+            evidence=evidence,
+            original=self._prepared,
+            candidate=self._prepared,
+            removed_context_ids=tuple(sorted(effective)),
+            plan=plan,
+            state_file=self._state_file,
+            store=self._store,
+            clock=self._clock,
+            verify_independence=self._verify_independence,
+        )
+        self._stop_reason = result.stop_reason
+        self._unclassified = None
+        if not result.complete and (not result.evidence.complete or result.evidence.eligible):
+            state = self._state_file.load(self._store)
+            if (
+                state.blocks
+                and state.blocks[-1].plan.digest == plan.digest
+                and not result.evidence.complete
+            ):
+                self._active = result.evidence
+            return None
+        return SampledCandidateTrial(
+            trial_key=key,
+            base_removals=base,
+            requested_removals=requested,
+            effective_removals=tuple(sorted(effective)),
+            phase=phase,
+            comparison=SampledComparison.from_evidence(result.evidence),
+        )
+
+    def _plan(self, key: str, candidate_digest: str) -> SamplingBlockPlan:
+        state = self._loaded_state
+        seed = int(content_digest({"run_id": state.run_id, "trial_key": key})[:16], 16)
+        search = self._reduction.search
+        return SamplingBlockPlan(
+            block_id=f"search-{key}",
+            role="search",
+            reduction=self._reduction,
+            original_identity=state.original_identity,
+            candidate_identity=self._prepared.identity,
+            original_candidate_digest=state.original_candidate_digest,
+            candidate_digest=candidate_digest,
+            frozen_at=self._clock(),
+            schedule_seed=seed,
+            schedule=sampling_schedule(
+                search.original.max_attempts, search.candidate.max_attempts, seed
+            ),
+            provider_calls_per_attempt=state.provider_calls_per_attempt,
+        )
+
+    def _validate_plan(self, plan: SamplingBlockPlan, key: str, candidate_digest: str) -> None:
+        state = self._loaded_state
+        seed = int(content_digest({"run_id": state.run_id, "trial_key": key})[:16], 16)
+        if (
+            plan.block_id != f"search-{key}"
+            or plan.role != "search"
+            or plan.reduction != self._reduction
+            or plan.original_identity != state.original_identity
+            or plan.candidate_identity != self._prepared.identity
+            or plan.original_candidate_digest != state.original_candidate_digest
+            or plan.candidate_digest != candidate_digest
+            or plan.schedule_seed != seed
+            or plan.provider_calls_per_attempt != state.provider_calls_per_attempt
+        ):
+            raise ResumeMismatchError(
+                "sampling block does not bind the generated trial and immutable original"
+            )
+
+    def _make_checkpoint(
+        self,
+        removed: Iterable[str],
+        trials: Iterable[SampledTrial],
+        final_sweep_complete: bool,
+        *,
+        evidence: CaseEvidence,
+    ) -> SampledReductionCheckpoint:
+        state = self._loaded_state
+        removed_ids = tuple(sorted(removed))
+        trials = tuple(trials)
+        final_trials = (
+            tuple(
+                trial.trial_key
+                for trial in trials
+                if trial.phase == "final-sweep" and trial.base_removals == removed_ids
+            )
+            if final_sweep_complete
+            else ()
+        )
+        neighbors = (
+            tuple(
+                (node.id,)
+                for node in evidence.context.nodes
+                if node.mutable and not node.protected and node.id not in removed_ids
+            )
+            if final_sweep_complete
+            else ()
+        )
+        return SampledReductionCheckpoint(
+            reduction=self._reduction,
+            original_identity=state.original_identity,
+            original_candidate_digest=state.original_candidate_digest,
+            best_candidate_digest=prepare_candidate(
+                evidence, self._prepared.execution_plan, removed_ids
+            ).digest,
+            removed_context_ids=removed_ids,
+            trials=trials,
+            active_block=self._active,
+            final_sweep_complete=final_sweep_complete,
+            final_sweep_trial_keys=final_trials,
+            expected_final_neighbors=neighbors,
+        )
+
+    def _publish_checkpoint(
+        self,
+        removed: Iterable[str],
+        trials: Iterable[SampledTrial],
+        final_sweep_complete: bool,
+        *,
+        evidence: CaseEvidence,
+    ) -> SampledReductionCheckpoint:
+        checkpoint = self._make_checkpoint(removed, trials, final_sweep_complete, evidence=evidence)
+        state = self._state_file.load(self._store)
+        if state.pending is None:
+            self._state_file.save_checkpoint(self._store, checkpoint)
+            self._archive_classified_block(state, checkpoint)
+        return checkpoint
+
+    def _archive_classified_block(
+        self, state: SampledRunState, checkpoint: SampledReductionCheckpoint | None
+    ) -> None:
+        """Recover a saved classification whose separate archival was interrupted."""
+
+        if (
+            checkpoint is not None
+            and state.pending is None
+            and state.blocks
+            and not state.blocks[-1].archived
+            and any(
+                isinstance(trial, SampledCandidateTrial)
+                and trial.comparison.evidence.plan.digest == state.blocks[-1].plan.digest
+                and trial.allows_search_continuation
+                for trial in checkpoint.trials
+            )
+        ):
+            self._state = self._state_file.archive_block(self._store)
+
+    @property
+    def _loaded_state(self) -> SampledRunState:
+        if self._state is None:
+            raise RuntimeError("sampled reducer has not loaded owned state")
+        return self._state

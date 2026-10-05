@@ -191,6 +191,18 @@ def test_reducer_finds_a_dependency_valid_one_minimal_reproducer(tmp_path: Path)
     )
 
 
+def test_unchanged_chunks_are_not_repeated_at_finer_granularity(tmp_path: Path) -> None:
+    evidence = _evidence("BCDEF")  # Required marker A is absent, so every candidate loses.
+    result = asyncio.run(
+        _reducer(evidence, ObservationStore(tmp_path / "observations.sqlite")).reduce(evidence)
+    )
+
+    assert result.status == "search-1-minimal"
+    assert result.removed_context_ids == ()
+    assert len(result.trials) == len({trial.trial_key for trial in result.trials})
+    assert result.candidate_runs_used == len(result.trials)
+
+
 def test_reducer_reports_only_one_minimality_when_alternatives_exist(tmp_path: Path) -> None:
     evidence = _evidence("ABCDE")
     result = asyncio.run(

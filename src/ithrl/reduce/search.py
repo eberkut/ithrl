@@ -1,4 +1,4 @@
-"""Deterministic chunk search and final single-removal sweep."""
+"""Shared candidate order and final single-removal sweep."""
 
 from __future__ import annotations
 
@@ -8,10 +8,24 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from ithrl.case import CaseEvidence
-from ithrl.reduce.contracts import CandidateTrial, ReductionCheckpoint, SearchPhase
+from ithrl.reduce.contracts import SearchPhase, trial_key
 
 
-class _Classifier(Protocol):
+class _Trial(Protocol):
+    @property
+    def trial_key(self) -> str: ...
+
+    @property
+    def effective_removals(self) -> tuple[str, ...]: ...
+
+    @property
+    def accepts_removal(self) -> bool: ...
+
+    @property
+    def allows_search_continuation(self) -> bool: ...
+
+
+class _Classifier[Trial: _Trial](Protocol):
     async def __call__(
         self,
         *,
@@ -19,35 +33,33 @@ class _Classifier(Protocol):
         base_removals: frozenset[str],
         requested_removals: Sequence[str],
         phase: SearchPhase,
-        prior_trials: deque[CandidateTrial],
-        completed_trials: Sequence[CandidateTrial],
+        prior_trials: deque[Trial],
+        completed_trials: Sequence[Trial],
         publish: bool,
-    ) -> CandidateTrial | None: ...
+    ) -> Trial | None: ...
 
 
-type _CheckpointPublisher = Callable[
-    [Iterable[str], Iterable[CandidateTrial], bool], ReductionCheckpoint
-]
+type _CheckpointPublisher[Trial: _Trial] = Callable[[Iterable[str], Iterable[Trial], bool], object]
 
 
 @dataclass(frozen=True, slots=True)
-class _SearchOutcome:
+class _SearchOutcome[Trial: _Trial]:
     removed: frozenset[str]
-    trials: list[CandidateTrial]
+    trials: list[Trial]
     complete: bool
 
 
 @dataclass(slots=True)
-class _Search:
+class _Search[Trial: _Trial]:
     evidence: CaseEvidence
     removable: list[str]
-    classify: _Classifier
-    prior_trials: deque[CandidateTrial]
+    classify: _Classifier[Trial]
+    prior_trials: deque[Trial]
     publish: bool
-    publish_checkpoint: _CheckpointPublisher
-    trials: list[CandidateTrial]
+    publish_checkpoint: _CheckpointPublisher[Trial]
+    trials: list[Trial]
 
-    async def run(self) -> _SearchOutcome:
+    async def run(self) -> _SearchOutcome[Trial]:
         removed, chunk_complete = await self._run_chunks()
         if not chunk_complete:
             return _SearchOutcome(removed, self.trials, False)
@@ -76,7 +88,7 @@ class _Search:
             trial = await self._run_trial(removed, chunk, "chunk")
             if trial is None:
                 return removed, False, False
-            if trial.classification == "preserves":
+            if trial.accepts_removal:
                 removed = frozenset(trial.effective_removals)
                 self._remove_effective(removed)
                 return removed, True, True
@@ -90,7 +102,7 @@ class _Search:
                 trial = await self._run_trial(removed, (node_id,), "final-sweep")
                 if trial is None:
                     return removed, False
-                if trial.classification == "preserves":
+                if trial.accepts_removal:
                     removed = frozenset(trial.effective_removals)
                     self._remove_effective(removed)
                     restart = True
@@ -102,7 +114,14 @@ class _Search:
         removed: frozenset[str],
         requested: Sequence[str],
         phase: SearchPhase,
-    ) -> CandidateTrial | None:
+    ) -> Trial | None:
+        key = trial_key(phase, removed, tuple(requested))
+        # Finer partitions can repeat an unchanged chunk. Keep its frozen decision
+        # rather than duplicate the trial or redraw a favorable sampled block.
+        previous = next((trial for trial in self.trials if trial.trial_key == key), None)
+        if previous is not None:
+            return previous if previous.allows_search_continuation else None
+        replaying = bool(self.prior_trials)
         trial = await self.classify(
             evidence=self.evidence,
             base_removals=removed,
@@ -115,27 +134,25 @@ class _Search:
         if trial is None:
             return None
         self.trials.append(trial)
-        if self.publish:
-            checkpoint_removed = (
-                trial.effective_removals if trial.classification == "preserves" else removed
-            )
+        if self.publish and not replaying:
+            checkpoint_removed = trial.effective_removals if trial.accepts_removal else removed
             self.publish_checkpoint(checkpoint_removed, self.trials, False)
-        return trial
+        return trial if trial.allows_search_continuation else None
 
     def _remove_effective(self, removed: frozenset[str]) -> None:
         self.removable = [item for item in self.removable if item not in removed]
 
 
-async def run_search(
+async def run_search[Trial: _Trial](
     evidence: CaseEvidence,
     *,
     removable: list[str],
-    classify: _Classifier,
-    prior_trials: deque[CandidateTrial],
+    classify: _Classifier[Trial],
+    prior_trials: deque[Trial],
     publish: bool,
-    publish_checkpoint: _CheckpointPublisher,
-) -> _SearchOutcome:
-    """Run chunk reduction followed by the single-removal proof sweep."""
+    publish_checkpoint: _CheckpointPublisher[Trial],
+) -> _SearchOutcome[Trial]:
+    """Run the same chunk order and restarting final sweep for either decision policy."""
 
     search = _Search(
         evidence=evidence,

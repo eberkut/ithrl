@@ -30,7 +30,7 @@ from ithrl.observations import (
     SamplingBudgetAllowance,
 )
 from ithrl.path_safety import UnsafePathError, private_file_lock
-from ithrl.reduce import ReductionCheckpoint, SampledReductionCheckpoint
+from ithrl.reduce.contracts import ReductionCheckpoint, SampledReductionCheckpoint
 from ithrl.runner import ProviderAcceptanceState
 
 _MAX_RUN_STATE_BYTES = 64 * 1024 * 1024

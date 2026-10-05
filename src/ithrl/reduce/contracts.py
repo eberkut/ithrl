@@ -102,6 +102,14 @@ class CandidateTrial(BaseModel):
         if self.effective_removals != self.base_removals:
             raise ValueError("invalid trials cannot change effective removals")
 
+    @property
+    def accepts_removal(self) -> bool:
+        return self.classification == "preserves"
+
+    @property
+    def allows_search_continuation(self) -> bool:
+        return True
+
 
 class ReductionCheckpoint(BaseModel):
     """Complete deterministic search state needed for exact continuation."""
@@ -221,26 +229,17 @@ class SampledComparison(BaseModel):
     evidence: SamplingBlockEvidence
     action: SampledScreenAction | None
 
+    @classmethod
+    def from_evidence(cls, evidence: SamplingBlockEvidence) -> SampledComparison:
+        """Derive the frozen exploratory action without assigning a confidence claim."""
+
+        return cls(evidence=evidence, action=_sampled_screen_action(evidence))
+
     @model_validator(mode="after")
     def validate_action(self) -> SampledComparison:
         if self.evidence.plan.role != "search":
             raise ValueError("sampled comparisons require search evidence")
-        expected: SampledScreenAction | None = None
-        if self.evidence.eligible:
-            expected = "incomplete"
-        if self.evidence.complete and self.evidence.eligible:
-            original = self.evidence.original_counts
-            candidate = self.evidence.candidate_counts
-            # Compare count ratios exactly against the frozen margin, without subtracting
-            # rounded rates or introducing a tolerance at the admission boundary.
-            difference = Fraction(candidate.matches, candidate.valid) - Fraction(
-                original.matches, original.valid
-            )
-            expected = (
-                "admit"
-                if difference >= -Fraction(self.evidence.plan.reduction.margin)
-                else "retain"
-            )
+        expected = _sampled_screen_action(self.evidence)
         if self.action != expected:
             raise ValueError("screen action does not match complete eligible evidence")
         return self
@@ -252,8 +251,8 @@ class SampledComparison(BaseModel):
         return self.evidence.eligibility_refusal
 
 
-class SampledCandidateTrial(BaseModel):
-    """Removal metadata bound to a two-arm exploratory comparison."""
+class _SampledRemovalTrial(BaseModel):
+    """Strict metadata shared by sampled and locally invalid removal trials."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
@@ -262,10 +261,9 @@ class SampledCandidateTrial(BaseModel):
     requested_removals: tuple[_SampledNodeId, ...] = Field(max_length=MAX_CONTEXT_NODES)
     effective_removals: tuple[_SampledNodeId, ...] = Field(max_length=MAX_CONTEXT_NODES)
     phase: SearchPhase
-    comparison: SampledComparison
 
     @model_validator(mode="after")
-    def validate_trial(self) -> SampledCandidateTrial:
+    def validate_removals(self) -> _SampledRemovalTrial:
         if self.base_removals != tuple(sorted(set(self.base_removals))):
             raise ValueError("base_removals must contain sorted unique node IDs")
         if not self.requested_removals or len(set(self.requested_removals)) != len(
@@ -274,12 +272,69 @@ class SampledCandidateTrial(BaseModel):
             raise ValueError("requested_removals must contain nonempty unique node IDs")
         if self.effective_removals != tuple(sorted(set(self.effective_removals))):
             raise ValueError("effective_removals must contain sorted unique node IDs")
-        requested = set(self.base_removals) | set(self.requested_removals)
-        if not requested <= set(self.effective_removals):
-            raise ValueError("effective_removals must include base and requested removals")
+        if not set(self.base_removals) <= set(self.effective_removals):
+            raise ValueError("effective_removals must include base removals")
         if self.trial_key != trial_key(self.phase, self.base_removals, self.requested_removals):
             raise ValueError("trial_key does not match the trial inputs")
         return self
+
+
+class SampledCandidateTrial(_SampledRemovalTrial):
+    """Removal metadata bound to a two-arm exploratory comparison."""
+
+    comparison: SampledComparison
+
+    @model_validator(mode="after")
+    def validate_candidate(self) -> SampledCandidateTrial:
+        requested = set(self.base_removals) | set(self.requested_removals)
+        if not requested <= set(self.effective_removals):
+            raise ValueError("effective_removals must include base and requested removals")
+        return self
+
+    @property
+    def accepts_removal(self) -> bool:
+        return self.comparison.action == "admit"
+
+    @property
+    def allows_search_continuation(self) -> bool:
+        return self.comparison.action in {"admit", "retain"}
+
+
+class SampledInvalidCandidateTrial(_SampledRemovalTrial):
+    """A local dependency refusal with no sampling block or behavioral verdict."""
+
+    classification: Literal["invalid"]
+
+    @model_validator(mode="after")
+    def validate_invalid(self) -> SampledInvalidCandidateTrial:
+        if self.effective_removals != self.base_removals:
+            raise ValueError("invalid trials cannot change effective removals")
+        return self
+
+    @property
+    def accepts_removal(self) -> bool:
+        return False
+
+    @property
+    def allows_search_continuation(self) -> bool:
+        return True
+
+
+type SampledTrial = SampledCandidateTrial | SampledInvalidCandidateTrial
+
+
+def _sampled_screen_action(evidence: SamplingBlockEvidence) -> SampledScreenAction | None:
+    if not evidence.eligible:
+        return None
+    if not evidence.complete:
+        return "incomplete"
+    original = evidence.original_counts
+    candidate = evidence.candidate_counts
+    # Exact ratios preserve the admission boundary without a floating-point tolerance.
+    difference = Fraction(candidate.matches, candidate.valid) - Fraction(
+        original.matches, original.valid
+    )
+    return "admit" if difference >= -Fraction(evidence.plan.reduction.margin) else "retain"
 
 
 class SampledReductionCheckpoint(BaseModel):
@@ -293,7 +348,7 @@ class SampledReductionCheckpoint(BaseModel):
     original_candidate_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     best_candidate_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     removed_context_ids: tuple[_SampledNodeId, ...] = Field(max_length=MAX_CONTEXT_NODES)
-    trials: tuple[SampledCandidateTrial, ...] = Field(default=(), max_length=MAX_CANDIDATE_RUNS)
+    trials: tuple[SampledTrial, ...] = Field(default=(), max_length=MAX_CANDIDATE_RUNS)
     active_block: SamplingBlockEvidence | None = None
     final_sweep_complete: bool = False
     final_sweep_trial_keys: tuple[str, ...] = Field(default=(), max_length=MAX_CANDIDATE_RUNS)
@@ -310,10 +365,14 @@ class SampledReductionCheckpoint(BaseModel):
             raise ValueError("checkpoint trial keys must not contain duplicates")
         best = self.original_candidate_digest
         removed: tuple[str, ...] = ()
-        for trial in self.trials:
+        for index, trial in enumerate(self.trials):
             if trial.base_removals != removed:
                 raise ValueError("trial base removals must match the current best candidate")
-            if trial.comparison.action == "admit":
+            if not trial.allows_search_continuation and (
+                index + 1 < len(self.trials) or self.active_block is not None
+            ):
+                raise ValueError("search cannot continue after incomplete or ineligible evidence")
+            if isinstance(trial, SampledCandidateTrial) and trial.accepts_removal:
                 best = trial.comparison.evidence.plan.candidate_digest
                 removed = trial.effective_removals
         if (self.best_candidate_digest, self.removed_context_ids) != (best, removed):
@@ -343,7 +402,7 @@ class SampledReductionCheckpoint(BaseModel):
                 raise ValueError("incomplete final sweeps cannot carry a completion witness")
             return
         if self.active_block is not None or any(
-            trial.comparison.action in {None, "incomplete"} for trial in self.trials
+            not trial.allows_search_continuation for trial in self.trials
         ):
             raise ValueError("final sweep completion requires complete eligible search evidence")
         keys = self.final_sweep_trial_keys
@@ -359,7 +418,8 @@ class SampledReductionCheckpoint(BaseModel):
         if any(
             trial.phase != "final-sweep"
             or trial.base_removals != self.removed_context_ids
-            or trial.comparison.action != "retain"
+            or trial.accepts_removal
+            or not trial.allows_search_continuation
             for trial in selected
         ):
             raise ValueError("final sweep requires complete eligible retained final neighbors")
@@ -370,7 +430,11 @@ class SampledReductionCheckpoint(BaseModel):
     def blocks(self) -> tuple[SamplingBlockEvidence, ...]:
         """All search blocks, including a partial dispatch block when present."""
 
-        completed = tuple(trial.comparison.evidence for trial in self.trials)
+        completed = tuple(
+            trial.comparison.evidence
+            for trial in self.trials
+            if isinstance(trial, SampledCandidateTrial)
+        )
         return completed if self.active_block is None else (*completed, self.active_block)
 
     @property
@@ -378,7 +442,7 @@ class SampledReductionCheckpoint(BaseModel):
         """Execution identity of the most recently admitted candidate or original."""
 
         for trial in reversed(self.trials):
-            if trial.comparison.action == "admit":
+            if isinstance(trial, SampledCandidateTrial) and trial.accepts_removal:
                 return trial.comparison.evidence.plan.candidate_identity
         return self.original_identity
 
