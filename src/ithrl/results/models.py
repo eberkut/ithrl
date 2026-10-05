@@ -209,6 +209,28 @@ class SampledReductionEvidence(_StrictImmutableModel):
     calibration_attempt_ids: tuple[Annotated[str, Field(min_length=1)], ...] = ()
     confirmation: SampledConfirmation | None = None
 
+    @property
+    def confirmation_result(
+        self,
+    ) -> Literal[
+        "not-run", "confirmed-preserving", "loses", "inconclusive", "incomplete", "refused"
+    ]:
+        if self.confirmation is None:
+            return "not-run"
+        from ithrl.statistics import FixedSampleOutcome
+
+        match self.confirmation.outcome:
+            case FixedSampleOutcome.PRESERVES:
+                return "confirmed-preserving"
+            case FixedSampleOutcome.LOSES:
+                return "loses"
+            case FixedSampleOutcome.INCONCLUSIVE:
+                return "inconclusive"
+            case FixedSampleOutcome.INCOMPLETE:
+                return "incomplete"
+            case None:
+                return "refused"
+
     @field_validator("selected_at")
     @classmethod
     def normalize_selected_at(cls, value: datetime) -> datetime:

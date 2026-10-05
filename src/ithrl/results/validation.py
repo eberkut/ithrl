@@ -6,7 +6,7 @@ import json
 import math
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import ValidationError
 
@@ -27,15 +27,68 @@ from ithrl.experiment import (
     ExperimentFormatError,
     SampledExperimentDefinition,
 )
-from ithrl.reduce import CandidateTrial, ReductionCheckpoint
+from ithrl.reduce import CandidateTrial, ReductionCheckpoint, SampledConfirmation, SampledReducer
 from ithrl.results.models import (
     CalibrationSnapshot,
     CalibrationSummary,
     ResultSnapshot,
     ResultSnapshotError,
     ResultSummary,
+    SampledReductionEvidence,
 )
 from ithrl.runner import Candidate
+
+if TYPE_CHECKING:
+    from ithrl.case import CaseEvidence
+    from ithrl.observations import ObservationStore
+    from ithrl.run_state import SampledRunStateFile
+    from ithrl.workflow import PreparedExperiment
+
+
+async def validate_sampled_result(
+    *,
+    result: SampledReductionEvidence,
+    evidence: CaseEvidence,
+    prepared: PreparedExperiment,
+    store: ObservationStore,
+    state_file: SampledRunStateFile,
+) -> None:
+    """Independently validate sampled claims against original content and owned authority.
+
+    Validation replays only the candidate generator's recorded decisions, never a runner.
+    The existing private sampling snapshot stores the selected checkpoint, frozen holdout
+    and both fresh arms; this validator binds a result to that exact durable record.
+    """
+
+    from ithrl.observations import SamplingBlockEvidence
+    from ithrl.workflow import _sampled_result
+
+    with state_file.acquire_lock(store):
+        state = state_file.load(store)
+        reducer = SampledReducer(prepared=prepared, state_file=state_file, observation_store=store)
+        await reducer._load_and_validate(evidence, allow_selected=True)
+        selection = state.selection
+        confirmation = None
+        if selection is not None:
+            plan = selection.plan
+            search = tuple(b for b in state_file.evidence(store) if b.plan.role == "search")
+            if any(not b.eligible for b in search):
+                raise ResultSnapshotError("ineligible search evidence forbids confirmation")
+            block = next(
+                (b for b in state_file.evidence(store) if b.plan.role == "confirmation"),
+                SamplingBlockEvidence(plan=plan, attempts=()),
+            )
+            confirmation = SampledConfirmation.from_evidence(block)
+        elif any(b.plan.role == "confirmation" for b in state.blocks):
+            raise ResultSnapshotError("confirmation requires a durable prior selection")
+        expected = _sampled_result(
+            state,
+            store,
+            selection.selected_at if selection is not None else result.selected_at,
+            confirmation=confirmation,
+        )
+        if result != expected:
+            raise ResultSnapshotError("sampled result differs from authoritative run evidence")
 
 
 def validate_contents(

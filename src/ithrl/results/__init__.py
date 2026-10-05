@@ -23,6 +23,7 @@ from ithrl.results.storage import (
     write_sampling_snapshot,
 )
 from ithrl.results.summary import calibration_summary_from_observations
+from ithrl.results.validation import validate_sampled_result
 
 __all__ = [
     "CalibrationOutcome",
@@ -41,6 +42,7 @@ __all__ = [
     "load_calibration_snapshot",
     "load_result_snapshot",
     "load_sampling_snapshot",
+    "validate_sampled_result",
     "write_calibration_snapshot",
     "write_result_snapshot",
     "write_sampling_snapshot",

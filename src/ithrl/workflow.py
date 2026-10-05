@@ -1,11 +1,12 @@
-"""Run deterministic local experiments."""
+"""Compose calibrated deterministic and fixed-plan sampled experiments."""
 
 from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Literal
 
 from ithrl.case import CaseEvidence
 from ithrl.context import content_digest
@@ -30,11 +31,16 @@ from ithrl.observations import (
     ObservationIdentity,
     ObservationRole,
     ObservationStore,
+    SamplingBlockEvidence,
+    SamplingBlockPlan,
+    sampling_schedule,
 )
 from ithrl.reduce import (
     ALGORITHM_DIGEST,
     DeterministicReducer,
     ReductionResult,
+    SampledConfirmation,
+    SampledReducer,
 )
 from ithrl.runner import (
     PreparedAttempt,
@@ -43,6 +49,10 @@ from ithrl.runner import (
     built_in_runner_registry,
     prepare_candidate,
 )
+
+if TYPE_CHECKING:
+    from ithrl.results import SampledReductionEvidence
+    from ithrl.run_state import SampledRunState, SampledRunStateFile, SampledRunUsage
 
 
 class WorkflowError(RuntimeError):
@@ -379,3 +389,182 @@ def _validate_oracle_prerequisites(
             + "; ".join(details)
             + ")"
         )
+
+
+# Only resource/candidate-capacity stops permit a new holdout. Operational stops and
+# interrupted search first require reconciliation/continuation of their existing block.
+_SAFE_SEARCH_STOPS = frozenset(
+    {
+        None,
+        "candidate-limit",
+        "trial-limit",
+        "provider-call-budget",
+        "wall-time-budget",
+        "freshness-budget",
+        "attempt-limit",
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class SampledPhaseOutcome:
+    """Separate exploratory search, fresh confirmation, and operational accounting."""
+
+    result: SampledReductionEvidence
+    usage: SampledRunUsage
+    stop_reason: str | None
+
+
+async def run_sampled_phases(
+    *,
+    evidence: CaseEvidence,
+    prepared: PreparedExperiment,
+    store: ObservationStore,
+    state_file: SampledRunStateFile,
+    clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+    verify_independence: Callable[[Observation], str | None] | None = None,
+    progress: Callable[[str], None] | None = None,
+) -> SampledPhaseOutcome:
+    """Search after successful stored calibration, then confirm one durably selected artifact.
+
+    Run/store ownership spans search, selection publication and holdout collection. Resume
+    uses the same frozen holdout and never re-enters search after selecting the artifact.
+    This shared service does not authorize provider execution or expose a new CLI path.
+    """
+
+    from ithrl.run_state import SampledFinalSelection
+    from ithrl.sampling import _collect_sampling_block_owned
+
+    reducer = SampledReducer(
+        prepared=prepared,
+        state_file=state_file,
+        observation_store=store,
+        clock=clock,
+        verify_independence=verify_independence,
+    )
+    with state_file.acquire_lock(store):
+        state = state_file.load(store)
+        if state.selection is None:
+            if progress is not None:
+                progress("Searching dependency-valid candidates")
+            search = await reducer._reduce_owned(evidence)
+            state = state_file.load(store)
+            now = clock()
+            blocks = state_file.evidence(store)
+            refusal = _confirmation_search_refusal(state, blocks, search.stop_reason, now)
+            if refusal is not None:
+                return SampledPhaseOutcome(
+                    _sampled_result(state, store, now),
+                    state_file.usage(store, now=now),
+                    refusal,
+                )
+            phase = search.checkpoint.reduction.confirmation
+            holdout_id = content_digest({"run_id": state.run_id, "role": "confirmation"})
+            seed = int(holdout_id[:16], 16)
+            plan = SamplingBlockPlan(
+                block_id=f"confirmation-{holdout_id}",
+                role="confirmation",
+                reduction=search.checkpoint.reduction,
+                original_identity=state.original_identity,
+                candidate_identity=search.checkpoint.best_candidate_identity,
+                original_candidate_digest=state.original_candidate_digest,
+                candidate_digest=search.checkpoint.best_candidate_digest,
+                frozen_at=clock(),
+                schedule_seed=seed,
+                schedule=sampling_schedule(
+                    phase.original.max_attempts, phase.candidate.max_attempts, seed
+                ),
+                provider_calls_per_attempt=state.provider_calls_per_attempt,
+            )
+            state = state_file.select_candidate(
+                store,
+                SampledFinalSelection.model_validate(
+                    {
+                        "checkpoint_digest": content_digest(
+                            search.checkpoint.model_dump(mode="json")
+                        ),
+                        "selected_at": now,
+                        "plan": plan,
+                        "search_stop_reason": search.stop_reason,
+                    }
+                ),
+            )
+        else:
+            await reducer._load_and_validate(evidence, allow_selected=True)
+        selection = state.selection
+        if selection is None or state.checkpoint is None:
+            raise WorkflowError("sampled confirmation requires a selected search checkpoint")
+        block = next(
+            (b for b in state_file.evidence(store) if b.plan.role == "confirmation"),
+            SamplingBlockEvidence(plan=selection.plan, attempts=()),
+        )
+        stop_reason = block.eligibility_refusal
+        if not block.complete and block.eligible:
+            if progress is not None:
+                progress(
+                    "Confirming selected context with fresh original and candidate observations"
+                )
+            collection = await _collect_sampling_block_owned(
+                evidence=evidence,
+                original=prepared,
+                candidate=prepared,
+                removed_context_ids=state.checkpoint.removed_context_ids,
+                plan=selection.plan,
+                state_file=state_file,
+                store=store,
+                clock=clock,
+                verify_independence=verify_independence,
+            )
+            block, stop_reason = collection.evidence, collection.stop_reason
+        result = _sampled_result(
+            state_file.load(store),
+            store,
+            selection.selected_at,
+            confirmation=SampledConfirmation.from_evidence(block),
+        )
+        if progress is not None:
+            progress(f"Confirmation: {result.confirmation_result}")
+        return SampledPhaseOutcome(result, state_file.usage(store, now=clock()), stop_reason)
+
+
+def _confirmation_search_refusal(
+    state: SampledRunState,
+    blocks: tuple[SamplingBlockEvidence, ...],
+    reason: str | None,
+    now: datetime,
+) -> str | None:
+    if state.pending is not None:
+        return "unresolved-dispatch"
+    if any(not b.eligible for b in blocks):
+        return "ineligible-prior-block"
+    if reason not in _SAFE_SEARCH_STOPS:
+        return reason or "unsafe-search-stop"
+    if any(not b.complete and not b.plan.frozen_at <= now < b.plan.expires_at for b in blocks):
+        return "freshness-expired"
+    if (now - state.started_at).total_seconds() >= state.allowance.max_wall_time_seconds:
+        return "wall-time-exhausted"
+    return None
+
+
+def _sampled_result(
+    state: SampledRunState,
+    store: ObservationStore,
+    selected_at: datetime,
+    *,
+    confirmation: SampledConfirmation | None = None,
+) -> SampledReductionEvidence:
+    from ithrl.results import SampledReductionEvidence
+
+    checkpoint = state.checkpoint
+    if checkpoint is None:
+        raise WorkflowError("sampled result requires a durable search checkpoint")
+    calibration = store.get_many(state.calibration_observation_ids)
+    return SampledReductionEvidence(
+        checkpoint=checkpoint,
+        search_result="search-reduced" if checkpoint.final_sweep_complete else "search-incomplete",
+        selected_candidate_digest=checkpoint.best_candidate_digest,
+        selected_at=selected_at,
+        calibration_observation_ids=state.calibration_observation_ids,
+        calibration_attempt_ids=tuple(o.attempt_evidence.attempt_id for o in calibration),
+        confirmation=confirmation,
+    )

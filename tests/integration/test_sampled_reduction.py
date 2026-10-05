@@ -46,6 +46,12 @@ from ithrl.reduce import (
     SampledReductionCheckpoint,
     SampledSearchResult,
 )
+from ithrl.results import (
+    ResultSnapshotError,
+    load_sampling_snapshot,
+    validate_sampled_result,
+    write_sampling_snapshot,
+)
 from ithrl.run_state import SampledRunStateFile, SamplingBudgetApproval
 from ithrl.runner import (
     PreparedAttempt,
@@ -59,7 +65,12 @@ from ithrl.runner import (
     ToolCall,
     prepare_candidate,
 )
-from ithrl.workflow import PreparedExperiment, prepare_experiment
+from ithrl.workflow import (
+    PreparedExperiment,
+    SampledPhaseOutcome,
+    prepare_experiment,
+    run_sampled_phases,
+)
 
 _PROVIDER = "synthetic-provider"
 _ENDPOINT = "https://provider.example.invalid"
@@ -73,7 +84,8 @@ class ScreenRunner:
         self.behavior = behavior
         self.samples = samples
         self.calls: list[PreparedAttempt] = []
-        self.counts: Counter[tuple[str, str]] = Counter()
+        self.counts: Counter[tuple[str, str, str]] = Counter()
+        self.confirmation_matches: int | RunnerErrorCode | None = None
         self.capability_profile = CapabilityProfile.deterministic_fake().model_copy(
             update={
                 "runner_type": "codex",
@@ -91,11 +103,17 @@ class ScreenRunner:
 
     async def run(self, attempt: PreparedAttempt) -> RunResult:
         self.calls.append(attempt)
-        key = (attempt.arm, attempt.candidate.digest)
+        key = (attempt.phase, attempt.arm, attempt.candidate.digest)
         index = self.counts[key]
         self.counts[key] += 1
         removed = frozenset(attempt.candidate.removed_context_ids)
         matches = self.samples if not removed else self.behavior(removed, index // self.samples)
+        if (
+            attempt.phase == "confirmation"
+            and attempt.arm == "candidate"
+            and self.confirmation_matches is not None
+        ):
+            matches = self.confirmation_matches
         if isinstance(matches, RunnerErrorCode):
             raise RunnerError(
                 matches,
@@ -175,6 +193,7 @@ def _fixture(
     dependencies: dict[str, tuple[str, ...]] | None = None,
     protected: frozenset[str] = frozenset(),
     calibration: bool = True,
+    run_id: str = "sampled-search",
 ) -> SearchFixture:
     runner = ScreenRunner(behavior or (lambda removed, _: int("ctx-a" not in removed)), samples)
     items: list[JsonValue] = [{"role": "user", "content": marker} for marker in markers]
@@ -268,7 +287,7 @@ def _fixture(
         references = (observed.observation_id,)
     state_file = SampledRunStateFile.create(
         case_root=tmp_path / "case",
-        run_id="sampled-search",
+        run_id=run_id,
         store=store,
         started_at=now,
         original_identity=prepared.identity,
@@ -279,7 +298,7 @@ def _fixture(
             approval_id="initial",
             approved_at=now,
             allowance=SamplingBudgetAllowance(
-                run_id="sampled-search",
+                run_id=run_id,
                 max_provider_calls=calls,
                 max_wall_time_seconds=10_000,
                 max_candidate_comparisons=comparisons,
@@ -577,6 +596,383 @@ def test_mixed_invalid_and_sampled_neighbors_have_exact_terminal_coverage(tmp_pa
     )
     assert any(isinstance(trial, SampledCandidateTrial) for trial in result.checkpoint.trials)
     assert fixture.run().checkpoint == result.checkpoint
+
+
+def _workflow(fixture: SearchFixture, **kwargs: Any) -> SampledPhaseOutcome:
+    return asyncio.run(
+        run_sampled_phases(
+            evidence=fixture.evidence,
+            prepared=fixture.prepared,
+            store=fixture.store,
+            state_file=fixture.state_file,
+            **kwargs,
+        )
+    )
+
+
+def _validate_result(fixture: SearchFixture, outcome: SampledPhaseOutcome) -> None:
+    asyncio.run(
+        validate_sampled_result(
+            result=outcome.result,
+            evidence=fixture.evidence,
+            prepared=fixture.prepared,
+            store=fixture.store,
+            state_file=fixture.state_file,
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("samples", "matches", "expected"),
+    [(12, 12, "confirmed-preserving"), (8, 0, "loses"), (1, 1, "inconclusive")],
+)
+def test_fresh_confirmation_reports_actual_outcome_without_reselection(
+    tmp_path: Path,
+    samples: int,
+    matches: int,
+    expected: str,
+) -> None:
+    fixture = _fixture(tmp_path, markers="AB", samples=samples)
+    fixture.runner.confirmation_matches = matches
+    originals = {
+        p: p.read_bytes()
+        for p in (tmp_path / "case").rglob("*")
+        if p.is_file() and ".runs" not in p.parts
+    }
+    outcome = _workflow(fixture)
+    assert outcome.result.search_result == "search-reduced"
+    assert outcome.result.confirmation_result == expected
+    confirmation = outcome.result.confirmation
+    assert confirmation is not None
+    assert confirmation.evidence.original_counts.valid == samples
+    assert confirmation.evidence.candidate_counts.matches == matches
+    assert confirmation.evidence.candidate_counts.valid == samples
+    assert confirmation.evidence.plan.candidate_digest == outcome.result.selected_candidate_digest
+    prior_ids = set(outcome.result.calibration_observation_ids)
+    prior_ids.update(i for b in outcome.result.checkpoint.blocks for i in b.observation_ids)
+    assert not prior_ids.intersection(confirmation.evidence.observation_ids)
+    prior_attempts = set(outcome.result.calibration_attempt_ids)
+    prior_attempts.update(i for b in outcome.result.checkpoint.blocks for i in b.attempt_ids)
+    assert not prior_attempts.intersection(confirmation.evidence.attempt_ids)
+    assert outcome.usage.actual_provider_calls == len(fixture.runner.calls)
+    _validate_result(fixture, outcome)
+    calls = len(fixture.runner.calls)
+    assert _workflow(fixture).result == outcome.result
+    assert len(fixture.runner.calls) == calls
+    with pytest.raises(ResumeMismatchError, match="confirmation"):
+        fixture.run()
+    assert all(p.read_bytes() == content for p, content in originals.items())
+    with fixture.state_file.acquire_lock(fixture.store):
+        state = fixture.state_file.load(fixture.store)
+    snapshot = write_sampling_snapshot(
+        destination=tmp_path / "result", state=state, store=fixture.store
+    )
+    assert load_sampling_snapshot(snapshot, fixture.store) == state
+
+
+def test_search_selected_false_positive_is_unconfirmed_by_fresh_holdout(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path, markers="AB", samples=8, behavior=lambda _removed, _block: 8)
+    fixture.runner.confirmation_matches = 0
+    outcome = _workflow(fixture)
+    assert outcome.result.checkpoint.removed_context_ids == ("ctx-a", "ctx-b")
+    assert outcome.result.search_result == "search-reduced"
+    assert outcome.result.confirmation_result == "loses"
+    assert outcome.result.confirmation is not None
+    assert outcome.result.confirmation.evidence.candidate_counts.no_matches == 8
+    _validate_result(fixture, outcome)
+
+
+@pytest.mark.parametrize("kind", ["comparison", "calls", "safe-errors"])
+def test_safe_incomplete_search_can_use_confirmation_capacity(tmp_path: Path, kind: str) -> None:
+    kwargs: dict[str, Any] = {"samples": 12, "comparisons": 3}
+    verifier = None
+    if kind == "calls":
+        kwargs = {"samples": 1, "calls": 4}
+    if kind == "safe-errors":
+        kwargs = {"samples": 12, "behavior": lambda _removed, _block: RunnerErrorCode.STARTUP}
+        verifier = _independent_failure
+    fixture = _fixture(tmp_path, **kwargs)
+    fixture.runner.confirmation_matches = fixture.runner.samples
+    outcome = _workflow(fixture, verify_independence=verifier)
+    assert outcome.result.search_result == "search-incomplete"
+    assert outcome.result.confirmation_result in {"confirmed-preserving", "inconclusive"}
+    assert not outcome.result.checkpoint.final_sweep_complete
+    _validate_result(fixture, outcome)
+    calls = len(fixture.runner.calls)
+    assert _workflow(fixture, verify_independence=verifier).result == outcome.result
+    assert len(fixture.runner.calls) == calls
+
+
+def test_ineligible_search_forbids_confirmation(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path, behavior=lambda _removed, _block: RunnerErrorCode.PROTOCOL)
+    outcome = _workflow(fixture)
+    assert outcome.result.search_result == "search-incomplete"
+    assert outcome.result.confirmation_result == "not-run"
+    assert outcome.stop_reason == "ineligible-prior-block"
+    assert not any(a.phase == "confirmation" for a in fixture.runner.calls)
+    with fixture.state_file.acquire_lock(fixture.store):
+        assert fixture.state_file.load(fixture.store).selection is None
+    _validate_result(fixture, outcome)
+
+
+@pytest.mark.parametrize(("independent", "expected"), [(False, "refused"), (True, "incomplete")])
+def test_confirmation_errors_are_operational_and_never_behavioral_losses(
+    tmp_path: Path,
+    independent: bool,
+    expected: str,
+) -> None:
+    fixture = _fixture(tmp_path, markers="AB", samples=1)
+    fixture.runner.confirmation_matches = RunnerErrorCode.STARTUP
+    verifier = _independent_failure if independent else None
+    outcome = _workflow(fixture, verify_independence=verifier)
+    assert outcome.result.confirmation_result == expected
+    block = outcome.result.confirmation
+    assert block is not None
+    assert block.evidence.candidate_counts.runner_errors == 1
+    assert block.evidence.candidate_counts.valid == 0
+    assert block.evidence.candidate_counts.no_matches == 0
+    _validate_result(fixture, outcome)
+    calls = len(fixture.runner.calls)
+    assert _workflow(fixture, verify_independence=verifier).result == outcome.result
+    assert len(fixture.runner.calls) == calls
+
+
+@pytest.mark.parametrize("after", [1, 2])
+def test_confirmation_interruption_resumes_same_holdout_without_search_replay(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    after: int,
+) -> None:
+    fixture = _fixture(tmp_path, markers="AB")
+    original = sampling_module.observe_once
+    count = 0
+
+    async def interrupted(**kwargs: Any):
+        nonlocal count
+        observation = await original(**kwargs)
+        if kwargs["attempt"].phase == "confirmation":
+            count += 1
+            if count == after:
+                raise asyncio.CancelledError
+        return observation
+
+    with monkeypatch.context() as patch:
+        patch.setattr(sampling_module, "observe_once", interrupted)
+        stopped = _workflow(fixture)
+    assert stopped.stop_reason == "user-interrupt"
+    block = stopped.result.confirmation
+    assert block is not None
+    assert len(block.evidence.attempts) == after
+    calls = len(fixture.runner.calls)
+    resumed = _workflow(fixture)
+    assert resumed.result.confirmation is not None
+    assert resumed.result.confirmation.evidence.plan == block.evidence.plan
+    assert resumed.result.confirmation.evidence.attempts[:after] == block.evidence.attempts
+    assert len(fixture.runner.calls) == calls + (2 - after)
+    assert resumed.result.checkpoint == stopped.result.checkpoint
+    assert len({a.attempt_id for a in fixture.runner.calls}) == len(fixture.runner.calls)
+    _validate_result(fixture, resumed)
+
+
+def test_selection_is_durable_before_first_confirmation_dispatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _fixture(tmp_path, markers="AB")
+    original = sampling_module._collect_sampling_block_owned
+
+    async def stopped(**kwargs: Any):
+        if kwargs["plan"].role == "confirmation":
+            raise asyncio.CancelledError
+        return await original(**kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(sampling_module, "_collect_sampling_block_owned", stopped)
+        with pytest.raises(asyncio.CancelledError):
+            _workflow(fixture)
+    with fixture.state_file.acquire_lock(fixture.store):
+        state = fixture.state_file.load(fixture.store)
+        assert state.selection is not None
+        assert not any(b.plan.role == "confirmation" for b in state.blocks)
+    calls = len(fixture.runner.calls)
+    outcome = _workflow(fixture)
+    assert len(fixture.runner.calls) == calls + 2
+    assert outcome.result.confirmation is not None
+    assert outcome.result.confirmation.evidence.plan == state.selection.plan
+    _validate_result(fixture, outcome)
+
+
+def test_confirmation_unresolved_dispatch_is_charged_and_never_replayed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _fixture(tmp_path, markers="AB")
+    original = sampling_module.observe_once
+
+    async def missing(**kwargs: Any):
+        if kwargs["attempt"].phase == "confirmation":
+            raise asyncio.CancelledError
+        return await original(**kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(sampling_module, "observe_once", missing)
+        stopped = _workflow(fixture)
+    assert stopped.stop_reason == "unresolved-dispatch"
+    assert stopped.usage.pending_provider_calls == 1
+    calls = len(fixture.runner.calls)
+    resumed = _workflow(fixture)
+    assert resumed.stop_reason == "unresolved-dispatch"
+    assert resumed.usage.pending_provider_calls == 1
+    assert resumed.result == stopped.result
+    assert len(fixture.runner.calls) == calls
+    _validate_result(fixture, resumed)
+
+
+def test_result_validation_rejects_omitted_confirmation_and_calibration_membership(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path, markers="AB")
+    outcome = _workflow(fixture)
+    changes_to_test: tuple[dict[str, Any], ...] = (
+        {"confirmation": None},
+        {"calibration_observation_ids": ()},
+        {"calibration_attempt_ids": ()},
+    )
+    for changes in changes_to_test:
+        forged = replace(outcome, result=outcome.result.model_copy(update=changes))
+        with pytest.raises(ResultSnapshotError, match="authoritative"):
+            _validate_result(fixture, forged)
+    calls = len(fixture.runner.calls)
+    assert _workflow(fixture).result == outcome.result
+    assert len(fixture.runner.calls) == calls
+
+
+def _independent_failure(_observation: Observation) -> str:
+    return "a" * 64
+
+
+def test_full_confirmation_block_must_fit_after_calibration_consumption(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path, samples=12, calls=24)
+    outcome = _workflow(fixture)
+    assert outcome.result.search_result == "search-incomplete"
+    assert outcome.result.confirmation_result == "incomplete"
+    assert outcome.stop_reason == "provider-call-budget"
+    assert len(fixture.runner.calls) == 1
+    assert outcome.result.confirmation is not None
+    assert outcome.result.confirmation.evidence.attempts == ()
+    with fixture.state_file.acquire_lock(fixture.store):
+        state = fixture.state_file.load(fixture.store)
+        assert state.selection is not None
+        assert state.blocks == ()
+    _validate_result(fixture, outcome)
+
+
+def test_expired_run_forbids_starting_confirmation(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path, comparisons=1)
+    fixture.run()
+    with fixture.state_file.acquire_lock(fixture.store):
+        state = fixture.state_file.load(fixture.store)
+    calls = len(fixture.runner.calls)
+    expired = state.started_at + timedelta(seconds=state.allowance.max_wall_time_seconds + 1)
+    outcome = _workflow(fixture, clock=lambda: expired)
+    assert outcome.result.confirmation_result == "not-run"
+    assert outcome.stop_reason == "wall-time-exhausted"
+    assert len(fixture.runner.calls) == calls
+    _validate_result(fixture, outcome)
+
+
+def test_stale_interrupted_confirmation_refuses_more_dispatches(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _fixture(tmp_path, markers="AB")
+    original = sampling_module.observe_once
+
+    async def interrupted(**kwargs: Any):
+        observation = await original(**kwargs)
+        if kwargs["attempt"].phase == "confirmation":
+            raise asyncio.CancelledError
+        return observation
+
+    with monkeypatch.context() as patch:
+        patch.setattr(sampling_module, "observe_once", interrupted)
+        stopped = _workflow(fixture)
+    assert stopped.result.confirmation is not None
+    expired = stopped.result.confirmation.evidence.plan.expires_at
+    calls = len(fixture.runner.calls)
+    outcome = _workflow(fixture, clock=lambda: expired)
+    assert outcome.stop_reason == "freshness-expired"
+    assert outcome.result.confirmation_result == "incomplete"
+    assert outcome.result.confirmation == stopped.result.confirmation
+    assert len(fixture.runner.calls) == calls
+    _validate_result(fixture, outcome)
+
+
+def test_search_missing_dispatch_forbids_holdout_and_stays_charged(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _fixture(tmp_path)
+
+    async def missing(**_kwargs: Any):
+        raise asyncio.CancelledError
+
+    with monkeypatch.context() as patch:
+        patch.setattr(sampling_module, "observe_once", missing)
+        outcome = _workflow(fixture)
+    assert outcome.stop_reason == "unresolved-dispatch"
+    assert outcome.result.confirmation_result == "not-run"
+    assert outcome.usage.pending_provider_calls == 1
+    calls = len(fixture.runner.calls)
+    assert _workflow(fixture).stop_reason == "unresolved-dispatch"
+    assert len(fixture.runner.calls) == calls
+
+
+def test_selection_cannot_be_changed_or_followed_by_a_different_holdout(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path, markers="AB")
+    outcome = _workflow(fixture)
+    with fixture.state_file.acquire_lock(fixture.store):
+        state = fixture.state_file.load(fixture.store)
+        assert state.selection is not None
+        with pytest.raises(ValueError, match="cannot be repeated"):
+            fixture.state_file.select_candidate(fixture.store, state.selection)
+        assert state.checkpoint is not None
+        from ithrl.run_state import SampledRunState
+
+        payload = state.model_dump()
+        payload["selection"]["checkpoint_digest"] = "a" * 64
+        with pytest.raises(ValidationError, match="checkpoint cannot change"):
+            SampledRunState.model_validate(payload)
+        payload = state.model_dump()
+        payload["selection"]["plan"]["candidate_digest"] = "a" * 64
+        with pytest.raises(ValidationError, match="selected candidate"):
+            SampledRunState.model_validate(payload)
+        payload = state.model_dump()
+        payload["selection"]["search_stop_reason"] = "user-interrupt"
+        with pytest.raises(ValidationError, match="search_stop_reason"):
+            SampledRunState.model_validate(payload)
+        payload = state.model_dump()
+        payload["selection"]["plan"]["block_id"] = "redrawn-holdout"
+        with pytest.raises(ValidationError, match="single frozen run holdout"):
+            SampledRunState.model_validate(payload)
+    _validate_result(fixture, outcome)
+
+
+def test_confirmation_supports_maximum_length_run_id(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path, markers="AB", run_id="r" * 128)
+    outcome = _workflow(fixture)
+    assert outcome.result.confirmation is not None
+    plan = outcome.result.confirmation.evidence.plan
+    with fixture.state_file.acquire_lock(fixture.store):
+        state = fixture.state_file.load(fixture.store)
+        digest = content_digest({"run_id": state.run_id, "role": "confirmation"})
+        assert plan.block_id == f"confirmation-{digest}"
+        assert len(plan.block_id) == 77
+        assert plan.schedule_seed == int(digest[:16], 16)
+    _validate_result(fixture, outcome)
+    calls = len(fixture.runner.calls)
+    assert _workflow(fixture).result == outcome.result
+    assert len(fixture.runner.calls) == calls
 
 
 def test_safe_failure_exhaustion_stays_incomplete_and_cannot_redraw(tmp_path: Path) -> None:

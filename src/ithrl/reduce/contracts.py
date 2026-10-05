@@ -455,6 +455,21 @@ class SampledConfirmation(BaseModel):
     evidence: SamplingBlockEvidence
     outcome: FixedSampleOutcome | None
 
+    @classmethod
+    def from_evidence(cls, evidence: SamplingBlockEvidence) -> SampledConfirmation:
+        outcome = FixedSampleOutcome.INCOMPLETE if evidence.eligible else None
+        if evidence.complete and evidence.eligible:
+            phase = evidence.plan.reduction.confirmation
+            outcome = classify_fixed_sample(
+                BinomialSample(evidence.candidate_counts.matches, evidence.candidate_counts.valid),
+                BinomialSample(evidence.original_counts.matches, evidence.original_counts.valid),
+                required_candidate=phase.candidate.required_valid,
+                required_original=phase.original.required_valid,
+                confidence=phase.one_sided_confidence,
+                margin=evidence.plan.reduction.margin,
+            ).outcome
+        return cls(evidence=evidence, outcome=outcome)
+
     @model_validator(mode="after")
     def validate_outcome(self) -> SampledConfirmation:
         if self.evidence.plan.role != "confirmation":

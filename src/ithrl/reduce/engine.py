@@ -511,21 +511,31 @@ class SampledReducer:
         """Continue the same sampled run, preserving both evidence and confirmation capacity."""
 
         with self._state_file.acquire_lock(self._store):
-            await self._load_and_validate(evidence)
-            self._archive_classified_block(self._loaded_state, self._resume)
-            self._stop_reason = None
-            self._active = None
-            outcome = await self._run_search(evidence, publish=True)
-            checkpoint = self._publish_checkpoint(
-                outcome.removed, outcome.trials, outcome.complete, evidence=evidence
-            )
-            return SampledSearchResult(
-                checkpoint,
-                self._state_file.usage(self._store, now=self._clock()),
-                self._stop_reason,
-            )
+            return await self._reduce_owned(evidence)
 
-    async def _load_and_validate(self, evidence: CaseEvidence) -> None:
+    async def _reduce_owned(self, evidence: CaseEvidence) -> SampledSearchResult:
+        """Compose search with workflow selection under uninterrupted run/store ownership."""
+
+        self._state_file._require_lock(self._store)
+        await self._load_and_validate(evidence)
+        self._archive_classified_block(self._loaded_state, self._resume)
+        self._stop_reason = None
+        self._active = None
+        if self._loaded_state.checkpoint is None:
+            self._publish_checkpoint((), (), False, evidence=evidence)
+        outcome = await self._run_search(evidence, publish=True)
+        checkpoint = self._publish_checkpoint(
+            outcome.removed, outcome.trials, outcome.complete, evidence=evidence
+        )
+        return SampledSearchResult(
+            checkpoint,
+            self._state_file.usage(self._store, now=self._clock()),
+            self._stop_reason,
+        )
+
+    async def _load_and_validate(
+        self, evidence: CaseEvidence, *, allow_selected: bool = False
+    ) -> None:
         state = self._state_file.load(self._store)
         prepared = self._prepared
         original = prepare_candidate(evidence, prepared.execution_plan)
@@ -542,8 +552,12 @@ class SampledReducer:
             raise ResumeMismatchError("sampled run does not match the prepared original")
         self._validate_calibration(state)
         blocks = self._state_file.evidence(self._store)
-        if any(block.plan.role != "search" for block in blocks):
+        if not allow_selected and (
+            state.selection is not None or any(block.plan.role != "search" for block in blocks)
+        ):
             raise ResumeMismatchError("search cannot continue after confirmation starts")
+        if allow_selected:
+            blocks = tuple(block for block in blocks if block.plan.role == "search")
         checkpoint = state.checkpoint
         published = (
             ()
@@ -562,7 +576,7 @@ class SampledReducer:
         self._resume = checkpoint
         self._active = None
         self._unclassified = blocks[-1] if len(blocks) > len(published) else None
-        if self._unclassified is not None and state.blocks[-1].archived:
+        if self._unclassified is not None and state.selection is None and state.blocks[-1].archived:
             raise ResumeMismatchError("unclassified search blocks cannot be archived or redrawn")
         outcome = await self._run_search(evidence, publish=False)
         if checkpoint is not None:

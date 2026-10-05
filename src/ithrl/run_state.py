@@ -16,6 +16,7 @@ from typing import Annotated, Literal
 from filelock import Timeout
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
+from ithrl.context import content_digest
 from ithrl.observations import (
     Observation,
     ObservationArm,
@@ -314,6 +315,36 @@ class SampledRunUsage(_SampledStateContract):
         )
 
 
+class SampledFinalSelection(_SampledStateContract):
+    """One selected artifact and holdout plan, frozen before any confirmation dispatch."""
+
+    checkpoint_digest: _StateDigest
+    selected_at: datetime
+    plan: SamplingBlockPlan
+    search_stop_reason: (
+        Literal[
+            "candidate-limit",
+            "trial-limit",
+            "provider-call-budget",
+            "wall-time-budget",
+            "freshness-budget",
+            "attempt-limit",
+        ]
+        | None
+    ) = None
+
+    @field_validator("selected_at")
+    @classmethod
+    def normalize_time(cls, value: datetime) -> datetime:
+        return _sampled_time(value)
+
+    @model_validator(mode="after")
+    def validate_plan(self) -> SampledFinalSelection:
+        if self.plan.role != "confirmation" or self.plan.frozen_at <= self.selected_at:
+            raise ValueError("a fresh confirmation plan must follow selection")
+        return self
+
+
 class SampledRunState(_SampledStateContract):
     """Private sampled progress, with administrative history outside frozen execution identities."""
 
@@ -329,6 +360,7 @@ class SampledRunState(_SampledStateContract):
     blocks: Annotated[tuple[SamplingBlockProgress, ...], Field(max_length=10_000)] = ()
     pending: SamplingDispatchReservation | None = None
     checkpoint: SampledReductionCheckpoint | None = None
+    selection: SampledFinalSelection | None = None
 
     @field_validator("started_at")
     @classmethod
@@ -389,6 +421,32 @@ class SampledRunState(_SampledStateContract):
                 raise ValueError("dispatch must be reserved within frozen freshness")
             if reservation.attempt_id in {item.attempt_id for item in references}:
                 raise ValueError("dispatch cannot repeat a published prepared attempt")
+        if self.selection is not None:
+            selection, checkpoint = self.selection, self.checkpoint
+            plan = selection.plan
+            holdout_id = content_digest({"run_id": self.run_id, "role": "confirmation"})
+            if plan.block_id != f"confirmation-{holdout_id}" or plan.schedule_seed != int(
+                holdout_id[:16], 16
+            ):
+                raise ValueError("confirmation must use the single frozen run holdout")
+            if checkpoint is None or selection.checkpoint_digest != content_digest(
+                checkpoint.model_dump(mode="json")
+            ):
+                raise ValueError("selected search checkpoint cannot change")
+            if (
+                plan.reduction != checkpoint.reduction
+                or plan.original_identity != checkpoint.original_identity
+                or plan.original_candidate_digest != checkpoint.original_candidate_digest
+                or plan.candidate_identity != checkpoint.best_candidate_identity
+                or plan.candidate_digest != checkpoint.best_candidate_digest
+            ):
+                raise ValueError("confirmation must bind the selected candidate and original")
+            confirmation = tuple(b for b in self.blocks if b.plan.role == "confirmation")
+            if len(confirmation) > 1 or (
+                confirmation
+                and (self.blocks[-1] != confirmation[0] or confirmation[0].plan != plan)
+            ):
+                raise ValueError("selection permits only its single final confirmation block")
         return self
 
     @property
@@ -616,6 +674,19 @@ class SampledRunStateFile:
                 or any(by_digest.get(block.plan.digest) != block for block in checkpoint.blocks)
             ):
                 raise RunStateError("sampled checkpoint differs from authoritative block progress")
+        if state.selection is not None:
+            selection = state.selection
+            search = tuple(block for block in blocks if block.plan.role == "search")
+            if checkpoint is None or checkpoint.blocks != search:
+                raise RunStateError(
+                    "selected checkpoint must include all authoritative search evidence"
+                )
+            if any(
+                selection.selected_at < block.plan.frozen_at
+                or any(selection.selected_at < a.observation.recorded_at for a in block.attempts)
+                for block in search
+            ) or any(selection.selected_at < o.recorded_at for o in observations):
+                raise RunStateError("selection must follow calibration and search evidence")
 
     @staticmethod
     def _calibration(state: SampledRunState, store: ObservationStore) -> tuple[Observation, ...]:
@@ -906,6 +977,21 @@ class SampledRunStateFile:
         if current.pending is not None:
             raise RunStateError("checkpoint publication requires dispatch reconciliation")
         return self._publish(current, store, checkpoint=checkpoint)
+
+    def select_candidate(
+        self, store: ObservationStore, selection: SampledFinalSelection
+    ) -> SampledRunState:
+        """Freeze selection and close search atomically, including a safe partial last block."""
+
+        current = self.load(store)
+        if current.selection is not None or current.pending is not None:
+            raise RunStateError("selection requires reconciled search and cannot be repeated")
+        if any(b.plan.role != "search" for b in current.blocks):
+            raise RunStateError("selection must precede every confirmation dispatch")
+        blocks = current.blocks
+        if blocks and not blocks[-1].archived:
+            blocks = (*blocks[:-1], blocks[-1].model_copy(update={"archived": True}))
+        return self._publish(current, store, blocks=blocks, selection=selection)
 
     def _publish(
         self, current: SampledRunState, store: ObservationStore, **changes: object
