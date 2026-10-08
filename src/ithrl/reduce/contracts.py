@@ -301,7 +301,7 @@ class SampledCandidateTrial(_SampledRemovalTrial):
 
 
 class SampledInvalidCandidateTrial(_SampledRemovalTrial):
-    """A local dependency refusal with no sampling block or behavioral verdict."""
+    """A local dependency or reconstruction refusal, without sampling or a verdict."""
 
     classification: Literal["invalid"]
 

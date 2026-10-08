@@ -191,6 +191,19 @@ The walkthrough exercises `shrink --experiment` with a private TOML plan, `--dry
 `--max-provider-calls` and `--max-wall-time`, acknowledgement, human/JSON output, and `--resume`
 from an active run or saved result. Resumption preserves the statistical plan and completed
 confirmation; administrative limits may increase. Test sample sizes are fixture settings.
+
+The mock-native integration suite runs Codex final-response and Copilot final-response and
+visible-but-denied shell-action profiles through isolated mock harness processes:
+
+```bash
+uv run pytest -o addopts= tests/integration/test_native_calibration.py -q
+```
+
+It exercises context-sensitive reduction, fresh confirmation, independent candidate state,
+immutable inputs, action denial, cleanup, accounting and budget refusal without provider calls.
+The operator walkthrough also covers interrupted dispatch, private session metadata and result
+publication, including exact resume without repeating completed confirmation.
+
 Native sampled reduction still requires its profile-specific live and usefulness gates; the
 availability table above is unchanged.
 

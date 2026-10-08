@@ -51,6 +51,12 @@ if "sessions" in arguments and "import" in arguments:
         records = [json.loads(line) for line in source if line.strip()]
     if not records or records[0].get("type") != "session":
         raise SystemExit(3)
+    if MODE == "context-sensitive":
+        context_path = os.path.join(os.environ["COPILOT_HOME"], "fixture-context.json")
+        if os.path.exists(context_path):
+            raise SystemExit(5)
+        with open(context_path, "w") as output:
+            json.dump("ITHRL_REQUIRED_CONTEXT" in json.dumps(records), output)
     print(json.dumps({"ok": True, "code": "session_imported", "sessionId": "session-1"}))
     raise SystemExit(0)
 
@@ -85,12 +91,16 @@ emit(
 )
 
 shell_action = "--available-tools=bash" in arguments
+required_context = True
+if MODE == "context-sensitive":
+    with open(os.path.join(os.environ["COPILOT_HOME"], "fixture-context.json")) as source:
+        required_context = json.load(source)
 if shell_action:
     request = {
         "toolCallId": "call-1",
         "name": "bash",
         "type": "function",
-        "arguments": {"command": "pwd", "description": "Show directory"},
+        "arguments": {"command": "pwd" if required_context else "echo no-match", "description": "Show directory"},
     }
     emit(
         "assistant.message",
@@ -135,7 +145,7 @@ emit(
         "messageId": "message-1",
         "apiCallId": "api-call-1",
         "model": model,
-        "content": "Fixture complete.",
+        "content": "Fixture complete." if required_context else "Fixture does not match.",
         "toolRequests": [],
         "turnId": turn_id,
     },
@@ -170,7 +180,9 @@ def _record(ordinal: int, record_type: str, data: dict[str, Any]) -> dict[str, A
     }
 
 
-def _source_records(target: CopilotTarget) -> list[dict[str, Any]]:
+def _source_records(
+    target: CopilotTarget, *, context_sensitive: bool = False
+) -> list[dict[str, Any]]:
     turn_id = "30000000-0000-4000-8000-000000000001"
     tool_requests: list[dict[str, Any]] = []
     if target == "shell-action":
@@ -181,7 +193,7 @@ def _source_records(target: CopilotTarget) -> list[dict[str, Any]]:
                 "arguments": {"command": "pwd", "description": "Show directory"},
             }
         )
-    return [
+    records = [
         _record(
             0,
             "session.start",
@@ -210,17 +222,28 @@ def _source_records(target: CopilotTarget) -> list[dict[str, Any]]:
         ),
         _record(4, "assistant.turn_end", {"turnId": turn_id}),
     ]
+    if context_sensitive:
+        records[1:1] = [
+            _record(5, "user.message", {"content": "ITHRL_REQUIRED_CONTEXT", "turnId": "prior-1"}),
+            _record(
+                6, "user.message", {"content": "Irrelevant removable context.", "turnId": "prior-2"}
+            ),
+        ]
+    return records
 
 
 def _case(
     tmp_path: Path,
     target: CopilotTarget,
+    *,
+    context_sensitive: bool = False,
 ) -> tuple[Path, CaseWorkspace, CaseEvidence]:
     source = tmp_path / "source" / "events.jsonl"
     source.parent.mkdir()
     source.write_text(
         "".join(
-            json.dumps(record, separators=(",", ":")) + "\n" for record in _source_records(target)
+            json.dumps(record, separators=(",", ":")) + "\n"
+            for record in _source_records(target, context_sensitive=context_sensitive)
         ),
         encoding="utf-8",
     )

@@ -40,6 +40,7 @@ from ithrl.cli.sampled_output import (
 )
 from ithrl.cli.sampled_session import (
     SampledCliSession,
+    SampledCliSessionError,
     load_cli_run_state,
     load_cli_session,
     save_cli_result,
@@ -775,6 +776,16 @@ def _run_report(
         next_action = (
             "Inspect the private safety evidence and resolve the refusal before starting a new run."
         )
+    if safe_resume:
+        try:
+            load_cli_session(state_file.path.parent)
+        except SampledCliSessionError:
+            safe_resume = False
+            next_action = (
+                "Private resume metadata is unavailable. Start a new run with fresh acknowledgement; no attempt was dispatched."
+                if not observations and state.pending is None
+                else "Private resume metadata is unavailable. Inspect the retained private run evidence before starting another run."
+            )
     args = [
         "ithrl",
         "shrink",

@@ -8,6 +8,7 @@ from pathlib import Path
 from ithrl.context import content_digest
 from ithrl.execution import CapabilityProfile
 from ithrl.runner.contracts import (
+    CandidateInvalidError,
     NativeOutputReference,
     PreparedAttempt,
     ProviderAcceptanceState,
@@ -25,6 +26,7 @@ from ithrl.runner.copilot.isolation import (
 )
 from ithrl.runner.copilot.materialize import (
     CopilotMaterializationError,
+    CopilotMaterializationErrorCode,
     materialize_copilot_attempt,
 )
 from ithrl.runner.copilot.policy import (
@@ -118,6 +120,19 @@ class CopilotRunner:
             "worker": self._worker_digest,
         }
         return f"copilot-v{RUNNER_VERSION}:{content_digest(identity)}"
+
+    def validate_candidate(self, attempt: PreparedAttempt) -> None:
+        """Check semantic reconstruction without runtime or provider operations."""
+
+        try:
+            materialize_copilot_attempt(attempt)
+        except CopilotMaterializationError as error:
+            if attempt.candidate.removed_context_ids and error.code in {
+                CopilotMaterializationErrorCode.MISSING_TRIGGER,
+                CopilotMaterializationErrorCode.UNSUPPORTED_CONTEXT,
+            }:
+                raise CandidateInvalidError("candidate cannot be reconstructed") from error
+            raise
 
     async def run(self, attempt: PreparedAttempt) -> RunResult:
         """Execute one prepared source-backed Copilot attempt."""

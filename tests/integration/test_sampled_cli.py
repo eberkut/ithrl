@@ -19,6 +19,7 @@ from typer.testing import CliRunner, Result
 import ithrl.calibration as calibration
 import ithrl.cli as cli
 import ithrl.cli.sampled_reduction as sampled_reduction
+import ithrl.cli.sampled_session as sampled_session
 import ithrl.observations as observations
 import ithrl.sampling as sampling
 import ithrl.workflow as workflow
@@ -599,6 +600,267 @@ def test_operator_resumes_same_durable_block_after_interruption(
         assert after.selection == before.selection
     ids = [attempt.attempt_id for attempt in operator_case.runner.calls]
     assert len(ids) == len(set(ids))
+    operator_case.assert_sources_unchanged()
+
+
+@pytest.mark.parametrize("output_format", ["json", "human"])
+def test_reserved_dispatch_without_observation_stays_charged_and_never_replays(
+    operator_case: OperatorCase, monkeypatch: pytest.MonkeyPatch, output_format: str
+) -> None:
+    reserved_attempts: list[PreparedAttempt] = []
+
+    async def interrupt_before_observation(**kwargs: Any) -> None:
+        # The collector has already persisted its reservation. No observation can prove
+        # whether dispatch reached a provider, even though this synthetic runner is idle.
+        reserved_attempts.append(kwargs["attempt"])
+        raise asyncio.CancelledError
+
+    with monkeypatch.context() as patch:
+        patch.setattr(sampling, "observe_once", interrupt_before_observation)
+        stopped = _invoke(operator_case.command("--format", output_format))
+    assert stopped.exit_code == ExitCode.UNSUPPORTED, stopped.output
+    assert _PRIVATE_CONTEXT not in stopped.output
+    assert _PRIVATE_RESPONSE not in stopped.output
+    assert len(reserved_attempts) == 1
+    assert [a.phase for a in operator_case.runner.calls] == ["calibration"]
+    if output_format == "json":
+        report = _json(stopped)
+        assert report["status"] == "refused"
+        assert report["stop_reason"] == "unresolved-dispatch"
+        assert report["provider_call_accounting"] == "started-unknown"
+        assert report["provider_calls"] is None
+        assert report["actual_provider_calls"] == 1
+        assert report["pending_provider_calls"] == 1
+        assert report["charged_provider_calls"] == 2
+        assert report["reliability_status"] == "unknown"
+        assert report["next_command"] is None
+    else:
+        assert "Sampled shrink: refused" in stopped.stdout
+        assert "unknown actual; 2 charged / 100 maximum" in stopped.stdout
+        assert "1 pending" in stopped.stdout
+        assert "unresolved-dispatch" in stopped.stdout
+    run_path = next((operator_case.workspace.root / ".runs").glob("*/sampled-state.json"))
+    run_file = SampledRunStateFile.open(run_path.parent)
+    store = ObservationStore(operator_case.store_path)
+    with run_file.acquire_lock(store):
+        before = run_file.load(store)
+        blocks_before = run_file.evidence(store)
+    assert before.pending is not None
+    assert before.pending.attempt_id == reserved_attempts[0].attempt_id
+    assert len(blocks_before) == 1
+    assert blocks_before[0].attempts == ()
+    assert before.selection is None
+    resumed = _invoke(
+        [
+            "shrink",
+            str(run_path.parent),
+            "--resume",
+            "--acknowledge-model-execution",
+            "--format",
+            "json",
+        ]
+    )
+    assert resumed.exit_code == ExitCode.UNSUPPORTED, resumed.output
+    resumed_report = _json(resumed)
+    assert resumed_report["stop_reason"] == "unresolved-dispatch"
+    assert resumed_report["pending_provider_calls"] == 1
+    assert resumed_report["charged_provider_calls"] == 2
+    assert resumed_report["provider_calls"] is None
+    assert resumed_report["next_command"] is None
+    with run_file.acquire_lock(store):
+        assert run_file.load(store) == before
+        assert run_file.evidence(store) == blocks_before
+    assert [a.phase for a in operator_case.runner.calls] == ["calibration"]
+    operator_case.assert_sources_unchanged()
+
+
+@pytest.mark.parametrize("metadata", ["missing", "malformed"])
+def test_interrupted_session_publication_does_not_propose_unusable_resume(
+    operator_case: OperatorCase, monkeypatch: pytest.MonkeyPatch, metadata: str
+) -> None:
+    def interrupt_session_publication(_root: Path, _session: Any) -> None:
+        if metadata == "malformed":
+            path = _root / "cli-session.json"
+            path.write_text(_PRIVATE_CONTEXT, encoding="utf-8")
+            path.chmod(0o600)
+        raise asyncio.CancelledError
+
+    with monkeypatch.context() as patch:
+        patch.setattr(sampled_reduction, "save_cli_session", interrupt_session_publication)
+        stopped = _invoke(operator_case.command())
+    assert stopped.exit_code == ExitCode.CANCELLED, stopped.output
+    report = _json(stopped)
+    assert report["status"] == "interrupted"
+    assert report["provider_call_accounting"] == "accounted"
+    assert report["provider_calls"] == report["charged_provider_calls"] == 0
+    assert report["attempts_used"] == 0
+    assert operator_case.runner.calls == []
+    run_root = Path(report["run_state_path"])
+    assert (run_root / "sampled-state.json").is_file()
+    assert (run_root / "cli-session.json").exists() == (metadata == "malformed")
+    state_before = (run_root / "sampled-state.json").read_bytes()
+    # The durable state cannot reconstruct CLI inputs without its private session pointer.
+    # A proposed --resume command would deterministically refuse before dispatch.
+    unusable_resume = _invoke(
+        [
+            "shrink",
+            str(run_root),
+            "--resume",
+            "--acknowledge-model-execution",
+            "--format",
+            "json",
+        ]
+    )
+    assert unusable_resume.exit_code == ExitCode.USAGE, unusable_resume.output
+    assert _json(unusable_resume)["error_code"] == (
+        "invalid-input" if metadata == "missing" else "sampled-resume-mismatch"
+    )
+    assert operator_case.runner.calls == []
+    assert (run_root / "sampled-state.json").read_bytes() == state_before
+    assert report["next_command"] is None
+    assert report["next_command_shell"] is None
+    assert "new run" in report["next_action"]
+    assert not (operator_case.workspace.root / "results").exists()
+    operator_case.assert_sources_unchanged()
+
+
+@pytest.mark.parametrize("metadata", ["missing", "malformed"])
+def test_unavailable_resume_metadata_preserves_recorded_work_accounting(
+    operator_case: OperatorCase, monkeypatch: pytest.MonkeyPatch, metadata: str
+) -> None:
+    observe = sampling.observe_once
+
+    async def stop_after_observation_without_metadata(**kwargs: Any):
+        observation = await observe(**kwargs)
+        if kwargs["attempt"].phase == "search":
+            path = next((operator_case.workspace.root / ".runs").glob("*/cli-session.json"))
+            if metadata == "missing":
+                path.unlink()
+            else:
+                path.write_text(_PRIVATE_CONTEXT, encoding="utf-8")
+            raise asyncio.CancelledError
+        return observation
+
+    with monkeypatch.context() as patch:
+        patch.setattr(sampling, "observe_once", stop_after_observation_without_metadata)
+        stopped = _invoke(operator_case.command())
+    # The observation is durable; result publication subsequently refuses the missing metadata.
+    assert stopped.exit_code == ExitCode.UNSUPPORTED, stopped.output
+    report = _json(stopped)
+    assert report["status"] == "refused"
+    assert report["stop_reason"] == "execution-refused"
+    assert report["provider_call_accounting"] == "accounted"
+    assert report["provider_calls"] == report["charged_provider_calls"] == 2
+    assert report["attempts_used"] == 2
+    assert report["pending_provider_calls"] == 0
+    assert report["next_command"] is report["next_command_shell"] is None
+    assert "Inspect the private run evidence" in report["next_action"]
+    assert "no attempt was dispatched" not in report["next_action"]
+    assert [attempt.phase for attempt in operator_case.runner.calls] == ["calibration", "search"]
+    run_file = SampledRunStateFile.open(Path(report["run_state_path"]))
+    store = ObservationStore(operator_case.store_path)
+    with run_file.acquire_lock(store):
+        state = run_file.load(store)
+        assert state.pending is None
+        assert len(run_file.evidence(store)[0].attempts) == 1
+    operator_case.assert_sources_unchanged()
+
+
+def test_interruption_after_session_publication_can_resume_without_recreating_run(
+    operator_case: OperatorCase, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    save_session = sampled_reduction.save_cli_session
+
+    def stop_after_publication(root: Path, session: sampled_session.SampledCliSession) -> None:
+        save_session(root, session)
+        raise asyncio.CancelledError
+
+    with monkeypatch.context() as patch:
+        patch.setattr(sampled_reduction, "save_cli_session", stop_after_publication)
+        stopped = _invoke(operator_case.command())
+    assert stopped.exit_code == ExitCode.CANCELLED, stopped.output
+    before = _json(stopped)
+    assert before["provider_calls"] == before["attempts_used"] == 0
+    assert operator_case.runner.calls == []
+    run_path = Path(before["run_state_path"])
+    assert (run_path / "cli-session.json").is_file()
+    resumed = _invoke([*shlex.split(before["next_command"])[1:], "--format", "json"])
+    assert resumed.exit_code == ExitCode.SUCCESS, resumed.output
+    after = _json(resumed)
+    assert after["run_state_path"] == before["run_state_path"]
+    assert after["confirmation_result"] == "confirmed-preserving"
+    assert len(list((operator_case.workspace.root / ".runs").iterdir())) == 1
+    operator_case.assert_sources_unchanged()
+
+
+@pytest.mark.parametrize("output_format", ["json", "human"])
+def test_result_publication_failure_recovers_without_repeating_confirmation(
+    operator_case: OperatorCase, monkeypatch: pytest.MonkeyPatch, output_format: str
+) -> None:
+    sync_directory = sampled_session._sync_directory
+
+    def fail_before_publication(directory: Path) -> None:
+        if directory.name == "result" and directory.parent.name.startswith(".sampled-"):
+            raise OSError(_PRIVATE_RESPONSE)
+        sync_directory(directory)
+
+    with monkeypatch.context() as patch:
+        # Fail after private result files and snapshot are staged, before atomic rename.
+        patch.setattr(sampled_session, "_sync_directory", fail_before_publication)
+        stopped = _invoke(operator_case.command("--format", output_format))
+    assert stopped.exit_code == ExitCode.UNSUPPORTED, stopped.output
+    assert _PRIVATE_CONTEXT not in stopped.output
+    assert _PRIVATE_RESPONSE not in stopped.output
+    if output_format == "json":
+        report = _json(stopped)
+        assert report["status"] == "refused"
+        assert report["stop_reason"] == "execution-refused"
+        assert report["confirmation_result"] == "confirmed-preserving"
+        assert report["provider_call_accounting"] == "accounted"
+        assert report["result_path"] is None
+    else:
+        assert "Sampled shrink: refused" in stopped.stdout
+        assert "confirmed-preserving" in stopped.stdout
+        assert "execution-refused" in stopped.stdout
+    results_root = operator_case.workspace.root / "results"
+    assert results_root.is_dir()
+    assert list(results_root.iterdir()) == []
+    run_path = next((operator_case.workspace.root / ".runs").glob("*/sampled-state.json"))
+    run_file = SampledRunStateFile.open(run_path.parent)
+    store = ObservationStore(operator_case.store_path)
+    with run_file.acquire_lock(store):
+        before = run_file.load(store)
+        blocks_before = run_file.evidence(store)
+    confirmation = next(block for block in blocks_before if block.plan.role == "confirmation")
+    assert before.pending is None
+    assert before.selection is not None
+    assert confirmation.complete
+    assert len(confirmation.attempts) == 8
+    calls_before = tuple(operator_case.runner.calls)
+    resumed = _invoke(
+        [
+            "shrink",
+            str(run_path.parent),
+            "--resume",
+            "--acknowledge-model-execution",
+            "--format",
+            "json",
+        ]
+    )
+    assert resumed.exit_code == ExitCode.SUCCESS, resumed.output
+    report = _json(resumed)
+    assert report["confirmation_result"] == "confirmed-preserving"
+    assert report["provider_calls"] == len(calls_before)
+    assert report["confirmation_capacity"] == "consumed"
+    destination = Path(report["result_path"])
+    assert list(results_root.iterdir()) == [destination]
+    saved = SampledReductionEvidence.model_validate_json((destination / "result.json").read_text())
+    assert saved.confirmation is not None
+    assert saved.confirmation.evidence == confirmation
+    assert tuple(operator_case.runner.calls) == calls_before
+    with run_file.acquire_lock(store):
+        assert run_file.load(store) == before
+        assert run_file.evidence(store) == blocks_before
     operator_case.assert_sources_unchanged()
 
 

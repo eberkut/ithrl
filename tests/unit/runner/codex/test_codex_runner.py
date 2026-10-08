@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import stat
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
+import ithrl.runner.codex.runner as codex_runner_module
 from ithrl.case import CaseEvidence, CaseWorkspace
 from ithrl.execution import (
     CapabilityProfile,
@@ -22,6 +24,11 @@ from ithrl.runner import (
     prepare_candidate,
 )
 from ithrl.runner.codex import CodexProviderConfiguration, CodexRunner, CodexRuntime
+from ithrl.runner.codex.materialize import (
+    CodexMaterializationError,
+    CodexMaterializationErrorCode,
+)
+from ithrl.runner.contracts import CandidateInvalidError
 from ithrl.runner.evidence import AttemptEvidence
 from ithrl.runner.runtime import ProtectedPath
 from native_support.codex import _FAKE_APP_SERVER, FIXTURES, _capability, _case, _configuration
@@ -155,6 +162,62 @@ def _attempt(
         phase="calibration",
         arm="baseline",
     )
+
+
+@pytest.mark.parametrize("code", list(CodexMaterializationErrorCode))
+@pytest.mark.parametrize("removed", [False, True])
+def test_pure_candidate_admission_only_classifies_local_reconstruction_refusals(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    code: CodexMaterializationErrorCode,
+    removed: bool,
+) -> None:
+    workspace, evidence = _case(tmp_path)
+    runner = _runner(tmp_path, workspace)
+    attempt = _attempt(evidence, runner)
+    if removed:
+        node = next(n for n in evidence.context.nodes if n.mutable and not n.protected)
+        attempt = replace(
+            attempt,
+            candidate=prepare_candidate(evidence, attempt.execution_plan, (node.id,)),
+            phase="search",
+            arm="candidate",
+        )
+
+    def refuse(_attempt: PreparedAttempt) -> None:
+        raise CodexMaterializationError(code, "private reconstruction diagnostic")
+
+    monkeypatch.setattr(codex_runner_module, "materialize_codex_attempt", refuse)
+    expected = (
+        CandidateInvalidError
+        if removed
+        and code
+        in {
+            CodexMaterializationErrorCode.MISSING_TRIGGER,
+            CodexMaterializationErrorCode.UNSUPPORTED_CONTEXT,
+        }
+        else CodexMaterializationError
+    )
+    with pytest.raises(expected):
+        runner.validate_candidate(attempt)
+    assert not (tmp_path / "attempts").exists()
+    assert list((tmp_path / "output").iterdir()) == []
+
+
+def test_candidate_admission_does_not_probe_codex_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace, evidence = _case(tmp_path)
+    runner = _runner(tmp_path, workspace)
+    attempt = _attempt(evidence, runner)
+
+    def forbidden_validation(_attempt: PreparedAttempt) -> None:
+        pytest.fail("pure admission must not validate runtime executables or configuration")
+
+    monkeypatch.setattr(runner, "_validate_attempt", forbidden_validation)
+    runner.validate_candidate(attempt)
+    assert not (tmp_path / "attempts").exists()
+    assert list((tmp_path / "output").iterdir()) == []
 
 
 def test_runs_one_final_response_inside_shared_isolation(tmp_path: Path) -> None:

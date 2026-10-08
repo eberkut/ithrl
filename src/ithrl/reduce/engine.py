@@ -44,6 +44,7 @@ from ithrl.reduce.contracts import (
 )
 from ithrl.reduce.search import run_search
 from ithrl.runner import Candidate, PreparedAttempt, Runner, prepare_candidate
+from ithrl.runner.contracts import CandidateAdmission, CandidateInvalidError
 
 if TYPE_CHECKING:
     from ithrl.run_state import SampledRunState, SampledRunStateFile, SampledRunUsage
@@ -550,6 +551,7 @@ class SampledReducer:
             or prepared.identity.target_digest != prepared.experiment.target.digest
         ):
             raise ResumeMismatchError("sampled run does not match the prepared original")
+        self._validate_candidate_admission(evidence, original, arm="baseline")
         self._validate_calibration(state)
         blocks = self._state_file.evidence(self._store)
         if not allow_selected and (
@@ -674,7 +676,9 @@ class SampledReducer:
                 return None
         try:
             effective = evidence.context.dependency_closure((*base_removals, *requested))
-        except ContextGraphError:
+            candidate = prepare_candidate(evidence, self._prepared.execution_plan, effective)
+            self._validate_candidate_admission(evidence, candidate, arm="candidate")
+        except (ContextGraphError, CandidateInvalidError):
             invalid = SampledInvalidCandidateTrial(
                 trial_key=key,
                 base_removals=base,
@@ -686,17 +690,16 @@ class SampledReducer:
             if prior is not None:
                 if prior != invalid:
                     raise ResumeMismatchError(
-                        "invalid trial does not match the context graph"
+                        "invalid trial does not match current candidate admission"
                     ) from None
                 return prior
             if not publish:
                 if self._unclassified is not None:
                     raise ResumeMismatchError(
-                        "sampling block belongs to an invalid graph candidate"
+                        "sampling block belongs to an inadmissible candidate"
                     ) from None
                 return None
             return invalid
-        candidate = prepare_candidate(evidence, self._prepared.execution_plan, effective)
         if prior is not None:
             if (
                 not isinstance(prior, SampledCandidateTrial)
@@ -753,6 +756,24 @@ class SampledReducer:
             phase=phase,
             comparison=SampledComparison.from_evidence(result.evidence),
         )
+
+    def _validate_candidate_admission(
+        self, evidence: CaseEvidence, candidate: Candidate, *, arm: Literal["baseline", "candidate"]
+    ) -> None:
+        prepared = self._prepared
+        if isinstance(prepared.runner, CandidateAdmission):
+            prepared.runner.validate_candidate(
+                PreparedAttempt(
+                    evidence=evidence,
+                    candidate=candidate,
+                    target=prepared.experiment.target,
+                    execution_plan=prepared.execution_plan,
+                    safety_policy=prepared.safety_policy,
+                    resource_limits=prepared.resource_limits,
+                    phase="search",
+                    arm=arm,
+                )
+            )
 
     def _plan(self, key: str, candidate_digest: str) -> SamplingBlockPlan:
         state = self._loaded_state

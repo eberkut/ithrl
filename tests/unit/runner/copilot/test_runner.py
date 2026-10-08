@@ -3,10 +3,12 @@ from __future__ import annotations
 import asyncio
 import json
 import stat
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
+import ithrl.runner.copilot.runner as copilot_runner_module
 from ithrl.case import CaseEvidence, CaseWorkspace
 from ithrl.execution import (
     ResolvedExecutionPlan,
@@ -21,10 +23,15 @@ from ithrl.runner import (
     RunnerErrorCode,
     prepare_candidate,
 )
+from ithrl.runner.contracts import CandidateInvalidError
 from ithrl.runner.copilot import (
     CopilotRunner,
     CopilotRuntime,
     DetectedCopilotCapability,
+)
+from ithrl.runner.copilot.materialize import (
+    CopilotMaterializationError,
+    CopilotMaterializationErrorCode,
 )
 from ithrl.runner.copilot.policy import (
     ENDPOINT,
@@ -133,6 +140,65 @@ def _attempt(
         phase="calibration",
         arm="baseline",
     )
+
+
+@pytest.mark.parametrize("code", list(CopilotMaterializationErrorCode))
+@pytest.mark.parametrize("removed", [False, True])
+def test_pure_candidate_admission_only_classifies_local_reconstruction_refusals(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    code: CopilotMaterializationErrorCode,
+    removed: bool,
+) -> None:
+    source, workspace, evidence = _case(tmp_path, "final-response")
+    runner, marker = _runner(tmp_path, source, workspace, target="final-response")
+    attempt = _attempt(evidence, runner)
+    if removed:
+        node = next(n for n in evidence.context.nodes if n.mutable and not n.protected)
+        attempt = replace(
+            attempt,
+            candidate=prepare_candidate(evidence, attempt.execution_plan, (node.id,)),
+            phase="search",
+            arm="candidate",
+        )
+
+    def refuse(_attempt: PreparedAttempt) -> None:
+        raise CopilotMaterializationError(code, "private reconstruction diagnostic")
+
+    monkeypatch.setattr(copilot_runner_module, "materialize_copilot_attempt", refuse)
+    expected = (
+        CandidateInvalidError
+        if removed
+        and code
+        in {
+            CopilotMaterializationErrorCode.MISSING_TRIGGER,
+            CopilotMaterializationErrorCode.UNSUPPORTED_CONTEXT,
+        }
+        else CopilotMaterializationError
+    )
+    with pytest.raises(expected):
+        runner.validate_candidate(attempt)
+    assert not (tmp_path / "attempts").exists()
+    assert list((tmp_path / "output").iterdir()) == []
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize("target", ["final-response", "shell-action"])
+def test_candidate_admission_does_not_probe_copilot_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: CopilotTarget
+) -> None:
+    source, workspace, evidence = _case(tmp_path, target)
+    runner, marker = _runner(tmp_path, source, workspace, target=target)
+    attempt = _attempt(evidence, runner)
+
+    def forbidden_validation(_attempt: PreparedAttempt) -> None:
+        pytest.fail("pure admission must not validate runtime executables or configuration")
+
+    monkeypatch.setattr(runner, "_validate_attempt", forbidden_validation)
+    runner.validate_candidate(attempt)
+    assert not (tmp_path / "attempts").exists()
+    assert list((tmp_path / "output").iterdir()) == []
+    assert not marker.exists()
 
 
 def test_runs_final_response_without_changing_protected_state(tmp_path: Path) -> None:

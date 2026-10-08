@@ -6,7 +6,7 @@ import asyncio
 import json
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Annotated, Literal, Protocol
+from typing import Annotated, Literal, Protocol, runtime_checkable
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -339,6 +339,22 @@ class Runner(Protocol):
     def capability_profile(self) -> CapabilityProfile: ...
 
     async def run(self, attempt: PreparedAttempt) -> RunResult: ...
+
+
+class CandidateInvalidError(ValueError):
+    """A removal cannot be reconstructed from an otherwise supported original."""
+
+
+@runtime_checkable
+class CandidateAdmission(Protocol):
+    """Optional pure reconstruction check before committing sampling resources.
+
+    Implementations must not start a harness, probe runtime configuration or dispatch
+    a provider request. Only candidate-local refusals use ``CandidateInvalidError``;
+    original evidence, identity and unsupported-original failures remain terminal.
+    """
+
+    def validate_candidate(self, attempt: PreparedAttempt) -> None: ...
 
 
 def prepare_candidate(

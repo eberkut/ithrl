@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import MappingProxyType
 
@@ -52,7 +53,9 @@ if message["params"]["modelProvider"] != "ithrl":
 send({"id": message["id"], "result": {"thread": {"id": "thread-1", "model": returned_model, "serviceTier": "default"}}})
 send({"method": "thread/started", "params": {"thread": {"id": "thread-1"}}})
 message = receive()
+required_context = False
 if message["method"] == "thread/inject_items":
+    required_context = "ITHRL_REQUIRED_CONTEXT" in json.dumps(message["params"])
     send({"id": message["id"], "result": {}})
     message = receive()
 send({"id": message["id"], "result": {"turn": {"id": "turn-1", "items": [], "status": "inProgress"}}})
@@ -73,6 +76,8 @@ if mode in {"action", "action-long-metadata"}:
 send({"method": "item/agentMessage/delta", "params": {"threadId": "thread-1", "turnId": "turn-1", "itemId": "message-1", "delta": "Fixture complete."}})
 send({"method": "thread/tokenUsage/updated", "params": {"threadId": "thread-1", "turnId": "turn-1", "tokenUsage": {"last": {"inputTokens": 101, "outputTokens": 7, "cachedInputTokens": 50, "reasoningOutputTokens": 2, "totalTokens": 108}, "total": {"inputTokens": 101, "outputTokens": 7, "cachedInputTokens": 50, "reasoningOutputTokens": 2, "totalTokens": 108}, "modelContextWindow": 128000}}})
 final_text = "private-response-" * 5_000 if mode == "long-final" else "Fixture complete."
+if mode == "context-sensitive" and not required_context:
+    final_text = "Fixture does not match."
 item = {"type": "agentMessage", "id": "message-1", "text": final_text, "phase": "final_answer"}
 send({"method": "item/completed", "params": {"threadId": "thread-1", "turnId": "turn-1", "item": item}})
 send({"method": "turn/completed", "params": {"threadId": "thread-1", "turn": {"id": "turn-1", "items": [item], "status": "completed"}}})
@@ -81,8 +86,33 @@ for _ in sys.stdin:
 """
 
 
-def _case(tmp_path: Path) -> tuple[CaseWorkspace, CaseEvidence]:
-    session = parse_session(FIXTURES / "codex-session" / "rollout.jsonl")
+def _case(tmp_path: Path, *, context_sensitive: bool = False) -> tuple[CaseWorkspace, CaseEvidence]:
+    source = FIXTURES / "codex-session" / "rollout.jsonl"
+    if context_sensitive:
+        records = [json.loads(line) for line in source.read_text().splitlines()]
+        for record in records:
+            payload = record["payload"]
+            if payload.get("id") == "message-fixture-user-001":
+                payload["content"][0]["text"] = "ITHRL_REQUIRED_CONTEXT"
+        records.insert(
+            3,
+            {
+                "ordinal": 13,
+                "timestamp": "2026-01-01T00:00:02.500Z",
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "id": "message-fixture-irrelevant",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "Irrelevant removable context."}],
+                    "phase": None,
+                },
+            },
+        )
+        source = tmp_path / "source" / "rollout.jsonl"
+        source.parent.mkdir()
+        source.write_text("".join(json.dumps(record) + "\n" for record in records))
+    session = parse_session(source)
     decision = enumerate_decisions(session)[0]
     workspace = extract_decision(
         session,

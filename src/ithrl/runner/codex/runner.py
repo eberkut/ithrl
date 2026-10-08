@@ -40,6 +40,7 @@ from ithrl.runner.codex.transcript import parse_transcript
 from ithrl.runner.contracts import (
     MAX_MODEL_NAME_LENGTH,
     MAX_SERVICE_TIER_LENGTH,
+    CandidateInvalidError,
     NativeOutputReference,
     PreparedAttempt,
     ProviderAcceptanceState,
@@ -132,6 +133,20 @@ class CodexRunner:
             "support_programs": {source.name: digest for source, digest in self._support_programs},
         }
         return f"codex-v{RUNNER_VERSION}:{content_digest(identity)}"
+
+    def validate_candidate(self, attempt: PreparedAttempt) -> None:
+        """Check source-backed reconstruction without runtime or provider operations."""
+
+        try:
+            materialized = materialize_codex_attempt(attempt)
+            _validate_materialized_identity(materialized, attempt)
+        except CodexMaterializationError as error:
+            if attempt.candidate.removed_context_ids and error.code in {
+                CodexMaterializationErrorCode.MISSING_TRIGGER,
+                CodexMaterializationErrorCode.UNSUPPORTED_CONTEXT,
+            }:
+                raise CandidateInvalidError("candidate cannot be reconstructed") from error
+            raise
 
     async def run(self, attempt: PreparedAttempt) -> RunResult:
         """Execute one prepared source-backed final-response attempt."""

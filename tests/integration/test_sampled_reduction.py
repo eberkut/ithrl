@@ -65,6 +65,7 @@ from ithrl.runner import (
     ToolCall,
     prepare_candidate,
 )
+from ithrl.runner.contracts import CandidateInvalidError
 from ithrl.workflow import (
     PreparedExperiment,
     SampledPhaseOutcome,
@@ -352,6 +353,139 @@ def test_locally_invalid_neighbors_have_no_sampling_block(tmp_path: Path) -> Non
     assert result.checkpoint.blocks == ()
     assert len(fixture.runner.calls) == 1  # Calibration only.
     assert fixture.run().checkpoint == result.checkpoint
+
+
+def test_original_admission_failure_stops_before_any_search_sampling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = _fixture(tmp_path)
+    validated: list[PreparedAttempt] = []
+
+    def refuse_original(attempt: PreparedAttempt) -> None:
+        validated.append(attempt)
+        raise RunnerError(RunnerErrorCode.PREPARATION, "unsupported original")
+
+    monkeypatch.setattr(fixture.runner, "validate_candidate", refuse_original, raising=False)
+    with fixture.state_file.acquire_lock(fixture.store):
+        before = fixture.state_file.load(fixture.store)
+    with pytest.raises(RunnerError, match="unsupported original"):
+        fixture.run()
+    assert len(validated) == 1
+    assert validated[0].arm == "baseline"
+    assert validated[0].candidate.removed_context_ids == ()
+    assert len(fixture.runner.calls) == 1  # Existing calibration only.
+    with fixture.state_file.acquire_lock(fixture.store):
+        assert fixture.state_file.load(fixture.store) == before
+        assert fixture.state_file.evidence(fixture.store) == ()
+
+
+def test_candidate_preparation_error_remains_terminal_before_sampling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = _fixture(tmp_path)
+
+    def refuse_preparation(attempt: PreparedAttempt) -> None:
+        if attempt.candidate.removed_context_ids:
+            raise RunnerError(RunnerErrorCode.PREPARATION, "unexpected preparation failure")
+
+    monkeypatch.setattr(fixture.runner, "validate_candidate", refuse_preparation, raising=False)
+    with pytest.raises(RunnerError, match="unexpected preparation failure"):
+        fixture.run()
+    assert len(fixture.runner.calls) == 1
+    with fixture.state_file.acquire_lock(fixture.store):
+        state = fixture.state_file.load(fixture.store)
+        assert state.blocks == ()
+        assert state.pending is None
+        assert state.checkpoint is None
+
+
+def test_reconstruction_invalid_candidates_do_not_spend_baseline_or_candidate_calls(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = _fixture(tmp_path, markers="ABC", dependencies={"C": ("ctx-b",)})
+    admitted: list[PreparedAttempt] = []
+
+    def refuse_removals(attempt: PreparedAttempt) -> None:
+        admitted.append(attempt)
+        if attempt.candidate.removed_context_ids:
+            raise CandidateInvalidError("synthetic reconstruction refusal")
+
+    monkeypatch.setattr(fixture.runner, "validate_candidate", refuse_removals, raising=False)
+    result = fixture.run()
+    assert result.status == "search-reduced"
+    assert result.checkpoint.removed_context_ids == ()
+    assert result.checkpoint.blocks == ()
+    assert all(isinstance(t, SampledInvalidCandidateTrial) for t in result.checkpoint.trials)
+    assert any(t.requested_removals == ("ctx-b",) for t in result.checkpoint.trials)
+    assert any("ctx-b" in a.candidate.removed_context_ids for a in admitted)
+    assert all(
+        "ctx-c" in a.candidate.removed_context_ids
+        for a in admitted
+        if "ctx-b" in a.candidate.removed_context_ids
+    )
+    assert result.usage.actual_provider_calls == len(fixture.runner.calls) == 1
+    with fixture.state_file.acquire_lock(fixture.store):
+        state = fixture.state_file.load(fixture.store)
+        assert state.blocks == ()
+        assert state.pending is None
+    assert fixture.run().checkpoint == result.checkpoint
+    assert len(fixture.runner.calls) == 1
+
+
+@pytest.mark.parametrize("initially_invalid", [False, True])
+def test_replay_refuses_changed_candidate_admission_without_dispatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, initially_invalid: bool
+) -> None:
+    fixture = _fixture(tmp_path, markers="AB")
+    invalid = initially_invalid
+
+    def validate(attempt: PreparedAttempt) -> None:
+        if invalid and attempt.candidate.removed_context_ids:
+            raise CandidateInvalidError("synthetic reconstruction refusal")
+
+    monkeypatch.setattr(fixture.runner, "validate_candidate", validate, raising=False)
+    fixture.run()
+    invalid = not invalid
+    calls_before = tuple(fixture.runner.calls)
+    with fixture.state_file.acquire_lock(fixture.store):
+        before = fixture.state_file.load(fixture.store)
+    with pytest.raises(ResumeMismatchError):
+        asyncio.run(fixture.reducer().validate_resume(fixture.evidence))
+    assert tuple(fixture.runner.calls) == calls_before
+    with fixture.state_file.acquire_lock(fixture.store):
+        assert fixture.state_file.load(fixture.store) == before
+
+
+def test_unclassified_block_cannot_be_reinterpreted_as_invalid_candidate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = _fixture(tmp_path, markers="AB")
+    observe = sampling_module.observe_once
+
+    async def interrupt_after_observation(**kwargs: Any):
+        await observe(**kwargs)
+        raise asyncio.CancelledError
+
+    with monkeypatch.context() as patch:
+        patch.setattr(sampling_module, "observe_once", interrupt_after_observation)
+        stopped = fixture.run()
+    assert stopped.stop_reason == "user-interrupt"
+
+    def refuse_removals(attempt: PreparedAttempt) -> None:
+        if attempt.candidate.removed_context_ids:
+            raise CandidateInvalidError("synthetic reconstruction refusal")
+
+    monkeypatch.setattr(fixture.runner, "validate_candidate", refuse_removals, raising=False)
+    calls_before = tuple(fixture.runner.calls)
+    with fixture.state_file.acquire_lock(fixture.store):
+        before = fixture.state_file.load(fixture.store)
+        block_before = fixture.state_file.evidence(fixture.store)
+    with pytest.raises(ResumeMismatchError, match="sampling block belongs to an inadmissible"):
+        asyncio.run(fixture.reducer().validate_resume(fixture.evidence))
+    assert tuple(fixture.runner.calls) == calls_before
+    with fixture.state_file.acquire_lock(fixture.store):
+        assert fixture.state_file.load(fixture.store) == before
+        assert fixture.state_file.evidence(fixture.store) == block_before
 
 
 def test_cumulative_degradation_is_compared_with_original(tmp_path: Path) -> None:
