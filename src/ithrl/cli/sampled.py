@@ -217,7 +217,12 @@ def handle_sampled_shrink(
         )
 
 
-def _require_model_acknowledgement(output_format: OutputFormat, harness_started: bool) -> None:
+def _require_model_acknowledgement(
+    output_format: OutputFormat,
+    harness_started: bool,
+    *,
+    prompt: str = "Send this case to the configured provider for bounded calibration?",
+) -> None:
     """Require interactive consent without dispatching or writing observation state."""
 
     try:
@@ -225,7 +230,7 @@ def _require_model_acknowledgement(output_format: OutputFormat, harness_started:
             _stop_before_execution(output_format, "acknowledgement-required", harness_started)
         with redirect_stdout(sys.stderr) if output_format is OutputFormat.JSON else nullcontext():
             acknowledged = typer.confirm(
-                "Send this case to the configured provider for bounded calibration?",
+                prompt,
                 default=False,
             )
     except (KeyboardInterrupt, typer.Abort):
@@ -440,6 +445,7 @@ def _observation_store_path(
         resolved,
         resolved.with_name(f"{resolved.name}.calibration.lock"),
         resolved.with_name(f"{resolved.name}.calibration.inflight"),
+        resolved.with_name(f"{resolved.name}.sampling.lock"),
         resolved.with_name(f"{resolved.name}-journal"),
         resolved.with_name(f"{resolved.name}-wal"),
         resolved.with_name(f"{resolved.name}-shm"),

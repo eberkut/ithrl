@@ -236,6 +236,9 @@ def _measure_entry(
 ) -> StateMeasurement:
     try:
         metadata = entry.stat(follow_symlinks=False)
+    except FileNotFoundError:
+        # Native processes may consume disposable members during measurement.
+        return measurement
     except OSError as error:
         raise AttemptStateError("cannot inspect disposable attempt state") from error
     if stat.S_ISDIR(metadata.st_mode):
@@ -243,6 +246,8 @@ def _measure_entry(
             raise AttemptStateError("disposable attempt state exceeds the nesting limit")
         try:
             child = os.open(entry.name, flags, dir_fd=parent_descriptor)
+        except FileNotFoundError:
+            return measurement
         except OSError as error:
             raise AttemptStateError("cannot inspect disposable attempt state") from error
         try:

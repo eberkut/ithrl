@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
+import tracemalloc
+from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -11,6 +14,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
+from ithrl.context import content_digest
 from ithrl.experiment import (
     SampledConfirmationPhase,
     SampledReductionPlan,
@@ -34,6 +38,7 @@ from ithrl.reduce.contracts import trial_key
 from ithrl.run_state import (
     RunStateBusyError,
     RunStateError,
+    SampledFinalSelection,
     SampledRunState,
     SampledRunStateFile,
     SamplingBlockProgress,
@@ -98,7 +103,9 @@ def _approval(**changes: Any) -> SamplingBudgetApproval:
     )
 
 
-def _create(tmp_path: Path) -> tuple[SampledRunStateFile, ObservationStore, SamplingBlockPlan]:
+def _create(
+    tmp_path: Path, *, admit_block: bool = True
+) -> tuple[SampledRunStateFile, ObservationStore, SamplingBlockPlan]:
     case = tmp_path / "case"
     case.mkdir()
     store = ObservationStore(tmp_path / "observations.sqlite")
@@ -114,8 +121,9 @@ def _create(tmp_path: Path) -> tuple[SampledRunStateFile, ObservationStore, Samp
         provider_calls_per_attempt=plan.provider_calls_per_attempt,
         approval=_approval(),
     )
-    with file.acquire_lock(store):
-        file.admit_block(store, plan)
+    if admit_block:
+        with file.acquire_lock(store):
+            file.admit_block(store, plan)
     return file, store, plan
 
 
@@ -403,6 +411,8 @@ def test_mutation_load_and_hydration_require_both_owned_locks(tmp_path: Path) ->
         lambda: file.admit_block(store, plan),
         lambda: file.reserve_dispatch(store, _reservation(plan)),
         lambda: file.evidence(store),
+        lambda: file.snapshot(store, now=_TIME),
+        lambda: file.record_calibration(store, ()),
     ):
         with pytest.raises(RunStateError, match="owned"):
             action()
@@ -731,6 +741,7 @@ def test_recorded_calibration_consumption_stays_in_same_run_usage(tmp_path: Path
             "candidate_digest": plan.original_candidate_digest,
             "role": ObservationRole.CALIBRATION,
             "arm": ObservationArm.BASELINE,
+            "recorded_at": _TIME - timedelta(seconds=30),
         }
     )
     store.append(calibration)
@@ -749,13 +760,165 @@ def test_recorded_calibration_consumption_stays_in_same_run_usage(tmp_path: Path
         assert file.evidence(store) == ()
         usage = file.usage(store, now=_TIME + timedelta(seconds=2))
         assert usage.actual_provider_calls == 1
+        assert usage.possible_provider_calls == 1
+        assert usage.charged_provider_calls == 2
         assert usage.known_tokens == 12
         assert usage.runner_milliseconds == 12
+        assert usage.wall_time_seconds == 2
         extension = _approval(max_provider_calls=100).model_copy(
             update={"approval_id": "approval-2"}
         )
         file.extend_budget(store, extension)
         assert file.usage(store, now=_TIME + timedelta(seconds=2)) == usage
+
+
+def _calibration_observation(
+    plan: SamplingBlockPlan, position: int = 0, *, unknown: bool = False
+) -> Observation:
+    return _observation(
+        plan, _reservation(plan, position, attempt=position + 1), unknown=unknown
+    ).model_copy(
+        update={
+            **plan.original_identity.model_dump(),
+            "candidate_digest": plan.original_candidate_digest,
+            "role": ObservationRole.CALIBRATION,
+            "arm": ObservationArm.BASELINE,
+            "recorded_at": _TIME - timedelta(seconds=30 - position),
+        }
+    )
+
+
+def test_prior_calibration_charges_known_and_unknown_consumption_without_arm_evidence(
+    tmp_path: Path,
+) -> None:
+    file, store, plan = _create(tmp_path, admit_block=False)
+    observations = (
+        _calibration_observation(plan),
+        _calibration_observation(plan, 1, unknown=True),
+    )
+    for observation in observations:
+        store.append(observation)
+    with file.acquire_lock(store):
+        file.record_calibration(store, tuple(item.observation_id for item in observations))
+    reopened = SampledRunStateFile.open(file.path)
+    with reopened.acquire_lock(store):
+        assert reopened.evidence(store) == ()
+        usage = reopened.usage(store, now=_TIME + timedelta(seconds=2))
+        assert usage.actual_provider_calls == 1
+        assert usage.possible_provider_calls == 3
+        assert usage.charged_provider_calls == 4
+        assert usage.known_tokens == 12
+        assert usage.runner_milliseconds == 12
+        assert usage.unknown_provider_attempts == 1
+        assert usage.unknown_runner_attempts == usage.unknown_token_attempts == 1
+        assert usage.pending_provider_calls == usage.pending_runner_seconds == 0
+        assert usage.wall_time_seconds == 2
+        reopened.admit_block(store, plan)
+        assert reopened.evidence(store)[0].attempts == ()
+        assert reopened.usage(store, now=_TIME + timedelta(seconds=2)) == usage
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("role", ObservationRole.SEARCH),
+        ("role", ObservationRole.CONFIRMATION),
+        ("arm", ObservationArm.CANDIDATE),
+        ("arm", ObservationArm.SELECTED),
+        ("candidate_digest", "7" * 64),
+        ("case_digest", "7" * 64),
+        ("experiment_digest", "7" * 64),
+        ("runner_fingerprint", "another-fixture"),
+        ("execution_plan_digest", "7" * 64),
+        ("target_digest", "7" * 64),
+        ("algorithm_digest", "7" * 64),
+    ],
+)
+def test_incompatible_calibration_cannot_publish_or_charge_run(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    file, store, plan = _create(tmp_path, admit_block=False)
+    observation = _calibration_observation(plan).model_copy(update={field: value})
+    store.append(observation)
+    before = file.path.read_bytes()
+    with file.acquire_lock(store):
+        with pytest.raises(RunStateError, match="calibration accounting"):
+            file.record_calibration(store, (observation.observation_id,))
+        assert file.load(store).calibration_observation_ids == ()
+        assert file.usage(store, now=_TIME).charged_provider_calls == 0
+    assert file.path.read_bytes() == before
+    assert store.get(observation.observation_id) == observation
+
+
+def test_calibration_continuation_appends_exact_prefix_and_refuses_replacement(
+    tmp_path: Path,
+) -> None:
+    file, store, plan = _create(tmp_path, admit_block=False)
+    first, second = (_calibration_observation(plan, position) for position in range(2))
+    store.append(first)
+    store.append(second)
+    with file.acquire_lock(store):
+        file.record_calibration(store, (first.observation_id,))
+        ids = (first.observation_id, second.observation_id)
+        state = file.record_calibration(store, ids)
+        assert state.calibration_observation_ids == ids
+        assert file.usage(store, now=_TIME).charged_provider_calls == 4
+        before = file.path.read_bytes()
+        assert file.record_calibration(store, ids) == state
+        for replacement in ((), (first.observation_id,), ids[::-1], (second.observation_id,)):
+            with pytest.raises(RunStateError, match="recorded prefix"):
+                file.record_calibration(store, replacement)
+            assert file.path.read_bytes() == before
+            assert file.load(store) == state
+
+
+@pytest.mark.parametrize("boundary", ["block", "checkpoint", "selection"])
+def test_calibration_references_freeze_when_search_starts(tmp_path: Path, boundary: str) -> None:
+    file, store, plan = _create(tmp_path, admit_block=False)
+    first, second = (_calibration_observation(plan, position) for position in range(2))
+    store.append(first)
+    store.append(second)
+    with file.acquire_lock(store):
+        ids = (first.observation_id,)
+        file.record_calibration(store, ids)
+        if boundary == "block":
+            file.admit_block(store, plan)
+        else:
+            checkpoint = SampledReductionCheckpoint(
+                reduction=plan.reduction,
+                original_identity=plan.original_identity,
+                original_candidate_digest=plan.original_candidate_digest,
+                best_candidate_digest=plan.original_candidate_digest,
+                removed_context_ids=(),
+            )
+            file.save_checkpoint(store, checkpoint)
+            if boundary == "selection":
+                holdout_id = content_digest({"run_id": "run-1", "role": "confirmation"})
+                seed = int(holdout_id[:16], 16)
+                confirmation = _plan(
+                    block_id=f"confirmation-{holdout_id}",
+                    role="confirmation",
+                    candidate_identity=plan.original_identity,
+                    candidate_digest=plan.original_candidate_digest,
+                    frozen_at=_TIME + timedelta(seconds=2),
+                    schedule_seed=seed,
+                    schedule=sampling_schedule(3, 3, seed),
+                )
+                file.select_candidate(
+                    store,
+                    SampledFinalSelection(
+                        checkpoint_digest=content_digest(checkpoint.model_dump(mode="json")),
+                        selected_at=_TIME + timedelta(seconds=1),
+                        plan=confirmation,
+                    ),
+                )
+        state = file.load(store)
+        before = file.path.read_bytes()
+        assert file.record_calibration(store, ids) == state
+        with pytest.raises(RunStateError, match="after search starts"):
+            file.record_calibration(store, (*ids, second.observation_id))
+        assert file.path.read_bytes() == before
+        assert file.load(store) == state
 
 
 def test_unknown_missing_accounting_retains_zero_as_known_lower_bound_only(tmp_path: Path) -> None:
@@ -792,6 +955,160 @@ def test_state_hardlink_refuses_without_modifying_the_alias(tmp_path: Path) -> N
     with file.acquire_lock(store), pytest.raises(RunStateError, match="regular"):
         file.load(store)
     assert alias.read_bytes() == before
+
+
+def test_small_state_load_does_not_allocate_the_entire_byte_limit(tmp_path: Path) -> None:
+    file, store, _ = _create(tmp_path)
+    with file.acquire_lock(store):
+        tracemalloc.start()
+        try:
+            state = file.load(store)
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+    assert state.run_id == "run-1"
+    assert peak < 2 * 1024 * 1024
+
+
+def test_state_replacement_during_read_refuses_with_content_safe_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import ithrl.case.filesystem as filesystem
+
+    file, store, _ = _create(tmp_path)
+    read_descriptor = filesystem._read_descriptor
+    replacement = file.path.with_name("replacement-state")
+    replacement.write_bytes(file.path.read_bytes())
+    replacement.chmod(0o600)
+
+    def replace_after_read(
+        descriptor: int, *, expected_size: int, max_bytes: int, label: str
+    ) -> tuple[bytes, os.stat_result]:
+        result = read_descriptor(
+            descriptor, expected_size=expected_size, max_bytes=max_bytes, label=label
+        )
+        replacement.replace(file.path)
+        return result
+
+    monkeypatch.setattr(filesystem, "_read_descriptor", replace_after_read)
+    with (
+        file.acquire_lock(store),
+        pytest.raises(RunStateError, match="invalid or unavailable") as raised,
+    ):
+        file.load(store)
+    assert str(file.path) not in str(raised.value)
+
+
+def test_state_hardlink_acquired_during_read_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import ithrl.run_state as module
+
+    file, store, _ = _create(tmp_path)
+    alias = tmp_path / "linked-state"
+    read_bytes = module.read_safe_bytes
+
+    def link_after_read(path: Path, *, max_bytes: int, label: str) -> bytes:
+        content = read_bytes(path, max_bytes=max_bytes, label=label)
+        os.link(path, alias)
+        return content
+
+    monkeypatch.setattr(module, "read_safe_bytes", link_after_read)
+    with file.acquire_lock(store), pytest.raises(RunStateError, match="regular"):
+        file.load(store)
+    assert alias.read_bytes() == file.path.read_bytes()
+
+
+def test_state_load_refuses_oversized_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import ithrl.run_state as module
+
+    file, store, _ = _create(tmp_path)
+    before = file.path.read_bytes()
+    monkeypatch.setattr(module, "_MAX_RUN_STATE_BYTES", len(before) - 1)
+    with file.acquire_lock(store), pytest.raises(RunStateError, match="invalid or unavailable"):
+        file.load(store)
+    assert file.path.read_bytes() == before
+
+
+@pytest.mark.parametrize("unknown", [False, True])
+def test_fresh_snapshot_matches_existing_reads_and_preserves_pending_accounting(
+    tmp_path: Path, unknown: bool
+) -> None:
+    file, store, plan = _create(tmp_path, admit_block=False)
+    calibration = _calibration_observation(plan, unknown=unknown)
+    calibration = calibration.model_copy(
+        update={
+            "attempt_evidence": calibration.attempt_evidence.model_copy(
+                update={"attempt_id": "attempt-" + "a" * 32}
+            )
+        }
+    )
+    store.append(calibration)
+    with file.acquire_lock(store):
+        file.record_calibration(store, (calibration.observation_id,))
+        file.admit_block(store, plan)
+        pending = _reservation(plan)
+        file.reserve_dispatch(store, pending)
+        now = _TIME + timedelta(seconds=2)
+        snapshot = file.snapshot(store, now=now)
+        assert snapshot.state == file.load(store)
+        assert snapshot.blocks == file.evidence(store)
+        assert snapshot.calibration == (calibration,)
+        assert snapshot.usage == file.usage(store, now=now)
+        assert snapshot.usage.pending_provider_calls == pending.provider_calls == 2
+        assert snapshot.usage.pending_runner_seconds == pending.runner_seconds
+        assert snapshot.usage.charged_provider_calls == 4
+        assert snapshot.usage.unknown_provider_attempts == int(unknown)
+        assert snapshot.usage.unknown_runner_attempts == int(unknown)
+        assert snapshot.usage.unknown_token_attempts == int(unknown)
+        assert snapshot.usage.wall_time_seconds == 2
+        assert str(file.path) not in repr(snapshot)
+        assert calibration.observation_id not in repr(snapshot)
+
+
+def test_snapshot_rejects_earlier_clock_without_changing_clock_free_reads(tmp_path: Path) -> None:
+    file, store, _ = _create(tmp_path)
+    with file.acquire_lock(store):
+        state = file.load(store)
+        blocks = file.evidence(store)
+        with pytest.raises(RunStateError, match="clock precedes"):
+            file.snapshot(store, now=_TIME - timedelta(microseconds=1))
+        assert file.load(store) == state
+        assert file.evidence(store) == blocks
+
+
+@pytest.mark.parametrize("corruption", ["attempt-digest", "invalid-body"])
+def test_snapshot_rereads_sqlite_and_refuses_corruption_between_calls(
+    tmp_path: Path, corruption: str
+) -> None:
+    file, store, plan = _create(tmp_path)
+    reservation = _reservation(plan)
+    observation = _observation(plan, reservation)
+    with file.acquire_lock(store):
+        file.reserve_dispatch(store, reservation)
+        file.append_observation(store, observation)
+        previous = file.snapshot(store, now=_TIME)
+        assert previous.blocks[0].attempts[0].observation == observation
+        body = observation.attempt_evidence.model_dump(mode="json")
+        if corruption == "attempt-digest":
+            body["attempt_digest"] = "7" * 64
+        else:
+            body["termination_reason"] = "private-invalid-termination"
+        # Simulate external database corruption while restoring its exact schema.
+        with closing(sqlite3.connect(store.path)) as connection, connection:
+            trigger = connection.execute(
+                "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'observations_no_update'"
+            ).fetchone()[0]
+            connection.execute("DROP TRIGGER observations_no_update")
+            connection.execute(
+                "UPDATE observations SET attempt_evidence = ? WHERE observation_id = ?",
+                (json.dumps(body), observation.observation_id),
+            )
+            connection.execute(trigger)
+        with pytest.raises(RunStateError) as raised:
+            file.snapshot(store, now=_TIME)
+        assert "private-invalid-termination" not in str(raised.value)
+        assert previous.blocks[0].attempts[0].observation == observation
 
 
 def test_accepted_without_accounting_preserves_known_lower_bound_and_possible_continuation(

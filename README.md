@@ -177,6 +177,23 @@ ITHRL_DIST_DIR=dist uv run pytest -o addopts= tests/packaging
 The non-packaging tests and synthetic walkthrough do not use provider credentials or make network
 requests. Packaging checks may download build and runtime dependencies.
 
+### Credential-free sampled CLI walkthrough
+
+The sampled CLI integration is under development. Its operator walkthrough uses a mock runner
+through the real calibration, search, fresh confirmation, observation store and private result
+paths:
+
+```bash
+uv run pytest -o addopts= tests/integration/test_sampled_cli.py -q
+```
+
+The walkthrough exercises `shrink --experiment` with a private TOML plan, `--dry-run`, explicit
+`--max-provider-calls` and `--max-wall-time`, acknowledgement, human/JSON output, and `--resume`
+from an active run or saved result. Resumption preserves the statistical plan and completed
+confirmation; administrative limits may increase. Test sample sizes are fixture settings.
+Native sampled reduction still requires its profile-specific live and usefulness gates; the
+availability table above is unchanged.
+
 ### Opt-in native smoke tests
 
 The three native smoke profiles are `codex-final`, `copilot-final`, and `copilot-shell`.

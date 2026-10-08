@@ -19,7 +19,11 @@ from ithrl.experiment import (
     ExperimentDefinition,
     NativeRunnerConfig,
     SampledCalibrationPhase,
+    SampledConfirmationPhase,
     SampledExperimentDefinition,
+    SampledReductionPlan,
+    SampledSearchPhase,
+    SamplingArmTarget,
 )
 from ithrl.extraction import extract_decision
 
@@ -120,6 +124,7 @@ def test_ordinary_case_resolves_explicit_samples_without_rewriting_evidence(
     assert selection.experiment.schema_version == 1
     assert selection.experiment.kind == "sampled"
     assert selection.experiment.calibration == PHASE
+    assert selection.experiment.reduction is None
     assert selection.experiment.runner.required_capability_digest == profile.digest
     bounds = calibration_budget_bounds(PHASE, profile, selection.resource_limits)
     assert (bounds.attempts, bounds.provider_calls, bounds.runner_seconds) == (3, 6, 45)
@@ -198,6 +203,119 @@ def test_persisted_sampled_experiment_requires_exact_detected_profile(
     assert raised.value.harness_started is True
     mocked_runtime[0].assert_called_once()
     mocked_runtime[1].assert_not_called()
+
+
+def _reduction_experiment(
+    evidence: CaseEvidence, profile: CapabilityProfile
+) -> SampledExperimentDefinition:
+    persisted = ExperimentDefinition.from_toml(evidence.default_experiment)
+    return SampledExperimentDefinition(
+        target=persisted.target,
+        oracle=persisted.oracle,
+        runner=NativeRunnerConfig(type="codex", required_capability_digest=profile.digest),
+        calibration=PHASE,
+        reduction=SampledReductionPlan(
+            search=SampledSearchPhase(
+                original=SamplingArmTarget(required_valid=4, max_attempts=8),
+                candidate=SamplingArmTarget(required_valid=5, max_attempts=9),
+            ),
+            confirmation=SampledConfirmationPhase(
+                original=SamplingArmTarget(required_valid=20, max_attempts=24),
+                candidate=SamplingArmTarget(required_valid=21, max_attempts=25),
+                one_sided_confidence=0.95,
+            ),
+            margin=0.2,
+            freshness_seconds=600,
+        ),
+    )
+
+
+def test_native_selection_preserves_complete_persisted_reduction(
+    native_case: tuple[CaseWorkspace, CaseEvidence, Path],
+    mocked_runtime: tuple[Mock, Mock],
+    profile: CapabilityProfile,
+) -> None:
+    workspace, evidence, original = native_case
+    sampled = _reduction_experiment(evidence, profile)
+    case = CaseEvidence(
+        manifest=evidence.manifest,
+        request=None,
+        context=evidence.context,
+        default_experiment=sampled.to_toml(),
+        source_artifacts=evidence.source_artifacts,
+        decision=evidence.decision,
+    )
+    selection = native.native_selection(workspace, case, original_workspace=original)
+    assert selection.experiment == sampled
+    assert selection.experiment.digest == sampled.digest
+    assert selection.experiment.reduction == sampled.reduction
+    assert selection.registry.resolve(selection.experiment.runner, case).issue is None
+    mocked_runtime[0].assert_called_once()
+
+
+def test_explicit_experiment_preserves_reduction_with_calibration_override(
+    native_case: tuple[CaseWorkspace, CaseEvidence, Path],
+    mocked_runtime: tuple[Mock, Mock],
+    profile: CapabilityProfile,
+) -> None:
+    workspace, evidence, original = native_case
+    sampled = _reduction_experiment(evidence, profile)
+    phase = SampledCalibrationPhase(required_valid=3, minimum_matches=2, max_attempts=5)
+    original_toml = (workspace.root / "experiments/default.toml").read_bytes()
+    selection = native.native_selection(
+        workspace,
+        evidence,
+        original_workspace=original,
+        experiment=sampled,
+        calibration=phase,
+        max_provider_calls=10,
+    )
+    expected = sampled.model_copy(update={"calibration": phase})
+    assert selection.experiment == expected
+    assert selection.experiment.digest == expected.digest
+    assert selection.experiment.reduction == sampled.reduction
+    assert sampled.calibration == PHASE
+    assert selection.registry.resolve(selection.experiment.runner, evidence).issue is None
+    assert calibration_budget_bounds(phase, profile, selection.resource_limits).provider_calls == 10
+    assert (workspace.root / "experiments/default.toml").read_bytes() == original_toml
+    mocked_runtime[0].assert_called_once()
+
+
+def test_explicit_experiment_still_requires_its_capability_pin(
+    native_case: tuple[CaseWorkspace, CaseEvidence, Path],
+    mocked_runtime: tuple[Mock, Mock],
+    profile: CapabilityProfile,
+) -> None:
+    workspace, evidence, original = native_case
+    sampled = _reduction_experiment(evidence, profile).model_copy(
+        update={"runner": NativeRunnerConfig(type="codex", required_capability_digest="0" * 64)}
+    )
+    with pytest.raises(native.NativeSelectionError) as raised:
+        native.native_selection(
+            workspace, evidence, original_workspace=original, experiment=sampled
+        )
+    assert raised.value.code == "capability-profile-mismatch"
+    mocked_runtime[0].assert_called_once()
+    mocked_runtime[1].assert_not_called()
+
+
+def test_explicit_experiment_cannot_change_captured_harness(
+    native_case: tuple[CaseWorkspace, CaseEvidence, Path],
+    mocked_runtime: tuple[Mock, Mock],
+    profile: CapabilityProfile,
+) -> None:
+    workspace, evidence, original = native_case
+    sampled = _reduction_experiment(evidence, profile).model_copy(
+        update={
+            "runner": NativeRunnerConfig(type="copilot", required_capability_digest=profile.digest)
+        }
+    )
+    with pytest.raises(native.NativeSelectionError) as raised:
+        native.native_selection(
+            workspace, evidence, original_workspace=original, experiment=sampled
+        )
+    assert raised.value.code == "runner-evidence-mismatch"
+    mocked_runtime[0].assert_not_called()
 
 
 @pytest.mark.parametrize(

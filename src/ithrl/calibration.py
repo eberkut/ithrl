@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import stat
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -83,8 +83,13 @@ def run_sampled_calibration(
     evidence: CaseEvidence,
     prepared: PreparedExperiment,
     store: ObservationStore,
+    before_attempt: Callable[[], None] | None = None,
 ) -> SampledCalibrationResult:
-    """Run or resume one calibration block; never start search or confirmation."""
+    """Run or resume calibration, checking optional command admission before each attempt.
+
+    Standalone calibration retains its frozen attempt limits. A composing command can
+    additionally enforce its overall resource allowance without changing that plan.
+    """
 
     experiment = _sampled_experiment(prepared)
     with _calibration_lock(store):
@@ -98,6 +103,7 @@ def run_sampled_calibration(
                     store=store,
                     candidate=candidate,
                     experiment=experiment,
+                    before_attempt=before_attempt,
                 )
             )
         except (KeyboardInterrupt, asyncio.CancelledError):
@@ -204,6 +210,7 @@ async def _run_sampled_calibration(
     store: ObservationStore,
     candidate: Candidate,
     experiment: SampledExperimentDefinition,
+    before_attempt: Callable[[], None] | None = None,
 ) -> SampledCalibrationResult:
     # The candidate is always the unchanged full-context baseline.
     while True:
@@ -211,6 +218,8 @@ async def _run_sampled_calibration(
         classified = _classify(observations, experiment, interrupted=False)
         if classified is not None:
             return classified
+        if before_attempt is not None:
+            before_attempt()
         reservation = _InFlightAttempt(
             identity=prepared.identity,
             candidate_digest=candidate.digest,

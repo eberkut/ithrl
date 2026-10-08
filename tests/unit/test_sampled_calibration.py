@@ -166,6 +166,61 @@ def _prepared(
     return case, prepared, runner
 
 
+def test_command_admission_runs_before_each_calibration_reservation(tmp_path: Path) -> None:
+    case, prepared, runner = _prepared(
+        tmp_path, outcomes=(True, True), required_valid=2, minimum_matches=2, max_attempts=2
+    )
+    store = ObservationStore(tmp_path / "observations.sqlite")
+    admitted: list[int] = []
+
+    def admit() -> None:
+        assert not calibration_module._inflight_path(store).exists()
+        admitted.append(runner.calls)
+
+    result = run_sampled_calibration(
+        evidence=case, prepared=prepared, store=store, before_attempt=admit
+    )
+    assert result.outcome == "measurable"
+    assert admitted == [0, 1]
+    assert runner.calls == 2
+    cached = run_sampled_calibration(
+        evidence=case, prepared=prepared, store=store, before_attempt=admit
+    )
+    assert cached == result
+    assert admitted == [0, 1]
+    assert runner.calls == 2
+
+
+@pytest.mark.parametrize("allowed", [0, 1])
+def test_command_admission_refusal_preserves_exact_calibration_prefix(
+    tmp_path: Path, allowed: int
+) -> None:
+    case, prepared, runner = _prepared(
+        tmp_path, outcomes=(True, True), required_valid=2, minimum_matches=2, max_attempts=2
+    )
+    store = ObservationStore(tmp_path / "observations.sqlite")
+
+    def admit() -> None:
+        if runner.calls == allowed:
+            raise ValueError("command budget exhausted")
+
+    with pytest.raises(ValueError, match="command budget exhausted"):
+        run_sampled_calibration(evidence=case, prepared=prepared, store=store, before_attempt=admit)
+    candidate = prepare_candidate(case, prepared.execution_plan)
+    observations = store.list_compatible(
+        prepared.identity,
+        candidate_digest=candidate.digest,
+        role=ObservationRole.CALIBRATION,
+        arm=ObservationArm.BASELINE,
+    )
+    assert len(observations) == runner.calls == allowed
+    assert not calibration_module._inflight_path(store).exists()
+    result = run_sampled_calibration(evidence=case, prepared=prepared, store=store)
+    assert result.outcome == "measurable"
+    assert result.observations[:allowed] == observations
+    assert runner.calls == 2
+
+
 def test_sampled_calibration_collects_exact_valid_block_and_reuses_it(tmp_path: Path) -> None:
     case, prepared, runner = _prepared(
         tmp_path,

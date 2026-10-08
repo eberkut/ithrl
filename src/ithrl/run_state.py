@@ -9,6 +9,7 @@ import tempfile
 import threading
 from collections.abc import Generator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Literal
@@ -16,6 +17,8 @@ from typing import Annotated, Literal
 from filelock import Timeout
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
+from ithrl.case.contracts import CaseError
+from ithrl.case.filesystem import read_safe_bytes
 from ithrl.context import content_digest
 from ithrl.observations import (
     Observation,
@@ -491,6 +494,16 @@ def _validate_budget_extension(
         raise ValueError("budget extensions must preserve confirmation reserves and accounting")
 
 
+@dataclass(frozen=True, slots=True, repr=False)
+class _SampledRunSnapshot:
+    """Private in-memory evidence resolved by one fresh owned state read."""
+
+    state: SampledRunState
+    calibration: tuple[Observation, ...]
+    blocks: tuple[SamplingBlockEvidence, ...]
+    usage: SampledRunUsage
+
+
 class SampledRunStateFile:
     """Owned, atomic sampled progress; authoritative observations are never replayed."""
 
@@ -584,25 +597,21 @@ class SampledRunStateFile:
     def load(self, store: ObservationStore) -> SampledRunState:
         """Read bounded private state and cross-check every cached fact against SQLite."""
 
+        state, _, _ = self._read_validated(store)
+        return state
+
+    def _read_validated(
+        self, store: ObservationStore
+    ) -> tuple[SampledRunState, tuple[Observation, ...], tuple[SamplingBlockEvidence, ...]]:
         self._require_lock(store)
         _reject_sampled_path(self.path)
         _private_directory(self.path.parent)
         _private_regular_file(self.path)
-        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
         try:
-            descriptor = os.open(self.path, flags)
-            with os.fdopen(descriptor, "rb") as stream:
-                metadata = os.fstat(stream.fileno())
-                if (
-                    not stat.S_ISREG(metadata.st_mode)
-                    or metadata.st_nlink != 1
-                    or metadata.st_size > _MAX_RUN_STATE_BYTES
-                    or (os.name == "posix" and stat.S_IMODE(metadata.st_mode) != 0o600)
-                ):
-                    raise RunStateError("sampled run state is not a bounded regular file")
-                raw = stream.read(_MAX_RUN_STATE_BYTES + 1)
-            if len(raw) > _MAX_RUN_STATE_BYTES:
-                raise RunStateError("sampled run state exceeds its byte limit")
+            raw = read_safe_bytes(
+                self.path, max_bytes=_MAX_RUN_STATE_BYTES, label="sampled run state"
+            )
+            _private_regular_file(self.path)
             # Validate JSON directly to preserve strict tuple/datetime JSON decoding.
             json.loads(raw, object_pairs_hook=_sampled_unique_keys)
             state = SampledRunState.model_validate_json(raw)
@@ -612,16 +621,28 @@ class SampledRunStateFile:
             json.JSONDecodeError,
             RecursionError,
             ValidationError,
+            CaseError,
         ) as error:
             raise RunStateError("invalid or unavailable sampled run state") from error
         if Path(state.observation_store) != store.path.absolute():
             raise RunStateError("sampled run observation-store identity does not match")
-        self._validate_authority(state, store)
-        return state
+        calibration, blocks = self._validate_authority(state, store)
+        return state, calibration, blocks
 
     def evidence(self, store: ObservationStore) -> tuple[SamplingBlockEvidence, ...]:
-        state = self.load(store)
-        return tuple(self._hydrate(progress, store) for progress in state.blocks)
+        _, _, blocks = self._read_validated(store)
+        return blocks
+
+    def snapshot(self, store: ObservationStore, *, now: datetime) -> _SampledRunSnapshot:
+        """Resolve fresh authority and its accounting once under the owned locks."""
+
+        state, calibration, blocks = self._read_validated(store)
+        return _SampledRunSnapshot(
+            state=state,
+            calibration=calibration,
+            blocks=blocks,
+            usage=self._usage(state, calibration, blocks, now=now),
+        )
 
     @staticmethod
     def _hydrate(progress: SamplingBlockProgress, store: ObservationStore) -> SamplingBlockEvidence:
@@ -651,7 +672,9 @@ class SampledRunStateFile:
             raise RunStateError("sampled progress has inconsistent block membership") from error
 
     @staticmethod
-    def _validate_authority(state: SampledRunState, store: ObservationStore) -> None:
+    def _validate_authority(
+        state: SampledRunState, store: ObservationStore
+    ) -> tuple[tuple[Observation, ...], tuple[SamplingBlockEvidence, ...]]:
         observations = SampledRunStateFile._calibration(state, store)
         blocks = tuple(SampledRunStateFile._hydrate(progress, store) for progress in state.blocks)
         attempt_ids = [item.attempt_evidence.attempt_id for item in observations]
@@ -687,6 +710,7 @@ class SampledRunStateFile:
                 for block in search
             ) or any(selection.selected_at < o.recorded_at for o in observations):
                 raise RunStateError("selection must follow calibration and search evidence")
+        return observations, blocks
 
     @staticmethod
     def _calibration(state: SampledRunState, store: ObservationStore) -> tuple[Observation, ...]:
@@ -700,23 +724,29 @@ class SampledRunStateFile:
                 observation.role is not ObservationRole.CALIBRATION
                 or observation.identity != state.original_identity
                 or observation.candidate_digest != state.original_candidate_digest
-                or observation.recorded_at < state.started_at
+                or observation.arm is not ObservationArm.BASELINE
             ):
                 raise RunStateError("calibration accounting does not match original run identity")
             observations.append(observation)
         return tuple(observations)
 
     def usage(self, store: ObservationStore, *, now: datetime) -> SampledRunUsage:
-        state = self.load(store)
+        state, calibration, blocks = self._read_validated(store)
+        return self._usage(state, calibration, blocks, now=now)
+
+    @staticmethod
+    def _usage(
+        state: SampledRunState,
+        calibration: tuple[Observation, ...],
+        blocks: tuple[SamplingBlockEvidence, ...],
+        *,
+        now: datetime,
+    ) -> SampledRunUsage:
         now = _sampled_time(now)
         if now < state.started_at:
             raise RunStateError("run clock precedes its recorded start")
-        observations = list(self._calibration(state, store))
-        observations.extend(
-            attempt.observation
-            for progress in state.blocks
-            for attempt in self._hydrate(progress, store).attempts
-        )
+        observations = list(calibration)
+        observations.extend(attempt.observation for block in blocks for attempt in block.attempts)
         actual = possible = missing_provider = runner = missing_runner = tokens = missing_tokens = 0
         for observation in observations:
             evidence = observation.attempt_evidence
@@ -963,6 +993,25 @@ class SampledRunStateFile:
             plan=block.plan, observations=block.observations, archived=True
         )
         return self._publish(current, store, blocks=(*current.blocks[:-1], archived))
+
+    def record_calibration(
+        self, store: ObservationStore, observation_ids: tuple[str, ...]
+    ) -> SampledRunState:
+        """Attach the exact calibration prefix, charging compatible prior observations too.
+
+        Calibration may precede the administrative run. It never supplies observations
+        to a search or confirmation arm. Once search starts, its references are frozen.
+        """
+
+        current = self.load(store)
+        previous = current.calibration_observation_ids
+        if observation_ids[: len(previous)] != previous:
+            raise RunStateError("calibration continuation must preserve its recorded prefix")
+        if current.checkpoint is not None or current.blocks or current.selection is not None:
+            if observation_ids != previous:
+                raise RunStateError("calibration references cannot change after search starts")
+            return current
+        return self._publish(current, store, calibration_observation_ids=observation_ids)
 
     def extend_budget(
         self, store: ObservationStore, approval: SamplingBudgetApproval

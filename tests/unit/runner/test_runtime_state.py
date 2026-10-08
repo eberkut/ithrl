@@ -11,6 +11,7 @@ from ithrl.runner.runtime.state import (
     AttemptStateError,
     AttemptStateLimitError,
     OwnedAttemptState,
+    StateMeasurement,
 )
 
 ATTEMPT_1 = "attempt-00000000000000000000000000000001"
@@ -70,6 +71,82 @@ def test_attempt_state_enforces_the_entry_limit_during_enumeration(tmp_path: Pat
 
     assert raised.value.measurement.entries == 3
     assert raised.value.measurement.bytes == 0
+
+
+def test_attempt_state_counts_a_member_deleted_before_inspection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = OwnedAttemptState.create(tmp_path / "attempts", ATTEMPT_1)
+    consumed = state.member("consumed-request")
+    consumed.write_bytes(b"synthetic fixture")
+    inspect_entry = state_module._measure_entry
+
+    def delete_before_inspection(
+        parent_descriptor: int,
+        entry: os.DirEntry[str],
+        *,
+        measurement: StateMeasurement,
+        flags: int,
+        max_entries: int,
+        max_bytes: int,
+        depth: int,
+    ) -> StateMeasurement:
+        assert entry.name == consumed.name
+        consumed.unlink()
+        return inspect_entry(
+            parent_descriptor,
+            entry,
+            measurement=measurement,
+            flags=flags,
+            max_entries=max_entries,
+            max_bytes=max_bytes,
+            depth=depth,
+        )
+
+    monkeypatch.setattr(state_module, "_measure_entry", delete_before_inspection)
+
+    measurement = state.measure(max_entries=1, max_bytes=1)
+
+    assert measurement == StateMeasurement(entries=1, bytes=0)
+
+
+@pytest.mark.parametrize("change", ["deleted", "replaced", "permission-denied"])
+def test_attempt_state_handles_a_directory_changed_before_open(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    change: str,
+) -> None:
+    state = OwnedAttemptState.create(tmp_path / "attempts", ATTEMPT_1)
+    nested = state.member("nested")
+    nested.mkdir()
+    open_path = state_module.os.open
+
+    def change_before_open(
+        path: os.PathLike[str] | str,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        if path == "nested" and dir_fd is not None:
+            if change == "permission-denied":
+                raise PermissionError("synthetic permission refusal")
+            if change == "replaced":
+                nested.rename(tmp_path / "original-nested")
+                nested.mkdir()
+            else:
+                nested.rmdir()
+        return open_path(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(state_module.os, "open", change_before_open)
+
+    if change == "deleted":
+        assert state.measure(max_entries=1, max_bytes=1) == StateMeasurement(entries=1, bytes=0)
+    else:
+        message = "changed during inspection" if change == "replaced" else "cannot inspect"
+        with pytest.raises(AttemptStateError, match=message):
+            state.measure()
 
 
 def test_attempt_state_opens_wide_directories_one_at_a_time(

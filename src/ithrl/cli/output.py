@@ -237,6 +237,8 @@ class SampledErrorOutput(_OutputEnvelope):
     probe_exit_code: int | None = None
     probe_reason: str | None = Field(default=None, max_length=240)
     diagnostic_path: str | None = None
+    minimum_provider_calls: int | None = Field(default=None, ge=0)
+    minimum_wall_time_seconds: int | None = Field(default=None, ge=0)
 
     @model_validator(mode="after")
     def validate_accounting(self) -> SampledErrorOutput:
@@ -493,7 +495,12 @@ def render_sampled(report: SampledOutput, output_format: OutputFormat) -> None:
 def render_sampled_error(report: SampledErrorOutput, output_format: OutputFormat) -> None:
     """Render safe refusal metadata and an explicit private diagnostic location."""
     if output_format is OutputFormat.JSON:
-        typer.echo(json.dumps(report.model_dump(mode="json"), sort_keys=True))
+        exclude = {
+            name
+            for name in ("minimum_provider_calls", "minimum_wall_time_seconds")
+            if getattr(report, name) is None
+        }
+        typer.echo(json.dumps(report.model_dump(mode="json", exclude=exclude), sort_keys=True))
         return
     message = {
         "refused": "Sampled run refused before calibration.",
@@ -510,6 +517,16 @@ def render_sampled_error(report: SampledErrorOutput, output_format: OutputFormat
         print_plain(error_console, "Provider calls: unknown (execution may have started).")
     if report.next_action is not None:
         print_plain(error_console, report.next_action, soft_wrap=True)
+    if report.minimum_provider_calls is not None:
+        print_plain(
+            error_console,
+            f"Required minimum provider-call budget: {report.minimum_provider_calls}.",
+        )
+    if report.minimum_wall_time_seconds is not None:
+        print_plain(
+            error_console,
+            f"Required minimum runner-time allowance: {report.minimum_wall_time_seconds} seconds; local overhead is additional.",
+        )
     if report.probe_stage is not None:
         print_plain(error_console, f"Failing probe stage: {report.probe_stage}.")
     if report.probe_exit_code is not None:
@@ -534,6 +551,8 @@ def fail_sampled(
     probe_exit_code: int | None = None,
     probe_reason: str | None = None,
     diagnostic_path: str | None = None,
+    minimum_provider_calls: int | None = None,
+    minimum_wall_time_seconds: int | None = None,
 ) -> Never:
     """Emit a content-free sampled error and exit with its public code."""
     try:
@@ -550,6 +569,8 @@ def fail_sampled(
                 probe_exit_code=probe_exit_code,
                 probe_reason=probe_reason,
                 diagnostic_path=diagnostic_path,
+                minimum_provider_calls=minimum_provider_calls,
+                minimum_wall_time_seconds=minimum_wall_time_seconds,
             ),
             output_format,
         )
@@ -563,8 +584,19 @@ def fail_sampled(
 def _sampled_error_next_action(error_code: str) -> str:
     """Give stable guidance without echoing private diagnostics."""
 
+    if error_code == "sampled-reduction-plan-required":
+        return "Supply --experiment with a complete sampled reduction TOML plan, then inspect --dry-run."
+    if error_code in {"sampling-budget-required", "sampling-budget-too-small"}:
+        return "Set --max-provider-calls and --max-wall-time to cover calibration, one complete comparison and fresh confirmation; allow time for local overhead."
+    if error_code == "sampled-resume-mismatch":
+        return "Resume the saved run with its original case, workspace, observation store and statistical plan; only administrative budgets may increase."
+    if error_code == "sampling-freshness-too-small":
+        return "Choose attempt deadlines and a declared freshness window that admit a complete comparison, including cancellation time, before expiry."
+    if error_code == "confirmation-unattainable":
+        return "Revise the confirmation sample plan: even all matching samples cannot establish preservation at the configured margin and confidence."
+
     if error_code in {"acknowledgement-required", "acknowledgement-declined"}:
-        return "Inspect the dry-run plan, then use --calibrate-only --acknowledge-model-execution when ready."
+        return "Inspect the dry-run plan, then add --acknowledge-model-execution to the selected execution mode when ready."
     if error_code in {"original-workspace-required", "original-workspace-unavailable"}:
         return "Supply --original-workspace with the existing original workspace directory."
     if error_code in {"sampling-options-required", "calibration-settings-required"}:

@@ -105,6 +105,7 @@ def native_selection(
     evidence: CaseEvidence,
     *,
     original_workspace: Path | None,
+    experiment: SampledExperimentDefinition | None = None,
     calibration: SampledCalibrationPhase | None = None,
     max_provider_calls: int | None = None,
     attempt_timeout_seconds: int | None = None,
@@ -112,7 +113,9 @@ def native_selection(
 ) -> NativeSelection:
     """Resolve explicit samples against an exact current or persisted profile."""
 
-    persisted = parse_experiment_toml(evidence.default_experiment)
+    persisted = (
+        experiment if experiment is not None else parse_experiment_toml(evidence.default_experiment)
+    )
     if isinstance(persisted, SampledExperimentDefinition):
         harness = persisted.runner.type
         required_digest = persisted.runner.required_capability_digest
@@ -171,13 +174,16 @@ def native_selection(
         type=native_type,
         required_capability_digest=capability.digest,
     )
-    experiment = SampledExperimentDefinition(
-        schema_version=1,
-        target=persisted.target,
-        oracle=persisted.oracle,
-        runner=config,
-        calibration=phase,
-    )
+    if isinstance(persisted, SampledExperimentDefinition):
+        resolved_experiment = persisted.model_copy(update={"runner": config, "calibration": phase})
+    else:
+        resolved_experiment = SampledExperimentDefinition(
+            schema_version=1,
+            target=persisted.target,
+            oracle=persisted.oracle,
+            runner=config,
+            calibration=phase,
+        )
     if capability.provider is None or capability.endpoint is None:
         raise NativeSelectionError(
             "provider-destination-unavailable",
@@ -229,7 +235,7 @@ def native_selection(
         registry=RunnerRegistry({harness: exact_runner}),
         safety_policy=policy,
         resource_limits=limits,
-        experiment=experiment,
+        experiment=resolved_experiment,
     )
 
 

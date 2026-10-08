@@ -22,6 +22,7 @@ from ithrl.case import (
     CaseWorkspace,
     UnsafeCasePathError,
 )
+from ithrl.case.filesystem import read_safe_text
 from ithrl.cli.extract import ExtractionSelectionError, create_case_report
 from ithrl.cli.native import NativeSelection, NativeSelectionError, native_selection
 from ithrl.cli.output import (
@@ -39,13 +40,20 @@ from ithrl.cli.output import (
 )
 from ithrl.cli.paths import private_data_root
 from ithrl.cli.sampled import handle_sampled_shrink
+from ithrl.cli.sampled_reduction import (
+    SampledCommandLimits,
+    handle_sampled_reduction,
+    resume_sampled_shrink,
+)
+from ithrl.cli.sampled_session import SampledCliSession
 from ithrl.cli.shrink import prepare_shrink, save_outcome, validate_phase_observations
-from ithrl.execution.contracts import MAX_PROVIDER_CALLS_PER_ATTEMPT, MAX_WALL_TIME_SECONDS
+from ithrl.execution.contracts import MAX_WALL_TIME_SECONDS
 from ithrl.experiment import (
     MAX_CALIBRATION_ATTEMPTS,
     ExperimentFormatError,
     SampledCalibrationPhase,
     SampledExperimentDefinition,
+    parse_experiment_toml,
 )
 from ithrl.observations import ObservationStore, ObservationStoreError
 from ithrl.reduce import (
@@ -225,8 +233,9 @@ def shrink(
             max=MAX_CANDIDATE_RUNS,
             help=(
                 "Maximum candidate tests across the active run and any resumed runs. "
-                "Default: 100 for a new search; 100 or twice the saved count, whichever is "
-                f"larger, capped at {MAX_CANDIDATE_RUNS:,}, when resuming."
+                "Default: 100 for a new search; sampled resume preserves the saved limit. "
+                "Deterministic resume defaults to 100 or twice the saved count, whichever "
+                f"is larger, capped at {MAX_CANDIDATE_RUNS:,}."
             ),
         ),
     ] = None,
@@ -260,7 +269,7 @@ def shrink(
         typer.Option(
             "--original-workspace",
             metavar="DIRECTORY",
-            help="Original workspace to protect during native calibration.",
+            help="Original workspace to protect during native execution.",
         ),
     ] = None,
     required_valid: Annotated[
@@ -295,8 +304,29 @@ def shrink(
         typer.Option(
             "--max-provider-calls",
             min=1,
-            max=MAX_CALIBRATION_ATTEMPTS * MAX_PROVIDER_CALLS_PER_ATTEMPT,
-            help="Maximum total provider calls allowed for native calibration.",
+            help="Maximum total provider calls allowed for the native run.",
+        ),
+    ] = None,
+    max_wall_time: Annotated[
+        int | None,
+        typer.Option(
+            "--max-wall-time",
+            min=1,
+            help="Total elapsed-time limit in seconds for a sampled run, including calibration.",
+        ),
+    ] = None,
+    experiment: Annotated[
+        Path | None,
+        typer.Option(
+            "--experiment",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            metavar="TOML",
+            help=(
+                "Private sampled experiment TOML, including search and fresh confirmation "
+                "samples (0600 on POSIX)."
+            ),
         ),
     ] = None,
     attempt_timeout: Annotated[
@@ -320,6 +350,10 @@ def shrink(
         OutputFormat,
         typer.Option("--format", help="Output format."),
     ] = OutputFormat.HUMAN,
+    verbose: Annotated[
+        bool,
+        typer.Option("--verbose", help="Show detailed sampled limits, assumptions and accounting."),
+    ] = False,
     observation_store: Annotated[
         Path | None,
         typer.Option(
@@ -352,6 +386,9 @@ def shrink(
                 max_provider_calls=max_provider_calls,
                 attempt_timeout=attempt_timeout,
                 max_input_tokens=max_input_tokens,
+                max_wall_time=max_wall_time,
+                experiment_path=experiment,
+                verbose=verbose,
             )
     except RunStateBusyError as error:
         fail(str(error), ExitCode.USAGE, output_format, "shrink", "run-in-use")
@@ -377,6 +414,9 @@ def _shrink(
     max_provider_calls: int | None = None,
     attempt_timeout: int | None = None,
     max_input_tokens: int | None = None,
+    max_wall_time: int | None = None,
+    experiment_path: Path | None = None,
+    verbose: bool = False,
 ) -> None:
     if resume and (calibrate_only or dry_run):
         fail(
@@ -386,7 +426,73 @@ def _shrink(
             "shrink",
             "invalid-options",
         )
+    if resume and (source / "cli-session.json").exists():
+        if any(
+            value is not None
+            for value in (
+                experiment_path,
+                required_valid,
+                minimum_matches,
+                max_attempts,
+                attempt_timeout,
+                max_input_tokens,
+            )
+        ):
+            fail_sampled(
+                error_code="sampled-resume-mismatch",
+                code=ExitCode.USAGE,
+                output_format=output_format,
+                status="refused",
+                provider_call_accounting="not-started",
+            )
+
+        def select_saved(
+            workspace: CaseWorkspace,
+            evidence: CaseEvidence,
+            session: SampledCliSession,
+        ) -> NativeSelection:
+            return native_selection(
+                workspace,
+                evidence,
+                original_workspace=session.original_workspace,
+                experiment=session.experiment,
+                attempt_timeout_seconds=session.resource_limits.max_wall_time_seconds,
+                max_input_tokens=session.resource_limits.max_input_tokens,
+            )
+
+        resume_sampled_shrink(
+            source,
+            select=select_saved,
+            acknowledge_model_execution=acknowledge_model_execution,
+            limits=SampledCommandLimits(max_provider_calls, max_wall_time, max_candidates),
+            original_workspace=original_workspace,
+            observation_store=observation_store,
+            output_format=output_format,
+            verbose=verbose,
+        )
+        return
     native_attempted = False
+    selected_experiment: SampledExperimentDefinition | None = None
+    if experiment_path is not None:
+        try:
+            parsed = parse_experiment_toml(
+                read_safe_text(
+                    experiment_path,
+                    max_bytes=1024 * 1024,
+                    label="sampled experiment",
+                )
+            )
+            if not isinstance(parsed, SampledExperimentDefinition):
+                raise ValueError("sampled experiment required")
+            selected_experiment = parsed
+        except (CaseError, ExperimentFormatError, ValueError, OSError):
+            fail_sampled(
+                error_code="invalid-sampled-input",
+                code=ExitCode.USAGE,
+                output_format=output_format,
+                status="refused",
+                provider_call_accounting="not-started",
+            )
     calibration: SampledCalibrationPhase | None = None
     counts = (required_valid, minimum_matches, max_attempts)
     if any(count is not None for count in counts):
@@ -418,9 +524,16 @@ def _shrink(
     def select_native(workspace: CaseWorkspace, evidence: CaseEvidence) -> NativeSelection:
         nonlocal native_attempted
         native_attempted = True
-        if resume or max_candidates is not None or not (dry_run or calibrate_only):
+        if resume:
             raise NativeSelectionError(
-                "sampled-search-unavailable", "native execution currently supports calibration only"
+                "sampled-resume-mismatch", "resume requires a saved sampled session"
+            )
+        persisted = selected_experiment or parse_experiment_toml(evidence.default_experiment)
+        if not (dry_run or calibrate_only) and (
+            not isinstance(persisted, SampledExperimentDefinition) or persisted.reduction is None
+        ):
+            raise NativeSelectionError(
+                "sampled-reduction-plan-required", "explicit reduction samples are required"
             )
         if dry_run and calibrate_only:
             raise NativeSelectionError("invalid-options", "choose dry-run or calibration-only")
@@ -428,6 +541,7 @@ def _shrink(
             workspace,
             evidence,
             original_workspace=original_workspace,
+            experiment=selected_experiment,
             calibration=calibration,
             max_provider_calls=max_provider_calls,
             attempt_timeout_seconds=attempt_timeout,
@@ -521,7 +635,22 @@ def _shrink(
         raise
 
     if isinstance(prepared.experiment, SampledExperimentDefinition):
-        if max_candidates is not None:
+        if prepared.experiment.reduction is not None and not calibrate_only:
+            handle_sampled_reduction(
+                workspace=workspace,
+                evidence=evidence,
+                prepared=prepared,
+                dry_run=dry_run,
+                acknowledge_model_execution=acknowledge_model_execution,
+                original_workspace=original_workspace,
+                observation_store=observation_store,
+                limits=SampledCommandLimits(max_provider_calls, max_wall_time, max_candidates),
+                experiment_path=experiment_path,
+                output_format=output_format,
+                verbose=verbose,
+            )
+            return
+        if max_candidates is not None or max_wall_time is not None:
             fail_sampled(
                 error_code="sampled-search-unavailable",
                 code=ExitCode.USAGE,
@@ -550,6 +679,9 @@ def _shrink(
         or max_provider_calls is not None
         or attempt_timeout is not None
         or max_input_tokens is not None
+        or max_wall_time is not None
+        or experiment_path is not None
+        or verbose
     ):
         fail(
             "native calibration options require a native case",
