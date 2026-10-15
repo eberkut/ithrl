@@ -1,0 +1,15 @@
+OpenAI Codex
+Copyright 2025 OpenAI
+
+The JSON fixtures in schema/ are modified, reduced and sanitized projections of
+the OpenAI Codex app-server protocol schemas, maintained for ithrl contract tests.
+They retain selected protocol methods, fields and enum values; they are not a
+complete or verbatim generated schema bundle.
+
+Upstream source (Codex 0.156.1):
+https://github.com/openai/codex/tree/rust-v0.156.1/codex-rs/app-server-protocol
+Upstream attribution notice:
+https://github.com/openai/codex/blob/rust-v0.156.1/NOTICE
+
+Licensed under Apache-2.0. The license text is in ../../../LICENSE.
+The original generator flags and projection procedure were not retained.

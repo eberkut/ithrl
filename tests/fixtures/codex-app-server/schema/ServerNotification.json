@@ -1,4 +1,4 @@
-{"oneOf":[
+{"$comment":"Modified and reduced for ithrl tests from OpenAI Codex rust-v0.156.1; see tests/fixtures/codex-app-server/NOTICE.","oneOf":[
   {"properties":{"method":{"enum":["account/rateLimits/updated"]},"params":{"$ref":"#/definitions/AccountRateLimitsUpdatedNotification"}}},
   {"properties":{"method":{"enum":["item/agentMessage/delta"]},"params":{"$ref":"#/definitions/AgentMessageDeltaNotification"}}},
   {"properties":{"method":{"enum":["item/completed"]},"params":{"$ref":"#/definitions/ItemCompletedNotification"}}},

@@ -2,6 +2,9 @@
   "schema_version": 1,
   "observed_codex_version": "0.156.1",
   "source": "sanitized projection of codex app-server generate-json-schema",
+  "upstream_source": "https://github.com/openai/codex/tree/rust-v0.156.1/codex-rs/app-server-protocol",
+  "license": "Apache-2.0",
+  "notice": "NOTICE",
   "client_methods": {
     "initialize": "InitializeParams",
     "thread/inject_items": "ThreadInjectItemsParams",

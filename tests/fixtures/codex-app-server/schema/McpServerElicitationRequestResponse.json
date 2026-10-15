@@ -1,1 +1,1 @@
-{"properties":{"_meta":{},"action":{"$ref":"#/definitions/Action"},"content":{}},"definitions":{"Action":{"enum":["decline"],"type":"string"}}}
+{"$comment":"Modified and reduced for ithrl tests from OpenAI Codex rust-v0.156.1; see tests/fixtures/codex-app-server/NOTICE.","properties":{"_meta":{},"action":{"$ref":"#/definitions/Action"},"content":{}},"definitions":{"Action":{"enum":["decline"],"type":"string"}}}

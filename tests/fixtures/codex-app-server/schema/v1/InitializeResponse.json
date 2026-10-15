@@ -1,1 +1,1 @@
-{"type":"object"}
+{"$comment":"Modified and reduced for ithrl tests from OpenAI Codex rust-v0.156.1; see tests/fixtures/codex-app-server/NOTICE.","type":"object"}
