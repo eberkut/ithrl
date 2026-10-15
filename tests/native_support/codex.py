@@ -60,6 +60,13 @@ if message["method"] == "thread/inject_items":
     message = receive()
 send({"id": message["id"], "result": {"turn": {"id": "turn-1", "items": [], "status": "inProgress"}}})
 send({"method": "item/started", "params": {"threadId": "thread-1", "turnId": "turn-1", "item": {"type": "userMessage", "id": "user-message-1", "content": []}}})
+if mode in {"overload", "overload-after-output"}:
+    if mode == "overload-after-output":
+        send({"method": "item/agentMessage/delta", "params": {"threadId": "thread-1", "turnId": "turn-1", "itemId": "message-1", "delta": "Fixture partial output."}})
+    send({"method": "error", "params": {"threadId": "thread-1", "turnId": "turn-1", "willRetry": False, "error": {"message": "Fixture overload.", "codexErrorInfo": "serverOverloaded"}}})
+    for _ in sys.stdin:
+        pass
+    raise SystemExit(0)
 if mode == "after-dispatch-malformed":
     sys.stdout.write("not-json\n")
     sys.stdout.flush()

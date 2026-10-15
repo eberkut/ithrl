@@ -241,10 +241,8 @@ def test_outcomes_have_truthful_accounting_and_only_safe_continuations(
     continuation: bool,
 ) -> None:
     observations = (
-        SimpleNamespace(valid=True, attempt_evidence=SimpleNamespace(automatic_retry_safe=False)),
-        SimpleNamespace(
-            valid=False, attempt_evidence=SimpleNamespace(automatic_retry_safe=retry_safe)
-        ),
+        SimpleNamespace(valid=True, allows_fresh_attempt=Mock(return_value=True)),
+        SimpleNamespace(valid=False, allows_fresh_attempt=Mock(return_value=retry_safe)),
     )
     result = SimpleNamespace(observations=observations)
     summary = SimpleNamespace(

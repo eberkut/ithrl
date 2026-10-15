@@ -215,6 +215,11 @@ class SampledConfirmationPhase(_ImmutableContract):
     one_sided_confidence: Annotated[float, Field(gt=0.5, lt=1, allow_inf_nan=False)]
 
 
+type SamplingEligibilityPolicy = Literal[
+    "independent-safe-preaccept-only", "safe-provider-overload"
+]
+
+
 class SampledReductionPlan(_ImmutableContract):
     """Complete strict sampled search and separate final-confirmation policy."""
 
@@ -223,9 +228,7 @@ class SampledReductionPlan(_ImmutableContract):
     margin: Annotated[float, Field(ge=0, lt=1, allow_inf_nan=False)]
     baseline_policy: Literal["strict-fresh-original"] = "strict-fresh-original"
     estimand: Literal["valid-only"] = "valid-only"
-    eligibility_policy: Literal["independent-safe-preaccept-only"] = (
-        "independent-safe-preaccept-only"
-    )
+    eligibility_policy: SamplingEligibilityPolicy = "independent-safe-preaccept-only"
     schedule_policy: Literal["seeded-interleaving"] = "seeded-interleaving"
     freshness_seconds: Annotated[int, Field(ge=1, le=MAX_SAMPLING_FRESHNESS_SECONDS)]
 

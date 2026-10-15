@@ -231,6 +231,11 @@ async def _run_sampled_calibration(
                 runner=prepared.runner,
                 identity=prepared.identity,
                 store=store,
+                eligibility_policy=(
+                    experiment.reduction.eligibility_policy
+                    if experiment.reduction is not None
+                    else "independent-safe-preaccept-only"
+                ),
                 attempt=PreparedAttempt(
                     evidence=evidence,
                     candidate=candidate,
@@ -268,7 +273,15 @@ def _classify(
             outcome = "inconclusive"
         return SampledCalibrationResult(outcome, "valid-sample-limit", observations)
     unsafe = next(
-        (item for item in reversed(observations) if not item.attempt_evidence.automatic_retry_safe),
+        (
+            item
+            for item in reversed(observations)
+            if not item.allows_fresh_attempt(
+                experiment.reduction.eligibility_policy
+                if experiment.reduction is not None
+                else "independent-safe-preaccept-only"
+            )
+        ),
         None,
     )
     if unsafe is not None and unsafe.error_category in {"safety", "contract"}:
@@ -323,7 +336,11 @@ def _compatible(
     for index, item in enumerate(observations):
         if valid >= experiment.calibration.required_valid:
             raise ValueError("stored calibration attempts continue after a complete sample block")
-        if index and not observations[index - 1].attempt_evidence.automatic_retry_safe:
+        if index and not observations[index - 1].allows_fresh_attempt(
+            experiment.reduction.eligibility_policy
+            if experiment.reduction is not None
+            else "independent-safe-preaccept-only"
+        ):
             raise ValueError("stored calibration attempts continue after an unsafe attempt")
         valid += item.valid
     return observations

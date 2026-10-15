@@ -315,6 +315,19 @@ def shrink(
             help="Total elapsed-time limit in seconds for a sampled run, including calibration.",
         ),
     ] = None,
+    inter_attempt_delay: Annotated[
+        int | None,
+        typer.Option(
+            "--inter-attempt-delay",
+            min=0,
+            max=86_400,
+            metavar="SECONDS",
+            help=(
+                "Pause between attempts during sampled reduction. Default: 0; "
+                "resume preserves the saved delay. Counts toward the overall wall-time limit."
+            ),
+        ),
+    ] = None,
     experiment: Annotated[
         Path | None,
         typer.Option(
@@ -387,6 +400,7 @@ def shrink(
                 attempt_timeout=attempt_timeout,
                 max_input_tokens=max_input_tokens,
                 max_wall_time=max_wall_time,
+                inter_attempt_delay=inter_attempt_delay,
                 experiment_path=experiment,
                 verbose=verbose,
             )
@@ -415,6 +429,7 @@ def _shrink(
     attempt_timeout: int | None = None,
     max_input_tokens: int | None = None,
     max_wall_time: int | None = None,
+    inter_attempt_delay: int | None = None,
     experiment_path: Path | None = None,
     verbose: bool = False,
 ) -> None:
@@ -464,7 +479,9 @@ def _shrink(
             source,
             select=select_saved,
             acknowledge_model_execution=acknowledge_model_execution,
-            limits=SampledCommandLimits(max_provider_calls, max_wall_time, max_candidates),
+            limits=SampledCommandLimits(
+                max_provider_calls, max_wall_time, max_candidates, inter_attempt_delay
+            ),
             original_workspace=original_workspace,
             observation_store=observation_store,
             output_format=output_format,
@@ -644,13 +661,19 @@ def _shrink(
                 acknowledge_model_execution=acknowledge_model_execution,
                 original_workspace=original_workspace,
                 observation_store=observation_store,
-                limits=SampledCommandLimits(max_provider_calls, max_wall_time, max_candidates),
+                limits=SampledCommandLimits(
+                    max_provider_calls, max_wall_time, max_candidates, inter_attempt_delay
+                ),
                 experiment_path=experiment_path,
                 output_format=output_format,
                 verbose=verbose,
             )
             return
-        if max_candidates is not None or max_wall_time is not None:
+        if (
+            max_candidates is not None
+            or max_wall_time is not None
+            or inter_attempt_delay is not None
+        ):
             fail_sampled(
                 error_code="sampled-search-unavailable",
                 code=ExitCode.USAGE,
@@ -680,6 +703,7 @@ def _shrink(
         or attempt_timeout is not None
         or max_input_tokens is not None
         or max_wall_time is not None
+        or inter_attempt_delay is not None
         or experiment_path is not None
         or verbose
     ):

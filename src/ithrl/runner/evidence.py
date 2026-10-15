@@ -42,6 +42,7 @@ class AttemptEvidence(BaseModel):
     accounting: RunAccounting | None = None
     native_output: NativeOutputReference | None = None
     retry_safe: bool = False
+    overload_replacement_safe: bool = False
 
     @model_validator(mode="after")
     def validate_completion(self) -> AttemptEvidence:
@@ -49,6 +50,22 @@ class AttemptEvidence(BaseModel):
         self._validate_provider_acceptance()
         if self.retry_safe:
             self._validate_safe_retry()
+        if self.overload_replacement_safe:
+            accounting = self.accounting
+            if (
+                self.termination_reason != "failed"
+                or self.retry_safe
+                or self.effective_policy_digest is None
+                or accounting is None
+                or not _safe_overload_accounting(accounting)
+                or self.provider_calls_possible != 1
+                or (self.usage is not None and self.usage.output_tokens != 0)
+                or self.provider_acceptance_state is not ProviderAcceptanceState.UNKNOWN
+                or self.native_output is None
+                or not self.native_output.complete
+                or self.native_output.size_bytes != accounting.native_output_bytes
+            ):
+                raise ValueError("overload replacement requires complete bounded safety evidence")
         return self
 
     def _validate_completed_attempt(self) -> None:
@@ -151,6 +168,7 @@ class AttemptEvidence(BaseModel):
             accounting=error.accounting,
             native_output=error.native_output,
             retry_safe=_error_retry_safe(attempt, error, acceptance),
+            overload_replacement_safe=_error_overload_replacement_safe(attempt, error),
         )
 
 
@@ -187,6 +205,44 @@ _RETRYABLE_ERROR_CODES = {
     RunnerErrorCode.STARTUP,
     RunnerErrorCode.TRANSPORT,
 }
+
+
+def _error_overload_replacement_safe(attempt: PreparedAttempt, error: RunnerError) -> bool:
+    """Qualify a fresh sample without asserting unobserved provider work did not occur."""
+
+    accounting = error.accounting
+    capability = attempt.execution_plan.capability
+    return (
+        error.code is RunnerErrorCode.PROVIDER_OVERLOADED
+        and error.behavior_output_observed is False
+        and accounting is not None
+        and _safe_overload_accounting(accounting)
+        and (error.usage is None or error.usage.output_tokens == 0)
+        and capability.provider_calls_per_attempt == 1
+        and capability.action_denial == "enforced"
+        and capability.protected_state_enforcement == "preventive"
+        and error.effective_policy_digest == attempt.safety_policy.digest
+        and error.provider == capability.provider
+        and error.endpoint == capability.endpoint
+        and error.model_requested == attempt.execution_plan.model_requested
+        and _retry_limits_allow(attempt, error, accounting)
+        and _retry_plan_matches(attempt, error)
+        and error.native_output is not None
+        and error.native_output.complete
+        and _native_output_is_consistent(error.native_output, accounting.native_output_bytes)
+    )
+
+
+def _safe_overload_accounting(accounting: RunAccounting) -> bool:
+    return (
+        _safe_cleanup_and_effects(accounting)
+        and accounting.cleanup_outcome == "verified"
+        and accounting.process_outcome in {"exited", "terminated"}
+        and accounting.actions_requested == 0
+        and accounting.provider_calls_started == 1
+        and accounting.provider_calls_completed == 0
+        and accounting.provider_connections_started <= 1
+    )
 
 
 def _error_retry_safe(
@@ -256,11 +312,17 @@ def _error_provenance_matches(attempt: PreparedAttempt, error: RunnerError) -> b
 
 
 def _accounting_has_no_external_effects(accounting: RunAccounting) -> bool:
+    return (
+        accounting.provider_calls_started == 0
+        and accounting.provider_calls_completed == 0
+        and accounting.provider_connections_started == 0
+        and _safe_cleanup_and_effects(accounting)
+    )
+
+
+def _safe_cleanup_and_effects(accounting: RunAccounting) -> bool:
     return all(
         (
-            accounting.provider_calls_started == 0,
-            accounting.provider_calls_completed == 0,
-            accounting.provider_connections_started == 0,
             accounting.tool_network_requests == 0,
             accounting.actions_executed == 0,
             accounting.actions_denied == accounting.actions_requested,

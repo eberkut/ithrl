@@ -16,6 +16,8 @@ from ithrl.execution import (
     SafetyPolicy,
 )
 from ithrl.experiment import ExperimentDefinition
+from ithrl.measurement import observe_once
+from ithrl.observations import ObservationIdentity, ObservationOutcome, ObservationStore
 from ithrl.runner import (
     PreparedAttempt,
     RunnerCancelled,
@@ -23,7 +25,7 @@ from ithrl.runner import (
     RunnerErrorCode,
     prepare_candidate,
 )
-from ithrl.runner.contracts import CandidateInvalidError
+from ithrl.runner.contracts import CandidateInvalidError, ProviderAcceptanceState
 from ithrl.runner.copilot import (
     CopilotRunner,
     CopilotRuntime,
@@ -38,7 +40,8 @@ from ithrl.runner.copilot.policy import (
     PROVIDER,
     CopilotTarget,
 )
-from ithrl.runner.runtime import ProtectedPath
+from ithrl.runner.copilot.protocol import CopilotProtocolOutcome
+from ithrl.runner.runtime import ProtectedPath, RuntimeReport
 from native_support.copilot import _FAKE_COPILOT, _capability, _case, _configuration
 
 
@@ -255,6 +258,110 @@ def test_stops_after_visible_denied_shell_action(tmp_path: Path) -> None:
     assert result.accounting.cleanup_outcome == "verified"
     assert not marker.exists()
     assert not (tmp_path / "attempts" / result.attempt_id).exists()
+
+
+@pytest.mark.parametrize(
+    ("target", "mode"),
+    [
+        ("shell-action", "tool-free"),
+        ("shell-action", "empty-final"),
+        ("shell-action", "reasoning"),
+        ("final-response", "reasoning"),
+    ],
+)
+def test_completed_tool_free_observation_is_valid_no_match(
+    tmp_path: Path, target: CopilotTarget, mode: str
+) -> None:
+    source, workspace, evidence = _case(tmp_path, target)
+    runner, marker = _runner(tmp_path, source, workspace, target=target, mode=mode)
+    attempt = _attempt(evidence, runner)
+    if target == "shell-action":
+        assert attempt.target.type == "shell-action"
+        assert attempt.target.count == 1
+    identity = ObservationIdentity(
+        case_digest=evidence.digest,
+        experiment_digest=attempt.execution_plan.experiment_digest,
+        runner_fingerprint=runner.fingerprint,
+        execution_plan_digest=attempt.execution_plan.digest,
+        target_digest=attempt.target.digest,
+        algorithm_digest="fixture-algorithm",
+    )
+    store = ObservationStore(tmp_path / "observations.sqlite")
+    source_before = source.read_bytes()
+
+    observation = asyncio.run(
+        observe_once(runner=runner, identity=identity, store=store, attempt=attempt)
+    )
+
+    assert observation.valid
+    assert observation.outcome is ObservationOutcome.NO_MATCH
+    assert observation.target_observed is False
+    assert observation.error_category is None
+    measured = observation.attempt_evidence
+    assert measured.termination_reason == "completed"
+    assert measured.provider_acceptance_state is ProviderAcceptanceState.ACCEPTED
+    assert measured.provider_calls_possible == 0
+    assert measured.accounting is not None
+    assert measured.accounting.provider_calls_started == 1
+    assert measured.accounting.provider_calls_completed == 1
+    assert measured.accounting.actions_requested == measured.accounting.actions_denied == 0
+    assert measured.accounting.actions_executed == 0
+    assert measured.accounting.process_outcome == "exited"
+    assert measured.accounting.cleanup_outcome == "verified"
+    assert measured.accounting.source_store_effect == "unchanged"
+    assert measured.accounting.original_workspace_effect == "unchanged"
+    assert not (tmp_path / "attempts" / attempt.attempt_id).exists()
+    assert source.read_bytes() == source_before
+    assert (tmp_path / "original-workspace" / "protected.txt").read_text() == "unchanged\n"
+    assert not marker.exists()
+
+
+def test_tool_free_shell_response_requires_successful_process_exit(tmp_path: Path) -> None:
+    source, workspace, evidence = _case(tmp_path, "shell-action")
+    runner, marker = _runner(
+        tmp_path, source, workspace, target="shell-action", mode="nonzero-final"
+    )
+
+    with pytest.raises(RunnerError) as raised:
+        asyncio.run(runner.run(_attempt(evidence, runner)))
+
+    assert raised.value.code is RunnerErrorCode.PROTOCOL
+    assert raised.value.accounting is not None
+    assert raised.value.accounting.provider_calls_completed == 1
+    assert raised.value.accounting.cleanup_outcome == "verified"
+    assert not marker.exists()
+
+
+def test_tool_free_response_cannot_use_denial_stopped_completion(tmp_path: Path) -> None:
+    source, workspace, evidence = _case(tmp_path, "shell-action")
+    runner, _ = _runner(tmp_path, source, workspace, target="shell-action")
+    attempt = _attempt(evidence, runner)
+    outcome = CopilotProtocolOutcome(
+        type="final-response",
+        model_returned="fixture-model",
+        provider_calls_started=1,
+        provider_calls_completed=1,
+        final_text="Fixture complete.",
+    )
+    report = RuntimeReport(
+        elapsed_milliseconds=1,
+        native_output_bytes=1,
+        disposable_state_bytes=1,
+        residual_disposable_state_bytes=0,
+        disposable_state_entries=1,
+        residual_disposable_state_entries=0,
+        process_outcome="exited",
+        forced_termination=False,
+        stdout_stop_matched=True,
+        cleanup_outcome="verified",
+        source_store_effect="unchanged",
+        original_workspace_effect="unchanged",
+    )
+
+    with pytest.raises(RunnerError) as raised:
+        copilot_runner_module._validate_completion(attempt, "shell-action", 0, report, outcome)
+
+    assert raised.value.code is RunnerErrorCode.PROTOCOL
 
 
 @pytest.mark.parametrize("storage", ["state", "output"])

@@ -620,7 +620,10 @@ class SampledReducer:
             or sum(item.valid for item in observations) != phase.required_valid
             or sum(item.outcome is ObservationOutcome.MATCH for item in observations)
             < phase.minimum_matches
-            or any(not item.attempt_evidence.automatic_retry_safe for item in observations)
+            or any(
+                not item.allows_fresh_attempt(self._reduction.eligibility_policy)
+                for item in observations
+            )
         ):
             raise ReductionError("sampled search requires successful safe full-context calibration")
         valid = 0

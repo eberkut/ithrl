@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 import shlex
 import stat
@@ -42,7 +43,17 @@ from ithrl.extraction import extract_decision
 from ithrl.observations import ObservationStore
 from ithrl.results import SampledReductionEvidence, load_sampling_snapshot
 from ithrl.run_state import SampledRunStateFile
-from ithrl.runner import PreparedAttempt, RunAccounting, RunnerRegistry, RunResult, TokenUsage
+from ithrl.runner import (
+    NativeOutputReference,
+    PreparedAttempt,
+    ProviderAcceptanceState,
+    RunAccounting,
+    RunnerError,
+    RunnerErrorCode,
+    RunnerRegistry,
+    RunResult,
+    TokenUsage,
+)
 
 _SOURCE = Path(__file__).parents[1] / "fixtures/codex-session/rollout.jsonl"
 _PRIVATE_CONTEXT = "PRIVATE_FIXTURE_CONTEXT_DO_NOT_DISPLAY"
@@ -290,6 +301,218 @@ def _install_wall_clock(monkeypatch: pytest.MonkeyPatch) -> Callable[[int], None
 def _write_operator_experiment(case: OperatorCase, experiment: SampledExperimentDefinition) -> None:
     case.experiment_path.write_text(experiment.to_toml(), encoding="utf-8")
     case.frozen_files[case.experiment_path] = case.experiment_path.read_bytes()
+
+
+@pytest.mark.parametrize("phase", ["calibration", "search", "confirmation"])
+def test_complete_workflow_keeps_overload_cost_and_reliability_separate(
+    operator_case: OperatorCase,
+    monkeypatch: pytest.MonkeyPatch,
+    phase: str,
+) -> None:
+    experiment = operator_case.selection.experiment
+    assert experiment.reduction is not None
+    reduction = experiment.reduction
+    _write_operator_experiment(
+        operator_case,
+        experiment.model_copy(
+            update={
+                "reduction": reduction.model_copy(
+                    update={
+                        "eligibility_policy": "safe-provider-overload",
+                        "search": reduction.search.model_copy(
+                            update={
+                                "original": reduction.search.original.model_copy(
+                                    update={"max_attempts": 2}
+                                ),
+                                "candidate": reduction.search.candidate.model_copy(
+                                    update={"max_attempts": 2}
+                                ),
+                            }
+                        ),
+                        "confirmation": reduction.confirmation.model_copy(
+                            update={
+                                "original": reduction.confirmation.original.model_copy(
+                                    update={"max_attempts": 5}
+                                ),
+                                "candidate": reduction.confirmation.candidate.model_copy(
+                                    update={"max_attempts": 5}
+                                ),
+                            }
+                        ),
+                    }
+                ),
+                "calibration": experiment.calibration.model_copy(update={"max_attempts": 3}),
+            }
+        ),
+    )
+    runner = operator_case.runner
+    runner.capability_profile = runner.capability_profile.model_copy(
+        update={"protected_state_enforcement": "preventive"}
+    )
+    # The fixture's capability changes before the plan is pinned, never during execution.
+    revised = SampledExperimentDefinition.from_toml(operator_case.experiment_path.read_text())
+    _write_operator_experiment(
+        operator_case,
+        revised.model_copy(
+            update={
+                "runner": revised.runner.model_copy(
+                    update={"required_capability_digest": runner.capability_profile.digest}
+                ),
+            }
+        ),
+    )
+    original_run = runner.run
+    failed = False
+
+    async def overload_once(attempt: PreparedAttempt) -> RunResult:
+        nonlocal failed
+        if attempt.phase == phase and not failed:
+            failed = True
+            runner.calls.append(attempt)
+            raise RunnerError(
+                RunnerErrorCode.PROVIDER_OVERLOADED,
+                "Fixture overload.",
+                provider_acceptance_state=ProviderAcceptanceState.UNKNOWN,
+                model_requested=attempt.execution_plan.model_requested,
+                provider=_PROVIDER,
+                endpoint=_ENDPOINT,
+                effective_policy_digest=attempt.safety_policy.digest,
+                behavior_output_observed=False,
+                native_output=NativeOutputReference(
+                    artifact_id="fixture-overload",
+                    sha256="a" * 64,
+                    media_type="application/json",
+                    size_bytes=100,
+                ),
+                accounting=RunAccounting(
+                    provider_calls_started=1,
+                    native_output_bytes=100,
+                    process_outcome="exited",
+                    cleanup_outcome="verified",
+                ),
+            )
+        return await original_run(attempt)
+
+    monkeypatch.setattr(runner, "run", overload_once)
+    result = _invoke(operator_case.command())
+    report = _json(result)
+    assert result.exit_code == ExitCode.SUCCESS, report
+    assert report["confirmation_result"] == "confirmed-preserving"
+    assert report["evidence_eligibility"] == "eligible"
+    assert report["reliability_status"] == "incomplete"
+    assert report["runner_errors"] == 1
+    assert report["unknown_acceptance_attempts"] == 1
+    assert report["unknown_token_attempts"] == 1
+    assert report["actual_provider_calls"] == report["charged_provider_calls"] == len(runner.calls)
+    assert report["eligibility_policy"] == "safe-provider-overload"
+    assert "independent-stationary-attempts-with-prespecified-validity" in report["assumptions"]
+    assert len({call.attempt_id for call in runner.calls}) == len(runner.calls)
+    operator_case.assert_sources_unchanged()
+
+
+def test_paced_operator_flow_keeps_delay_on_resume_and_refuses_override(
+    operator_case: OperatorCase, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    advance = _install_wall_clock(monkeypatch)
+    waits: list[float] = []
+
+    def wait(seconds: float) -> None:
+        waits.append(seconds)
+        advance(math.ceil(seconds))
+
+    async def async_wait(seconds: float) -> None:
+        wait(seconds)
+
+    monkeypatch.setattr(sampled_reduction.time, "sleep", wait)
+    monkeypatch.setattr(sampling.asyncio, "sleep", async_wait)
+    experiment = operator_case.selection.experiment
+    assert isinstance(experiment, SampledExperimentDefinition)
+    experiment = experiment.model_copy(
+        update={
+            "calibration": SampledCalibrationPhase(
+                required_valid=3, minimum_matches=3, max_attempts=3
+            )
+        }
+    )
+    _write_operator_experiment(operator_case, experiment)
+    result = _invoke(operator_case.command("--inter-attempt-delay", "2"))
+    assert result.exit_code == ExitCode.SUCCESS, result.output
+    report = _json(result)
+    assert report["inter_attempt_delay_seconds"] == 2
+    assert report["confirmation_result"] == "confirmed-preserving"
+    assert len(waits) == len(operator_case.runner.calls) - 1
+    assert all(0 < seconds <= 2 for seconds in waits)
+    calls = len(operator_case.runner.calls)
+    source = report["run_state_path"]
+    resumed = _invoke(
+        ["shrink", source, "--resume", "--acknowledge-model-execution", "--format", "json"]
+    )
+    assert resumed.exit_code == ExitCode.SUCCESS, resumed.output
+    assert _json(resumed)["inter_attempt_delay_seconds"] == 2
+    changed = _invoke(
+        [
+            "shrink",
+            source,
+            "--resume",
+            "--acknowledge-model-execution",
+            "--inter-attempt-delay",
+            "0",
+            "--format",
+            "json",
+        ]
+    )
+    assert changed.exit_code == ExitCode.USAGE, changed.output
+    assert len(operator_case.runner.calls) == calls
+    operator_case.assert_sources_unchanged()
+
+
+def test_pacing_dry_run_includes_pauses_in_admission(
+    operator_case: OperatorCase,
+) -> None:
+    result = _invoke(
+        operator_case.command("--dry-run", "--inter-attempt-delay", "2", acknowledged=False)
+    )
+    assert result.exit_code == ExitCode.SUCCESS, result.output
+    report = _json(result)
+    assert report["inter_attempt_delay_seconds"] == 2
+    assert report["minimum_wall_time_seconds"] == 33
+    assert "--inter-attempt-delay 2" in report["next_command"]
+    refused = _invoke(
+        operator_case.command(
+            "--dry-run", "--inter-attempt-delay", "2", "--max-wall-time", "32", acknowledged=False
+        )
+    )
+    assert refused.exit_code == ExitCode.USAGE, refused.output
+    assert _json(refused)["error_code"] == "sampling-budget-too-small"
+    _assert_no_dispatch(operator_case)
+
+
+def test_interrupted_calibration_pause_has_no_inflight_reservation(
+    operator_case: OperatorCase, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    experiment = operator_case.selection.experiment
+    assert isinstance(experiment, SampledExperimentDefinition)
+    _write_operator_experiment(
+        operator_case,
+        experiment.model_copy(
+            update={
+                "calibration": SampledCalibrationPhase(
+                    required_valid=3, minimum_matches=3, max_attempts=3
+                )
+            }
+        ),
+    )
+
+    def interrupt(_seconds: float) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(sampled_reduction.time, "sleep", interrupt)
+    result = _invoke(operator_case.command("--inter-attempt-delay", "2"))
+    report = _json(result)
+    assert report["stop_reason"] == "user-interrupt"
+    assert len(operator_case.runner.calls) == 1
+    assert not calibration._inflight_path(ObservationStore(operator_case.store_path)).exists()
+    operator_case.assert_sources_unchanged()
 
 
 def test_operator_dry_run_exposes_complete_plan_without_creating_run(

@@ -6,6 +6,7 @@ import asyncio
 import math
 import os
 import sys
+import time
 from collections.abc import Callable
 from contextlib import redirect_stdout
 from dataclasses import dataclass
@@ -66,6 +67,7 @@ from ithrl.run_state import (
     SamplingBudgetApproval,
 )
 from ithrl.runner import prepare_candidate
+from ithrl.sampling import sampling_pacing_delay
 from ithrl.statistics import (
     BinomialSample,
     FixedSampleOutcome,
@@ -82,6 +84,7 @@ class SampledCommandLimits:
     provider_calls: int | None
     wall_seconds: int | None
     candidates: int | None
+    inter_attempt_delay_seconds: int | None = None
 
 
 class _CalibrationBudgetStop(RuntimeError):
@@ -179,6 +182,11 @@ def handle_sampled_reduction(
         if session is not None:
             saved = load_cli_run_state(session.run_directory)
             current = saved.allowance
+            if (
+                limits.inter_attempt_delay_seconds is not None
+                and limits.inter_attempt_delay_seconds != current.inter_attempt_delay_seconds
+            ):
+                raise ValueError("saved inter-attempt delay cannot change")
             limits = SampledCommandLimits(
                 current.max_provider_calls
                 if limits.provider_calls is None
@@ -189,6 +197,7 @@ def handle_sampled_reduction(
                 current.max_candidate_comparisons
                 if limits.candidates is None
                 else limits.candidates,
+                current.inter_attempt_delay_seconds,
             )
             if (
                 limits.provider_calls is None
@@ -200,7 +209,9 @@ def handle_sampled_reduction(
             ):
                 raise ValueError("budgets cannot decrease")
         elif limits.candidates is None:
-            limits = SampledCommandLimits(limits.provider_calls, limits.wall_seconds, 100)
+            limits = SampledCommandLimits(
+                limits.provider_calls, limits.wall_seconds, 100, limits.inter_attempt_delay_seconds
+            )
         preflight = _reduction_preflight(
             workspace,
             evidence,
@@ -398,6 +409,11 @@ def _reduction_preflight(
         raise ValueError("complete sampled reduction required")
     reduction = experiment.reduction
     cost = sampling_attempt_cost(prepared.execution_plan.capability, prepared.resource_limits)
+    delay = limits.inter_attempt_delay_seconds or 0
+    if type(delay) is not int or not 0 <= delay <= 86_400:
+        raise ValueError("inter-attempt delay must be bounded nonnegative seconds")
+    # Conservatively admit a full pause for every future attempt; the first may need none.
+    wall_seconds_per_attempt = cost.runner_seconds + delay
     calibration = experiment.calibration.max_attempts
     search = reduction.search.original.max_attempts + reduction.search.candidate.max_attempts
     confirmation = (
@@ -418,7 +434,7 @@ def _reduction_preflight(
         else:
             minimum_attempts -= len(saved.calibration_observation_ids)
     minimum_calls = minimum_attempts * cost.provider_calls
-    minimum_seconds = minimum_attempts * cost.runner_seconds
+    minimum_seconds = minimum_attempts * wall_seconds_per_attempt
     if session is None and (
         (limits.provider_calls is not None and limits.provider_calls < minimum_calls)
         or (limits.wall_seconds is not None and limits.wall_seconds < minimum_seconds)
@@ -432,7 +448,7 @@ def _reduction_preflight(
             minimum_provider_calls=minimum_calls,
             minimum_wall_time_seconds=minimum_seconds,
         )
-    if max(search, confirmation) * cost.runner_seconds >= reduction.freshness_seconds:
+    if max(search, confirmation) * wall_seconds_per_attempt >= reduction.freshness_seconds:
         fail_sampled(
             error_code="sampling-freshness-too-small",
             code=ExitCode.USAGE,
@@ -461,7 +477,9 @@ def _reduction_preflight(
         else attempts * cost.provider_calls
     )
     seconds = (
-        limits.wall_seconds if limits.wall_seconds is not None else attempts * cost.runner_seconds
+        limits.wall_seconds
+        if limits.wall_seconds is not None
+        else attempts * wall_seconds_per_attempt
     )
     capacity = max(
         0,
@@ -469,8 +487,8 @@ def _reduction_preflight(
             limits.candidates,
             (calls - (calibration + confirmation) * cost.provider_calls)
             // (search * cost.provider_calls),
-            (seconds - (calibration + confirmation) * cost.runner_seconds)
-            // (search * cost.runner_seconds),
+            (seconds - (calibration + confirmation) * wall_seconds_per_attempt)
+            // (search * wall_seconds_per_attempt),
         ),
     )
     base = _preflight_report(
@@ -531,6 +549,8 @@ def _reduction_preflight(
         )
         if prepared.resource_limits.max_input_tokens is not None:
             arguments.extend(("--max-input-tokens", str(prepared.resource_limits.max_input_tokens)))
+    if delay:
+        arguments.extend(("--inter-attempt-delay", str(delay)))
     command, shell = shell_command(tuple(arguments))
     if len(command) > 2048 or not command.isprintable():
         command = shell = None
@@ -541,6 +561,7 @@ def _reduction_preflight(
         max_provider_calls=calls,
         max_runner_seconds=attempts * cost.runner_seconds,
         max_wall_time_seconds=seconds,
+        inter_attempt_delay_seconds=delay,
         max_candidate_comparisons=limits.candidates,
         candidate_capacity=capacity,
         minimum_provider_calls=minimum_calls,
@@ -558,6 +579,7 @@ def _reduction_preflight(
         confirmation_runner_seconds=confirmation * cost.runner_seconds,
         confirmation_capacity="protected",
         freshness_seconds=reduction.freshness_seconds,
+        eligibility_policy=reduction.eligibility_policy,
         margin=reduction.margin,
         one_sided_confidence=reduction.confirmation.one_sided_confidence,
         original_context_count=len(evidence.context.nodes),
@@ -569,6 +591,12 @@ def _reduction_preflight(
         next_command=command,
         next_command_shell=shell,
     )
+    if reduction.eligibility_policy == "safe-provider-overload":
+        values["assumptions"] = (
+            *SampledReductionOutput.model_fields["assumptions"].default,
+            "independent-stationary-attempts-with-prespecified-validity",
+            "overload-replacement-estimates-behavior-conditional-on-validity",
+        )
     return SampledReductionOutput.model_validate(values)
 
 
@@ -580,6 +608,7 @@ def _allowance(report: SampledReductionOutput, run_id: str) -> SamplingBudgetAll
         max_candidate_comparisons=report.max_candidate_comparisons,
         confirmation_provider_calls=report.confirmation_provider_calls,
         confirmation_runner_seconds=int(report.confirmation_runner_seconds),
+        inter_attempt_delay_seconds=report.inter_attempt_delay_seconds,
     )
 
 
@@ -612,6 +641,9 @@ def _calibrate_for_run(
 
     def admit_attempt() -> None:
         state = refresh_calibration_prefix()
+        delay = sampling_pacing_delay(state, store, datetime.now(UTC))
+        if delay:
+            time.sleep(delay)
         usage = state_file.usage(store, now=datetime.now(UTC))
         remaining = max(0, phase.max_attempts - len(state.calibration_observation_ids))
         if (
@@ -625,6 +657,13 @@ def _calibrate_for_run(
             usage.wall_time_seconds
             + (remaining + search) * cost.runner_seconds
             + report.confirmation_runner_seconds
+            + (
+                remaining
+                + search
+                + reduction.confirmation.original.max_attempts
+                + reduction.confirmation.candidate.max_attempts
+            )
+            * state.allowance.inter_attempt_delay_seconds
             > state.allowance.max_wall_time_seconds
         ):
             raise _CalibrationBudgetStop("wall-time-budget")
@@ -730,7 +769,9 @@ def _run_report(
     eligible = (
         state.pending is None
         and all(b.eligible for b in blocks)
-        and all(o.attempt_evidence.automatic_retry_safe for o in calibration_observations)
+        and all(
+            o.allows_fresh_attempt(preflight.eligibility_policy) for o in calibration_observations
+        )
     )
     status: Literal[
         "confirmed", "confirmation-failed", "inconclusive", "incomplete", "refused", "interrupted"
@@ -825,6 +866,7 @@ def _run_report(
         else (
             "complete"
             if status in {"confirmed", "confirmation-failed", "inconclusive"}
+            and all(o.valid for o in observations)
             else "incomplete"
         ),
         retained_context_count=preflight.original_context_count - len(removed),
@@ -837,6 +879,9 @@ def _run_report(
         pending_provider_calls=usage.pending_provider_calls,
         charged_provider_calls=usage.charged_provider_calls,
         unknown_provider_attempts=usage.unknown_provider_attempts,
+        unknown_acceptance_attempts=sum(
+            o.attempt_evidence.acceptance_unknown for o in observations
+        ),
         attempts_used=len(observations),
         runner_seconds=None if usage.unknown_runner_attempts else usage.runner_milliseconds / 1000,
         unknown_runner_attempts=usage.unknown_runner_attempts,
@@ -934,10 +979,14 @@ def _continuation_budget(
         preflight.confirmation_original_max_attempts + preflight.confirmation_candidate_max_attempts
     )
     future_calls = remaining * state.provider_calls_per_attempt
-    future_seconds = remaining * per_attempt_seconds
+    future_seconds = remaining * (per_attempt_seconds + state.allowance.inter_attempt_delay_seconds)
     if state.selection is None:
         future_calls += preflight.confirmation_provider_calls
         future_seconds += preflight.confirmation_runner_seconds
+        future_seconds += (
+            preflight.confirmation_original_max_attempts
+            + preflight.confirmation_candidate_max_attempts
+        ) * state.allowance.inter_attempt_delay_seconds
     calls = max(state.allowance.max_provider_calls, usage.charged_provider_calls + future_calls)
     seconds = max(
         state.allowance.max_wall_time_seconds,

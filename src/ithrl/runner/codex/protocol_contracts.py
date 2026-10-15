@@ -76,6 +76,7 @@ SUPPORTED_NOTIFICATION_METHODS = frozenset(
         *THREAD_PASSIVE_NOTIFICATIONS,
         "account/rateLimits/updated",
         "account/updated",
+        "error",
         "item/completed",
         "item/started",
         "model/rerouted",
@@ -121,8 +122,11 @@ class ProtocolOutcome:
     provider_calls_completed: int
     actions_requested: int
     actions_denied: int
+    behavior_output_observed: bool = True
 
     def __post_init__(self) -> None:
+        if type(self.behavior_output_observed) is not bool:
+            raise ValueError("Codex output visibility must be a boolean")
         if self.status == "completed" and (self.error_code is not None or self.final_text is None):
             raise ValueError("completed Codex outcome requires one final response")
         if self.status == "error" and (self.error_code is None or self.final_text is not None):

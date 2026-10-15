@@ -488,6 +488,7 @@ def _validate_budget_extension(
         "run_id",
         "confirmation_provider_calls",
         "confirmation_runner_seconds",
+        "inter_attempt_delay_seconds",
         "token_accounting",
     )
     if any(getattr(extended, name) != getattr(original, name) for name in fixed):

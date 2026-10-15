@@ -4,6 +4,7 @@ import asyncio
 import stat
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -162,6 +163,92 @@ def _attempt(
         phase="calibration",
         arm="baseline",
     )
+
+
+@pytest.mark.parametrize("mode", ["overload", "overload-after-output"])
+def test_structured_overload_requires_no_output_for_fresh_sample(tmp_path: Path, mode: str) -> None:
+    workspace, case = _case(tmp_path)
+    runner = _runner(tmp_path, workspace, mode=mode)
+    attempt = _attempt(case, runner)
+    with pytest.raises(RunnerError) as caught:
+        asyncio.run(runner.run(attempt))
+    error = caught.value
+    assert error.code is RunnerErrorCode.PROVIDER_OVERLOADED
+    evidence = AttemptEvidence.from_error(attempt, error)
+    assert evidence.overload_replacement_safe is (mode == "overload")
+    assert not evidence.retry_safe
+    assert evidence.acceptance_unknown
+    assert evidence.provider_calls_possible == 1
+    assert evidence.accounting is not None
+    assert evidence.accounting.provider_calls_started == 1
+    assert evidence.accounting.cleanup_outcome == "verified"
+    assert evidence.accounting.source_store_effect == "unchanged"
+    assert evidence.accounting.original_workspace_effect == "unchanged"
+    assert evidence.native_output is not None
+    assert evidence.native_output.complete
+    assert AttemptEvidence.model_validate_json(evidence.model_dump_json()) == evidence
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"code": RunnerErrorCode.PROTOCOL},
+        {"code": RunnerErrorCode.TIMEOUT},
+        {"code": RunnerErrorCode.CANCELLED},
+        {"behavior_output_observed": True},
+        {"behavior_output_observed": None},
+        {"effective_policy_digest": None},
+        {"provider": None},
+        {"endpoint": "https://other.example.invalid"},
+        {"native_output": None},
+    ],
+)
+def test_overload_proof_rejects_missing_or_inconsistent_facts(
+    tmp_path: Path,
+    changes: dict[str, Any],
+) -> None:
+    workspace, case = _case(tmp_path)
+    runner = _runner(tmp_path, workspace, mode="overload")
+    attempt = _attempt(case, runner)
+    with pytest.raises(RunnerError) as caught:
+        asyncio.run(runner.run(attempt))
+    error = caught.value
+    for key, value in changes.items():
+        setattr(error, key, value)
+    assert not AttemptEvidence.from_error(attempt, error).overload_replacement_safe
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"cleanup_outcome": "failed"},
+        {"process_outcome": "unknown"},
+        {"source_store_effect": "unknown"},
+        {"original_workspace_effect": "changed"},
+        {"actions_requested": 1, "actions_denied": 1},
+        {"actions_requested": 1, "actions_executed": 1},
+        {"tool_network_requests": 1},
+        {"residual_disposable_state_bytes": 1, "cleanup_outcome": "failed"},
+        {"provider_calls_started": 2},
+        {"provider_calls_completed": 1},
+        {"elapsed_milliseconds": 5001},
+        {"disposable_state_bytes": 4 * 1024 * 1024 + 1},
+        {"disposable_state_entries": 1001},
+    ],
+)
+def test_overload_proof_rejects_unsafe_effects_and_resource_overruns(
+    tmp_path: Path,
+    changes: dict[str, Any],
+) -> None:
+    workspace, case = _case(tmp_path)
+    runner = _runner(tmp_path, workspace, mode="overload")
+    attempt = _attempt(case, runner)
+    with pytest.raises(RunnerError) as caught:
+        asyncio.run(runner.run(attempt))
+    error = caught.value
+    assert error.accounting is not None
+    error.accounting = error.accounting.model_copy(update=changes)
+    assert not AttemptEvidence.from_error(attempt, error).overload_replacement_safe
 
 
 @pytest.mark.parametrize("code", list(CodexMaterializationErrorCode))

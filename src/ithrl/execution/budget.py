@@ -101,17 +101,15 @@ def sampling_budget_refusal(
     if search_blocks > allowance.max_candidate_comparisons:
         return "candidate-limit"
 
+    # During confirmation, its reserve is already included in the remaining attempts.
+    future_calls = remaining_attempts * attempt_cost.provider_calls
+    future_seconds = remaining_attempts * (
+        attempt_cost.runner_seconds + allowance.inter_attempt_delay_seconds
+    )
     if role == "search":
-        future_calls = remaining_attempts * attempt_cost.provider_calls
         future_calls += allowance.confirmation_provider_calls
-        future_seconds = (
-            remaining_attempts * attempt_cost.runner_seconds + allowance.confirmation_runner_seconds
-        )
-    else:
-        # The confirmation reserve is already part of the overall allowance. During
-        # confirmation, charge only the remaining attempts to avoid counting it twice.
-        future_calls = remaining_attempts * attempt_cost.provider_calls
-        future_seconds = remaining_attempts * attempt_cost.runner_seconds
+        future_seconds += allowance.confirmation_runner_seconds
+        future_seconds += confirmation_attempts * allowance.inter_attempt_delay_seconds
 
     if charged_provider_calls + future_calls > allowance.max_provider_calls:
         return "provider-call-budget"

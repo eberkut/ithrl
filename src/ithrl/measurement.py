@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 
 from ithrl.behavior import BehaviorObservation, ShellAction, evaluate_target
+from ithrl.experiment import SamplingEligibilityPolicy
 from ithrl.observations import (
     Observation,
     ObservationArm,
@@ -54,10 +55,13 @@ async def observe_once(
     identity: ObservationIdentity,
     store: ObservationStore,
     attempt: PreparedAttempt,
+    eligibility_policy: SamplingEligibilityPolicy = "independent-safe-preaccept-only",
 ) -> Observation:
     """Run once, evaluate the result, and save the observation."""
 
-    role, arm, candidate_digest = _prepare_observation(runner, identity, store, attempt)
+    role, arm, candidate_digest = _prepare_observation(
+        runner, identity, store, attempt, eligibility_policy
+    )
     result: RunResult | None = None
     try:
         result = await _run_with_deadlines(runner, attempt)
@@ -118,6 +122,7 @@ def _prepare_observation(
     identity: ObservationIdentity,
     store: ObservationStore,
     attempt: PreparedAttempt,
+    eligibility_policy: SamplingEligibilityPolicy,
 ) -> tuple[ObservationRole, ObservationArm, str]:
     expected_identity = (
         attempt.candidate.case_digest,
@@ -147,7 +152,7 @@ def _prepare_observation(
         arm=arm,
     )
     unsafe_to_retry = next(
-        (item for item in reversed(previous) if not item.attempt_evidence.automatic_retry_safe),
+        (item for item in reversed(previous) if not item.allows_fresh_attempt(eligibility_policy)),
         None,
     )
     if unsafe_to_retry is not None:

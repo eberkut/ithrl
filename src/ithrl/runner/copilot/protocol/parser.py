@@ -13,6 +13,7 @@ from ithrl.runner.contracts import ToolCall
 from ithrl.runner.copilot.protocol.contracts import (
     MAX_ID_LENGTH,
     MAX_MODEL_LENGTH,
+    MAX_OUTPUT_LINE_BYTES,
     STARTUP_EVENTS,
     CopilotProtocolError,
     CopilotProtocolOutcome,
@@ -166,17 +167,32 @@ def _handle_usage(state: ProtocolState, data: dict[str, object]) -> None:
     state.usage = parse_usage(data)
 
 
+def _handle_reasoning(state: ProtocolState, data: dict[str, object]) -> None:
+    if not state.call_started or not state.turn_started or state.turn_ended:
+        invalid_sequence()
+    required_string(data, "content", max_length=MAX_OUTPUT_LINE_BYTES, allow_empty=True)
+    required_string(data, "reasoningId", max_length=MAX_OUTPUT_LINE_BYTES)
+    if "model" in data:
+        bind_model(state, required_string(data, "model", max_length=MAX_MODEL_LENGTH))
+    if "turnId" in data:
+        require_matching_turn(state, data)
+    # Opaque timeline fields remain bounded by the decoder's encoded-line limit.
+    # Timeline content and rte metadata establish no outcome or accounting evidence.
+
+
 def _handle_message(state: ProtocolState, data: dict[str, object]) -> None:
     if not state.call_finished or state.message_seen or state.turn_ended:
         invalid_sequence()
     require_matching_turn(state, data)
     bind_model(state, required_string(data, "model", max_length=MAX_MODEL_LENGTH))
     required_string(data, "messageId", max_length=MAX_ID_LENGTH)
-    required_string(data, "apiCallId", max_length=MAX_ID_LENGTH)
+    # Optional opaque provider metadata is not part of identity or completion proof.
+    if "apiCallId" in data:
+        required_string(data, "apiCallId", max_length=MAX_OUTPUT_LINE_BYTES, allow_empty=True)
     requests = data.get("toolRequests")
     if not isinstance(requests, list):
         raise CopilotProtocolError("invalid-message", "Copilot returned an invalid message")
-    if state.expected == "final-response":
+    if state.expected == "final-response" or not requests:
         _record_final_response(state, data, requests)
     else:
         _record_shell_request(state, data, requests)
@@ -234,7 +250,12 @@ def _record_tool_request(state: ProtocolState, value: object) -> None:
 
 
 def _handle_tool_start(state: ProtocolState, data: dict[str, object]) -> None:
-    if state.expected != "shell-action" or not state.message_seen or state.tool_started:
+    if (
+        state.expected != "shell-action"
+        or not state.message_seen
+        or state.tool_call is None
+        or state.tool_started
+    ):
         invalid_sequence()
     match_tool_identity(state, data)
     require_matching_turn(state, data)
@@ -272,7 +293,12 @@ def _handle_background_tasks(state: ProtocolState, data: dict[str, object]) -> N
 
 
 def _handle_turn_end(state: ProtocolState, data: dict[str, object]) -> None:
-    if state.expected != "final-response" or not state.message_seen or state.turn_ended:
+    if (
+        state.final_text is None
+        or state.tool_call is not None
+        or not state.message_seen
+        or state.turn_ended
+    ):
         invalid_sequence()
     require_matching_turn(state, data)
     state.turn_ended = True
@@ -295,13 +321,23 @@ def _handle_usage_checkpoint(state: ProtocolState, _data: dict[str, object]) -> 
 
 
 def _handle_idle(state: ProtocolState, _data: dict[str, object]) -> None:
-    if state.expected != "final-response" or not state.turn_ended or state.idle_seen:
+    if (
+        state.final_text is None
+        or state.tool_call is not None
+        or not state.turn_ended
+        or state.idle_seen
+    ):
         invalid_sequence()
     state.idle_seen = True
 
 
 def _handle_result(state: ProtocolState, event: dict[str, object]) -> None:
-    if state.expected != "final-response" or not state.idle_seen or state.result_seen:
+    if (
+        state.final_text is None
+        or state.tool_call is not None
+        or not state.idle_seen
+        or state.result_seen
+    ):
         invalid_sequence()
     exit_code = event.get("exitCode")
     if (
@@ -320,7 +356,7 @@ def _finish(state: ProtocolState) -> CopilotProtocolOutcome:
         raise CopilotProtocolError(
             "missing-provider-evidence", "Copilot output lacks complete provider-call evidence"
         )
-    if state.expected == "final-response":
+    if state.expected == "final-response" or state.final_text is not None:
         return _finish_final_response(state, state.model)
     return _finish_shell_action(state, state.model)
 
@@ -371,6 +407,7 @@ _EVENT_HANDLERS: dict[str, Callable[[ProtocolState, dict[str, object]], None]] =
     "assistant.turn_start": _handle_turn_start,
     "assistant.usage": _handle_usage,
     "assistant.message": _handle_message,
+    "assistant.reasoning": _handle_reasoning,
     "tool.execution_start": _handle_tool_start,
     "tool.execution_complete": _handle_tool_complete,
     "session.background_tasks_changed": _handle_background_tasks,

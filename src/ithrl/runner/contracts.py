@@ -276,6 +276,7 @@ class RunnerErrorCode(StrEnum):
     TIMEOUT = "timeout"
     CANCELLED = "cancelled"
     PROTOCOL = "protocol"
+    PROVIDER_OVERLOADED = "provider-overloaded"
     OUTPUT_LIMIT = "output-limit"
     SAFETY = "safety"
     CONTRACT = "contract"
@@ -300,6 +301,7 @@ class RunnerError(RuntimeError):
         accounting: RunAccounting | None = None,
         native_output: NativeOutputReference | None = None,
         effective_policy_digest: str | None = None,
+        behavior_output_observed: bool = True,
     ) -> None:
         super().__init__(message)
         self.code = code
@@ -317,6 +319,7 @@ class RunnerError(RuntimeError):
         self.accounting = accounting
         self.native_output = native_output
         self.effective_policy_digest = effective_policy_digest
+        self.behavior_output_observed = behavior_output_observed
 
 
 class RunnerCancelled(asyncio.CancelledError):

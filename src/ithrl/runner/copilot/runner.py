@@ -305,10 +305,14 @@ def _validate_completion(
     report: RuntimeReport,
     outcome: CopilotProtocolOutcome,
 ) -> None:
-    if target == "final-response":
+    if outcome.type == "final-response":
         valid = returncode == 0 and not report.stdout_stop_matched
     else:
-        valid = report.stdout_stop_matched and report.process_outcome in {"exited", "terminated"}
+        valid = (
+            target == "shell-action"
+            and report.stdout_stop_matched
+            and report.process_outcome in {"exited", "terminated"}
+        )
     if valid:
         return
     raise RunnerError(

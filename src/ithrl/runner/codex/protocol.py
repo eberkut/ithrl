@@ -85,6 +85,7 @@ class _SessionState:
     actions_requested: int = 0
     actions_denied: int = 0
     final_messages: dict[str, tuple[str | None, str]] = field(default_factory=dict)
+    behavior_output_observed: bool = False
 
 
 class _Transport:
@@ -263,6 +264,7 @@ def _run_session(
     if state.turn_id is not None and state.turn_id != turn_id:
         raise CodexProtocolError("identity-mismatch", "Codex turn identity changed")
     state.turn_id = turn_id
+    _record_turn_output(turn, state)
     state.provider_acceptance = "accepted"
 
     while state.provider_calls_completed == 0:
@@ -326,6 +328,15 @@ def _validate_notification(method: str, params: dict[str, object], state: _Sessi
     if method == "thread/started":
         _validate_thread_started(params, state)
         return
+    if method == "error":
+        _require_identity(params, state, require_turn=True)
+        error = _require_object(params.get("error"), "error notification")
+        _require_string(error.get("message"), "error notification")
+        if not isinstance(params.get("willRetry"), bool):
+            raise CodexProtocolError("invalid-message", "Codex error notification is invalid")
+        if error.get("codexErrorInfo") == "serverOverloaded" and params["willRetry"] is False:
+            raise CodexProtocolError("provider-overloaded", "Codex provider reported overload")
+        raise CodexProtocolError("native-error", "Codex app-server reported a native error")
     if method == "warning":
         _require_identity(params, state, require_turn=False)
         _require_string(params.get("message"), "warning notification")
@@ -351,6 +362,7 @@ def _validate_notification(method: str, params: dict[str, object], state: _Sessi
         return
     if method in PASSIVE_NOTIFICATIONS:
         _validate_passive_notification(method, params, state)
+        state.behavior_output_observed = True
         return
     if method == "thread/tokenUsage/updated":
         _record_token_usage(params, state)
@@ -381,6 +393,8 @@ def _record_token_usage(params: dict[str, object], state: _SessionState) -> None
             "Codex reported more than one provider call for the turn",
         )
     state.usage = last
+    if last.output_tokens:
+        state.behavior_output_observed = True
 
 
 def _usage_counts(value: object) -> ProtocolUsage:
@@ -404,6 +418,8 @@ def _record_item(
     item = _require_object(params.get("item"), "item notification")
     item_type = _require_string(item.get("type"), "item notification")
     _require_passive_item_type(item_type)
+    if item_type != "userMessage":
+        state.behavior_output_observed = True
     if completed and item_type == "agentMessage":
         _record_agent_message(item, state)
 
@@ -415,7 +431,18 @@ def _record_turn_started(params: dict[str, object], state: _SessionState) -> Non
     if state.turn_id is not None and state.turn_id != turn_id:
         raise CodexProtocolError("identity-mismatch", "Codex turn identity changed")
     state.turn_id = turn_id
+    _record_turn_output(turn, state)
     state.provider_acceptance = "accepted"
+
+
+def _record_turn_output(turn: dict[str, object], state: _SessionState) -> None:
+    if "items" not in turn:
+        return
+    items = turn["items"]
+    if not isinstance(items, list):
+        raise CodexProtocolError("invalid-message", "Codex turn items are invalid")
+    if any(not isinstance(item, dict) or item.get("type") != "userMessage" for item in items):
+        state.behavior_output_observed = True
 
 
 def _record_turn_completed(params: dict[str, object], state: _SessionState) -> None:
@@ -439,6 +466,7 @@ def _record_turn_completed(params: dict[str, object], state: _SessionState) -> N
         if item_type == "agentMessage":
             _record_agent_message(item, state)
     state.provider_calls_completed = 1
+    state.behavior_output_observed = True
 
 
 def _record_agent_message(item: dict[str, object], state: _SessionState) -> None:
@@ -515,6 +543,7 @@ def _completed_outcome(state: _SessionState) -> ProtocolOutcome:
         provider_calls_completed=state.provider_calls_completed,
         actions_requested=state.actions_requested,
         actions_denied=state.actions_denied,
+        behavior_output_observed=state.behavior_output_observed,
     )
 
 
@@ -531,6 +560,7 @@ def _failed_outcome(state: _SessionState, code: str) -> ProtocolOutcome:
         provider_calls_completed=state.provider_calls_completed,
         actions_requested=state.actions_requested,
         actions_denied=state.actions_denied,
+        behavior_output_observed=state.behavior_output_observed,
     )
 
 

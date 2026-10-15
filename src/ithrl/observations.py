@@ -19,7 +19,12 @@ from filelock import Timeout
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from ithrl.context import content_digest
-from ithrl.experiment import MAX_SAMPLING_ATTEMPTS, SampledReductionPlan, SamplingArmTarget
+from ithrl.experiment import (
+    MAX_SAMPLING_ATTEMPTS,
+    SampledReductionPlan,
+    SamplingArmTarget,
+    SamplingEligibilityPolicy,
+)
 from ithrl.path_safety import UnsafePathError, private_file_lock
 from ithrl.runner.evidence import AttemptEvidence
 
@@ -145,6 +150,13 @@ class Observation(BaseModel):
             raise ValueError("runner errors require incomplete attempt evidence")
         if self.valid and not completed:
             raise ValueError("behavior outcomes require completed attempt evidence")
+        if self.attempt_evidence.overload_replacement_safe and (
+            self.outcome is not ObservationOutcome.RUNNER_ERROR
+            or self.error_category != "provider-overloaded"
+        ):
+            raise ValueError(
+                "overload replacement evidence requires the structured overload category"
+            )
         return self
 
     @property
@@ -175,6 +187,21 @@ class Observation(BaseModel):
         if self.outcome is ObservationOutcome.NO_MATCH:
             return False
         return None
+
+    @property
+    def safe_provider_overload(self) -> bool:
+        return (
+            self.outcome is ObservationOutcome.RUNNER_ERROR
+            and self.error_category == "provider-overloaded"
+            and self.attempt_evidence.overload_replacement_safe
+        )
+
+    def allows_fresh_attempt(self, policy: SamplingEligibilityPolicy) -> bool:
+        """Apply the frozen policy; this never authorizes replaying an unresolved dispatch."""
+
+        return self.attempt_evidence.automatic_retry_safe or (
+            policy == "safe-provider-overload" and self.safe_provider_overload
+        )
 
 
 class AttemptCounts(BaseModel):
@@ -451,7 +478,10 @@ class SamplingBlockEvidence(_SamplingContract):
             if not self.plan.frozen_at <= observation.recorded_at < self.plan.expires_at:
                 return "stale-observation"
             if not observation.valid:
-                if not item.replaceable:
+                if not item.replaceable and not (
+                    self.plan.reduction.eligibility_policy == "safe-provider-overload"
+                    and observation.safe_provider_overload
+                ):
                     return "ineligible-exclusion"
                 continue
             accounting = observation.attempt_evidence.accounting
@@ -498,6 +528,7 @@ class SamplingBudgetAllowance(_SamplingContract):
     max_candidate_comparisons: Annotated[int, Field(ge=1, le=10_000)]
     confirmation_provider_calls: Annotated[int, Field(ge=1)]
     confirmation_runner_seconds: Annotated[int, Field(ge=1)]
+    inter_attempt_delay_seconds: Annotated[int, Field(ge=0, le=86_400)] = 0
     max_tokens: Annotated[int | None, Field(ge=1)] = None
     token_accounting: Literal["observed-or-estimated"] = "observed-or-estimated"
 

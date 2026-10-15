@@ -19,6 +19,8 @@ from typer._click import ClickException
 from typer._click.core import Exit
 from typer.core import TyperGroup
 
+from ithrl.experiment import SamplingEligibilityPolicy
+
 
 class ExitCode(IntEnum):
     SUCCESS = 0
@@ -114,6 +116,7 @@ class SampledOutput(_OutputEnvelope):
 
     kind: Literal["sampled"] = "sampled"
     command: Literal["shrink"] = "shrink"
+    eligibility_policy: SamplingEligibilityPolicy = "independent-safe-preaccept-only"
     status: Literal[
         "ready",
         "measurable",

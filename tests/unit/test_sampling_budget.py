@@ -49,6 +49,48 @@ def test_sampling_attempt_cost_includes_cancellation_grace() -> None:
     ) == SamplingAttemptCost(provider_calls=2, runner_seconds=10)
 
 
+@pytest.mark.parametrize(("seconds", "expected"), [(145, None), (144, "wall-time-budget")])
+def test_pacing_preserves_confirmation_wall_budget(seconds: int, expected: str | None) -> None:
+    allowance = _allowance(calls=14, seconds=seconds).model_copy(
+        update={"inter_attempt_delay_seconds": 15}
+    )
+    assert (
+        sampling_budget_refusal(
+            allowance=allowance,
+            charged_provider_calls=4,
+            elapsed_seconds=20,
+            remaining_attempts=3,
+            attempt_cost=SamplingAttemptCost(provider_calls=2, runner_seconds=10),
+            confirmation_attempts=2,
+            search_blocks=1,
+            role="search",
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize(("seconds", "expected"), [(70, None), (69, "wall-time-budget")])
+def test_paced_confirmation_charges_only_remaining_pauses(
+    seconds: int, expected: str | None
+) -> None:
+    allowance = _allowance(calls=8, seconds=seconds).model_copy(
+        update={"inter_attempt_delay_seconds": 15}
+    )
+    assert (
+        sampling_budget_refusal(
+            allowance=allowance,
+            charged_provider_calls=4,
+            elapsed_seconds=20,
+            remaining_attempts=2,
+            attempt_cost=SamplingAttemptCost(provider_calls=2, runner_seconds=10),
+            confirmation_attempts=2,
+            search_blocks=1,
+            role="confirmation",
+        )
+        == expected
+    )
+
+
 def test_search_budget_fits_exact_remaining_cost_and_protected_confirmation() -> None:
     cost = SamplingAttemptCost(provider_calls=2, runner_seconds=10)
 

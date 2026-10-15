@@ -95,7 +95,7 @@ required_context = True
 if MODE == "context-sensitive":
     with open(os.path.join(os.environ["COPILOT_HOME"], "fixture-context.json")) as source:
         required_context = json.load(source)
-if shell_action:
+if shell_action and MODE not in {"tool-free", "empty-final", "nonzero-final", "reasoning"}:
     request = {
         "toolCallId": "call-1",
         "name": "bash",
@@ -145,11 +145,13 @@ emit(
         "messageId": "message-1",
         "apiCallId": "api-call-1",
         "model": model,
-        "content": "Fixture complete." if required_context else "Fixture does not match.",
+        "content": "" if MODE == "empty-final" else "Fixture complete." if required_context and MODE != "reasoning" else "Fixture does not match.",
         "toolRequests": [],
         "turnId": turn_id,
     },
 )
+if MODE == "reasoning":
+    emit("assistant.reasoning", {"content": "Private fixture timeline.", "reasoningId": "reasoning-1", "rte": True})
 emit("assistant.turn_end", {"turnId": turn_id})
 emit("assistant.idle", {}, ephemeral=True)
 result = {
@@ -165,6 +167,8 @@ result = {
     },
 }
 print(json.dumps(result, separators=(",", ":")), flush=True)
+if MODE == "nonzero-final":
+    raise SystemExit(5)
 if MODE == "continued":
     emit("session.info", {"private": "continued-private-output"})
 """

@@ -38,6 +38,7 @@ from ithrl.run_state import (
     SamplingBudgetApproval,
 )
 from ithrl.runner import (
+    NativeOutputReference,
     PreparedAttempt,
     ProviderAcceptanceState,
     RunAccounting,
@@ -76,6 +77,7 @@ class SequenceRunner:
                 "provider_calls_per_attempt": 1,
                 "provider": _PROVIDER,
                 "endpoint": _ENDPOINT,
+                "protected_state_enforcement": "preventive",
             }
         )
 
@@ -87,11 +89,30 @@ class SequenceRunner:
         self.calls.append(attempt)
         outcome = self.outcomes[len(self.calls) - 1]
         if isinstance(outcome, RunnerErrorCode):
+            overload = outcome is RunnerErrorCode.PROVIDER_OVERLOADED
             raise RunnerError(
                 outcome,
                 "sanitized synthetic runner failure",
-                provider_acceptance_state=ProviderAcceptanceState.NOT_STARTED,
-                accounting=RunAccounting(),
+                provider_acceptance_state=(
+                    ProviderAcceptanceState.UNKNOWN
+                    if overload
+                    else ProviderAcceptanceState.NOT_STARTED
+                ),
+                accounting=RunAccounting(
+                    provider_calls_started=int(overload),
+                    native_output_bytes=100 if overload else 0,
+                    process_outcome="exited" if overload else "not-started",
+                    cleanup_outcome="verified" if overload else "not-required",
+                ),
+                native_output=NativeOutputReference(
+                    artifact_id="synthetic-overload",
+                    sha256="a" * 64,
+                    media_type="application/json",
+                    size_bytes=100,
+                )
+                if overload
+                else None,
+                behavior_output_observed=not overload,
                 model_requested=attempt.execution_plan.model_requested,
                 provider=_PROVIDER,
                 endpoint=_ENDPOINT,
@@ -141,6 +162,10 @@ def _prepared(
     required_valid: int = 1,
     max_attempts: int = 2,
     freshness_seconds: int = 600,
+    eligibility_policy: Literal[
+        "independent-safe-preaccept-only", "safe-provider-overload"
+    ] = "independent-safe-preaccept-only",
+    calibration_max_attempts: int = 1,
 ) -> tuple[CaseEvidence, PreparedExperiment, SequenceRunner, tuple[str, ...]]:
     extracted = extract_inference(
         FIXTURE,
@@ -161,6 +186,7 @@ def _prepared(
         ),
         margin=0.2,
         freshness_seconds=freshness_seconds,
+        eligibility_policy=eligibility_policy,
     )
     experiment = SampledExperimentDefinition(
         schema_version=1,
@@ -169,7 +195,9 @@ def _prepared(
         runner=NativeRunnerConfig(
             type="codex", required_capability_digest=runner.capability_profile.digest
         ),
-        calibration=SampledCalibrationPhase(required_valid=1, minimum_matches=1, max_attempts=1),
+        calibration=SampledCalibrationPhase(
+            required_valid=1, minimum_matches=1, max_attempts=calibration_max_attempts
+        ),
         reduction=reduction,
     )
     case = CaseEvidence(
@@ -204,6 +232,8 @@ def _run_state(
     max_tokens: int | None = None,
     store: ObservationStore | None = None,
     calibration_observation_ids: tuple[str, ...] = (),
+    inter_attempt_delay_seconds: int = 0,
+    max_wall_time_seconds: int = 120,
 ) -> tuple[SampledRunStateFile, ObservationStore]:
     store = store or ObservationStore(tmp_path / "private" / "observations.sqlite")
     store.initialize()
@@ -218,7 +248,14 @@ def _run_state(
         approval=SamplingBudgetApproval(
             approval_id="initial-approval",
             approved_at=now,
-            allowance=_allowance(max_provider_calls=max_provider_calls, max_tokens=max_tokens),
+            allowance=_allowance(
+                max_provider_calls=max_provider_calls, max_tokens=max_tokens
+            ).model_copy(
+                update={
+                    "inter_attempt_delay_seconds": inter_attempt_delay_seconds,
+                    "max_wall_time_seconds": max_wall_time_seconds,
+                }
+            ),
         ),
         calibration_observation_ids=calibration_observation_ids,
     )
@@ -480,6 +517,107 @@ def test_safe_preaccept_failure_without_verifier_refuses_replacement(tmp_path: P
     assert result.evidence.attempts[0].independence_evidence_digest is None
 
 
+@pytest.mark.parametrize("role", ["search", "confirmation"])
+@pytest.mark.parametrize("seed", [3, 9])
+@pytest.mark.parametrize("policy", ["independent-safe-preaccept-only", "safe-provider-overload"])
+def test_overload_replacement_is_frozen_bounded_and_keeps_unknown_charge(
+    tmp_path: Path,
+    role: Literal["search", "confirmation"],
+    seed: int,
+    policy: Literal["independent-safe-preaccept-only", "safe-provider-overload"],
+) -> None:
+    now = datetime.now(UTC)
+    case, prepared, runner, removed = _prepared(
+        tmp_path,
+        outcomes=(RunnerErrorCode.PROVIDER_OVERLOADED, True, True),
+        eligibility_policy=policy,
+    )
+    state_file, store = _run_state(tmp_path, case, prepared, now=now)
+    plan = _plan(
+        case, prepared, removed, now=now, required_valid=1, max_attempts=2, seed=seed, role=role
+    )
+    clock = MutableClock(now)
+    result = asyncio.run(_collect(case, prepared, removed, plan, state_file, store, clock))
+    excluded = result.evidence.attempts[0]
+    assert excluded.observation.safe_provider_overload
+    assert excluded.independence_evidence_digest is None
+    assert not excluded.observation.attempt_evidence.retry_safe
+    if policy == "independent-safe-preaccept-only":
+        assert result.stop_reason == "ineligible-exclusion"
+        assert len(runner.calls) == 1
+        assert not result.complete
+    else:
+        assert result.complete
+        assert result.evidence.eligible
+        assert len(runner.calls) == 3
+        assert len(set(result.evidence.attempt_ids)) == 3
+        assert result.evidence.original_counts.valid == result.evidence.candidate_counts.valid == 1
+        assert result.usage.actual_provider_calls == 3
+        assert result.usage.possible_provider_calls == 0
+        assert excluded.observation.attempt_evidence.acceptance_unknown
+        assert excluded.observation.attempt_evidence.provider_calls_possible == 1
+        assert result.usage.charged_provider_calls == 3
+        assert result.usage.unknown_token_attempts == 1
+        resumed = asyncio.run(_collect(case, prepared, removed, plan, state_file, store, clock))
+        assert resumed == result
+        assert len(runner.calls) == 3
+
+
+def test_overload_replacements_exhaust_existing_arm_slots(tmp_path: Path) -> None:
+    now = datetime.now(UTC)
+    case, prepared, runner, removed = _prepared(
+        tmp_path,
+        outcomes=(RunnerErrorCode.PROVIDER_OVERLOADED,) * 4,
+        eligibility_policy="safe-provider-overload",
+    )
+    state_file, store = _run_state(tmp_path, case, prepared, now=now)
+    plan = _plan(case, prepared, removed, now=now, required_valid=1, max_attempts=2, seed=3)
+    result = asyncio.run(
+        _collect(case, prepared, removed, plan, state_file, store, MutableClock(now))
+    )
+    assert result.stop_reason == "attempt-limit"
+    assert result.evidence.eligible
+    assert not result.complete
+    assert len(runner.calls) == 4
+    assert result.usage.charged_provider_calls == 4
+    assert result.evidence.original_counts.valid == result.evidence.candidate_counts.valid == 0
+
+
+@pytest.mark.parametrize("policy", ["independent-safe-preaccept-only", "safe-provider-overload"])
+def test_calibration_overload_policy_is_preserved_in_snapshot(
+    tmp_path: Path,
+    policy: Literal["independent-safe-preaccept-only", "safe-provider-overload"],
+) -> None:
+    from ithrl.calibration import run_sampled_calibration, save_sampled_calibration_result
+    from ithrl.case import CaseWorkspace
+
+    case, prepared, runner, _ = _prepared(
+        tmp_path,
+        outcomes=(RunnerErrorCode.PROVIDER_OVERLOADED, True),
+        eligibility_policy=policy,
+        calibration_max_attempts=2,
+    )
+    store = ObservationStore(tmp_path / "calibration.sqlite")
+    result = run_sampled_calibration(evidence=case, prepared=prepared, store=store)
+    if policy == "safe-provider-overload":
+        assert result.outcome == "measurable"
+        assert result.valid_samples == result.matches == 1
+        assert len(runner.calls) == 2
+    else:
+        assert result.stop_reason == "unsafe-retry"
+        assert len(runner.calls) == 1
+    snapshot = save_sampled_calibration_result(
+        workspace=CaseWorkspace(tmp_path / "case"),
+        evidence=case,
+        prepared=prepared,
+        store=store,
+        result=result,
+    )
+    assert snapshot.summary.runner_errors == 1
+    assert snapshot.summary.provider_calls_possible == 1
+    assert run_sampled_calibration(evidence=case, prepared=prepared, store=store) == result
+
+
 def test_completed_search_starts_fresh_confirmation_then_refuses_a_second_block(
     tmp_path: Path,
 ) -> None:
@@ -582,6 +720,96 @@ def test_clock_overrun_stops_before_next_dispatch(
     assert result.stop_reason == "wall-time-exhausted"
     assert len(runner.calls) == 1
     assert len(result.evidence.attempts) == 1
+
+
+def test_pacing_waits_before_dispatch_and_counts_elapsed_wall_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = datetime.now(UTC)
+    case, prepared, runner, removed = _prepared(
+        tmp_path, outcomes=(True,) * 4, required_valid=2, max_attempts=2
+    )
+    state_file, store = _run_state(
+        tmp_path,
+        case,
+        prepared,
+        now=now,
+        inter_attempt_delay_seconds=15,
+        max_wall_time_seconds=300,
+    )
+    plan = _plan(case, prepared, removed, now=now, required_valid=2, max_attempts=2, seed=4)
+    clock = MutableClock(now)
+    pauses: list[float] = []
+
+    async def wait(seconds: float) -> None:
+        # No reservation is published for an attempt which is still waiting.
+        assert state_file.load(store).pending is None
+        pauses.append(seconds)
+        clock.advance(int(seconds))
+
+    monkeypatch.setattr(sampling_module.asyncio, "sleep", wait)
+    result = asyncio.run(_collect(case, prepared, removed, plan, state_file, store, clock))
+    assert result.complete
+    assert len(runner.calls) == 4
+    assert pauses == [15, 15, 15]
+    assert result.usage.wall_time_seconds == 45
+
+
+def test_interrupted_pause_resumes_after_elapsed_delay_without_replay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = datetime.now(UTC)
+    case, prepared, runner, removed = _prepared(tmp_path, outcomes=(True,) * 2, max_attempts=1)
+    state_file, store = _run_state(
+        tmp_path,
+        case,
+        prepared,
+        now=now,
+        inter_attempt_delay_seconds=15,
+        max_wall_time_seconds=300,
+    )
+    plan = _plan(case, prepared, removed, now=now, required_valid=1, max_attempts=1, seed=2)
+    clock = MutableClock(now)
+
+    async def interrupt(_seconds: float) -> None:
+        assert state_file.load(store).pending is None
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(sampling_module.asyncio, "sleep", interrupt)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(_collect(case, prepared, removed, plan, state_file, store, clock))
+    assert len(runner.calls) == 1
+    clock.advance(15)
+    # The same interruption hook would fail if resume slept again unnecessarily.
+    result = asyncio.run(_collect(case, prepared, removed, plan, state_file, store, clock))
+    assert result.complete
+    assert len(runner.calls) == 2
+
+
+def test_wait_overrun_rechecks_budget_before_dispatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = datetime.now(UTC)
+    case, prepared, runner, removed = _prepared(tmp_path, outcomes=(True,) * 2, max_attempts=1)
+    state_file, store = _run_state(
+        tmp_path,
+        case,
+        prepared,
+        now=now,
+        inter_attempt_delay_seconds=15,
+    )
+    plan = _plan(case, prepared, removed, now=now, required_valid=1, max_attempts=1, seed=2)
+    clock = MutableClock(now)
+
+    async def overrun(_seconds: float) -> None:
+        clock.advance(121)
+
+    monkeypatch.setattr(sampling_module.asyncio, "sleep", overrun)
+    result = asyncio.run(_collect(case, prepared, removed, plan, state_file, store, clock))
+    assert result.stop_reason == "wall-time-budget"
+    assert len(runner.calls) == 1
+    with state_file.acquire_lock(store):
+        assert state_file.load(store).pending is None
 
 
 def test_frozen_candidate_mismatch_refuses_before_dispatch(tmp_path: Path) -> None:

@@ -21,6 +21,7 @@ SUPPORTED_EVENTS = frozenset(
     {
         "assistant.idle",
         "assistant.message",
+        "assistant.reasoning",
         "assistant.turn_end",
         "assistant.turn_start",
         "assistant.usage",

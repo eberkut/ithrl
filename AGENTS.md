@@ -25,11 +25,16 @@ links. Do not present planned commands or compatibility as implemented.
   eligible fresh confirmation of the durably selected candidate against the immutable original.
   Keep confirmation observations separate from calibration and search; never resume search after
   final selection. Errors do not count as behavioral losses or enter Bernoulli denominators.
-  Exclusions require verified outcome independence.
+  Preaccept exclusions require verified outcome independence. The opt-in `safe-provider-overload`
+  policy permits a fresh sample after a structured overload with no captured output and verified
+  safety/cleanup; retain the failed observation, unknown acceptance and full call charge. Its
+  valid-only inference assumes independent, stationary attempts with prespecified validity.
 - Admit complete sampling blocks while preserving the confirmation budget. Persist dispatch
   reservations before execution and reconcile recorded observations on resume. Never redispatch
   an unresolved attempt or repeat completed confirmation. Keep actual, possible and pending
   provider calls distinct; unknown usage must remain explicit and conservatively charged.
+- Inter-attempt pacing is opt-in and defaults to zero. Preserve its delay across resume and
+  include future pauses in wall-time admission; wait before publishing a dispatch reservation.
 - `src/ithrl/runner/<harness>/` owns candidate reconstruction, disposable state, isolation,
   effective policy, native protocol handling, and normalization. The shared runtime owns bounded
   process and state lifecycles, not arbitrary filesystem or network sandboxing.

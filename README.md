@@ -18,14 +18,15 @@ context that would work, or the cause of the behavior.
 | Input | `extract` | `shrink` |
 | --- | --- | --- |
 | Included synthetic trace format | Yes | Yes, with the deterministic local runner |
-| Codex CLI rollout JSONL | Yes | No |
-| Copilot CLI event schema `1` | Yes | No |
+| Codex CLI rollout JSONL | Yes | Experimental final-response reduction; see below |
+| Copilot CLI event schema `1` | Yes | Experimental final-response and denied shell-action reduction; see below |
 
 `extract` can discover the default Codex and Copilot session stores or read an explicit session
 file. It does not start the coding agent, contact a provider, execute a tool, or change the saved
-session. Native-session reduction remains unavailable. Bounded full-context calibration is
-implemented for developer validation through the separately approved opt-in smoke tests below;
-it does not search for a smaller context or establish a 1-minimal result.
+session. Experimental native reduction requires an explicit sampled experiment, local capability
+checks and automatic original-context calibration. Its tested scope, configuration and execution
+boundaries are described below. The opt-in smoke tests exercise bounded full-context calibration
+separately from reduction.
 
 The synthetic workflow covers extraction and reduction without provider credentials or network
 access. Its deterministic runner does not execute tool calls.
@@ -141,6 +142,126 @@ responses and recognized `bash` or `shell` requests.
 A native case contains the exact saved-session bytes, separate decision metadata, and an index of
 context records and their dependencies.
 
+## Experimental native sampled reduction
+
+The validated profiles are Codex `0.162.1` final response and Copilot `1.0.95` final response or
+visible-but-denied native `bash` action, using recorded model `gpt-6.1-sol`. Qualification used
+harmless four-history-group cases of approximately 10k locally estimated context tokens. Each
+profile removed 75% of editable history bytes and completed fresh confirmation with 100 matching
+observations per arm. These are bounded workload results; arbitrary-session success rates,
+100k contexts, token savings and monetary cost remain unqualified.
+
+The workflow screens candidates against fresh original samples, freezes one selected candidate,
+then compares it with the immutable original using separate fresh observations. A confirmed result
+estimates behavior preservation among valid observations. Errors stay outside behavioral
+denominators and execution reliability is reported separately. Inference assumes independent
+valid observations and stationarity within each comparison. Search-sweep evidence and final
+preservation are separate claims; sampled confirmation does not establish global or confirmed
+minimality, causality, or campaign-wide confidence.
+
+Prerequisites are a supported installed harness, Linux/Bubblewrap isolation prerequisites for the
+current profiles, existing local harness authentication, an extracted case and the original
+workspace to protect. Model/provider selection comes from captured evidence and the supported
+local harness configuration. No `--model` override is provided. Keep experiment files, observation
+stores and results private; use a dedicated private directory (mode `0700` on POSIX) outside
+the case and original workspace for the observation store.
+
+1. Obtain approval for local structural discovery, then inspect the current profile without a
+   provider call. Native `--dry-run` can start bounded, network-denied local harness probes;
+   it does not start a model turn. Use the returned `capability_digest` in the experiment below.
+
+   ```bash
+   uv run ithrl shrink CASE --original-workspace ORIGINAL \
+     --required-valid 3 --minimum-matches 2 --max-attempts 7 \
+     --attempt-timeout 120 --dry-run --format json
+   ```
+
+2. Create a separate private TOML experiment (mode `0600` on POSIX). Copy `[target]` and `[oracle]` from
+   `CASE/experiments/default.toml`, preserving the behavior predicates and protected IDs. Combine
+   those tables with the following Codex configuration; replace `APPROVED_DIGEST` with the digest
+   from discovery. This is user configuration; leave the extracted case and internal JSON/SQLite
+   state unchanged.
+
+   ```toml
+   schema_version = 1
+   kind = "sampled"
+
+   [runner]
+   type = "codex"
+   required_capability_digest = "APPROVED_DIGEST"
+
+   [calibration]
+   required_valid = 3
+   minimum_matches = 2
+   max_attempts = 7
+
+   [reduction]
+   margin = 0.20
+   freshness_seconds = 86400
+   baseline_policy = "strict-fresh-original"
+   eligibility_policy = "safe-provider-overload"
+
+   [reduction.search.original]
+   required_valid = 4
+   max_attempts = 8
+
+   [reduction.search.candidate]
+   required_valid = 5
+   max_attempts = 9
+
+   [reduction.confirmation]
+   one_sided_confidence = 0.95
+
+   [reduction.confirmation.original]
+   required_valid = 100
+   max_attempts = 124
+
+   [reduction.confirmation.candidate]
+   required_valid = 100
+   max_attempts = 124
+   ```
+
+   For Copilot, use `runner.type = "copilot"`, its target-specific capability digest, and
+   `eligibility_policy = "independent-safe-preaccept-only"`. Keep the extracted target unchanged.
+   The Codex overload policy permits a fresh bounded attempt only for a verified structured
+   overload without captured output and with unchanged protected state and verified cleanup.
+   It retains the failed observation, unknown acceptance and full call charge. Its valid-only
+   interpretation assumes independent, stationary attempts with prespecified validity.
+
+   This starting plan permits a **20-percentage-point decrease** in valid-observation match
+   probability, with nominal 95% one-sided Newcombe method 10 confirmation. Choose the margin
+   deliberately; changing sample counts or the margin requires reconsidering usefulness and
+   the complete budget together. These settings are explicit configuration, not automatic defaults.
+
+3. Preflight the complete plan and inspect its exact provider, model, destination, safety policy
+   and budgets before approving provider execution:
+
+   ```bash
+   uv run ithrl shrink CASE --experiment PRIVATE_EXPERIMENT \
+     --original-workspace ORIGINAL --observation-store PRIVATE_STORE \
+     --max-candidates 14 --max-provider-calls 493 --max-wall-time 86400 \
+     --attempt-timeout 120 --inter-attempt-delay 15 --dry-run --format json
+   ```
+
+   For Copilot, omit `--inter-attempt-delay 15`; shell-action profiles require
+   `--max-provider-calls 986`. The complete plan protects up to 248 confirmation attempts within
+   493 total attempt slots. Copilot shell conservatively allows two provider calls per attempt.
+   Returned actions are observed and denied, never executed; tool-side network, hosted tools and
+   MCP remain forbidden. These profiles refuse an unenforceable hard input-token limit.
+
+4. After approving the displayed limits, use the complete-plan preflight's `next_command`, which
+   includes `--acknowledge-model-execution`. Calibration, search and fresh confirmation run within
+   that allowance. Successful qualification commands took about 1h41m for paced Codex and
+   36–37 minutes for Copilot. The 24-hour limit is a conservative administrative ceiling, not a
+   duration estimate. Subscription quota is not predictable from these call limits.
+
+Inspect the printed private result and `summary.json`. They report calibration/search/confirmation,
+eligibility, reliability, known usage and actual/possible/pending/charged provider calls. Copilot
+token usage remains unavailable, and denied shell actions may leave possible continuation calls;
+unknown usage is never reported as zero consumption. Follow the printed continuation to resume
+an incomplete run with its frozen experiment and pacing. Administrative budgets may increase;
+completed confirmation is never repeated and unresolved dispatch is never automatically replayed.
+
 ## Data and privacy
 
 Cases can contain prompts, source code, command output, paths, and other sensitive data. Never
@@ -179,7 +300,7 @@ requests. Packaging checks may download build and runtime dependencies.
 
 ### Credential-free sampled CLI walkthrough
 
-The sampled CLI integration is under development. Its operator walkthrough uses a mock runner
+The credential-free sampled CLI walkthrough uses a mock runner
 through the real calibration, search, fresh confirmation, observation store and private result
 paths:
 
@@ -190,7 +311,9 @@ uv run pytest -o addopts= tests/integration/test_sampled_cli.py -q
 The walkthrough exercises `shrink --experiment` with a private TOML plan, `--dry-run`, explicit
 `--max-provider-calls` and `--max-wall-time`, acknowledgement, human/JSON output, and `--resume`
 from an active run or saved result. Resumption preserves the statistical plan and completed
-confirmation; administrative limits may increase. Test sample sizes are fixture settings.
+confirmation; administrative limits may increase. Optional `--inter-attempt-delay SECONDS`
+defaults to zero, persists across resume and consumes the overall wall-time allowance.
+Test sample sizes are fixture settings.
 
 The mock-native integration suite runs Codex final-response and Copilot final-response and
 visible-but-denied shell-action profiles through isolated mock harness processes:
@@ -204,8 +327,8 @@ immutable inputs, action denial, cleanup, accounting and budget refusal without 
 The operator walkthrough also covers interrupted dispatch, private session metadata and result
 publication, including exact resume without repeating completed confirmation.
 
-Native sampled reduction still requires its profile-specific live and usefulness gates; the
-availability table above is unchanged.
+The experimental native profiles and their measured limits are described above. Mock tests alone
+do not establish native experimental support.
 
 ### Opt-in native smoke tests
 

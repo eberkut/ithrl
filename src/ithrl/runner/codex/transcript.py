@@ -71,8 +71,11 @@ def _outcome_from_document(document: dict[str, object]) -> ProtocolOutcome:
         "actions_requested",
         "actions_denied",
     }
-    if set(document) != expected:
+    if set(document) not in (expected, expected | {"behavior_output_observed"}):
         raise ValueError("unexpected summary fields")
+    output_observed = document.get("behavior_output_observed", True)
+    if type(output_observed) is not bool:
+        raise ValueError("output visibility must be a boolean")
     status = document["status"]
     acceptance = document["provider_acceptance"]
     if status not in {"completed", "error"} or acceptance not in {
@@ -93,6 +96,7 @@ def _outcome_from_document(document: dict[str, object]) -> ProtocolOutcome:
         provider_calls_completed=_count(document["provider_calls_completed"]),
         actions_requested=_count(document["actions_requested"]),
         actions_denied=_count(document["actions_denied"]),
+        behavior_output_observed=output_observed,
     )
 
 

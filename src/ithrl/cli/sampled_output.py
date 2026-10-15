@@ -15,6 +15,7 @@ from ithrl.cli.output import (
     console,
     print_plain,
 )
+from ithrl.experiment import SamplingEligibilityPolicy
 from ithrl.observations import SamplingArmCounts
 
 type ReductionStatus = Literal[
@@ -38,6 +39,8 @@ type Assumption = Literal[
     "stationary-within-comparison",
     "valid-only-does-not-estimate-execution-reliability",
     "no-campaign-wide-error-guarantee",
+    "independent-stationary-attempts-with-prespecified-validity",
+    "overload-replacement-estimates-behavior-conditional-on-validity",
 ]
 
 _ASSUMPTIONS: tuple[Assumption, ...] = (
@@ -93,6 +96,7 @@ class SampledReductionOutput(BaseModel):
     max_provider_calls: int = Field(ge=0)
     max_runner_seconds: float = Field(ge=0, allow_inf_nan=False)
     max_wall_time_seconds: float = Field(ge=0, allow_inf_nan=False)
+    inter_attempt_delay_seconds: int = Field(default=0, ge=0, le=86_400)
     max_candidate_comparisons: int = Field(ge=0)
     candidate_capacity: int = Field(ge=0)
     minimum_provider_calls: int = Field(ge=0)
@@ -116,6 +120,7 @@ class SampledReductionOutput(BaseModel):
     freshness_seconds: int | None = Field(default=None, ge=1)
     baseline_policy: Literal["strict-fresh-original"] = "strict-fresh-original"
     estimand: Literal["valid-only"] = "valid-only"
+    eligibility_policy: SamplingEligibilityPolicy = "independent-safe-preaccept-only"
     confirmation_method: Literal["newcombe-method-10"] = "newcombe-method-10"
     margin: float = Field(ge=0, lt=1, allow_inf_nan=False)
     one_sided_confidence: float = Field(gt=0.5, lt=1, allow_inf_nan=False)
@@ -143,6 +148,7 @@ class SampledReductionOutput(BaseModel):
     pending_provider_calls: int = Field(default=0, ge=0)
     charged_provider_calls: int = Field(default=0, ge=0)
     unknown_provider_attempts: int = Field(default=0, ge=0)
+    unknown_acceptance_attempts: int = Field(default=0, ge=0)
     attempts_used: int = Field(default=0, ge=0)
     runner_seconds: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     unknown_runner_attempts: int = Field(default=0, ge=0)
@@ -401,6 +407,7 @@ def render_sampled_reduction(
             ("maximum provider calls", report.max_provider_calls),
             ("maximum runner seconds", report.max_runner_seconds),
             ("maximum wall seconds", report.max_wall_time_seconds),
+            ("inter-attempt delay seconds", report.inter_attempt_delay_seconds),
             ("freshness seconds", report.freshness_seconds),
             ("maximum tokens", report.max_tokens),
             ("attempt timeout seconds", report.attempt_timeout_seconds),
@@ -435,6 +442,7 @@ def render_sampled_reduction(
             ("wall seconds", report.wall_time_seconds),
             ("known tokens", report.known_tokens),
             ("unknown token attempts", report.unknown_token_attempts),
+            ("unknown provider acceptance attempts", report.unknown_acceptance_attempts),
             ("matches", report.matches),
             ("no matches", report.no_matches),
             ("invalid observations", report.invalid_observations),
@@ -448,6 +456,7 @@ def render_sampled_reduction(
             )
         for assumption in report.assumptions:
             print_plain(console, f"  assumption: {assumption}", soft_wrap=True)
+    print_plain(console, f"Eligibility policy: {report.eligibility_policy}", soft_wrap=True)
     for label, value in (
         ("stop reason", report.stop_reason),
         ("private result", report.result_path),

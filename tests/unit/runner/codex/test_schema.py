@@ -32,9 +32,10 @@ def _write(path: Path, document: dict[str, Any]) -> None:
 
 
 def test_schema_and_protocol_notification_contracts_match() -> None:
-    # Passive account/status/warning messages are optional on older servers.
+    # Account/status/warning and terminal error messages are optional on older servers.
     assert (
-        _NOTIFICATION_METHODS | {"account/updated", "remoteControl/status/changed", "warning"}
+        _NOTIFICATION_METHODS
+        | {"account/updated", "error", "remoteControl/status/changed", "warning"}
         == SUPPORTED_NOTIFICATION_METHODS
     )
 

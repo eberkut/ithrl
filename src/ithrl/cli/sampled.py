@@ -262,7 +262,7 @@ def _calibration_report(
         status in {"incomplete", "interrupted"}
         and summary.observations_recorded < preflight.max_attempts
         and all(
-            item.valid or item.attempt_evidence.automatic_retry_safe for item in result.observations
+            item.allows_fresh_attempt(preflight.eligibility_policy) for item in result.observations
         )
     )
     report_data = preflight.model_dump(mode="python")
@@ -354,6 +354,11 @@ def _preflight_report(
         next_shell = None
     return SampledOutput(
         status="ready",
+        eligibility_policy=(
+            experiment.reduction.eligibility_policy
+            if experiment.reduction is not None
+            else "independent-safe-preaccept-only"
+        ),
         harness_started=harness_started,
         plan_digest=plan.digest,
         capability_digest=capability.digest,

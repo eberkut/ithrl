@@ -440,17 +440,17 @@ def _outcome_error(
     report: RuntimeReport,
     native_output: NativeOutputReference,
 ) -> RunnerError:
-    code = (
-        RunnerErrorCode.SAFETY
-        if outcome.error_code
-        in {
-            "action-requested",
-            "remote-control-active",
-            "unintercepted-action",
-            "unsupported-server-request",
-        }
-        else RunnerErrorCode.PROTOCOL
-    )
+    if outcome.error_code == "provider-overloaded":
+        code = RunnerErrorCode.PROVIDER_OVERLOADED
+    elif outcome.error_code in {
+        "action-requested",
+        "remote-control-active",
+        "unintercepted-action",
+        "unsupported-server-request",
+    }:
+        code = RunnerErrorCode.SAFETY
+    else:
+        code = RunnerErrorCode.PROTOCOL
     acceptance = ProviderAcceptanceState(outcome.provider_acceptance)
     return RunnerError(
         code,
@@ -465,6 +465,7 @@ def _outcome_error(
         accounting=_accounting(report, outcome),
         native_output=native_output,
         effective_policy_digest=attempt.safety_policy.digest,
+        behavior_output_observed=outcome.behavior_output_observed,
     )
 
 

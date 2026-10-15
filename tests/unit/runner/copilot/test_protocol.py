@@ -7,14 +7,17 @@ from typing import Any
 
 import pytest
 
+from ithrl.behavior import MAX_BEHAVIOR_TEXT_LENGTH
 from ithrl.runner.contracts import TokenUsage, ToolCall
 from ithrl.runner.copilot.protocol import (
     MAX_OUTPUT_LINE_BYTES,
     CopilotProtocolError,
     CopilotProtocolOutcome,
+    ExpectedOutcome,
     is_denied_tool_completion,
     parse_output,
 )
+from ithrl.runner.copilot.protocol.contracts import MAX_ID_LENGTH
 
 TURN_ID = "turn-fixture"
 MODEL = "fixture-model"
@@ -140,16 +143,88 @@ def _jsonl(events: Iterable[object]) -> bytes:
     )
 
 
-def test_parse_final_response_proves_normal_completion() -> None:
-    outcome = parse_output(_jsonl(_final_events()), expected="final-response")
+@pytest.mark.parametrize("expected", ["final-response", "shell-action"])
+@pytest.mark.parametrize("text", [FINAL_TEXT, ""])
+def test_parse_tool_free_response_proves_normal_completion(
+    expected: ExpectedOutcome, text: str
+) -> None:
+    events = _final_events()
+    events[-4]["data"]["content"] = text
+
+    outcome = parse_output(_jsonl(events), expected=expected)
 
     assert outcome == CopilotProtocolOutcome(
         type="final-response",
         model_returned=MODEL,
         provider_calls_started=1,
         provider_calls_completed=1,
-        final_text=FINAL_TEXT,
+        final_text=text,
     )
+
+
+@pytest.mark.parametrize(
+    ("expected", "shell_request"),
+    [("final-response", False), ("shell-action", False), ("shell-action", True)],
+)
+@pytest.mark.parametrize("api_call_id", [None, "", "x" * 516], ids=["absent", "empty", "long"])
+def test_optional_api_call_id_preserves_outcome_and_accounting(
+    expected: ExpectedOutcome, shell_request: bool, api_call_id: str | None
+) -> None:
+    events = _shell_events() if shell_request else _final_events()
+    baseline = parse_output(_jsonl(events), expected=expected)
+    message = next(event["data"] for event in events if event["type"] == "assistant.message")
+    if api_call_id is None:
+        del message["apiCallId"]
+    else:
+        message["apiCallId"] = api_call_id
+
+    assert parse_output(_jsonl(events), expected=expected) == baseline
+
+
+@pytest.mark.parametrize("api_call_id", [None, 1, True, [], {"private": "fixture-value"}])
+def test_present_api_call_id_requires_a_string(api_call_id: object) -> None:
+    events = _shell_events()
+    events[-3]["data"]["apiCallId"] = api_call_id
+
+    with pytest.raises(CopilotProtocolError) as raised:
+        parse_output(_jsonl(events), expected="shell-action")
+
+    assert raised.value.code == "invalid-field"
+    assert "fixture-value" not in str(raised.value)
+
+
+def test_api_call_id_cannot_exceed_encoded_line_bound() -> None:
+    events = _shell_events()
+    events[-3]["data"]["apiCallId"] = "x" * MAX_OUTPUT_LINE_BYTES
+
+    with pytest.raises(CopilotProtocolError) as raised:
+        parse_output(_jsonl(events), expected="shell-action")
+
+    assert raised.value.code == "line-limit"
+
+
+@pytest.mark.parametrize(
+    "missing_type", ["model.call_finished", "tool.execution_complete", "assistant.turn_end"]
+)
+def test_long_api_call_id_cannot_supply_completion_or_denial(missing_type: str) -> None:
+    events = _shell_events() if missing_type == "tool.execution_complete" else _final_events()
+    message = next(event["data"] for event in events if event["type"] == "assistant.message")
+    message["apiCallId"] = "x" * 516
+    events = [event for event in events if event["type"] != missing_type]
+
+    with pytest.raises(CopilotProtocolError):
+        parse_output(_jsonl(events), expected="shell-action")
+
+
+def test_long_api_call_id_cannot_allow_action_execution() -> None:
+    events = _shell_events()
+    events[-3]["data"]["apiCallId"] = "x" * 516
+    events[-1]["data"]["success"] = True
+
+    with pytest.raises(CopilotProtocolError) as raised:
+        parse_output(_jsonl(events), expected="shell-action")
+
+    assert raised.value.code == "action-not-denied"
 
 
 def test_parse_final_response_preserves_reported_token_usage() -> None:
@@ -167,6 +242,161 @@ def test_parse_final_response_preserves_reported_token_usage() -> None:
         output_tokens=12,
         cached_input_tokens=40,
     )
+
+
+@pytest.mark.parametrize(
+    ("expected", "shell_request"),
+    [("final-response", False), ("shell-action", False), ("shell-action", True)],
+)
+@pytest.mark.parametrize("after_message", [False, True])
+@pytest.mark.parametrize("content", ["Private fixture timeline.", ""])
+def test_optional_reasoning_does_not_change_proved_outcome_or_accounting(
+    expected: ExpectedOutcome, shell_request: bool, after_message: bool, content: str
+) -> None:
+    events = _shell_events() if shell_request else _final_events()
+    baseline = parse_output(_jsonl(events), expected=expected)
+    message_index = next(
+        index for index, event in enumerate(events) if event["type"] == "assistant.message"
+    )
+    events.insert(
+        message_index + int(after_message),
+        _event(
+            "assistant.reasoning",
+            {"content": content, "reasoningId": "reasoning-fixture", "rte": False},
+        ),
+    )
+
+    assert parse_output(_jsonl(events), expected=expected) == baseline
+
+
+@pytest.mark.parametrize("identity", [{}, {"model": MODEL, "turnId": TURN_ID}])
+def test_reasoning_identity_fields_are_optional_and_matching_when_present(identity: Event) -> None:
+    events = _final_events()
+    baseline = parse_output(_jsonl(events), expected="final-response")
+    events.insert(
+        -3,
+        _event(
+            "assistant.reasoning", {"content": "", "reasoningId": "reasoning-fixture", **identity}
+        ),
+    )
+
+    assert parse_output(_jsonl(events), expected="final-response") == baseline
+
+
+@pytest.mark.parametrize(
+    ("placement", "code"),
+    [
+        ("before-call", "invalid-sequence"),
+        ("after-turn-end", "invalid-sequence"),
+        ("after-result", "continued-after-result"),
+        ("after-denial", "continued-after-denial"),
+    ],
+)
+def test_reasoning_requires_active_selected_call(placement: str, code: str) -> None:
+    events = _shell_events() if placement == "after-denial" else _final_events()
+    reasoning = _event("assistant.reasoning", {"content": "", "reasoningId": "reasoning-fixture"})
+    if placement == "before-call":
+        index = next(
+            index for index, event in enumerate(events) if event["type"] == "model.call_start"
+        )
+        events.insert(index, reasoning)
+    elif placement == "after-turn-end":
+        events.insert(-2, reasoning)
+    else:
+        events.append(reasoning)
+
+    with pytest.raises(CopilotProtocolError) as raised:
+        parse_output(_jsonl(events), expected="shell-action")
+
+    assert raised.value.code == code
+
+
+def test_reasoning_from_subagent_is_rejected() -> None:
+    events = _final_events()
+    reasoning = _event("assistant.reasoning", {"content": "", "reasoningId": "reasoning-fixture"})
+    reasoning["agentId"] = "subagent-fixture"
+    events.insert(-3, reasoning)
+
+    with pytest.raises(CopilotProtocolError) as raised:
+        parse_output(_jsonl(events), expected="final-response")
+
+    assert raised.value.code == "subagent-event"
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"reasoningId": "reasoning-fixture"},
+        {"content": ""},
+        {"content": None, "reasoningId": "reasoning-fixture"},
+        {"content": "", "reasoningId": ""},
+        {"content": "", "reasoningId": MAX_ID_LENGTH},
+    ],
+)
+def test_reasoning_requires_bounded_content_and_identifier(fields: Event) -> None:
+    events = _final_events()
+    events.insert(-3, _event("assistant.reasoning", fields))
+
+    with pytest.raises(CopilotProtocolError) as raised:
+        parse_output(_jsonl(events), expected="final-response")
+
+    assert raised.value.code == "invalid-field"
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"content": "", "reasoningId": "x" * (MAX_ID_LENGTH + 1)},
+        {"content": "x" * (MAX_BEHAVIOR_TEXT_LENGTH + 1), "reasoningId": "reasoning-fixture"},
+    ],
+)
+def test_opaque_reasoning_fields_use_existing_encoded_line_bound(fields: Event) -> None:
+    events = _final_events()
+    baseline = parse_output(_jsonl(events), expected="final-response")
+    events.insert(-3, _event("assistant.reasoning", fields))
+
+    assert parse_output(_jsonl(events), expected="final-response") == baseline
+
+
+@pytest.mark.parametrize(
+    ("identity", "code"),
+    [
+        ({"model": "different-model"}, "model-mismatch"),
+        ({"turnId": "different-turn"}, "turn-mismatch"),
+        ({"model": None}, "invalid-field"),
+        ({"turnId": None}, "invalid-field"),
+    ],
+)
+def test_reasoning_cannot_override_selected_identity(identity: Event, code: str) -> None:
+    events = _final_events()
+    events.insert(
+        -3,
+        _event(
+            "assistant.reasoning", {"content": "", "reasoningId": "reasoning-fixture", **identity}
+        ),
+    )
+
+    with pytest.raises(CopilotProtocolError) as raised:
+        parse_output(_jsonl(events), expected="final-response")
+
+    assert raised.value.code == code
+
+
+@pytest.mark.parametrize(
+    "missing_type",
+    ["model.call_finished", "assistant.message", "assistant.turn_end", "assistant.idle", "result"],
+)
+def test_reasoning_cannot_supply_missing_completion_evidence(missing_type: str) -> None:
+    events = _final_events()
+    events.insert(
+        -3, _event("assistant.reasoning", {"content": "", "reasoningId": "reasoning-fixture"})
+    )
+    events = [event for event in events if event["type"] != missing_type]
+
+    with pytest.raises(CopilotProtocolError) as raised:
+        parse_output(_jsonl(events), expected="shell-action")
+
+    assert raised.value.code in {"invalid-sequence", "incomplete-final-response"}
 
 
 @pytest.mark.parametrize("usage", [None, {"model": MODEL, "inputTokens": 100, "outputTokens": 12}])
@@ -314,12 +544,13 @@ def test_oversized_line_fails_closed() -> None:
     assert raised.value.code in {"line-limit", "output-limit"}
 
 
-def test_boolean_result_exit_code_is_not_zero() -> None:
+@pytest.mark.parametrize("expected", ["final-response", "shell-action"])
+def test_boolean_result_exit_code_is_not_zero(expected: ExpectedOutcome) -> None:
     events = _final_events()
     events[-1]["exitCode"] = False
 
     with pytest.raises(CopilotProtocolError) as raised:
-        parse_output(_jsonl(events), expected="final-response")
+        parse_output(_jsonl(events), expected=expected)
 
     assert raised.value.code == "invalid-result"
 
@@ -333,6 +564,33 @@ def test_multiple_tool_requests_are_ambiguous() -> None:
         parse_output(_jsonl(events), expected="shell-action")
 
     assert raised.value.code == "ambiguous-action"
+
+
+@pytest.mark.parametrize("tool_event", [-2, -1])
+def test_tool_evidence_after_tool_free_message_is_rejected(tool_event: int) -> None:
+    events = _final_events()
+    events.insert(-3, _shell_events()[tool_event])
+
+    with pytest.raises(CopilotProtocolError) as raised:
+        parse_output(_jsonl(events), expected="shell-action")
+
+    assert raised.value.code == "invalid-sequence"
+
+
+def test_requested_shell_action_cannot_finish_as_tool_free_response() -> None:
+    events = [*_shell_events()[:-2], *_final_events()[-3:]]
+
+    with pytest.raises(CopilotProtocolError) as raised:
+        parse_output(_jsonl(events), expected="shell-action")
+
+    assert raised.value.code == "invalid-sequence"
+
+
+def test_final_response_profile_still_rejects_requested_shell_action() -> None:
+    with pytest.raises(CopilotProtocolError) as raised:
+        parse_output(_jsonl(_shell_events()), expected="final-response")
+
+    assert raised.value.code == "unexpected-action"
 
 
 @pytest.mark.parametrize(
@@ -427,21 +685,27 @@ def test_multiple_continuation_turns_after_denial_are_rejected() -> None:
 
 
 @pytest.mark.parametrize("missing_type", ["model.call_start", "model.call_finished"])
-def test_missing_provider_call_evidence_is_rejected(missing_type: str) -> None:
+@pytest.mark.parametrize("expected", ["final-response", "shell-action"])
+def test_missing_provider_call_evidence_is_rejected(
+    missing_type: str, expected: ExpectedOutcome
+) -> None:
     events = [event for event in _final_events() if event["type"] != missing_type]
 
     with pytest.raises(CopilotProtocolError) as raised:
-        parse_output(_jsonl(events), expected="final-response")
+        parse_output(_jsonl(events), expected=expected)
 
     assert raised.value.code in {"invalid-sequence", "missing-provider-evidence"}
 
 
 @pytest.mark.parametrize("missing_type", ["assistant.turn_end", "assistant.idle", "result"])
-def test_final_response_requires_normal_turn_and_process_completion(missing_type: str) -> None:
+@pytest.mark.parametrize("expected", ["final-response", "shell-action"])
+def test_tool_free_response_requires_normal_turn_and_process_completion(
+    missing_type: str, expected: ExpectedOutcome
+) -> None:
     events = [event for event in _final_events() if event["type"] != missing_type]
 
     with pytest.raises(CopilotProtocolError) as raised:
-        parse_output(_jsonl(events), expected="final-response")
+        parse_output(_jsonl(events), expected=expected)
 
     assert raised.value.code in {"invalid-sequence", "incomplete-final-response"}
 

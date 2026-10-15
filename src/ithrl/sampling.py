@@ -54,6 +54,30 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
+def sampling_pacing_delay(state: SampledRunState, store: ObservationStore, now: datetime) -> float:
+    """Remaining pause since the last owned observation, including time spent offline."""
+
+    delay = state.allowance.inter_attempt_delay_seconds
+    if not delay:
+        return 0.0
+    reference = next(
+        (
+            block.observations[-1].observation_id
+            for block in reversed(state.blocks)
+            if block.observations
+        ),
+        state.calibration_observation_ids[-1] if state.calibration_observation_ids else None,
+    )
+    if reference is None:
+        return 0.0
+    observation = store.get(reference)
+    if observation is None:
+        raise ValueError("pacing requires the last owned observation")
+    if now < observation.recorded_at:
+        raise ValueError("sampling clock precedes recorded progress")
+    return max(0.0, delay - (now - observation.recorded_at).total_seconds())
+
+
 async def collect_sampling_block(
     *,
     evidence: CaseEvidence,
@@ -70,7 +94,9 @@ async def collect_sampling_block(
 
     The trusted verifier must establish that a specific safe preaccept failure is independent
     of the potential behavioral outcome, then return its private evidence digest. Error labels
-    and digests alone do not establish independence. With no verifier, exclusions are refused.
+    and digests alone do not establish independence. Without a verifier, preaccept exclusions
+    are refused. The frozen opt-in overload policy instead requires its validated safety proof
+    and scopes inference to valid observations under independent, stationary attempt draws.
     Recorded attempts are reconciled before continuation; an unresolved dispatch is never
     replayed. Callers own selection and statistical classification in later workflow layers.
 
@@ -203,8 +229,14 @@ async def _collect_sampling_block_owned(
             role=ObservationRole(plan.role),
             arm=ObservationArm(arm),
         )
-        if any(not item.attempt_evidence.automatic_retry_safe for item in previous):
+        if any(
+            not item.allows_fresh_attempt(plan.reduction.eligibility_policy) for item in previous
+        ):
             return SamplingCollectionResult(block, usage, "unsafe-prior-attempt")
+        delay = sampling_pacing_delay(state, store, clock())
+        if delay:
+            # Wait before publishing any reservation. Cancellation leaves no dispatch to replay.
+            await asyncio.sleep(delay)
         attempt = _attempt(evidence, prepared, partition, plan, arm)
         # Preparation is outside the runner deadline; include its elapsed time before
         # publishing a dispatch. Synchronous publication itself has no hard time bound.
@@ -238,7 +270,11 @@ async def _collect_sampling_block_owned(
         interrupted = False
         try:
             observation = await observe_once(
-                runner=prepared.runner, identity=prepared.identity, store=store, attempt=attempt
+                runner=prepared.runner,
+                identity=prepared.identity,
+                store=store,
+                attempt=attempt,
+                eligibility_policy=plan.reduction.eligibility_policy,
             )
         except RunnerExecutionError as error:
             if error.observation is None:
@@ -327,7 +363,8 @@ def _budget_reason(
     active: bool,
 ) -> str | None:
     elapsed = state.started_at + timedelta(seconds=usage.wall_time_seconds)
-    if elapsed + timedelta(seconds=remaining * cost.runner_seconds) >= plan.expires_at:
+    future_seconds = remaining * (cost.runner_seconds + state.allowance.inter_attempt_delay_seconds)
+    if elapsed + timedelta(seconds=future_seconds) >= plan.expires_at:
         return "freshness-budget"
     confirmation = plan.reduction.confirmation
     return sampling_budget_refusal(

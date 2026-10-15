@@ -390,6 +390,7 @@ def test_budget_extension_keeps_frozen_plans_start_consumption_and_reservation(
         {"max_tokens": 9999},
         {"confirmation_provider_calls": 13},
         {"confirmation_runner_seconds": 61},
+        {"inter_attempt_delay_seconds": 15},
         {"run_id": "another-run"},
     ],
 )

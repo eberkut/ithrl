@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 from collections.abc import Iterable
+from dataclasses import asdict
 from typing import Any
 
 import pytest
@@ -104,6 +105,41 @@ def _final_item(text: str = FINAL_TEXT) -> Message:
             },
         },
     }
+
+
+def _native_error(*, will_retry: bool = False, error_info: object = None) -> Message:
+    return {
+        "method": "error",
+        "params": {
+            "threadId": THREAD_ID,
+            "turnId": TURN_ID,
+            "error": {
+                "message": "Synthetic private error message.",
+                "codexErrorInfo": error_info,
+                "additionalDetails": "Synthetic private error details.",
+            },
+            "willRetry": will_retry,
+        },
+    }
+
+
+@pytest.mark.parametrize("will_retry", [False, True])
+@pytest.mark.parametrize("output", [False, True])
+def test_structured_overload_tracks_output_and_native_retry(will_retry: bool, output: bool) -> None:
+    before = [_final_item()] if output else []
+    outcome, client, audit = _run(
+        [
+            *_prefix(),
+            *before,
+            _native_error(will_retry=will_retry, error_info="serverOverloaded"),
+        ]
+    )
+    assert outcome.error_code == ("native-error" if will_retry else "provider-overloaded")
+    assert outcome.behavior_output_observed is output
+    assert outcome.provider_calls_started == 1
+    assert outcome.provider_calls_completed == 0
+    assert len([m for m in client if m["method"] == "turn/start"]) == 1
+    assert parse_transcript(_server_bytes(audit)) == outcome
 
 
 def _turn_completed(*, items: list[Message] | None = None, status: str = "completed") -> Message:
@@ -319,6 +355,142 @@ def test_unknown_notification_fails_closed() -> None:
 
     assert outcome.status == "error"
     assert outcome.error_code == "unsupported-notification"
+
+
+@pytest.mark.parametrize(
+    "error_info",
+    [
+        None,
+        "usageLimitExceeded",
+        {"responseTooManyFailedAttempts": {"httpStatusCode": 429}},
+        {"httpConnectionFailed": {"httpStatusCode": 503}},
+    ],
+)
+@pytest.mark.parametrize("will_retry", [False, True])
+@pytest.mark.parametrize("reported_usage", [False, True])
+def test_native_error_is_terminal_without_retry_or_metadata_disclosure(
+    error_info: object,
+    will_retry: bool,
+    reported_usage: bool,
+) -> None:
+    notification = _native_error(will_retry=will_retry, error_info=error_info)
+    before_error = [_usage()] if reported_usage else []
+    outcome, client, audit = _run(
+        [*_prefix(), *before_error, _final_item(), notification, _usage(), _turn_completed()]
+    )
+
+    assert outcome == ProtocolOutcome(
+        status="error",
+        error_code="native-error",
+        final_text=None,
+        model_returned=MODEL,
+        service_tier="standard",
+        usage=ProtocolUsage(100, 25, 10) if reported_usage else None,
+        provider_acceptance="accepted",
+        provider_calls_started=1,
+        provider_calls_completed=0,
+        actions_requested=0,
+        actions_denied=0,
+    )
+    assert [message["method"] for message in client] == [
+        "initialize",
+        "initialized",
+        "thread/start",
+        "turn/start",
+    ]
+    assert audit[-2] == {"kind": "server", "value": notification}
+    assert parse_transcript(_server_bytes(audit)) == outcome
+    for private_text in (
+        "Synthetic private error message.",
+        "Synthetic private error details.",
+        FINAL_TEXT,
+    ):
+        assert private_text not in json.dumps(audit[-1])
+        assert private_text not in repr(outcome)
+
+
+@pytest.mark.parametrize("will_retry", [False, True])
+@pytest.mark.parametrize("acceptance", ["accepted", "unknown"])
+def test_native_error_raises_static_diagnostic_without_state_mutation(
+    will_retry: bool,
+    acceptance: protocol.ProviderAcceptance,
+) -> None:
+    state = protocol._SessionState(
+        thread_id=THREAD_ID,
+        turn_id=TURN_ID,
+        usage=ProtocolUsage(100, 25, 10),
+        provider_acceptance=acceptance,
+        provider_calls_started=1,
+        actions_requested=1,
+        actions_denied=1,
+        final_messages={"fixture-message": ("final_answer", FINAL_TEXT)},
+    )
+    before = asdict(state)
+    with pytest.raises(
+        CodexProtocolError, match=r"^Codex app-server reported a native error$"
+    ) as error:
+        protocol._validate_notification(
+            "error", _native_error(will_retry=will_retry)["params"], state
+        )
+
+    assert error.value.code == "native-error"
+    assert "Synthetic private error" not in repr(error.value)
+    assert asdict(state) == before
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "code"),
+    [
+        ("threadId", "other-thread", "identity-mismatch"),
+        ("threadId", None, "identity-mismatch"),
+        ("turnId", "other-turn", "identity-mismatch"),
+        ("turnId", True, "identity-mismatch"),
+        ("error", None, "invalid-message"),
+        ("error", [], "invalid-message"),
+        ("error", {}, "invalid-message"),
+        ("error", {"message": None}, "invalid-message"),
+        ("error", {"message": ""}, "invalid-message"),
+        ("error", {"message": True}, "invalid-message"),
+        ("willRetry", None, "invalid-message"),
+        ("willRetry", 0, "invalid-message"),
+        ("willRetry", 1, "invalid-message"),
+        ("willRetry", "true", "invalid-message"),
+    ],
+)
+def test_native_error_requires_valid_identity_error_and_boolean_retry(
+    field: str,
+    value: object,
+    code: str,
+) -> None:
+    notification = _native_error()
+    notification["params"][field] = value
+    outcome, _, _ = _run([*_prefix(), notification, _usage(), _final_item(), _turn_completed()])
+
+    assert outcome.status == "error"
+    assert outcome.error_code == code
+    assert outcome.final_text is None
+    assert outcome.provider_calls_completed == 0
+
+
+@pytest.mark.parametrize("field", ["threadId", "turnId", "error", "willRetry"])
+def test_native_error_requires_all_control_fields(field: str) -> None:
+    notification = _native_error()
+    del notification["params"][field]
+    outcome, _, _ = _run([*_prefix(), notification])
+
+    assert outcome.error_code == (
+        "identity-mismatch" if field in {"threadId", "turnId"} else "invalid-message"
+    )
+    assert outcome.provider_calls_completed == 0
+
+
+@pytest.mark.parametrize("prefix_length", [1, 3])
+def test_native_error_cannot_establish_thread_or_turn_identity(prefix_length: int) -> None:
+    outcome, _, _ = _run([*_prefix()[:prefix_length], _native_error()])
+
+    assert outcome.error_code == "identity-mismatch"
+    assert outcome.provider_acceptance in {"not-started", "unknown"}
+    assert outcome.provider_calls_completed == 0
 
 
 def test_thread_warning_is_informational_and_preserved_only_in_the_audit() -> None:
