@@ -16,6 +16,7 @@ dist/
 *.egg-info/
 
 # Local configuration and secrets
+/.local/
 .env
 .env.*
 !.env.example

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 import sys
 import tarfile
@@ -120,48 +121,8 @@ RUNTIME_MODULES = frozenset(
     }
 )
 
-SYNTHETIC_TRACE = {
-    "schema_version": 1,
-    "trace_schema": "ithrl.synthetic.v1",
-    "inferences": [
-        {
-            "inference_call_id": "packaging-smoke-001",
-            "captured_at": "2026-01-01T00:00:00+00:00",
-            "provider": "fake",
-            "endpoint": "local",
-            "request": {
-                "model": "fake-deterministic-v1",
-                "input": [
-                    {"role": "user", "content": "A"},
-                    {"role": "user", "content": "B"},
-                    {"role": "user", "content": "C"},
-                ],
-                "tools": [
-                    {
-                        "type": "function",
-                        "name": "exec_command",
-                        "description": "Return a command decision without executing it.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {"cmd": {"type": "string"}},
-                            "required": ["cmd"],
-                            "additionalProperties": False,
-                        },
-                    }
-                ],
-                "store": False,
-            },
-            "response": {
-                "model_returned": "fake-deterministic-v1",
-                "tool_calls": [{"name": "exec_command", "arguments": {"cmd": "true"}}],
-            },
-            "fake_behavior": {
-                "tool_name": "exec_command",
-                "required_markers": ["A", "C"],
-            },
-        }
-    ],
-}
+RUNTIME_ASSETS = frozenset({PurePosixPath("ithrl/examples/synthetic-trace.json")})
+PUBLIC_DOCS = frozenset(PurePosixPath("docs", name) for name in ("native-runs.md", "results.md"))
 
 
 @pytest.fixture(scope="module")
@@ -195,6 +156,9 @@ def test_wheel_contains_only_runtime_package_and_metadata(
     roots = {member.parts[0] for member in members}
 
     assert packaged_modules == RUNTIME_MODULES
+    assert {member for member in members if member.parts[0] == "ithrl"} == (
+        RUNTIME_MODULES | RUNTIME_ASSETS
+    )
     assert "ithrl" in roots
     assert len(roots) == 2
     assert any(root.endswith(".dist-info") for root in roots)
@@ -202,6 +166,21 @@ def test_wheel_contains_only_runtime_package_and_metadata(
     assert any(member.name == "LICENSE" for member in members)
     project = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     assert _wheel_version(wheel) == project["project"]["version"]
+    with zipfile.ZipFile(wheel) as archive:
+        metadata_path = next(
+            name for name in archive.namelist() if name.endswith(".dist-info/METADATA")
+        )
+        metadata = BytesParser().parsebytes(archive.read(metadata_path))
+    assert metadata["Summary"] == project["project"]["description"]
+    assert metadata["Requires-Python"] == ">=3.12"
+    assert metadata["License-Expression"] == "Apache-2.0"
+    assert metadata["Description-Content-Type"] == "text/markdown"
+    assert metadata["Author"] == "Vincent Morel"
+    assert metadata["Author-email"] is None
+    assert set(metadata.get_all("Classifier", [])) == set(project["project"]["classifiers"])
+    assert set(metadata.get_all("Project-URL", [])) == {
+        f"{label}, {url}" for label, url in project["project"]["urls"].items()
+    }
     _assert_no_private_or_checkout_content(members)
 
 
@@ -218,21 +197,28 @@ def test_sdist_contains_all_inputs_needed_to_rebuild_the_wheel(
     assert {
         PurePosixPath("LICENSE"),
         PurePosixPath("README.md"),
+        PurePosixPath("CONTRIBUTING.md"),
         PurePosixPath("pyproject.toml"),
     } <= set(relative_members)
+    assert {member for member in relative_members if member.parts[0] == "docs"} == PUBLIC_DOCS
     packaged_sources = {
         member
         for member in relative_members
         if member.parts[:2] == ("src", "ithrl") and member.suffix == ".py"
     }
     assert packaged_sources == expected_files
+    assert {member for member in relative_members if member.parts[:2] == ("src", "ithrl")} == (
+        expected_files | {PurePosixPath("src", asset) for asset in RUNTIME_ASSETS}
+    )
     assert {member.parts[0] for member in relative_members if member.parts} <= {
         ".gitignore",
         "LICENSE",
         "PKG-INFO",
         "README.md",
+        "CONTRIBUTING.md",
         "pyproject.toml",
         "src",
+        "docs",
     }
     _assert_no_private_or_checkout_content(relative_members)
 
@@ -281,8 +267,6 @@ def _assert_installed_workflow(wheel: Path, tmp_path: Path, expected_version: st
 
     runtime = tmp_path / "runtime"
     runtime.mkdir()
-    trace = runtime / "trace.json"
-    trace.write_text(json.dumps(SYNTHETIC_TRACE), encoding="utf-8")
     case = runtime / "case"
     child_environment = {
         name: os.environ[name]
@@ -303,23 +287,54 @@ def _assert_installed_workflow(wheel: Path, tmp_path: Path, expected_version: st
     }
     child_environment["NO_COLOR"] = "1"
     child_environment["XDG_DATA_HOME"] = str(runtime / "data")
+    child_environment["HOME"] = str(runtime / "home")
 
     help_result = _run(str(executable), "--help", cwd=runtime, env=child_environment)
     assert "Test how agent context affects a model decision" in help_result.stdout
     version_result = _run(str(executable), "--version", cwd=runtime, env=child_environment)
     assert version_result.stdout == f"ithrl {expected_version}\n"
+    extract_help = _run(str(executable), "extract", "--help", cwd=runtime, env=child_environment)
+    assert "--example" in extract_help.stdout
+    completion = _run(
+        str(executable),
+        cwd=runtime,
+        env=child_environment | {"_ITHRL_COMPLETE": "source_zsh"},
+    )
+    assert "#compdef ithrl" in completion.stdout
     extract_result = _run(
         str(executable),
         "extract",
-        str(trace),
-        "--inference",
-        "packaging-smoke-001",
+        "--example",
         "--output",
         str(case),
         cwd=runtime,
         env=child_environment,
     )
     assert "No network requests or provider calls" in extract_result.stdout
+    repeated = _run(
+        str(executable),
+        "extract",
+        "--example",
+        "--output",
+        str(case),
+        "--format",
+        "json",
+        cwd=runtime,
+        env=child_environment,
+        expected_exits=(2,),
+    )
+    assert json.loads(repeated.stdout)["error_code"] == "case-exists"
+    dry_run = _run(
+        str(executable),
+        "shrink",
+        str(case),
+        "--dry-run",
+        "--format",
+        "json",
+        cwd=runtime,
+        env=child_environment,
+    )
+    assert json.loads(dry_run.stdout)["status"] == "ready"
     shrink_result = _run(
         str(executable),
         "shrink",
@@ -329,7 +344,53 @@ def _assert_installed_workflow(wheel: Path, tmp_path: Path, expected_version: st
     )
     assert "1-minimal; all valid single removals tested" in shrink_result.stdout
     assert "No network requests or provider calls" in shrink_result.stdout
-    assert list((case / "results").glob("*/summary.json"))
+    (summary_path,) = (case / "results").glob("*/summary.json")
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert summary["confirmation_result"] == "confirmed-preserving"
+    assert summary["provider_calls"] == summary["actions_executed"] == 0
+    request = json.loads((summary_path.parent / "request.json").read_text(encoding="utf-8"))
+    assert [item["content"] for item in request["input"]] == ["A", "C"]
+    _assert_installed_resume(executable, runtime, child_environment)
+
+
+def _assert_installed_resume(executable: Path, runtime: Path, environment: dict[str, str]) -> None:
+    case = runtime / "resume-case"
+    _run(
+        str(executable), "extract", "--example", "--output", str(case), cwd=runtime, env=environment
+    )
+    stopped = _run(
+        str(executable),
+        "shrink",
+        str(case),
+        "--max-candidates",
+        "1",
+        "--format",
+        "json",
+        cwd=runtime,
+        env=environment,
+        expected_exits=(6,),
+    )
+    report = json.loads(stopped.stdout)
+    assert report["status"] == "stopped"
+    for _ in range(7):
+        assert report["next_command_shell"] == "posix"
+        command = shlex.split(report["next_command"])
+        assert command[0] == "ithrl"
+        resumed = _run(
+            str(executable),
+            *command[1:],
+            "--format",
+            "json",
+            cwd=runtime,
+            env=environment,
+            expected_exits=(0, 6),
+        )
+        report = json.loads(resumed.stdout)
+        if report["status"] == "reduced":
+            break
+        assert report["status"] == "stopped"
+    assert report["status"] == "reduced"
+    assert report["confirmation_result"] == "confirmed-preserving"
 
 
 def _wheel_version(wheel: Path) -> str:
@@ -351,6 +412,7 @@ def _assert_no_private_or_checkout_content(members: tuple[PurePosixPath, ...]) -
         ".git",
         ".github",
         ".ithrl",
+        ".local",
         "__pycache__",
         "fixtures",
         "tests",
@@ -379,6 +441,7 @@ def _run(
     *command: str,
     cwd: Path,
     env: dict[str, str] | None = None,
+    expected_exits: tuple[int, ...] = (0,),
 ) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(  # noqa: S603 - every argument is controlled by this test module.
         command,
@@ -386,12 +449,12 @@ def _run(
         env=env,
         check=False,
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
+        capture_output=True,
     )
-    if result.returncode:
+    if result.returncode not in expected_exits:
         pytest.fail(
-            f"command failed with exit code {result.returncode}: {command!r}\n{result.stdout}",
+            f"command failed with exit code {result.returncode}: {command!r}\n"
+            f"{result.stdout}\n{result.stderr}",
             pytrace=False,
         )
     return result

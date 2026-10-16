@@ -51,6 +51,34 @@ def test_root_version_option_reports_the_installed_version() -> None:
     assert result.stderr == ""
 
 
+@pytest.mark.parametrize(
+    "selection",
+    [
+        [str(FIXTURE)],
+        ["--inference", INFERENCE_ID],
+        ["--harness", "codex"],
+        ["--session", "session-001"],
+        ["--decision", "decision-001"],
+        ["--target", "final-response"],
+    ],
+)
+def test_example_refuses_conflicting_selection_without_creating_a_case(
+    tmp_path: Path, selection: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("example extraction attempted native discovery")
+
+    monkeypatch.setattr(import_module("ithrl.cli.extract"), "discover_native_sessions", forbidden)
+    case = tmp_path / "case"
+    result = CliRunner().invoke(
+        app,
+        ["extract", "--example", *selection, "--output", str(case), "--format", "json"],
+    )
+    assert result.exit_code == ExitCode.USAGE, result.output
+    assert json.loads(result.stdout)["error_code"] == "conflicting-options"
+    assert not case.exists()
+
+
 def _extract(runner: CliRunner, case: Path, *, output_format: str = "human"):
     return runner.invoke(
         app,
@@ -1241,8 +1269,9 @@ def test_shrink_help_describes_the_default_resume_budget() -> None:
     assert "100 or twice the saved count, whichever is larger, capped at 10,000" in help_text
 
 
+@pytest.mark.parametrize("example", [False, True])
 def test_vertical_slice_cannot_open_network_connections_or_processes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, example: bool
 ) -> None:
     def forbidden(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("credential-free workflow attempted an external operation")
@@ -1252,7 +1281,11 @@ def test_vertical_slice_cannot_open_network_connections_or_processes(
     runner = CliRunner()
     case = tmp_path / "case"
 
-    extracted = _extract(runner, case, output_format="json")
+    extracted = (
+        runner.invoke(app, ["extract", "--example", "--output", str(case), "--format", "json"])
+        if example
+        else _extract(runner, case, output_format="json")
+    )
     reduced = runner.invoke(
         app,
         [

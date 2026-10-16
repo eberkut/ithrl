@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "ithrl"
 version = "0.0.0"
-description = "Differential debugging and fuzzing for agent context"
+description = "Find smaller agent contexts that preserve a selected model behavior"
 readme = "README.md"
 authors = [
   { name = "Vincent Morel" },
@@ -14,11 +14,10 @@ license = "Apache-2.0"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
 classifiers = [
-  "Development Status :: 2 - Pre-Alpha",
+  "Development Status :: 3 - Alpha",
   "Environment :: Console",
   "Intended Audience :: Developers",
-  "License :: OSI Approved :: Apache Software License",
-  "Operating System :: OS Independent",
+  "Operating System :: POSIX :: Linux",
   "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
@@ -33,6 +32,12 @@ dependencies = [
   "rich>=14",
   "typer>=0.16",
 ]
+
+[project.urls]
+Source = "https://github.com/eberkut/ithrl"
+Issues = "https://github.com/eberkut/ithrl/issues"
+Documentation = "https://github.com/eberkut/ithrl#readme"
+Changelog = "https://github.com/eberkut/ithrl/releases"
 
 [project.scripts]
 ithrl = "ithrl.cli:app"
@@ -56,6 +61,9 @@ dev = [
 include = [
   "/LICENSE",
   "/README.md",
+  "/docs/native-runs.md",
+  "/docs/results.md",
+  "/CONTRIBUTING.md",
   "/pyproject.toml",
   "/src",
 ]

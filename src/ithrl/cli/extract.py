@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 from contextlib import nullcontext
+from importlib.resources import as_file, files
 from pathlib import Path
 from typing import Literal
 from uuid import uuid4
@@ -53,9 +54,24 @@ def create_case_report(
     target: str | None,
     output: Path | None,
     output_format: OutputFormat,
+    example: bool = False,
 ) -> CommandOutput:
     """Select evidence and create a case without exposing captured content in the output."""
 
+    if example:
+        selectors = (source, inference, harness, session_id, decision_id, target)
+        if any(value is not None for value in selectors):
+            raise ExtractionSelectionError(
+                "conflicting-options",
+                "--example cannot be combined with a source or selection options",
+            )
+        with as_file(files("ithrl").joinpath("examples/synthetic-trace.json")) as example_source:
+            return _extract_synthetic(
+                source=example_source,
+                inference="synthetic-ac-001",
+                output=output,
+                output_format=output_format,
+            )
     selected_harness = _parse_harness(harness)
     mode, opened_session = _select_mode(
         source=source,

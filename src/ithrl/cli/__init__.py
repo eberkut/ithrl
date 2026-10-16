@@ -129,6 +129,12 @@ def extract(
             help="Saved native session or supported synthetic trace. Omit to discover sessions.",
         ),
     ] = None,
+    example: Annotated[
+        bool,
+        typer.Option(
+            "--example", help="Use the bundled deterministic example; no harness or provider calls."
+        ),
+    ] = False,
     inference: Annotated[
         str | None,
         typer.Option("--inference", help="Synthetic trace inference ID."),
@@ -167,6 +173,7 @@ def extract(
     try:
         report = create_case_report(
             source=source,
+            example=example,
             inference=inference,
             harness=harness,
             session_id=session,

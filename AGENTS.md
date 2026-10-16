@@ -3,7 +3,7 @@
 ## Purpose and source of truth
 
 `ithrl` extracts decision evidence from coding-agent sessions and tests context interventions
-through controlled runners. Treat the availability table in `README.md` as the current public
+through controlled runners. Treat the supported-inputs table in `README.md` as the current public
 capability claim. Runner code or a passing fixture alone does not establish supported experimental
 use; capability, isolation, calibration, and live-use gates must pass for the exact target profile.
 
@@ -90,9 +90,10 @@ ITHRL_DIST_DIR=dist uv run pytest -o addopts= tests/packaging
 For workflow or Dependabot changes, use the jactionlint release pinned in
 `.github/workflows/ci.yml`: `jactionlint --no-online --strict-exit`. Keep its network checks and
 automatic fixes opt-in. For dependency changes, run the locked-dependency audit documented in
-README on Python 3.12–3.14; it audits a hashed export from `uv.lock` without resolving a new plan.
-Keep audit tooling in the optional `audit` dependency group. Review vulnerability findings and
-fix applicable risks; any exclusion needs a specific advisory ID and a documented justification.
+`CONTRIBUTING.md` on Python 3.12–3.14; it audits a hashed export from `uv.lock` without resolving
+a new plan. Keep audit tooling in the optional `audit` dependency group. Review vulnerability
+findings and fix applicable risks; any exclusion needs a specific advisory ID and a documented
+justification.
 
 Start with focused tests for the changed contract and failure paths. Run broader checks when the
 change could affect shared contracts, security boundaries, supported Python versions, or package
