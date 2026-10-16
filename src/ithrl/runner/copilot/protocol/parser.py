@@ -5,8 +5,6 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import cast
 
-from pydantic import ValidationError
-
 from ithrl.behavior import MAX_BEHAVIOR_TEXT_LENGTH
 from ithrl.context import JsonObject
 from ithrl.runner.contracts import ToolCall
@@ -241,7 +239,7 @@ def _record_tool_request(state: ProtocolState, value: object) -> None:
         raise CopilotProtocolError("invalid-action", "Copilot returned invalid action arguments")
     try:
         tool_call = ToolCall(name=name, arguments=cast(JsonObject, arguments))
-    except (TypeError, ValueError, ValidationError):
+    except (TypeError, ValueError):
         raise CopilotProtocolError(
             "invalid-action", "Copilot returned invalid action arguments"
         ) from None

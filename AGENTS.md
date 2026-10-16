@@ -18,6 +18,16 @@ links. Do not present planned commands or compatibility as implemented.
 - Shared case, context, behavior, experiment, measurement, reduction, and result code stays
   independent of concrete harnesses. Keep native evidence, edit metadata, execution plans, and
   observations separate; do not introduce a universal agent-session representation.
+- `src/ithrl/runner/<harness>/` owns reconstruction, isolation, effective policy, native protocols
+  and normalization. The shared runtime owns bounded process/state lifecycles; it is not a general
+  filesystem or network sandbox.
+- Application workflow composes registered runners; `src/ithrl/cli/` handles selection and
+  presentation. Preserve public imports and versioned persisted contracts when moving code.
+- Preserve unknown native records without interpreting or editing them until adapter and runner
+  support is proven. Evidence support and experimental support are separate claims.
+
+## Experimental invariants
+
 - `src/ithrl/sampling.py` owns sequential frozen-block collection, whole-block admission, and
   durable dispatch reconciliation. Keep exploratory screening and candidate selection in the
   reduction layer; collection alone establishes neither preservation nor search completion.
@@ -35,18 +45,10 @@ links. Do not present planned commands or compatibility as implemented.
   provider calls distinct; unknown usage must remain explicit and conservatively charged.
 - Inter-attempt pacing is opt-in and defaults to zero. Preserve its delay across resume and
   include future pauses in wall-time admission; wait before publishing a dispatch reservation.
-- `src/ithrl/runner/<harness>/` owns candidate reconstruction, disposable state, isolation,
-  effective policy, native protocol handling, and normalization. The shared runtime owns bounded
-  process and state lifecycles, not arbitrary filesystem or network sandboxing.
 - Sampled search checks optional runner candidate admission before committing sampling resources.
   Admission must be pure: no harness, runtime probe or provider request. Validate the immutable
   original first; only candidate-local reconstruction refusals become invalid trials. Evidence,
   identity and unsupported-original failures remain terminal. Keep runtime validation at execution.
-- Application workflow composes registered runners; `src/ithrl/cli/` handles selection and
-  presentation. Preserve existing public imports and versioned persisted contracts when moving
-  responsibilities between modules.
-- Unknown native records remain preserved and frozen until a versioned adapter and runner prove
-  how to handle them. Evidence support and experimental support are separate claims.
 
 ## Safety and privacy
 
@@ -85,16 +87,39 @@ uv build --sdist --wheel --no-sources
 ITHRL_DIST_DIR=dist uv run pytest -o addopts= tests/packaging
 ```
 
+For workflow or Dependabot changes, use the jactionlint release pinned in
+`.github/workflows/ci.yml`: `jactionlint --no-online --strict-exit`. Keep its network checks and
+automatic fixes opt-in. For dependency changes, run the locked-dependency audit documented in
+README on Python 3.12–3.14; it audits a hashed export from `uv.lock` without resolving a new plan.
+Keep audit tooling in the optional `audit` dependency group. Review vulnerability findings and
+fix applicable risks; any exclusion needs a specific advisory ID and a documented justification.
+
 Start with focused tests for the changed contract and failure paths. Run broader checks when the
 change could affect shared contracts, security boundaries, supported Python versions, or package
 contents. Run Python 3.12, 3.13, and 3.14 suites sequentially if they share `.venv`; CI runs
-non-packaging tests for each version and packaging separately. Radon reports are review signals,
-not a reason to split cohesive safety code or add wrappers. Tests and fixtures must remain
+tests, dependency audits and installed-package checks for each version. Radon reports are review
+signals, not a reason to split cohesive safety code or add wrappers. Tests and fixtures must remain
 credential-free and sanitized by default.
 
+For a local matrix run, set `UV_PYTHON=VERSION` on every `uv` command. A one-off `uv sync --python`
+does not override `.python-version` for later `uv run` commands. Parallel runs need separate
+environments, test caches and coverage files.
+
 When adding or removing runtime modules, update the explicit `RUNTIME_MODULES` manifest in
-`tests/packaging/test_distribution.py` and verify both wheel contents and reconstruction from the
-sdist.
+`tests/packaging/test_distribution.py`. Verify archive contents and clean installation of both the
+built wheel and a wheel reconstructed from the sdist; compare CLI versions with artifact metadata.
+
+## CI and release boundaries
+
+Keep jobs that execute pull-request code read-only and provider-free. Pin external Actions to
+reviewed full commit SHAs with same-line release comments for dependency updates. Keep checkout
+credentials out of the workspace, bound jobs and artifact retention, and upload only intentional
+public outputs. Dependency-update PRs receive the same checks and review as other changes.
+
+Changes to triggers, permissions, caches, artifacts or OIDC require review of the complete trust
+path. Publishing authority belongs only in the explicitly approved workflow and protected
+environment. Verify source and artifact identity before promotion; preserve the same distribution
+bytes between release destinations. Never execute untrusted PR code with publishing credentials.
 
 ## Review and publication
 

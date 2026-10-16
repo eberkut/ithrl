@@ -5,7 +5,9 @@ import os
 import subprocess
 import sys
 import tarfile
+import tomllib
 import zipfile
+from email.parser import BytesParser
 from pathlib import Path, PurePosixPath
 
 import pytest
@@ -198,6 +200,8 @@ def test_wheel_contains_only_runtime_package_and_metadata(
     assert any(root.endswith(".dist-info") for root in roots)
     assert any(member.name == "entry_points.txt" for member in members)
     assert any(member.name == "LICENSE" for member in members)
+    project = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    assert _wheel_version(wheel) == project["project"]["version"]
     _assert_no_private_or_checkout_content(members)
 
 
@@ -233,10 +237,19 @@ def test_sdist_contains_all_inputs_needed_to_rebuild_the_wheel(
     _assert_no_private_or_checkout_content(relative_members)
 
 
-def test_clean_wheel_from_sdist_completes_credential_free_workflow(
-    distributions: tuple[Path, Path], tmp_path: Path
+@pytest.mark.parametrize("origin", ["wheel", "sdist"])
+def test_clean_install_completes_credential_free_workflow(
+    distributions: tuple[Path, Path], tmp_path: Path, origin: str
 ) -> None:
-    _, sdist = distributions
+    wheel, sdist = distributions
+    expected_version = _wheel_version(wheel)
+    if origin == "sdist":
+        wheel = _rebuild_wheel(sdist, tmp_path)
+        assert _wheel_version(wheel) == expected_version
+    _assert_installed_workflow(wheel, tmp_path, expected_version)
+
+
+def _rebuild_wheel(sdist: Path, tmp_path: Path) -> Path:
     source_parent = tmp_path / "source"
     source_parent.mkdir()
     with tarfile.open(sdist) as archive:
@@ -256,8 +269,10 @@ def test_clean_wheel_from_sdist_completes_credential_free_workflow(
         str(source_root),
         cwd=tmp_path,
     )
-    wheel = _one_distribution(rebuilt, "*.whl")
+    return _one_distribution(rebuilt, "*.whl")
 
+
+def _assert_installed_workflow(wheel: Path, tmp_path: Path, expected_version: str) -> None:
     environment = tmp_path / "environment"
     _run("uv", "venv", "--python", sys.executable, str(environment), cwd=tmp_path)
     executable = environment / ("Scripts/ithrl.exe" if os.name == "nt" else "bin/ithrl")
@@ -292,7 +307,7 @@ def test_clean_wheel_from_sdist_completes_credential_free_workflow(
     help_result = _run(str(executable), "--help", cwd=runtime, env=child_environment)
     assert "Test how agent context affects a model decision" in help_result.stdout
     version_result = _run(str(executable), "--version", cwd=runtime, env=child_environment)
-    assert version_result.stdout == "ithrl 0.0.0\n"
+    assert version_result.stdout == f"ithrl {expected_version}\n"
     extract_result = _run(
         str(executable),
         "extract",
@@ -315,6 +330,20 @@ def test_clean_wheel_from_sdist_completes_credential_free_workflow(
     assert "1-minimal; all valid single removals tested" in shrink_result.stdout
     assert "No network requests or provider calls" in shrink_result.stdout
     assert list((case / "results").glob("*/summary.json"))
+
+
+def _wheel_version(wheel: Path) -> str:
+    with zipfile.ZipFile(wheel) as archive:
+        metadata_paths = [
+            name for name in archive.namelist() if name.endswith(".dist-info/METADATA")
+        ]
+        assert len(metadata_paths) == 1
+        metadata = BytesParser().parsebytes(archive.read(metadata_paths[0]))
+    assert metadata["Name"] == "ithrl"
+    version = metadata["Version"]
+    assert isinstance(version, str)
+    assert version
+    return version
 
 
 def _assert_no_private_or_checkout_content(members: tuple[PurePosixPath, ...]) -> None:

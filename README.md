@@ -298,6 +298,43 @@ ITHRL_DIST_DIR=dist uv run pytest -o addopts= tests/packaging
 The non-packaging tests and synthetic walkthrough do not use provider credentials or make network
 requests. Packaging checks may download build and runtime dependencies.
 
+CI runs tests and installed-package checks on Python 3.12, 3.13 and 3.14. The package job builds
+one wheel and sdist pair; each Python version tests that wheel directly and rebuilds and tests a
+wheel from the sdist, outside the checkout. CLI version output must match the distribution metadata.
+
+### Workflow and dependency checks
+
+For GitHub Actions or Dependabot changes, install the
+[jactionlint release](https://github.com/jdx/jactionlint/releases) pinned in
+`.github/workflows/ci.yml`, then run:
+
+```bash
+jactionlint --no-online --strict-exit
+```
+
+CI uses its default correctness/security profile, with online lookups and automatic fixes disabled.
+
+Audit the resolved runtime, development and audit-tool dependencies from `uv.lock` with the same
+command used by CI. Run this in Bash, with the locked environment synchronized as above:
+
+```bash
+set -o pipefail
+uv export --locked --all-groups --no-emit-project --format requirements.txt |
+  uv run --locked --group audit pip-audit --strict --disable-pip --require-hashes -r /dev/stdin
+```
+
+The export is temporary pipeline input, not a second maintained dependency file. The audit queries
+PyPI's vulnerability service for package names and versions; it does not install the exported
+packages, resolve alternative versions or apply fixes. CI runs it on each supported Python version
+to evaluate environment markers. This covers the locked versions, not every version permitted by
+the package's dependency ranges.
+
+CI also runs weekly on Monday at 06:17 UTC to check the existing lockfile against new advisories.
+Dependabot checks Python dependencies, Actions and pre-commit hooks weekly, groups minor/patch
+version updates, and leaves major upgrades separately reviewable. Ordinary version updates have
+a seven-day cooldown; security updates are separate and have no cooldown. No update is automatically
+merged. Dependency-graph alert and review coverage must be verified separately from version updates.
+
 ### Credential-free sampled CLI walkthrough
 
 The credential-free sampled CLI walkthrough uses a mock runner

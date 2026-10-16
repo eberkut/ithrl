@@ -568,7 +568,9 @@ def test_interruption_after_final_observation_keeps_completed_classification(
     assert snapshot.summary.stop_reason == "valid-sample-limit"
 
 
-def test_concurrent_calibration_cannot_start_an_extra_attempt(tmp_path: Path) -> None:
+def test_concurrent_calibration_cannot_start_an_extra_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     case, prepared, runner = _prepared(
         tmp_path,
         outcomes=(True,),
@@ -587,7 +589,7 @@ def test_concurrent_calibration_cannot_start_an_extra_attempt(tmp_path: Path) ->
             raise RuntimeError("test runner was not released")
         return await original(attempt)
 
-    runner.run = blocking_run
+    monkeypatch.setattr(runner, "run", blocking_run)
     with ThreadPoolExecutor(max_workers=1) as pool:
         first = pool.submit(run_sampled_calibration, evidence=case, prepared=prepared, store=store)
         assert entered.wait(5)

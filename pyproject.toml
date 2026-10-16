@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling==1.32.0"]
+requires = ["hatchling==1.32.4"]
 build-backend = "hatchling.build"
 
 [project]
@@ -38,14 +38,17 @@ dependencies = [
 ithrl = "ithrl.cli:app"
 
 [dependency-groups]
+audit = [
+  "pip-audit==2.10.1",
+]
 dev = [
   "hypothesis>=6.138",
   "pre-commit>=4.3",
-  "pyrefly==1.2.0",
+  "pyrefly==1.4.0",
   "pytest>=9",
   "pytest-cov>=7",
   "radon==6.0.1",
-  "ruff==0.16.5",
+  "ruff==0.17.1",
   "types-jsonschema>=4.25",
 ]
 

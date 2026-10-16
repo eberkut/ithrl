@@ -64,10 +64,7 @@ from ithrl.reduce import (
 )
 from ithrl.results import ResultSnapshot, ResultSnapshotError
 from ithrl.run_state import RunStateBusyError, RunStateError, RunStateFile
-from ithrl.synthetic import (
-    InferenceSelectionError,
-    SyntheticTraceError,
-)
+from ithrl.synthetic import SyntheticTraceError
 from ithrl.workflow import (
     OraclePrerequisiteError,
     PreflightRefusedError,
@@ -198,7 +195,7 @@ def extract(
         fail(str(error), ExitCode.USAGE, output_format, "extract", "unsafe-case-path")
     except CaseFormatError as error:
         fail(str(error), ExitCode.USAGE, output_format, "extract", "invalid-case")
-    except (CaseError, SyntheticTraceError, InferenceSelectionError) as error:
+    except (CaseError, SyntheticTraceError) as error:
         fail(
             str(error),
             ExitCode.USAGE,
