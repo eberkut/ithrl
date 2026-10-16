@@ -108,6 +108,32 @@ jobs:
       - name: Run tests
         run: uv run pytest --ignore=tests/packaging
 
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.13.1"
+          python-version: "3.14"
+          enable-cache: true
+
+      - name: Synchronize locked environment
+        run: uv sync --locked --all-groups
+
+      - name: Check CLI reference, site boundaries and issue forms
+        run: uv run pytest -o addopts= tests/unit/test_documentation.py -q
+
+      - name: Build public documentation and check links
+        run: uv run --group docs mkdocs build --strict
+
   package:
     name: Package
     runs-on: ubuntu-latest

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a vulnerability privately
+    url: https://github.com/eberkut/ithrl/security/advisories/new
+    about: Do not disclose suspected vulnerabilities in public issues.
+  - name: Support and reporting guide
+    url: https://github.com/eberkut/ithrl/blob/main/SUPPORT.md
+    about: Choose the right report and check what is safe to share.

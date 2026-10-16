@@ -25,7 +25,8 @@ valid single-group removal from the final context was tested and none preserved 
 under the recorded runner, settings and budget. It does not establish the smallest possible
 context, a unique solution or a causal explanation of the decision.
 
-Useful options, using the private example directory created in the [quick start](../README.md#try-it):
+Useful options, using the private example directory created in the
+[quick start](https://github.com/eberkut/ithrl/blob/main/README.md#try-it):
 
 ```bash
 # Validate the plan without running it.

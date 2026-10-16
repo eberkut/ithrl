@@ -46,15 +46,20 @@ ithrl = "ithrl.cli:app"
 audit = [
   "pip-audit==2.10.1",
 ]
+docs = [
+  "mkdocs==1.6.1",
+]
 dev = [
   "hypothesis>=6.138",
   "pre-commit>=4.3",
   "pyrefly==1.4.0",
   "pytest>=9",
   "pytest-cov>=7",
+  "PyYAML>=6",
   "radon==6.0.1",
   "ruff==0.17.1",
   "types-jsonschema>=4.25",
+  "types-PyYAML>=6",
 ]
 
 [tool.hatch.build.targets.sdist]
@@ -63,6 +68,10 @@ include = [
   "/README.md",
   "/docs/native-runs.md",
   "/docs/results.md",
+  "/docs/index.md",
+  "/docs/cli.md",
+  "/docs/troubleshooting.md",
+  "/docs/measurements.md",
   "/CONTRIBUTING.md",
   "/pyproject.toml",
   "/src",

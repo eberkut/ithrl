@@ -144,19 +144,7 @@ recorded for reproducibility; there is no exact-release allowlist. After a harne
 change, rerun preflight and use its capability digest for a new experiment. A changed digest prevents
 reuse of an old pinned plan or incompatible saved run.
 
-The following measurements used harmless four-history-group cases of approximately 10k locally
-estimated context tokens and model `gpt-6.1-sol`:
-
-| Target | Measured harness version | Full-command time |
-| --- | --- | --- |
-| Codex final response | `0.162.1` | About 1h41m, with 15-second inter-attempt pacing |
-| Copilot final response | `1.0.95` | About 37 minutes |
-| Copilot visible-but-denied `bash` request | `1.0.95` | About 36 minutes |
-
-Each run removed 75% of editable history bytes and completed fresh confirmation with 100 matching
-observations per arm. The version column identifies those measurements; other releases go through
-the same local compatibility checks.
-
-Arbitrary-session success rates, 100k contexts, token savings and monetary cost have not been
-qualified. The example's 24-hour wall-time limit is a conservative administrative ceiling. It is
-not an estimate of run duration.
+The [measurements](measurements.md) record the benchmark construction, completed reductions,
+tested harness versions, confirmation results and costs. Other releases go through the same local
+compatibility checks. The example's 24-hour wall-time limit is an administrative ceiling;
+use the measured times to understand the completed workload's duration.

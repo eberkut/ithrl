@@ -76,6 +76,9 @@ records the tested configurations and how to check another release.
 - [Contributing](https://github.com/eberkut/ithrl/blob/main/CONTRIBUTING.md): issue-first collaboration,
   checkout setup, checks and smoke tests.
 
+For help, bugs or proposals, see [Support](https://github.com/eberkut/ithrl/blob/main/SUPPORT.md).
+Report vulnerabilities through [private reporting](https://github.com/eberkut/ithrl/security/advisories/new).
+
 ## Name
 
 Pronounce `ithrl` as **Ithuriel**, the angel whose spear reveals Satan in disguise in Milton's

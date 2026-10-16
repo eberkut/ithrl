@@ -77,6 +77,42 @@ and pre-commit dependencies weekly, groups minor/patch updates and leaves majors
 reviewable. Ordinary updates have a seven-day cooldown; security updates have none. Updates are
 never automatically merged. Hosted dependency-graph coverage is a separate verification gate.
 
+## Documentation
+
+README owns the quick start; `docs/` owns user guides and reference. Support, security and conduct
+policies live at the repository root. Keep private sessions, cases and planning records out of
+documentation and generated output.
+
+The optional `docs` dependency group pins MkDocs with its built-in theme and no third-party
+plugins. A local hook preserves the packaged theme assets under the source-file allowlist.
+To preview the site locally:
+
+```bash
+uv sync --locked --all-groups
+uv run --group docs mkdocs serve
+```
+
+`mkdocs.yml` admits only the named public files under `docs/`. When adding a page, update its
+navigation and file allowlist, the sdist include list in `pyproject.toml`, and the documentation
+manifests in the documentation and packaging tests. Never set `docs_dir` to the repository root.
+
+After changing CLI options or help, regenerate the committed reference with Typer:
+
+```bash
+uv run typer ithrl.cli utils docs --name ithrl --title 'CLI reference' --output docs/cli.md
+```
+
+Generation reads command metadata without invoking the commands. Verify reference drift,
+publication boundaries, issue forms, page links and anchors with:
+
+```bash
+uv run pytest -o addopts= tests/unit/test_documentation.py -q
+uv run --group docs mkdocs build --strict
+```
+
+Build output stays in ignored `.local/site/`. Strict builds validate local documentation links;
+they do not verify remote URL availability. Site deployment is a separate maintainer operation.
+
 ## Credential-free integration tests
 
 The sampled CLI tests exercise calibration, search, fresh confirmation, observations, result

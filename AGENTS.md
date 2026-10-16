@@ -110,6 +110,11 @@ When adding or removing runtime modules, update the explicit `RUNTIME_MODULES` m
 `tests/packaging/test_distribution.py`. Verify archive contents and clean installation of both the
 built wheel and a wheel reconstructed from the sdist; compare CLI versions with artifact metadata.
 
+For documentation changes, follow the commands in `CONTRIBUTING.md`. Generate `docs/cli.md` from
+Typer metadata; do not edit it manually. `mkdocs.yml` must admit only named public files from
+`docs/`, with no repository-root source scan. Update site/sdist/test manifests together when
+adding a page. Run documentation tests and the strict site build; neither needs a native harness.
+
 ## CI and release boundaries
 
 Keep jobs that execute pull-request code read-only and provider-free. Pin external Actions to

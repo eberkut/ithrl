@@ -1,0 +1,39 @@
+site_name: ithrl
+site_description: Find smaller agent contexts that preserve a selected model behavior
+site_url: https://eberkut.github.io/ithrl/
+repo_url: https://github.com/eberkut/ithrl
+edit_uri: blob/main/docs/
+docs_dir: docs
+site_dir: .local/site
+theme:
+  name: mkdocs
+  highlightjs: false  # The built-in highlighter loads executable JavaScript from a CDN.
+plugins: []
+hooks:
+  - scripts/docs_theme.py
+markdown_extensions:
+  - tables
+  - fenced_code
+nav:
+  - Overview: index.md
+  - Native runs: native-runs.md
+  - Results and privacy: results.md
+  - CLI reference: cli.md
+  - Troubleshooting: troubleshooting.md
+  - Measurements: measurements.md
+# Navigation alone does not restrict which files MkDocs publishes.
+exclude_docs: |
+  *
+  !/index.md
+  !/native-runs.md
+  !/results.md
+  !/cli.md
+  !/troubleshooting.md
+  !/measurements.md
+validation:
+  nav:
+    omitted_files: warn
+  links:
+    anchors: warn
+    absolute_links: warn
+    unrecognized_links: warn

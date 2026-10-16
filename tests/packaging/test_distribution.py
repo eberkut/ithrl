@@ -122,7 +122,17 @@ RUNTIME_MODULES = frozenset(
 )
 
 RUNTIME_ASSETS = frozenset({PurePosixPath("ithrl/examples/synthetic-trace.json")})
-PUBLIC_DOCS = frozenset(PurePosixPath("docs", name) for name in ("native-runs.md", "results.md"))
+PUBLIC_DOCS = frozenset(
+    PurePosixPath("docs", name)
+    for name in (
+        "index.md",
+        "native-runs.md",
+        "results.md",
+        "cli.md",
+        "troubleshooting.md",
+        "measurements.md",
+    )
+)
 
 
 @pytest.fixture(scope="module")
