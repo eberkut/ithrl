@@ -58,8 +58,8 @@ jactionlint --no-online --strict-exit
 
 CI uses its default correctness/security profile, with online lookups and automatic fixes disabled.
 
-Audit the resolved runtime, development and audit-tool dependencies from `uv.lock`. Run this in
-Bash with the locked environment synchronized:
+Audit the resolved runtime dependencies and every dependency group, including development, docs
+and audit tooling, from `uv.lock`. Run this in Bash with the locked environment synchronized:
 
 ```bash
 set -o pipefail
@@ -72,6 +72,11 @@ package names and versions without installing those packages, resolving alternat
 fixes. CI evaluates markers on each supported Python version. This covers locked versions rather
 than every version permitted by package dependency ranges.
 
+GitHub's dependency graph and Dependency Review use the inventory GitHub has for each commit.
+Before relying on them for `uv.lock` coverage, compare the hosted package/version inventory with
+the locked export on each supported Python version. Keep the lockfile audit above as the CI gate;
+Dependabot version updates alone do not establish dependency-graph coverage.
+
 CI runs weekly on Monday at 06:17 UTC to detect new advisories. Dependabot checks Python, Actions
 and pre-commit dependencies weekly, groups minor/patch updates and leaves majors individually
 reviewable. Ordinary updates have a seven-day cooldown; security updates have none. Updates are
@@ -80,7 +85,7 @@ never automatically merged. Hosted dependency-graph coverage is a separate verif
 ## Documentation
 
 README owns the quick start; `docs/` owns user guides and reference. Support, security and conduct
-policies live at the repository root. Keep private sessions, cases and planning records out of
+policies live at the repository root. Keep private sessions, cases and credentials out of
 documentation and generated output.
 
 The optional `docs` dependency group pins MkDocs and the shadcn theme. Search runs in the browser;

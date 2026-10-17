@@ -7,10 +7,6 @@ through controlled runners. Treat the supported-inputs table in `README.md` as t
 capability claim. Runner code or a passing fixture alone does not establish supported experimental
 use; capability, isolation, calibration, and live-use gates must pass for the exact target profile.
 
-Private local planning and research records may describe future behavior. Use them for development
-context when present, but keep them untracked and out of commits, release artifacts, and public-file
-links. Do not present planned commands or compatibility as implemented.
-
 ## Architecture
 
 - `src/ithrl/adapters/` discovers and interprets harness-native evidence. Adapters do not invoke
@@ -72,20 +68,9 @@ links. Do not present planned commands or compatibility as implemented.
 
 ## Development and validation
 
-Use the locked `uv` environment and the commands used by CI:
-
-```bash
-uv sync --locked --all-groups
-uv lock --check
-uv run ruff check .
-uv run ruff format --check .
-uv run pyrefly check
-uv run pytest --ignore=tests/packaging
-uv run radon cc src/ithrl --min B --show-complexity --total-average
-uv run radon mi src/ithrl --min B --show
-uv build --sdist --wheel --no-sources
-ITHRL_DIST_DIR=dist uv run pytest -o addopts= tests/packaging
-```
+Use the locked `uv` environment: `uv sync --locked --all-groups`.
+`CONTRIBUTING.md` owns the [CI check sequence](CONTRIBUTING.md#checks); use those entrypoints
+rather than maintaining a separate validation procedure.
 
 For workflow or Dependabot changes, use the jactionlint release pinned in
 `.github/workflows/ci.yml`: `jactionlint --no-online --strict-exit`. Keep its network checks and
@@ -134,9 +119,8 @@ requested findings and reconcile them before editing; fix demonstrated defects a
 affected boundary. Update public documentation only for behavior that is implemented and verified.
 Use Conventional Commits. Inspect the exact public diff and proposed metadata before any Git or
 GitHub write; stage, commit, push, and open a pull request only with explicit approval. Preserve
-unrelated worktree changes and never publish private local planning records or private evidence.
+unrelated worktree changes and never publish private session data or evidence.
 
-When explicitly asked to pursue a sustained goal, define a compact contract for one bounded outcome,
-its essential invariants, validation and relevant reviews, and an observable stop point. Keep
-procedures and evidence in the task plan or private ledger when available. Task tracking does not
-expand authority for provider calls, publication, history changes, or later milestones.
+For sustained implementation tasks, agree on one bounded outcome, its essential invariants,
+validation and relevant reviews, and an observable stop point. Task scope does not expand authority
+for provider calls, publication or history changes.
