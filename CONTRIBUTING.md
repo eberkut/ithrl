@@ -201,3 +201,33 @@ user guide when commands or results change. Use Conventional Commit subjects, su
 Changes to native protocols, reconstruction, permissions or provider accounting need review of
 the affected safety boundary. Mock tests establish local contracts; claims of native support also
 need capability, isolation, calibration and live-use evidence for the target profile.
+
+## Preparing a release
+
+Python Semantic Release, pinned in the `release` dependency group, calculates versions from
+Conventional Commits. `pyproject.toml` is the version source; installed CLI and Codex client
+metadata read that distribution version. The tool generates `CHANGELOG.md` from the full release
+history, omitting routine build, CI, documentation, style and test commits. Do not edit the
+generated changelog by hand; review its contents before approving a release.
+
+Use `main` with complete history and all existing release tags available. Preview the next version
+without changing files, the index, commits, tags or remote state:
+
+```bash
+uv run --locked --group release semantic-release --noop version --print
+```
+
+The preparation command below writes **and stages** the version and changelog, even with
+`--no-commit`. Obtain approval for those local staging changes before running it. For worktree-only
+review, run it in a disposable checkout and transfer the reviewed file changes. To prepare:
+
+```bash
+uv run --locked --group release semantic-release version \
+  --no-commit --no-tag --no-push --no-vcs-release --skip-build
+uv lock --upgrade-package ithrl
+```
+
+The lock update remains unstaged. Review all generated changes, confirm version consistency and
+public-safe release notes, then run the affected checks before proposing the signed commit.
+Preparation creates no commit, tag or hosted release and uploads no package. Publication requires
+separate approval of the source commit, version, artifacts and destinations.

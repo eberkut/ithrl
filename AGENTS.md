@@ -112,6 +112,10 @@ path. Publishing authority belongs only in the explicitly approved workflow and 
 environment. Verify source and artifact identity before promotion; preserve the same distribution
 bytes between release destinations. Never execute untrusted PR code with publishing credentials.
 
+For version preparation, follow [Preparing a release](CONTRIBUTING.md#preparing-a-release).
+Python Semantic Release's `--no-commit` still stages files; obtain approval before it modifies
+the project index.
+
 ## Review and publication
 
 Keep changes small and reviewable. For independent correctness and security reviews, wait for all

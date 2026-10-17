@@ -36,6 +36,7 @@ def _request(
 ) -> Message:
     return {
         "schema_version": 1,
+        "client_version": "1.2.3rc1",
         "model": MODEL,
         "provider": PROVIDER,
         "effort": "low",
@@ -213,6 +214,32 @@ def test_completed_exchange_captures_final_response_usage_and_identity() -> None
     assert turn_start["params"]["effort"] == "low"
     assert turn_start["params"]["personality"] == "none"
     assert audit[-1]["kind"] == "summary"
+
+
+def test_initialization_uses_the_host_supplied_client_version() -> None:
+    request = _request()
+    request["client_version"] = "2.4.6"
+
+    outcome, client, _ = _run(_successful_exchange(), request=request)
+
+    assert outcome.status == "completed"
+    assert client[0]["params"]["clientInfo"] == {
+        "name": "ithrl",
+        "title": "ithrl",
+        "version": "2.4.6",
+    }
+
+
+@pytest.mark.parametrize("value", [None, True, 1, ""])
+def test_invalid_client_version_is_refused_before_initialization(value: object) -> None:
+    request = _request()
+    request["client_version"] = value
+
+    outcome, client, _ = _run(_successful_exchange(), request=request)
+
+    assert outcome.status == "error"
+    assert outcome.provider_calls_started == 0
+    assert client == []
 
 
 def test_history_is_injected_before_turn_and_tool_output_is_a_distinct_trigger() -> None:

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ithrl"
-version = "0.0.0"
+version = "0.1.0"
 description = "Find smaller agent contexts that preserve a selected model behavior"
 readme = "README.md"
 authors = [
@@ -50,6 +50,9 @@ docs = [
   "mkdocs==1.6.1",
   "mkdocs-shadcn==0.12.2",
 ]
+release = [
+  "python-semantic-release==10.7.0",
+]
 dev = [
   "GitPython>=3.2",
   "hypothesis>=6.138",
@@ -64,9 +67,32 @@ dev = [
   "types-PyYAML>=6",
 ]
 
+[tool.semantic_release]
+allow_zero_version = true
+major_on_zero = false
+commit_parser = "conventional"
+tag_format = "v{version}"
+version_toml = ["pyproject.toml:project.version"]
+
+[tool.semantic_release.branches.main]
+match = "main"
+prerelease = false
+
+[tool.semantic_release.remote]
+url = "https://github.com/eberkut/ithrl"
+ignore_token_for_push = true
+
+[tool.semantic_release.changelog]
+mode = "init"
+exclude_commit_patterns = ['^(?:build|chore|ci|docs|style|test)(?:\([^)]*\))?!?: ']
+
+[tool.semantic_release.changelog.default_templates]
+mask_initial_release = false
+
 [tool.hatch.build.targets.sdist]
 include = [
   "/LICENSE",
+  "/CHANGELOG.md",
   "/README.md",
   "/docs/native-runs.md",
   "/docs/results.md",

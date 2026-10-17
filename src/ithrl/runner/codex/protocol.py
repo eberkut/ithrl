@@ -196,7 +196,7 @@ def _run_session(
     initialize = transport.request(
         "initialize",
         {
-            "clientInfo": {"name": "ithrl", "title": "ithrl", "version": "0.0.0"},
+            "clientInfo": {"name": "ithrl", "title": "ithrl", "version": request["client_version"]},
             "capabilities": {"experimentalApi": False},
         },
         state,
@@ -574,6 +574,7 @@ def _outcome_document(outcome: ProtocolOutcome) -> dict[str, object]:
 def _validate_worker_request(request: dict[str, object]) -> None:
     expected = {
         "schema_version",
+        "client_version",
         "model",
         "provider",
         "effort",
@@ -587,6 +588,7 @@ def _validate_worker_request(request: dict[str, object]) -> None:
     if set(request) != expected or request.get("schema_version") != 1:
         raise CodexProtocolError("invalid-worker-request", "Codex worker request is invalid")
     _require_string(request.get("model"), "worker request")
+    _require_string(request.get("client_version"), "worker request")
     _require_string(request.get("provider"), "worker request")
     for key in ("effort", "personality", "baseInstructions", "developerInstructions"):
         if request[key] is not None:

@@ -207,6 +207,7 @@ def test_sdist_contains_all_inputs_needed_to_rebuild_the_wheel(
 
     assert {
         PurePosixPath("LICENSE"),
+        PurePosixPath("CHANGELOG.md"),
         PurePosixPath("README.md"),
         PurePosixPath("CONTRIBUTING.md"),
         PurePosixPath("pyproject.toml"),
@@ -224,6 +225,7 @@ def test_sdist_contains_all_inputs_needed_to_rebuild_the_wheel(
     assert {member.parts[0] for member in relative_members if member.parts} <= {
         ".gitignore",
         "LICENSE",
+        "CHANGELOG.md",
         "PKG-INFO",
         "README.md",
         "CONTRIBUTING.md",

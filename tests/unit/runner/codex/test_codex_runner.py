@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import stat
 from dataclasses import replace
+from importlib.metadata import version as distribution_version
 from pathlib import Path
 from typing import Any
 
@@ -31,7 +33,7 @@ from ithrl.runner.codex.materialize import (
 )
 from ithrl.runner.contracts import CandidateInvalidError
 from ithrl.runner.evidence import AttemptEvidence
-from ithrl.runner.runtime import ProtectedPath
+from ithrl.runner.runtime import ProtectedOutputStore, ProtectedPath
 from native_support.codex import _FAKE_APP_SERVER, FIXTURES, _capability, _case, _configuration
 
 
@@ -112,6 +114,24 @@ def test_rejects_overlapping_attempt_and_output_storage(tmp_path: Path) -> None:
             state_parent=output_root / "attempts",
             output_root=output_root,
         )
+
+
+def test_runner_fingerprint_binds_the_installed_client_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace, _ = _case(tmp_path)
+    versions = iter(("1.2.3", "1.2.4"))
+
+    def installed_version(name: str) -> str:
+        assert name == "ithrl"
+        return next(versions)
+
+    monkeypatch.setattr(codex_runner_module, "distribution_version", installed_version)
+    first = _runner(tmp_path, workspace)
+    second = _runner(tmp_path, workspace)
+
+    assert first.capability_profile.digest == second.capability_profile.digest
+    assert first.fingerprint != second.fingerprint
 
 
 def _attempt(
@@ -327,6 +347,11 @@ def test_runs_one_final_response_inside_shared_isolation(tmp_path: Path) -> None
     assert result.accounting.source_store_effect == "unchanged"
     assert result.accounting.original_workspace_effect == "unchanged"
     assert result.native_output is not None
+    output = ProtectedOutputStore.open(tmp_path / "output").read(result.native_output)
+    initialize = json.loads(output.stdout.splitlines()[0])
+    assert initialize["kind"] == "client"
+    assert initialize["value"]["method"] == "initialize"
+    assert initialize["value"]["params"]["clientInfo"]["version"] == distribution_version("ithrl")
     assert not (tmp_path / "attempts" / result.attempt_id).exists()
     assert stat.S_IMODE((tmp_path / "output").stat().st_mode) == 0o700
     assert (tmp_path / "original-workspace" / "marker.txt").read_text() == "unchanged\n"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from importlib.metadata import version as distribution_version
 from pathlib import Path
 from typing import cast
 
@@ -102,6 +103,7 @@ class CodexRunner:
         self._capability = capability_profile
         self._runtime = runtime
         self._configuration = configuration
+        self._client_version = distribution_version("ithrl")
         self._worker_source = Path(__file__).with_name("worker.py")
         self._worker_digest = program_digest(self._worker_source)
         support_sources = tuple(
@@ -124,6 +126,7 @@ class CodexRunner:
         identity = {
             "runner": "codex",
             "runner_version": RUNNER_VERSION,
+            "client_version": self._client_version,
             "capability": self._capability.digest,
             "materialization": self._capability.reconstruction_method,
             "policy": POLICY_VERSION,
@@ -166,7 +169,9 @@ class CodexRunner:
                 effective_policy_digest=attempt.safety_policy.digest,
             ) from error
 
-        worker_request = _worker_request(materialized, self._configuration.provider_id)
+        worker_request = _worker_request(
+            materialized, self._configuration.provider_id, self._client_version
+        )
         try:
             execution = await run_isolated_process(
                 attempt_id=attempt.attempt_id,
@@ -348,9 +353,12 @@ def _validate_materialized_identity(
         )
 
 
-def _worker_request(materialized: CodexMaterialization, runtime_provider_id: str) -> JsonObject:
+def _worker_request(
+    materialized: CodexMaterialization, runtime_provider_id: str, client_version: str
+) -> JsonObject:
     return {
         "schema_version": 1,
+        "client_version": client_version,
         "model": materialized.model,
         "provider": runtime_provider_id,
         "effort": materialized.effort,

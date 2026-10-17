@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import stat
+from importlib.metadata import version as distribution_version
 from pathlib import Path
 from typing import cast
 
@@ -189,7 +190,11 @@ def _client_request_samples() -> list[tuple[str, JsonObject]]:
             "initialize",
             {
                 "capabilities": {"experimentalApi": False},
-                "clientInfo": {"name": "ithrl", "title": "ithrl", "version": "0.0.0"},
+                "clientInfo": {
+                    "name": "ithrl",
+                    "title": "ithrl",
+                    "version": distribution_version("ithrl"),
+                },
             },
         ),
         (
