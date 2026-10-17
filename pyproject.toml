@@ -48,8 +48,10 @@ audit = [
 ]
 docs = [
   "mkdocs==1.6.1",
+  "mkdocs-shadcn==0.12.2",
 ]
 dev = [
+  "GitPython>=3.2",
   "hypothesis>=6.138",
   "pre-commit>=4.3",
   "pyrefly==1.4.0",
@@ -72,6 +74,7 @@ include = [
   "/docs/cli.md",
   "/docs/troubleshooting.md",
   "/docs/measurements.md",
+  "/docs/third-party-notices.txt",
   "/CONTRIBUTING.md",
   "/pyproject.toml",
   "/src",

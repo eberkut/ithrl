@@ -13,6 +13,7 @@ from urllib.parse import unquote, urlsplit
 
 import pytest
 import yaml
+from git import Actor, Repo
 from typer.cli import app as typer_cli
 from typer.testing import CliRunner
 
@@ -20,6 +21,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SITE_PAGES = frozenset(
     {"index.md", "native-runs.md", "results.md", "cli.md", "troubleshooting.md", "measurements.md"}
 )
+SITE_ASSETS = frozenset({"third-party-notices.txt"})
 
 
 def test_cli_reference_is_current_without_external_execution(
@@ -43,12 +45,16 @@ def test_cli_reference_is_current_without_external_execution(
 
 @pytest.fixture
 def site_sources(tmp_path: Path) -> Path:
+    # The theme reads Git timestamps and warns in strict mode without a commit.
+    actor = Actor("Documentation fixture", "docs@example.invalid")
+    with Repo.init(tmp_path) as repo:
+        repo.index.commit("Documentation fixture", author=actor, committer=actor, skip_hooks=True)
     shutil.copy(PROJECT_ROOT / "mkdocs.yml", tmp_path / "mkdocs.yml")
     (tmp_path / "scripts").mkdir()
     shutil.copy(PROJECT_ROOT / "scripts/docs_theme.py", tmp_path / "scripts/docs_theme.py")
     docs = tmp_path / "docs"
     docs.mkdir()
-    for page in SITE_PAGES:
+    for page in SITE_PAGES | SITE_ASSETS:
         shutil.copy(PROJECT_ROOT / "docs" / page, docs / page)
     return tmp_path
 
@@ -90,6 +96,30 @@ def test_site_build_publishes_only_allowlisted_sources(site_sources: Path) -> No
             assert asset.is_file(), f"Missing asset in {page}: {url}"
             assert asset.stat().st_size > 0
     assert not (site / "receipt.json").exists()
+    assert not list(site.rglob("*.md"))
+    search = json.loads((site / "search/search_index.json").read_text(encoding="utf-8"))
+    assert search["docs"]
+    assert {path.name for path in (site / "fonts").iterdir()} == {
+        "Geist.woff2",
+        "GeistMono.woff2",
+        "Inter.woff2",
+        "Inter-Italic.woff2",
+    }
+    assert {path.name for path in (site / "css/pygments").iterdir()} == {
+        "shadcn-light.css",
+        "github-dark.css",
+    }
+    assert {path.name for path in (site / "js").iterdir()} == {
+        "callbacks.js",
+        "copy-button.js",
+        "dark.js",
+        "sidebar.js",
+        "slider.js",
+        "toc.js",
+    }
+    for name in SITE_ASSETS:
+        assert (site / name).read_bytes() == (PROJECT_ROOT / "docs" / name).read_bytes()
+    assert "fetchStargazers(" not in (site / "index.html").read_text(encoding="utf-8")
     assert "cdnjs.cloudflare.com" not in (site / "index.html").read_text(encoding="utf-8")
     assert all(
         b"PRIVATE_SENTINEL" not in path.read_bytes() for path in site.rglob("*") if path.is_file()
@@ -147,3 +177,29 @@ def test_issue_forms_require_sanitized_reports_and_offer_private_security() -> N
         assert not form.get("labels")
         assert not form.get("assignees")
         assert "credentials" in json.dumps(form).lower()
+
+
+def test_pages_workflow_deploys_only_generated_site_from_trusted_main() -> None:
+    workflow = yaml.safe_load(
+        (PROJECT_ROOT / ".github/workflows/pages.yml").read_text(encoding="utf-8")
+    )
+    assert set(workflow["on"]) == {"push", "workflow_dispatch"}
+    assert workflow["on"]["push"]["branches"] == ["main"]
+    assert workflow["permissions"] == {}
+    assert workflow["concurrency"]["cancel-in-progress"] is False
+    build = workflow["jobs"]["build"]
+    assert build["if"] == "github.repository == 'eberkut/ithrl' && github.ref == 'refs/heads/main'"
+    assert build["permissions"] == {"contents": "read"}
+    upload = next(
+        step
+        for step in build["steps"]
+        if step.get("uses", "").startswith("actions/upload-pages-artifact@")
+    )
+    assert upload["with"] == {"path": ".local/site", "retention-days": 1}
+    deploy = workflow["jobs"]["deploy"]
+    assert deploy["needs"] == "build"
+    assert "if" not in deploy  # The default success gate must block failed/skipped builds.
+    assert deploy["permissions"] == {"pages": "write", "id-token": "write"}
+    assert deploy["environment"]["name"] == "github-pages"
+    assert len(deploy["steps"]) == 1
+    assert deploy["steps"][0]["uses"].startswith("actions/deploy-pages@")

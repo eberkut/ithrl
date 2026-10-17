@@ -131,6 +131,7 @@ PUBLIC_DOCS = frozenset(
         "cli.md",
         "troubleshooting.md",
         "measurements.md",
+        "third-party-notices.txt",
     )
 )
 

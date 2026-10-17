@@ -19,3 +19,5 @@ Report suspected vulnerabilities through
 [private vulnerability reporting](https://github.com/eberkut/ithrl/security/advisories/new).
 Contributor setup and checks are in
 [Contributing](https://github.com/eberkut/ithrl/blob/main/CONTRIBUTING.md).
+
+The site's theme, fonts and browser assets have [third-party notices](third-party-notices.txt).

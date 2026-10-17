@@ -83,8 +83,11 @@ README owns the quick start; `docs/` owns user guides and reference. Support, se
 policies live at the repository root. Keep private sessions, cases and planning records out of
 documentation and generated output.
 
-The optional `docs` dependency group pins MkDocs with its built-in theme and no third-party
-plugins. A local hook preserves the packaged theme assets under the source-file allowlist.
+The optional `docs` dependency group pins MkDocs and the shadcn theme. Search runs in the browser;
+fonts and scripts are served with the site. GitHub star-count requests and raw Markdown copying
+are disabled. A local hook admits only the packaged theme assets used by this configuration.
+When changing the theme or enabled extensions, check that asset list and the
+[third-party notices](docs/third-party-notices.txt) alongside the rendered site.
 To preview the site locally:
 
 ```bash
@@ -111,7 +114,18 @@ uv run --group docs mkdocs build --strict
 ```
 
 Build output stays in ignored `.local/site/`. Strict builds validate local documentation links;
-they do not verify remote URL availability. Site deployment is a separate maintainer operation.
+they do not verify remote URL availability.
+
+The [documentation workflow](.github/workflows/pages.yml) builds and deploys
+`https://eberkut.github.io/ithrl/` on pushes to `main`, or when a maintainer runs it manually
+from `main`. It checks the documentation before uploading only the generated site. Deployment
+runs in a separate `github-pages` environment job without checking out or executing project code.
+Pull requests receive read-only documentation checks through CI and cannot deploy.
+
+Repository administrators must select **Settings → Pages → Source: GitHub Actions** and restrict
+the `github-pages` environment to `main` before the first deployment. No custom domain, separate
+site repository, `gh-pages` branch or personal access token is needed. After a successful
+deployment, check the published pages, navigation and static assets at the URL above.
 
 ## Credential-free integration tests
 
