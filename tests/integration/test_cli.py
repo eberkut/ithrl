@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from click import unstyle
 from typer.testing import CliRunner
 
 from ithrl.case import CaseEvidence, CaseWorkspace
@@ -1265,7 +1266,7 @@ def test_shrink_help_describes_the_default_resume_budget() -> None:
     result = CliRunner().invoke(app, ["shrink", "--help"], color=False, terminal_width=80)
 
     assert result.exit_code == ExitCode.SUCCESS
-    help_text = " ".join(result.output.replace("│", " ").split())
+    help_text = " ".join(unstyle(result.output).replace("│", " ").split())
     assert "100 or twice the saved count, whichever is larger, capped at 10,000" in help_text
 
 
