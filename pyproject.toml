@@ -115,7 +115,7 @@ packages = ["src/ithrl"]
 
 [tool.pyrefly]
 preset = "strict"
-project-includes = ["src", "tests"]
+project-includes = ["src", "tests", "scripts/release.py"]
 python-version = "3.12"
 search-path = ["src", "tests"]
 

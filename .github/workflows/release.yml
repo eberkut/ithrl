@@ -1,0 +1,228 @@
+name: Release
+run-name: Release ${{ inputs.version }}
+
+"on":
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact prepared final version (X.Y.Z)
+        required: true
+        type: string
+      source-sha:
+        description: Approved main commit (full 40-character SHA)
+        required: true
+        type: string
+
+permissions: {}
+
+# Serialize the whole release, including its production-approval wait.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  GH_REPO: eberkut/ithrl
+  GH_PROMPT_DISABLED: "1"
+  GH_PAGER: cat
+
+jobs:
+  preflight:
+    name: Verify release source
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.source.outputs.version }}
+    steps:
+      - name: Check out the workflow commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Validate maintainer, source and version
+        id: source
+        run: python3 scripts/release.py dispatch
+        env:
+          EXPECTED_SHA: ${{ inputs.source-sha }}
+          EXPECTED_VERSION: ${{ inputs.version }}
+
+      - name: Require the release tag to be absent before rehearsal
+        env:
+          VERSION: ${{ steps.source.outputs.version }}
+        run: |
+          refs=$(git ls-remote --tags https://github.com/eberkut/ithrl.git "refs/tags/v$VERSION")
+          test -z "$refs"
+
+  checks:
+    name: Validate release
+    needs: preflight
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+    with:
+      release: true
+      expected-version: ${{ needs.preflight.outputs.version }}
+
+  testpypi:
+    name: Publish TestPyPI rehearsal
+    needs: [preflight, checks]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/ithrl/
+    steps:
+      - name: Download this run's identified release files
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ needs.checks.outputs.release-artifact-id }}
+          path: release
+          merge-multiple: true
+
+      - name: Verify release files
+        working-directory: release
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+          MANIFEST_SHA256: ${{ needs.checks.outputs.manifest-sha256 }}
+        run: |
+          test -n "$MANIFEST_SHA256"
+          printf '%s  SHA256SUMS\n' "$MANIFEST_SHA256" | sha256sum --check -
+          sha256sum --check SHA256SUMS
+          files=(dist/*)
+          test "${#files[@]}" -eq 2
+          test -f "dist/ithrl-$VERSION-py3-none-any.whl"
+          test -f "dist/ithrl-$VERSION.tar.gz"
+
+      - name: Require the tag to remain absent
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          refs=$(git ls-remote --tags https://github.com/eberkut/ithrl.git "refs/tags/v$VERSION")
+          test -z "$refs"
+
+      - name: Publish the verified distributions to TestPyPI
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          packages-dir: release/dist/
+          attestations: true
+
+      - name: Record the production review inputs
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+          ARTIFACT_ID: ${{ needs.checks.outputs.release-artifact-id }}
+          MANIFEST_SHA256: ${{ needs.checks.outputs.manifest-sha256 }}
+        run: |
+          {
+            printf '## TestPyPI rehearsal complete\n\n'
+            printf 'Version: %s\n\nSource: %s\n\n' "$VERSION" "$SOURCE_SHA"
+            printf 'Artifact ID: %s\n\nManifest SHA-256: %s\n\n' "$ARTIFACT_ID" "$MANIFEST_SHA256"
+            printf 'Inspect the TestPyPI installation and release files before production approval.\n'
+            printf 'Create and verify the signed v%s tag at the source commit before approving.\n' "$VERSION"
+            printf 'Complete approval within 30 days; do not rerun the workflow to promote these files.\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  pypi:
+    name: Publish PyPI
+    needs: [preflight, checks, testpypi]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    environment:
+      name: pypi
+      url: https://pypi.org/p/ithrl/
+    steps:
+      - name: Download this run's identified release files
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ needs.checks.outputs.release-artifact-id }}
+          path: release
+          merge-multiple: true
+
+      - name: Verify release files
+        working-directory: release
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+          MANIFEST_SHA256: ${{ needs.checks.outputs.manifest-sha256 }}
+        run: |
+          test -n "$MANIFEST_SHA256"
+          printf '%s  SHA256SUMS\n' "$MANIFEST_SHA256" | sha256sum --check -
+          sha256sum --check SHA256SUMS
+          files=(dist/*)
+          test "${#files[@]}" -eq 2
+          test -f "dist/ithrl-$VERSION-py3-none-any.whl"
+          test -f "dist/ithrl-$VERSION.tar.gz"
+
+      - name: Verify the existing annotated tag targets the approved source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          tag_sha=$(gh api "repos/$GH_REPO/git/ref/tags/v$VERSION" --jq 'select(.object.type == "tag") | .object.sha')
+          test -n "$tag_sha"
+          target=$(gh api "repos/$GH_REPO/git/tags/$tag_sha" --jq 'select(.object.type == "commit") | .object.sha')
+          test "$target" = "$SOURCE_SHA"
+
+      - name: Publish the rehearsed distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          packages-dir: release/dist/
+          attestations: true
+
+  github-release:
+    name: Publish GitHub Release
+    needs: [preflight, checks, pypi]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download this run's identified release files
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ needs.checks.outputs.release-artifact-id }}
+          path: release
+          merge-multiple: true
+
+      - name: Verify release files
+        working-directory: release
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+          MANIFEST_SHA256: ${{ needs.checks.outputs.manifest-sha256 }}
+        run: |
+          test -n "$MANIFEST_SHA256"
+          printf '%s  SHA256SUMS\n' "$MANIFEST_SHA256" | sha256sum --check -
+          sha256sum --check SHA256SUMS
+          files=(dist/*)
+          test "${#files[@]}" -eq 2
+          test -f "dist/ithrl-$VERSION-py3-none-any.whl"
+          test -f "dist/ithrl-$VERSION.tar.gz"
+
+      - name: Verify the existing annotated tag targets the approved source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          tag_sha=$(gh api "repos/$GH_REPO/git/ref/tags/v$VERSION" --jq 'select(.object.type == "tag") | .object.sha')
+          test -n "$tag_sha"
+          target=$(gh api "repos/$GH_REPO/git/tags/$tag_sha" --jq 'select(.object.type == "commit") | .object.sha')
+          test "$target" = "$SOURCE_SHA"
+
+      - name: Publish release notes and the rehearsed files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          gh release create "v$VERSION" --repo "$GH_REPO" --verify-tag \
+            --title "v$VERSION" --notes-file release/release-notes.md \
+            release/dist/*.whl release/dist/*.tar.gz release/SHA256SUMS release/release-notes.md

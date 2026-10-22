@@ -231,3 +231,71 @@ The lock update remains unstaged. Review all generated changes, confirm version 
 public-safe release notes, then run the affected checks before proposing the signed commit.
 Preparation creates no commit, tag or hosted release and uploads no package. Publication requires
 separate approval of the source commit, version, artifacts and destinations.
+
+### Publishing a prepared release
+
+The manually dispatched [release workflow](.github/workflows/release.yml) uses the existing CI
+workflow to check the exact source commit, build one release wheel/sdist pair and test installation
+on Python 3.12–3.14. It uploads to TestPyPI, waits for production approval, then promotes those
+same distribution bytes to PyPI and GitHub Releases. Ordinary pushes and pull requests do not
+publish packages. No native harness or model request is part of release automation.
+
+Before dispatch, the source must be reviewed and committed on `main`, with successful CI and
+the applicable hosted security checks for that commit. Verify account recovery readiness, package
+ownership and the following repository/index settings:
+
+- PyPI and TestPyPI Trusted Publishers bind `eberkut/ithrl`, `release.yml` and their respective
+  `pypi` / `testpypi` environments. Publishing uses OIDC, without a stored PyPI API token.
+- Both environments admit only `main`. `pypi` requires the maintainer's approval, permits
+  self-review and disallows administrative approval bypass. Environment declarations in YAML
+  do not configure these protections; verify the actual settings before dispatch.
+- Release-tag rules permit the maintainer's signed-tag creation and prevent unapproved tag
+  replacement or deletion. The workflow never creates a tag.
+
+The dispatch gate admits the repository's current maintainer identity and requires the full source
+SHA and exact final `X.Y.Z` version. Replace the placeholders with the reviewed values:
+
+```bash
+gh workflow run release.yml --repo eberkut/ithrl --ref main \
+  -f version=X.Y.Z -f source-sha=FULL_APPROVED_COMMIT_SHA
+```
+
+1. Inspect that run's checks and successful **Publish TestPyPI rehearsal** job. Its summary records
+   the source, version, immutable artifact ID and checksum-manifest digest. The production job
+   waits at the `pypi` environment. TestPyPI files, logs and artifacts are public.
+2. Download that run's `release-distributions` artifact into a new review directory. For example:
+
+   ```bash
+   gh run download RUN_ID --repo eberkut/ithrl \
+     --name release-distributions --dir /absolute/new/release-review
+   ```
+
+   Match `SHA256SUMS` to the digest in the run summary, then run `sha256sum --check SHA256SUMS`
+   from the review directory. Inspect the release notes and confirm TestPyPI serves the same
+   distribution hashes. Complete a clean TestPyPI installation/example rehearsal before approval;
+   resolve dependencies only from the normal PyPI index, without mixing indexes.
+3. After the rehearsal passes and tag creation is approved, create and verify the signed tag at
+   the frozen source commit, then push only that tag through the permitted tag-rules path:
+
+   ```bash
+   git tag -s vX.Y.Z FULL_APPROVED_COMMIT_SHA -m 'Release vX.Y.Z'
+   git verify-tag vX.Y.Z
+   git push origin refs/tags/vX.Y.Z
+   ```
+
+4. Review and approve the `pypi` deployment on the run's GitHub page. The job verifies the existing
+   annotated tag targets the frozen source, rechecks the files, and uploads to PyPI. The final job
+   rechecks the tag/files and creates the GitHub Release with those distributions, notes and
+   checksums. Signature verification belongs to the preceding maintainer tag check; the workflow
+   checks the tag object and target commit.
+5. Verify the published versions, hashes, attestations and installed example. A successful upload
+   alone does not complete release acceptance.
+
+Complete review within 30 days: release artifacts are retained for 30 days, and GitHub limits the
+total workflow lifetime, including approval waits. Start only one release at a time; concurrency
+preserves the active run but GitHub may replace an older pending run when another is queued.
+Do not rerun the whole workflow to promote a completed rehearsal or cancel a run during upload.
+For failure or partial publication, inspect the index and existing release first; preserve the
+original files and hashes. Any recovery upload needs explicit approval and must use identical
+missing files. Never rebuild and overwrite a published version or suppress conflicts with
+`skip-existing`.
