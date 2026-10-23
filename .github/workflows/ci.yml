@@ -33,6 +33,35 @@ env:
   UV_NO_PROGRESS: "1"
 
 jobs:
+  dependency-review:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # The action treats incomplete snapshots as warnings, even after polling times out.
+      - name: Require complete dependency snapshots
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          headers=$(gh api --include --silent --paginate \
+            "repos/$GITHUB_REPOSITORY/dependency-graph/compare/$BASE_SHA...$HEAD_SHA")
+          if grep -qi '^x-github-dependency-graph-snapshot-warnings:[[:space:]]*[^[:space:]]' <<< "$headers"; then
+            echo "::error::Dependency snapshots are incomplete. Wait for the graph update, then rerun this job."
+            exit 1
+          fi
+
+      - name: Review dependency changes
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: low
+          fail-on-scopes: runtime, development, unknown
+          license-check: false
+          show-openssf-scorecard: false
+
   workflows:
     name: Workflows
     runs-on: ubuntu-latest
