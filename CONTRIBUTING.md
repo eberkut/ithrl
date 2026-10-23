@@ -13,7 +13,7 @@ Use [uv](https://docs.astral.sh/uv/) and Python 3.12, 3.13 or 3.14. Python 3.14 
 development version. From the repository root:
 
 ```bash
-uv sync --locked --all-groups
+uv sync --locked --all-groups --all-extras
 uv run ithrl --help
 ```
 
@@ -58,12 +58,12 @@ jactionlint --no-online --strict-exit
 
 CI uses its default correctness/security profile, with online lookups and automatic fixes disabled.
 
-Audit the resolved runtime dependencies and every dependency group, including development, docs
+Audit the resolved runtime dependencies, optional extras and every dependency group, including development, docs
 and audit tooling, from `uv.lock`. Run this in Bash with the locked environment synchronized:
 
 ```bash
 set -o pipefail
-uv export --locked --all-groups --no-emit-project --format requirements.txt |
+uv export --locked --all-groups --all-extras --no-emit-project --format requirements.txt |
   uv run --locked --group audit pip-audit --strict --disable-pip --require-hashes -r /dev/stdin
 ```
 
@@ -100,7 +100,7 @@ When changing the theme or enabled extensions, check that asset list and the
 To preview the site locally:
 
 ```bash
-uv sync --locked --all-groups
+uv sync --locked --all-groups --all-extras
 uv run --group docs mkdocs serve
 ```
 

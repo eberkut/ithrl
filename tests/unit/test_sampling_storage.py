@@ -67,7 +67,7 @@ def _progress(
     plan = SamplingBlockPlan(
         block_id="block-1",
         role="search",
-        reduction=SampledReductionPlan(
+        procedure=SampledReductionPlan(
             search=SampledSearchPhase(original=target, candidate=target),
             confirmation=SampledConfirmationPhase(
                 original=target, candidate=target, one_sided_confidence=0.95
@@ -289,7 +289,7 @@ def test_sampling_snapshot_checkpoint_is_revalidated_against_database(root: Path
         attempts=(SamplingAttempt(schedule_position=0, observation=observation),),
     )
     checkpoint = SampledReductionCheckpoint(
-        reduction=progress.plan.reduction,
+        reduction=progress.plan.preservation,
         original_identity=state.original_identity,
         original_candidate_digest=state.original_candidate_digest,
         best_candidate_digest=state.original_candidate_digest,

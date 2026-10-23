@@ -464,7 +464,7 @@ async def run_sampled_phases(
             plan = SamplingBlockPlan(
                 block_id=f"confirmation-{holdout_id}",
                 role="confirmation",
-                reduction=search.checkpoint.reduction,
+                procedure=search.checkpoint.reduction,
                 original_identity=state.original_identity,
                 candidate_identity=search.checkpoint.best_candidate_identity,
                 original_candidate_digest=state.original_candidate_digest,

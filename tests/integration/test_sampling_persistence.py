@@ -60,7 +60,7 @@ def test_interrupted_block_reopens_extends_and_publishes_without_reexecution(
     plan = SamplingBlockPlan(
         block_id="frozen-block",
         role="search",
-        reduction=reduction,
+        procedure=reduction,
         original_identity=identity,
         candidate_identity=identity.model_copy(update={"execution_plan_digest": "f" * 64}),
         original_candidate_digest="1" * 64,

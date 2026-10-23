@@ -284,7 +284,7 @@ def _validate_state_session(state: SampledRunState, session: SampledCliSession) 
             state.checkpoint is not None
             and state.checkpoint.reduction != session.experiment.reduction
         )
-        or any(block.plan.reduction != session.experiment.reduction for block in state.blocks)
+        or any(block.plan.procedure != session.experiment.reduction for block in state.blocks)
     ):
         raise SampledCliSessionError("session metadata differs from its owned run state")
 

@@ -306,7 +306,7 @@ def test_result_binds_durable_selection_and_unstarted_confirmation(
     plan = SamplingBlockPlan(
         block_id=f"confirmation-{holdout}",
         role="confirmation",
-        reduction=checkpoint.reduction,
+        procedure=checkpoint.reduction,
         original_identity=bundle.session.original_identity,
         candidate_identity=bundle.session.original_identity,
         original_candidate_digest=checkpoint.original_candidate_digest,

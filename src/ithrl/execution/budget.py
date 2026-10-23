@@ -67,7 +67,7 @@ def sampling_budget_refusal(
     attempt_cost: SamplingAttemptCost,
     confirmation_attempts: int,
     search_blocks: int,
-    role: Literal["search", "confirmation"],
+    role: Literal["search", "discovery", "simplification", "confirmation"],
 ) -> str | None:
     """Return why remaining sampling and protected confirmation capacity do not fit."""
 
@@ -89,8 +89,8 @@ def sampling_budget_refusal(
     ):
         if type(value) is not int or value < minimum:
             raise ValueError(f"{name} must be an integer of at least {minimum}")
-    if role not in {"search", "confirmation"}:
-        raise ValueError("role must be search or confirmation")
+    if role not in {"search", "discovery", "simplification", "confirmation"}:
+        raise ValueError("role must be exploratory or confirmation")
 
     confirmation_calls = confirmation_attempts * attempt_cost.provider_calls
     confirmation_seconds = confirmation_attempts * attempt_cost.runner_seconds
@@ -106,7 +106,7 @@ def sampling_budget_refusal(
     future_seconds = remaining_attempts * (
         attempt_cost.runner_seconds + allowance.inter_attempt_delay_seconds
     )
-    if role == "search":
+    if role != "confirmation":
         future_calls += allowance.confirmation_provider_calls
         future_seconds += allowance.confirmation_runner_seconds
         future_seconds += confirmation_attempts * allowance.inter_attempt_delay_seconds

@@ -72,7 +72,7 @@ def _plan(**changes: Any) -> SamplingBlockPlan:
         {
             "block_id": "block-1",
             "role": "search",
-            "reduction": reduction,
+            "procedure": reduction,
             "original_identity": identity,
             "candidate_identity": identity.model_copy(update={"execution_plan_digest": "f" * 64}),
             "original_candidate_digest": "1" * 64,
@@ -559,7 +559,7 @@ def test_cached_checkpoint_keeps_admitted_trials_and_selection_across_append_rec
         )
         file.admit_block(store, next_plan)
         checkpoint = SampledReductionCheckpoint(
-            reduction=plan.reduction,
+            reduction=plan.preservation,
             original_identity=plan.original_identity,
             original_candidate_digest=plan.original_candidate_digest,
             best_candidate_digest=plan.candidate_digest,
@@ -599,7 +599,7 @@ def test_completed_block_remains_durable_while_checkpoint_preserves_previous_sel
     file, store, plan = _create(tmp_path)
     with file.acquire_lock(store):
         checkpoint = SampledReductionCheckpoint(
-            reduction=plan.reduction,
+            reduction=plan.preservation,
             original_identity=plan.original_identity,
             original_candidate_digest=plan.original_candidate_digest,
             best_candidate_digest=plan.original_candidate_digest,
@@ -886,7 +886,7 @@ def test_calibration_references_freeze_when_search_starts(tmp_path: Path, bounda
             file.admit_block(store, plan)
         else:
             checkpoint = SampledReductionCheckpoint(
-                reduction=plan.reduction,
+                reduction=plan.preservation,
                 original_identity=plan.original_identity,
                 original_candidate_digest=plan.original_candidate_digest,
                 best_candidate_digest=plan.original_candidate_digest,

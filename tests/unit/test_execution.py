@@ -84,7 +84,10 @@ def test_fake_capability_resolves_bounded_credential_free_plan(tmp_path: Path) -
     assert report.actions_executed == 0
     assert report.plan is not None
     assert report.plan.candidate_materialization == "exact-request"
-    assert report.plan.capability.supported_context_operations == ("dependency-closed-removal",)
+    assert report.plan.capability.supported_context_operations == (
+        "dependency-closed-removal",
+        "append-text",
+    )
     assert report.plan.capability.reconstruction_method == "exact-request-json-pointer-v1"
     assert report.plan.capability.provider_transport == "forbidden"
     assert report.plan.capability.provider_calls_per_attempt == 0

@@ -21,14 +21,16 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from ithrl.context import content_digest
 from ithrl.experiment import (
     MAX_SAMPLING_ATTEMPTS,
+    SampledChangePlan,
     SampledReductionPlan,
     SamplingArmTarget,
     SamplingEligibilityPolicy,
+    SamplingProcedure,
 )
 from ithrl.path_safety import UnsafePathError, private_file_lock
 from ithrl.runner.evidence import AttemptEvidence
 
-_STORE_SCHEMA_VERSION = 2
+_STORE_SCHEMA_VERSION = 1
 _METADATA_TABLE = "ithrl_metadata"
 _OBSERVATION_COLUMNS = (
     "observation_id",
@@ -70,6 +72,8 @@ class ObservationRole(StrEnum):
 
     CALIBRATION = "calibration"
     SEARCH = "search"
+    DISCOVERY = "discovery"
+    SIMPLIFICATION = "simplification"
     CONFIRMATION = "confirmation"
     NEIGHBOR_CONFIRMATION = "neighbor-confirmation"
 
@@ -219,7 +223,7 @@ class AttemptCounts(BaseModel):
 
 
 type SamplingArm = Literal["baseline", "candidate"]
-type SamplingRole = Literal["search", "confirmation"]
+type SamplingRole = Literal["search", "discovery", "simplification", "confirmation"]
 type _Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 
 
@@ -237,12 +241,13 @@ class SamplingBlockPlan(_SamplingContract):
 
     block_id: Annotated[str, Field(min_length=1, max_length=128)]
     role: SamplingRole
-    reduction: SampledReductionPlan
+    procedure: SamplingProcedure
     original_identity: ObservationIdentity
     candidate_identity: ObservationIdentity
     original_candidate_digest: _Digest
     candidate_digest: _Digest
     frozen_at: datetime
+    selected_at: datetime | None = None
     schedule_seed: Annotated[int, Field(ge=0, le=2**64 - 1)]
     schedule: Annotated[tuple[SamplingArm, ...], Field(max_length=2 * MAX_SAMPLING_ATTEMPTS)]
     provider_calls_per_attempt: Annotated[int, Field(ge=1, le=2)]
@@ -256,6 +261,22 @@ class SamplingBlockPlan(_SamplingContract):
 
     @model_validator(mode="after")
     def validate_block(self) -> SamplingBlockPlan:
+        change = isinstance(self.procedure, SampledChangePlan)
+        if (change and self.role == "search") or (
+            not change and self.role in {"discovery", "simplification"}
+        ):
+            raise ValueError("sampling role does not belong to the frozen procedure")
+        if isinstance(self.procedure, SampledChangePlan) and (
+            self.original_identity.algorithm_digest != self.procedure.campaign_digest
+        ):
+            raise ValueError("change observations must bind the complete campaign policy")
+        if change and self.role == "confirmation":
+            if self.selected_at is None or self.selected_at.tzinfo is None:
+                raise ValueError("change confirmation requires a frozen selection time")
+            if self.frozen_at <= self.selected_at:
+                raise ValueError("fresh confirmation must follow selection")
+        elif self.selected_at is not None:
+            raise ValueError("selection time belongs only to change confirmation")
         original = self.original_identity.model_dump(exclude={"execution_plan_digest"})
         candidate = self.candidate_identity.model_dump(exclude={"execution_plan_digest"})
         if original != candidate:
@@ -269,8 +290,18 @@ class SamplingBlockPlan(_SamplingContract):
         return self
 
     def targets_for(self, arm: SamplingArm) -> SamplingArmTarget:
-        phase = self.reduction.search if self.role == "search" else self.reduction.confirmation
+        phase = (
+            self.procedure.confirmation if self.role == "confirmation" else self.procedure.search
+        )
         return phase.original if arm == "baseline" else phase.candidate
+
+    @property
+    def preservation(self) -> SampledReductionPlan:
+        """Refuse using changed-behavior evidence as a preservation comparison."""
+
+        if not isinstance(self.procedure, SampledReductionPlan):
+            raise ValueError("preservation requires a reduction sampling procedure")
+        return self.procedure
 
     @property
     def digest(self) -> str:
@@ -278,7 +309,7 @@ class SamplingBlockPlan(_SamplingContract):
 
     @property
     def expires_at(self) -> datetime:
-        return self.frozen_at + timedelta(seconds=self.reduction.freshness_seconds)
+        return self.frozen_at + timedelta(seconds=self.procedure.freshness_seconds)
 
     @property
     def required_provider_call_budget(self) -> int:
@@ -479,7 +510,7 @@ class SamplingBlockEvidence(_SamplingContract):
                 return "stale-observation"
             if not observation.valid:
                 if not item.replaceable and not (
-                    self.plan.reduction.eligibility_policy == "safe-provider-overload"
+                    self.plan.procedure.eligibility_policy == "safe-provider-overload"
                     and observation.safe_provider_overload
                 ):
                     return "ineligible-exclusion"
@@ -1107,7 +1138,7 @@ _SCHEMA_STATEMENTS = (
     target_digest TEXT NOT NULL,
     algorithm_digest TEXT NOT NULL,
     role TEXT NOT NULL CHECK (
-        role IN ('calibration', 'search', 'confirmation', 'neighbor-confirmation')
+        role IN ('calibration', 'search', 'discovery', 'simplification', 'confirmation', 'neighbor-confirmation')
     ),
     arm TEXT NOT NULL CHECK (arm IN ('baseline', 'candidate', 'selected')),
     attempt INTEGER NOT NULL CHECK (attempt >= 1),

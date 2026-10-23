@@ -98,7 +98,7 @@ jobs:
           enable-cache: true
 
       - name: Synchronize locked environment
-        run: uv sync --locked --all-groups
+        run: uv sync --locked --all-groups --all-extras
 
       - name: Check lockfile
         run: uv lock --check
@@ -139,12 +139,12 @@ jobs:
           enable-cache: true
 
       - name: Synchronize locked environment
-        run: uv sync --locked --all-groups
+        run: uv sync --locked --all-groups --all-extras
 
       - name: Audit locked dependencies
         shell: bash
         run: |
-          uv export --locked --all-groups --no-emit-project --format requirements.txt |
+          uv export --locked --all-groups --all-extras --no-emit-project --format requirements.txt |
             uv run --locked --group audit pip-audit --strict --disable-pip --require-hashes -r /dev/stdin
 
       - name: Run tests

@@ -88,7 +88,7 @@ def _block(
     plan = SamplingBlockPlan(
         block_id=block_id,
         role=role,
-        reduction=reduction,
+        procedure=reduction,
         original_identity=_identity(),
         candidate_identity=_identity("3" * 64),
         original_candidate_digest=ORIGINAL,

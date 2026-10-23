@@ -334,7 +334,7 @@ def _sampled_screen_action(evidence: SamplingBlockEvidence) -> SampledScreenActi
     difference = Fraction(candidate.matches, candidate.valid) - Fraction(
         original.matches, original.valid
     )
-    return "admit" if difference >= -Fraction(evidence.plan.reduction.margin) else "retain"
+    return "admit" if difference >= -Fraction(evidence.plan.preservation.margin) else "retain"
 
 
 class SampledReductionCheckpoint(BaseModel):
@@ -385,7 +385,7 @@ class SampledReductionCheckpoint(BaseModel):
             if plan.role != "search":
                 raise ValueError("sampled checkpoints require search blocks")
             if (
-                plan.reduction != self.reduction
+                plan.procedure != self.reduction
                 or plan.original_identity != self.original_identity
                 or plan.original_candidate_digest != self.original_candidate_digest
             ):
@@ -459,24 +459,26 @@ class SampledConfirmation(BaseModel):
     def from_evidence(cls, evidence: SamplingBlockEvidence) -> SampledConfirmation:
         outcome = FixedSampleOutcome.INCOMPLETE if evidence.eligible else None
         if evidence.complete and evidence.eligible:
-            phase = evidence.plan.reduction.confirmation
+            phase = evidence.plan.preservation.confirmation
             outcome = classify_fixed_sample(
                 BinomialSample(evidence.candidate_counts.matches, evidence.candidate_counts.valid),
                 BinomialSample(evidence.original_counts.matches, evidence.original_counts.valid),
                 required_candidate=phase.candidate.required_valid,
                 required_original=phase.original.required_valid,
                 confidence=phase.one_sided_confidence,
-                margin=evidence.plan.reduction.margin,
+                margin=evidence.plan.preservation.margin,
             ).outcome
         return cls(evidence=evidence, outcome=outcome)
 
     @model_validator(mode="after")
     def validate_outcome(self) -> SampledConfirmation:
+        if not isinstance(self.evidence.plan.procedure, SampledReductionPlan):
+            raise ValueError("preservation confirmation requires a reduction procedure")
         if self.evidence.plan.role != "confirmation":
             raise ValueError("sampled confirmation requires confirmation evidence")
         expected = FixedSampleOutcome.INCOMPLETE if self.evidence.eligible else None
         if self.evidence.complete and self.evidence.eligible:
-            phase = self.evidence.plan.reduction.confirmation
+            phase = self.evidence.plan.preservation.confirmation
             candidate = self.evidence.candidate_counts
             original = self.evidence.original_counts
             expected = classify_fixed_sample(
@@ -485,7 +487,7 @@ class SampledConfirmation(BaseModel):
                 required_candidate=phase.candidate.required_valid,
                 required_original=phase.original.required_valid,
                 confidence=phase.one_sided_confidence,
-                margin=self.evidence.plan.reduction.margin,
+                margin=self.evidence.plan.preservation.margin,
             ).outcome
         if self.outcome != expected:
             raise ValueError("confirmation outcome does not match complete eligible evidence")

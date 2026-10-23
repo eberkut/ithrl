@@ -17,6 +17,14 @@ from ithrl.context import (
     validate_json_limits,
 )
 from ithrl.decisions import DecisionEvidence
+from ithrl.mutation import (
+    EditableText,
+    MutationError,
+    TextMutation,
+    append_message_text,
+    editable_message_text,
+    request_text_item,
+)
 
 
 def case_digest(
@@ -115,8 +123,37 @@ class CaseEvidence:
     def digest(self) -> str:
         return self._digest
 
-    def materialize(self, remove_ids: Iterable[str] = ()) -> JsonObject:
-        return self._context.materialize(self.request, remove_ids)
+    def materialize(
+        self, remove_ids: Iterable[str] = (), *, mutation: TextMutation | None = None
+    ) -> JsonObject:
+        removed = tuple(remove_ids)
+        if mutation is not None and not mutation.is_empty and removed:
+            raise MutationError("text mutation requires the unchanged original context")
+        request = self._context.materialize(self.request, removed)
+        if mutation is not None:
+            for edit in mutation.edits:
+                node = self._context.by_id.get(edit.context_id)
+                if node is None:
+                    raise MutationError("mutation addresses an unknown context node")
+                index, message = request_text_item(request, node)
+                inputs = request["input"]
+                if not isinstance(inputs, list):
+                    raise MutationError("mutation requires an input-message list")
+                inputs[index] = append_message_text(message, edit)
+        return request
+
+    def editable_text(self) -> tuple[EditableText, ...]:
+        """Discover prior-user request text without a runner or provider call."""
+
+        request = self.request
+        found = []
+        for node in self._context.nodes:
+            try:
+                _, message = request_text_item(request, node)
+            except MutationError:
+                continue
+            found.extend(editable_message_text(node, message))
+        return tuple(found)
 
 
 def validate_case_inputs(

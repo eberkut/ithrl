@@ -11,6 +11,7 @@ from ithrl.adapters.registry import parse_session_bytes
 from ithrl.case import CaseFormatError
 from ithrl.context import ContextNode, JsonObject, JsonValue
 from ithrl.extraction import validate_extracted_case
+from ithrl.mutation import EditableText, MutationError, append_message_text, editable_message_text
 from ithrl.runner.codex.policy import (
     CAPTURE_TYPE,
     MATERIALIZATION,
@@ -74,6 +75,7 @@ class CodexMaterialization:
     base_instructions: str | None = field(repr=False)
     developer_instructions: str | None = field(repr=False)
     history: tuple[JsonObject, ...] = field(repr=False)
+    history_context_ids: tuple[str, ...] = field(repr=False)
     turn_input: CodexTurnInput = field(repr=False)
 
 
@@ -160,7 +162,16 @@ def _materialize_session(
             "the candidate removes the input that triggered the selected decision",
         )
 
+    edit = next(iter(attempt.candidate.mutation.edits), None)
+    if edit is not None and edit.context_id == trigger_id:
+        raise CodexMaterializationError(
+            CodexMaterializationErrorCode.MISSING_TRIGGER,
+            "mutation cannot change the current decision input",
+        )
+    applied = edit is None
+
     history: list[JsonObject] = []
+    history_context_ids: list[str] = []
     trigger: JsonObject | None = None
     for node_id, record in selected:
         record_type = _string(record.get("type"))
@@ -169,7 +180,16 @@ def _materialize_session(
             if node_id == trigger_id:
                 trigger = payload
             else:
+                if edit is not None and node_id == edit.context_id:
+                    try:
+                        payload = append_message_text(payload, edit)
+                    except MutationError as error:
+                        raise CodexMaterializationError(
+                            CodexMaterializationErrorCode.UNSUPPORTED_CONTEXT, str(error)
+                        ) from error
+                    applied = True
                 history.append(copy.deepcopy(payload))
+                history_context_ids.append(node_id)
             continue
         if record_type not in _IGNORED_RECORD_TYPES:
             raise CodexMaterializationError(
@@ -177,6 +197,11 @@ def _materialize_session(
                 "the retained Codex context contains an unsupported record",
             )
 
+    if not applied:
+        raise CodexMaterializationError(
+            CodexMaterializationErrorCode.UNSUPPORTED_CONTEXT,
+            "mutation does not address a retained prior user message",
+        )
     if trigger is None:
         raise CodexMaterializationError(
             CodexMaterializationErrorCode.MISSING_TRIGGER,
@@ -202,7 +227,24 @@ def _materialize_session(
             allow_document=False,
         ),
         history=tuple(history),
+        history_context_ids=tuple(history_context_ids),
         turn_input=_turn_input(trigger, history),
+    )
+
+
+def editable_codex_text(attempt: PreparedAttempt) -> tuple[EditableText, ...]:
+    """Pure text discovery on the verified original, with the trigger excluded."""
+
+    if attempt.candidate.removed_context_ids or not attempt.candidate.mutation.is_empty:
+        raise MutationError("text discovery requires the unchanged original")
+    materialized = materialize_codex_attempt(attempt)
+    nodes = attempt.evidence.context.by_id
+    return tuple(
+        site
+        for node_id, message in zip(
+            materialized.history_context_ids, materialized.history, strict=True
+        )
+        for site in editable_message_text(nodes[node_id], message)
     )
 
 

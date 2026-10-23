@@ -383,6 +383,9 @@ class SampledRunState(_SampledStateContract):
         if len({item.plan.block_id for item in self.blocks}) != len(self.blocks):
             raise ValueError("block IDs must be unique")
         previous_time = self.started_at
+        confirmations = tuple(b for b in self.blocks if b.plan.role == "confirmation")
+        if len(confirmations) > 1 or (confirmations and self.blocks[-1] != confirmations[0]):
+            raise ValueError("only one final confirmation block is permitted")
         for index, progress in enumerate(self.blocks):
             plan = progress.plan
             if plan.original_identity != self.original_identity:
@@ -396,8 +399,8 @@ class SampledRunState(_SampledStateContract):
             previous_time = plan.frozen_at
             if index + 1 < len(self.blocks) and not progress.archived:
                 raise ValueError("only the final block may remain active")
-            if self.blocks and plan.reduction != self.blocks[0].plan.reduction:
-                raise ValueError("blocks must preserve the frozen reduction plan")
+            if self.blocks and plan.procedure != self.blocks[0].plan.procedure:
+                raise ValueError("blocks must preserve the frozen sampling procedure")
         references = tuple(item for block in self.blocks for item in block.observations)
         observation_ids = (
             *self.calibration_observation_ids,
@@ -437,7 +440,7 @@ class SampledRunState(_SampledStateContract):
             ):
                 raise ValueError("selected search checkpoint cannot change")
             if (
-                plan.reduction != checkpoint.reduction
+                plan.procedure != checkpoint.reduction
                 or plan.original_identity != checkpoint.original_identity
                 or plan.original_candidate_digest != checkpoint.original_candidate_digest
                 or plan.candidate_identity != checkpoint.best_candidate_identity
@@ -678,6 +681,14 @@ class SampledRunStateFile:
     ) -> tuple[tuple[Observation, ...], tuple[SamplingBlockEvidence, ...]]:
         observations = SampledRunStateFile._calibration(state, store)
         blocks = tuple(SampledRunStateFile._hydrate(progress, store) for progress in state.blocks)
+        if blocks and blocks[-1].plan.selected_at is not None:
+            selected_at = blocks[-1].plan.selected_at
+            if any(
+                attempt.observation.recorded_at > selected_at
+                for block in blocks[:-1]
+                for attempt in block.attempts
+            ) or any(observation.recorded_at > selected_at for observation in observations):
+                raise RunStateError("final change selection must follow all exploratory evidence")
         attempt_ids = [item.attempt_evidence.attempt_id for item in observations]
         attempt_ids.extend(attempt_id for block in blocks for attempt_id in block.attempt_ids)
         if len(set(attempt_ids)) != len(attempt_ids):
@@ -694,7 +705,7 @@ class SampledRunStateFile:
             if (
                 checkpoint.original_identity != state.original_identity
                 or checkpoint.original_candidate_digest != state.original_candidate_digest
-                or (state.blocks and checkpoint.reduction != state.blocks[0].plan.reduction)
+                or (state.blocks and checkpoint.reduction != state.blocks[0].plan.procedure)
                 or any(by_digest.get(block.plan.digest) != block for block in checkpoint.blocks)
             ):
                 raise RunStateError("sampled checkpoint differs from authoritative block progress")

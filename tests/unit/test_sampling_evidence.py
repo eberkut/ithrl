@@ -53,7 +53,7 @@ def _plan(**changes: Any) -> SamplingBlockPlan:
     values = {
         "block_id": "block-1",
         "role": "search",
-        "reduction": reduction,
+        "procedure": reduction,
         "original_identity": identity,
         "candidate_identity": identity.model_copy(update={"execution_plan_digest": "f" * 64}),
         "original_candidate_digest": "1" * 64,
