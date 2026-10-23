@@ -295,3 +295,41 @@ def test_rehearsal_refuses_existing_tag_and_lookup_failure(
         check=False,
     )
     assert (result.returncode == 0) is (case == "absent")
+
+
+@pytest.mark.parametrize(
+    ("headers", "api_status", "succeeds"),
+    [
+        ("HTTP/2.0 200 OK\n", 0, True),
+        ("X-GitHub-Dependency-Graph-Snapshot-Warnings: encoded-warning\r\n", 0, False),
+        ("", 1, False),
+    ],
+)
+def test_dependency_snapshot_gate(
+    tmp_path: Path, headers: str, api_status: int, succeeds: bool
+) -> None:
+    gh = tmp_path / "gh"
+    gh.write_text('#!/bin/sh\nprintf "%s" "$HEADERS"\nexit "$API_STATUS"\n')
+    gh.chmod(0o700)
+    result = subprocess.run(  # noqa: S603 - checked-in gate with a fixture-only gh executable.
+        [
+            "/bin/bash",
+            "--noprofile",
+            "--norc",
+            "-euo",
+            "pipefail",
+            "-c",
+            CI["jobs"]["dependency-review"]["steps"][0]["run"],
+        ],
+        env={
+            "PATH": f"{tmp_path}:{os.defpath}",
+            "GITHUB_REPOSITORY": "example/project",
+            "BASE_SHA": "1" * 40,
+            "HEAD_SHA": "2" * 40,
+            "HEADERS": headers,
+            "API_STATUS": str(api_status),
+        },
+        capture_output=True,
+        check=False,
+    )
+    assert (result.returncode == 0) is succeeds

@@ -74,8 +74,12 @@ than every version permitted by package dependency ranges.
 
 GitHub's dependency graph and Dependency Review use the inventory GitHub has for each commit.
 Before relying on them for `uv.lock` coverage, compare the hosted package/version inventory with
-the locked export on each supported Python version. Keep the lockfile audit above as the CI gate;
-Dependabot version updates alone do not establish dependency-graph coverage.
+the locked export on each supported Python version. The PR dependency-review job rejects newly
+introduced known vulnerabilities at any severity across runtime, development and unknown scopes.
+It uses a read-only token and does not check out or execute PR code. If it reports incomplete
+dependency snapshots, wait for GitHub's graph update and rerun the job. No license allowlist is
+enforced by this check. Keep the lockfile audit above as the full-inventory CI gate; Dependabot
+version updates alone do not establish dependency-graph coverage.
 
 CI runs weekly on Monday at 06:17 UTC to detect new advisories. Dependabot checks Python, Actions
 and pre-commit dependencies weekly, groups minor/patch updates and leaves majors individually
