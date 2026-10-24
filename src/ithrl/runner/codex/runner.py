@@ -144,7 +144,10 @@ class CodexRunner:
             materialized = materialize_codex_attempt(attempt)
             _validate_materialized_identity(materialized, attempt)
         except CodexMaterializationError as error:
-            if attempt.candidate.removed_context_ids and error.code in {
+            changed = (
+                attempt.candidate.removed_context_ids or not attempt.candidate.mutation.is_empty
+            )
+            if changed and error.code in {
                 CodexMaterializationErrorCode.MISSING_TRIGGER,
                 CodexMaterializationErrorCode.UNSUPPORTED_CONTEXT,
             }:

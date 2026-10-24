@@ -233,6 +233,31 @@ class SampledReductionPlan(_ImmutableContract):
     freshness_seconds: Annotated[int, Field(ge=1, le=MAX_SAMPLING_FRESHNESS_SECONDS)]
 
 
+class SampledChangeConfirmation(_ImmutableContract):
+    """Fresh independent arms with split one-sided exact-binomial tail errors."""
+
+    original: SamplingArmTarget
+    candidate: SamplingArmTarget
+    method: Literal["clopper-pearson-union-bound"] = "clopper-pearson-union-bound"
+    alpha: Annotated[float, Field(gt=0, lt=1, allow_inf_nan=False)]
+
+
+class SampledChangePlan(_ImmutableContract):
+    """Sampling policy bound to the complete owning fuzz campaign configuration."""
+
+    campaign_digest: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    objective: Literal["decrease-target-rate"] = "decrease-target-rate"
+    search: SampledSearchPhase
+    confirmation: SampledChangeConfirmation
+    screening_decrease: Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
+    minimum_decrease: Annotated[float, Field(ge=0, lt=1, allow_inf_nan=False)]
+    eligibility_policy: SamplingEligibilityPolicy
+    freshness_seconds: Annotated[int, Field(ge=1, le=MAX_SAMPLING_FRESHNESS_SECONDS)]
+
+
+type SamplingProcedure = SampledReductionPlan | SampledChangePlan
+
+
 class SampledExperimentDefinition(_ImmutableContract):
     """Native calibration with an optional complete sampled reduction plan."""
 

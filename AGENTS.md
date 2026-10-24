@@ -18,15 +18,19 @@ use; capability, isolation, calibration, and live-use gates must pass for the ex
   and normalization. The shared runtime owns bounded process/state lifecycles; it is not a general
   filesystem or network sandbox.
 - Application workflow composes registered runners; `src/ithrl/cli/` handles selection and
-  presentation. Preserve public imports and versioned persisted contracts when moving code.
+  presentation. Update owning imports and persisted contracts together when moving code.
+- Before 1.0, keep project-owned schema tags at `1` while evolving formats directly. Breaking
+  format changes are acceptable; do not add migrations or compatibility layers. Keep current
+  structure, kind, evidence-identity and safety validation strict. Revisit schema versioning for 1.0.
 - Preserve unknown native records without interpreting or editing them until adapter and runner
   support is proven. Evidence support and experimental support are separate claims.
 
 ## Experimental invariants
 
 - `src/ithrl/sampling.py` owns sequential frozen-block collection, whole-block admission, and
-  durable dispatch reconciliation. Keep exploratory screening and candidate selection in the
-  reduction layer; collection alone establishes neither preservation nor search completion.
+  durable dispatch reconciliation. Keep exploratory screening and candidate selection in their
+  owning reduction/fuzz workflows; collection alone establishes neither a statistical verdict
+  nor search completion.
 - Sampled search uses exploratory screening. Establish preservation only through complete,
   eligible fresh confirmation of the durably selected candidate against the immutable original.
   Keep confirmation observations separate from calibration and search; never resume search after
@@ -68,7 +72,7 @@ use; capability, isolation, calibration, and live-use gates must pass for the ex
 
 ## Development and validation
 
-Use the locked `uv` environment: `uv sync --locked --all-groups`.
+Use the locked `uv` environment: `uv sync --locked --all-groups --all-extras`.
 `CONTRIBUTING.md` owns the [CI check sequence](CONTRIBUTING.md#checks); use those entrypoints
 rather than maintaining a separate validation procedure.
 

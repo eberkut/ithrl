@@ -914,10 +914,10 @@ def _run_report(
             classification = classify_fixed_sample(
                 BinomialSample(holdout.candidate_counts.matches, holdout.candidate_counts.valid),
                 BinomialSample(holdout.original_counts.matches, holdout.original_counts.valid),
-                required_candidate=holdout.plan.reduction.confirmation.candidate.required_valid,
-                required_original=holdout.plan.reduction.confirmation.original.required_valid,
-                confidence=holdout.plan.reduction.confirmation.one_sided_confidence,
-                margin=holdout.plan.reduction.margin,
+                required_candidate=holdout.plan.preservation.confirmation.candidate.required_valid,
+                required_original=holdout.plan.preservation.confirmation.original.required_valid,
+                confidence=holdout.plan.preservation.confirmation.one_sided_confidence,
+                margin=holdout.plan.preservation.margin,
             )
             if classification.interval is None:
                 raise ValueError("complete eligible confirmation lacks an interval")

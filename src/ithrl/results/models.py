@@ -260,7 +260,7 @@ class SampledReductionEvidence(_StrictImmutableModel):
             confirmation = self.confirmation.evidence
             plan = confirmation.plan
             if (
-                plan.reduction != checkpoint.reduction
+                plan.procedure != checkpoint.reduction
                 or plan.original_identity != checkpoint.original_identity
                 or plan.original_candidate_digest != checkpoint.original_candidate_digest
                 or plan.candidate_digest != self.selected_candidate_digest

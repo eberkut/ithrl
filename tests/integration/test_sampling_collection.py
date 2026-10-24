@@ -306,7 +306,7 @@ def _plan(
     return SamplingBlockPlan(
         block_id=block_id or f"{role}-block",
         role=role,
-        reduction=reduction,
+        procedure=reduction,
         original_identity=prepared.identity,
         candidate_identity=prepared.identity,
         original_candidate_digest=baseline.digest,

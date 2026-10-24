@@ -28,8 +28,9 @@ from ithrl.execution import (
     ResourceLimits,
     SafetyPolicy,
 )
+from ithrl.mutation import MutationError, TextMutation
 
-type AttemptPhase = Literal["calibration", "search", "confirmation"]
+type AttemptPhase = Literal["calibration", "search", "discovery", "simplification", "confirmation"]
 type AttemptArm = Literal["baseline", "candidate", "selected"]
 type TerminationReason = Literal["completed", "timeout", "cancelled", "failed"]
 type ProcessOutcome = Literal["not-started", "exited", "terminated", "unknown"]
@@ -48,7 +49,9 @@ class _ImmutableContract(BaseModel):
 
 
 class Candidate(_ImmutableContract):
-    """One dependency-valid context partition bound to an execution plan."""
+    """A context partition and optional text intervention bound to an execution plan."""
+
+    model_config = ConfigDict(hide_input_in_errors=True)
 
     schema_version: Literal[1] = 1
     case_digest: Annotated[str, Field(pattern=_DIGEST_PATTERN)]
@@ -59,6 +62,7 @@ class Candidate(_ImmutableContract):
     retained_context_ids: Annotated[tuple[str, ...], Field(max_length=MAX_CONTEXT_NODES)]
     removed_context_ids: Annotated[tuple[str, ...], Field(max_length=MAX_CONTEXT_NODES)]
     materialization: Literal["exact-request", "source-backed"]
+    mutation: TextMutation = Field(default_factory=TextMutation)
 
     @model_validator(mode="after")
     def validate_partition(self) -> Candidate:
@@ -68,6 +72,10 @@ class Candidate(_ImmutableContract):
             raise ValueError("removed_context_ids must not contain duplicates")
         if set(self.retained_context_ids) & set(self.removed_context_ids):
             raise ValueError("retained and removed context IDs must be disjoint")
+        if not self.mutation.is_empty and self.removed_context_ids:
+            raise ValueError("text mutation requires the unchanged original context partition")
+        if any(edit.context_id not in self.retained_context_ids for edit in self.mutation.edits):
+            raise ValueError("mutation must address a retained context node")
         return self
 
     @property
@@ -95,6 +103,8 @@ class PreparedAttempt:
         allowed_phase_arms = {
             "calibration": ("baseline",),
             "search": ("baseline", "candidate"),
+            "discovery": ("baseline", "candidate"),
+            "simplification": ("baseline", "candidate"),
             "confirmation": ("baseline", "candidate", "selected"),
         }
         if self.phase not in allowed_phase_arms or self.arm not in allowed_phase_arms[self.phase]:
@@ -364,11 +374,25 @@ def prepare_candidate(
     evidence: CaseEvidence,
     execution_plan: ResolvedExecutionPlan,
     remove_ids: tuple[str, ...] | frozenset[str] = (),
+    *,
+    mutation: TextMutation | None = None,
 ) -> Candidate:
     """Build a dependency-valid candidate without interpreting native evidence."""
 
     if execution_plan.case_digest != evidence.digest:
         raise ValueError("execution plan does not belong to the case")
+    mutation = (
+        TextMutation() if mutation is None else TextMutation.model_validate(mutation.model_dump())
+    )
+    if not mutation.is_empty:
+        if "append-text" not in execution_plan.capability.supported_context_operations:
+            raise ValueError("execution plan does not support text mutation")
+        for edit in mutation.edits:
+            node = evidence.context.by_id.get(edit.context_id)
+            if node is None or not node.mutable or node.protected:
+                raise MutationError("mutation requires an editable context node")
+        if evidence.has_request:
+            evidence.materialize(mutation=mutation)
     removed = evidence.context.dependency_closure(remove_ids)
     retained_ids = tuple(node.id for node in evidence.context.nodes if node.id not in removed)
     removed_ids = tuple(node.id for node in evidence.context.nodes if node.id in removed)
@@ -382,6 +406,7 @@ def prepare_candidate(
         retained_context_ids=retained_ids,
         removed_context_ids=removed_ids,
         materialization=materialization,
+        mutation=mutation,
     )
 
 
@@ -414,6 +439,7 @@ def _validate_candidate_evidence(attempt: PreparedAttempt) -> None:
         evidence,
         attempt.execution_plan,
         frozenset(candidate.removed_context_ids),
+        mutation=candidate.mutation,
     )
     if candidate != expected:
         raise ValueError("candidate is not the canonical dependency-valid case partition")

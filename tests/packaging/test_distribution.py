@@ -62,7 +62,15 @@ RUNTIME_MODULES = frozenset(
         PurePosixPath("ithrl/execution/preflight.py"),
         PurePosixPath("ithrl/experiment.py"),
         PurePosixPath("ithrl/extraction.py"),
+        PurePosixPath("ithrl/fuzz/__init__.py"),
+        PurePosixPath("ithrl/fuzz/contracts.py"),
+        PurePosixPath("ithrl/fuzz/deterministic.py"),
+        PurePosixPath("ithrl/fuzz/generation.py"),
+        PurePosixPath("ithrl/fuzz/sampling.py"),
+        PurePosixPath("ithrl/fuzz/simplify.py"),
+        PurePosixPath("ithrl/fuzz/statistics.py"),
         PurePosixPath("ithrl/measurement.py"),
+        PurePosixPath("ithrl/mutation.py"),
         PurePosixPath("ithrl/observations.py"),
         PurePosixPath("ithrl/path_safety.py"),
         PurePosixPath("ithrl/reduce/__init__.py"),
@@ -364,6 +372,43 @@ def _assert_installed_workflow(wheel: Path, tmp_path: Path, expected_version: st
     request = json.loads((summary_path.parent / "request.json").read_text(encoding="utf-8"))
     assert [item["content"] for item in request["input"]] == ["A", "C"]
     _assert_installed_resume(executable, runtime, child_environment)
+    _run(
+        str(python),
+        "-c",
+        "from importlib.util import find_spec\n"
+        "assert find_spec('scipy') is None\n"
+        "from ithrl.fuzz.statistics import require_fuzz_numerics\n"
+        "try:\n"
+        "    require_fuzz_numerics()\n"
+        "except ImportError as error:\n"
+        "    assert 'ithrl[fuzz]' in str(error)\n"
+        "else:\n"
+        "    raise AssertionError('missing optional numerical dependency was accepted')\n",
+        cwd=runtime,
+        env=child_environment,
+    )
+
+
+def test_installed_fuzz_extra_provides_exact_numerics(
+    distributions: tuple[Path, Path], tmp_path: Path
+) -> None:
+    wheel, _ = distributions
+    environment = tmp_path / "fuzz-environment"
+    _run("uv", "venv", "--python", sys.executable, str(environment), cwd=tmp_path)
+    python = environment / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    _run("uv", "pip", "install", "--python", str(python), f"{wheel}[fuzz]", cwd=tmp_path)
+    _run(
+        str(python),
+        "-I",
+        "-c",
+        "from ithrl.fuzz.statistics import confirm_change\n"
+        "from ithrl.fuzz.contracts import FuzzOutcome\n"
+        "from ithrl.statistics import BinomialSample\n"
+        "result = confirm_change(BinomialSample(20,20), BinomialSample(0,20), "
+        "required_original=20, required_mutant=20, alpha=.05, minimum_decrease=.1)\n"
+        "assert result.outcome is FuzzOutcome.CONFIRMED_CHANGE\n",
+        cwd=tmp_path,
+    )
 
 
 def _assert_installed_resume(executable: Path, runtime: Path, environment: dict[str, str]) -> None:

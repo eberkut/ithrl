@@ -71,7 +71,9 @@ class FakeRunner:
                 RunnerErrorCode.PREPARATION,
                 "fake runner requires an exact provider request",
             )
-        request = attempt.evidence.materialize(attempt.candidate.removed_context_ids)
+        request = attempt.evidence.materialize(
+            attempt.candidate.removed_context_ids, mutation=attempt.candidate.mutation
+        )
         strings = set(_collect_strings(request.get("input", [])))
         marker_sets = (self.required_markers, *self.alternative_marker_sets)
         matched = any(required <= strings for required in marker_sets)

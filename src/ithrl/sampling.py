@@ -14,8 +14,9 @@ from ithrl.execution.budget import (
     sampling_attempt_cost,
     sampling_budget_refusal,
 )
-from ithrl.experiment import SampledExperimentDefinition
+from ithrl.experiment import SampledChangePlan, SampledExperimentDefinition
 from ithrl.measurement import RunnerExecutionError, observe_once
+from ithrl.mutation import TextMutation
 from ithrl.observations import (
     Observation,
     ObservationArm,
@@ -89,6 +90,7 @@ async def collect_sampling_block(
     store: ObservationStore,
     clock: Callable[[], datetime] = _now,
     verify_independence: Callable[[Observation], str | None] | None = None,
+    mutation: TextMutation | None = None,
 ) -> SamplingCollectionResult:
     """Admit a complete bounded block, collect serially, or retain an auditable refusal.
 
@@ -117,6 +119,7 @@ async def collect_sampling_block(
             store=store,
             clock=clock,
             verify_independence=verify_independence,
+            mutation=mutation,
         )
 
 
@@ -131,12 +134,15 @@ async def _collect_sampling_block_owned(
     store: ObservationStore,
     clock: Callable[[], datetime] = _now,
     verify_independence: Callable[[Observation], str | None] | None = None,
+    mutation: TextMutation | None = None,
 ) -> SamplingCollectionResult:
     """Collect while the caller owns run/store locks across the composed search."""
 
     state_file._require_lock(store)
     originals = prepare_candidate(evidence, original.execution_plan)
-    selected = prepare_candidate(evidence, candidate.execution_plan, removed_context_ids)
+    selected = prepare_candidate(
+        evidence, candidate.execution_plan, removed_context_ids, mutation=mutation
+    )
     inputs = {"baseline": (original, originals), "candidate": (candidate, selected)}
     _validate_inputs(evidence, plan, inputs)
     cost = sampling_attempt_cost(original.runner.capability_profile, original.resource_limits)
@@ -185,7 +191,7 @@ async def _collect_sampling_block_owned(
         return _result(state_file, store, plan, clock(), "ineligible-prior-block", block)
     if (
         not active
-        and plan.role == "search"
+        and plan.role != "confirmation"
         and any(not earlier.complete for earlier in prior_blocks)
     ):
         return _result(state_file, store, plan, clock(), "unfinished-prior-block", block)
@@ -230,7 +236,7 @@ async def _collect_sampling_block_owned(
             arm=ObservationArm(arm),
         )
         if any(
-            not item.allows_fresh_attempt(plan.reduction.eligibility_policy) for item in previous
+            not item.allows_fresh_attempt(plan.procedure.eligibility_policy) for item in previous
         ):
             return SamplingCollectionResult(block, usage, "unsafe-prior-attempt")
         delay = sampling_pacing_delay(state, store, clock())
@@ -274,7 +280,7 @@ async def _collect_sampling_block_owned(
                 identity=prepared.identity,
                 store=store,
                 attempt=attempt,
-                eligibility_policy=plan.reduction.eligibility_policy,
+                eligibility_policy=plan.procedure.eligibility_policy,
             )
         except RunnerExecutionError as error:
             if error.observation is None:
@@ -312,7 +318,11 @@ def _validate_inputs(
         profile = prepared.runner.capability_profile
         if (
             not isinstance(prepared.experiment, SampledExperimentDefinition)
-            or prepared.experiment.reduction != plan.reduction
+            or (
+                identity.algorithm_digest != plan.procedure.campaign_digest
+                if isinstance(plan.procedure, SampledChangePlan)
+                else prepared.experiment.reduction != plan.procedure
+            )
             or prepared.identity != identity
             or partition.digest != digest
             or profile.deterministic
@@ -366,7 +376,7 @@ def _budget_reason(
     future_seconds = remaining * (cost.runner_seconds + state.allowance.inter_attempt_delay_seconds)
     if elapsed + timedelta(seconds=future_seconds) >= plan.expires_at:
         return "freshness-budget"
-    confirmation = plan.reduction.confirmation
+    confirmation = plan.procedure.confirmation
     return sampling_budget_refusal(
         allowance=state.allowance,
         charged_provider_calls=usage.charged_provider_calls,
@@ -376,8 +386,8 @@ def _budget_reason(
         confirmation_attempts=(
             confirmation.original.max_attempts + confirmation.candidate.max_attempts
         ),
-        search_blocks=sum(progress.plan.role == "search" for progress in state.blocks)
-        + int(not active and plan.role == "search"),
+        search_blocks=sum(progress.plan.role != "confirmation" for progress in state.blocks)
+        + int(not active and plan.role != "confirmation"),
         role=plan.role,
     )
 

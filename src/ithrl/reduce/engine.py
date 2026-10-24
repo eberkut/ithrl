@@ -785,7 +785,7 @@ class SampledReducer:
         return SamplingBlockPlan(
             block_id=f"search-{key}",
             role="search",
-            reduction=self._reduction,
+            procedure=self._reduction,
             original_identity=state.original_identity,
             candidate_identity=self._prepared.identity,
             original_candidate_digest=state.original_candidate_digest,
@@ -804,7 +804,7 @@ class SampledReducer:
         if (
             plan.block_id != f"search-{key}"
             or plan.role != "search"
-            or plan.reduction != self._reduction
+            or plan.procedure != self._reduction
             or plan.original_identity != state.original_identity
             or plan.candidate_identity != self._prepared.identity
             or plan.original_candidate_digest != state.original_candidate_digest

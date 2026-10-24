@@ -334,7 +334,7 @@ def test_concurrent_first_initialization_uses_one_complete_schema(tmp_path: Path
     with closing(sqlite3.connect(path)) as connection:
         assert connection.execute(
             "SELECT value FROM ithrl_metadata WHERE key = 'schema_version'"
-        ).fetchone() == ("2",)
+        ).fetchone() == ("1",)
 
 
 def test_sqlite_initialization_errors_use_the_store_error_contract(

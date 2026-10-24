@@ -42,6 +42,11 @@ Changelog = "https://github.com/eberkut/ithrl/releases"
 [project.scripts]
 ithrl = "ithrl.cli:app"
 
+[project.optional-dependencies]
+fuzz = [
+    "scipy>=1.18",
+]
+
 [dependency-groups]
 audit = [
   "pip-audit==2.10.1",
@@ -63,6 +68,7 @@ dev = [
   "PyYAML>=6",
   "radon==6.0.1",
   "ruff==0.17.1",
+  "scipy-stubs>=1.18",
   "types-jsonschema>=4.25",
   "types-PyYAML>=6",
 ]

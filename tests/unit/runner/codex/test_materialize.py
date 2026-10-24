@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from ithrl.adapters import enumerate_decisions, parse_session
 from ithrl.case import CaseEvidence
+from ithrl.context import content_digest
 from ithrl.execution import (
     CapabilityProfile,
     ResolvedExecutionPlan,
@@ -15,10 +17,12 @@ from ithrl.execution import (
 )
 from ithrl.experiment import ExperimentDefinition
 from ithrl.extraction import extract_decision
+from ithrl.mutation import TextAppend, TextMutation
 from ithrl.runner import PreparedAttempt, prepare_candidate
 from ithrl.runner.codex.materialize import (
     CodexMaterializationError,
     CodexMaterializationErrorCode,
+    editable_codex_text,
     materialize_codex_attempt,
 )
 
@@ -170,6 +174,117 @@ def test_materializes_dependency_valid_removal_without_reordering(tmp_path: Path
     result = materialize_codex_attempt(_attempt(evidence, user_message.id))
 
     assert [item["type"] for item in result.history] == ["reasoning", "custom_tool_call"]
+
+
+def _with_mutation(attempt: PreparedAttempt, mutation: TextMutation) -> PreparedAttempt:
+    capability = attempt.execution_plan.capability.model_copy(
+        update={"supported_context_operations": ("dependency-closed-removal", "append-text")}
+    )
+    # This is a pure materialization fixture profile, never a detected/registered native profile.
+    plan = attempt.execution_plan.model_copy(update={"capability": capability})
+    return replace(
+        attempt,
+        execution_plan=plan,
+        candidate=prepare_candidate(attempt.evidence, plan, mutation=mutation),
+    )
+
+
+def test_text_append_changes_only_copied_prior_user_block(tmp_path: Path) -> None:
+    attempt = _attempt(_evidence(tmp_path))
+    before = materialize_codex_attempt(attempt)
+    source = tuple(artifact.content for artifact in attempt.evidence.source_artifacts)
+    sites = editable_codex_text(attempt)
+    assert len(sites) == 1
+    assert sites[0].original_text == "Inspect the fixture context."
+    site = sites[0]
+    mutation = TextMutation(
+        edits=(
+            TextAppend(
+                context_id=site.context_id,
+                content_index=site.content_index,
+                original_text_digest=content_digest(site.original_text),
+                text="\n\nSynthetic archived note.",
+            ),
+        )
+    )
+    result = materialize_codex_attempt(_with_mutation(attempt, mutation))
+    assert result.history != before.history
+    assert result.history[1:] == before.history[1:]
+    assert result.history_context_ids == before.history_context_ids
+    assert result.turn_input == before.turn_input
+    assert (
+        result.base_instructions,
+        result.developer_instructions,
+        result.model,
+        result.provider,
+        result.effort,
+        result.personality,
+    ) == (
+        before.base_instructions,
+        before.developer_instructions,
+        before.model,
+        before.provider,
+        before.effort,
+        before.personality,
+    )
+    assert tuple(a.content for a in attempt.evidence.source_artifacts) == source
+    assert materialize_codex_attempt(attempt) == before
+
+
+def test_codex_mutation_refuses_trigger_assistant_and_wrong_text(tmp_path: Path) -> None:
+    attempt = _attempt(_evidence(tmp_path))
+    trigger_id = next(
+        node.id
+        for node in attempt.evidence.context.nodes
+        if node.kind == "response_item.custom_tool_call_output"
+    )
+    trigger = TextMutation(
+        edits=(
+            TextAppend(
+                context_id=trigger_id,
+                content_index=0,
+                original_text_digest=content_digest("Fixture result."),
+                text="append",
+            ),
+        )
+    )
+    with pytest.raises(CodexMaterializationError, match="current decision input"):
+        materialize_codex_attempt(_with_mutation(attempt, trigger))
+    site = editable_codex_text(attempt)[0]
+    bad = TextMutation(
+        edits=(
+            TextAppend(
+                context_id=site.context_id,
+                content_index=0,
+                original_text_digest="f" * 64,
+                text="append",
+            ),
+        )
+    )
+    with pytest.raises(CodexMaterializationError, match="original text digest"):
+        materialize_codex_attempt(_with_mutation(attempt, bad))
+    assistant = _attempt(
+        _evidence_with_field(
+            tmp_path / "assistant",
+            record_type="response_item",
+            field_name="role",
+            value="assistant",
+        )
+    )
+    assert editable_codex_text(assistant) == ()
+    node = next(n for n in assistant.evidence.context.nodes if n.kind == "response_item.message")
+    edit = TextMutation(
+        edits=(
+            TextAppend(
+                context_id=node.id,
+                content_index=0,
+                original_text_digest=content_digest(site.original_text),
+                text="append",
+            ),
+        )
+    )
+    with pytest.raises(CodexMaterializationError, match="ordinary user message"):
+        materialize_codex_attempt(_with_mutation(assistant, edit))
 
 
 def test_refuses_candidate_that_removes_the_selected_trigger(tmp_path: Path) -> None:
