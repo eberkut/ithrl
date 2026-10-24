@@ -221,6 +221,19 @@ Changes to native protocols, reconstruction, permissions or provider accounting 
 the affected safety boundary. Mock tests establish local contracts; claims of native support also
 need capability, isolation, calibration and live-use evidence for the target profile.
 
+### Pull request review
+
+Pull requests are squash-merged, with the PR title becoming the commit subject. Use a Conventional
+Commit title, make sure the required CI and CodeQL checks pass, and resolve review conversations
+before merging.
+
+CodeRabbit reviews PRs when they are ready for review and posts feedback in a walkthrough and
+inline comments. Address relevant findings or explain why a suggestion does not apply. The
+maintainer makes the final review and merge decisions.
+
+CodeRabbit's optional planning and code-generation features are configured in
+[`.coderabbit.yaml`](.coderabbit.yaml). A paid CodeRabbit account is not required to contribute.
+
 ## Preparing a release
 
 Python Semantic Release, pinned in the `release` dependency group, calculates versions from
