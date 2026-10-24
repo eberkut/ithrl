@@ -259,6 +259,15 @@ class SamplingBlockPlan(_SamplingContract):
             raise ValueError("frozen_at must include a UTC offset")
         return value.astimezone(UTC)
 
+    @field_validator("selected_at")
+    @classmethod
+    def normalize_selected_at(cls, value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("selected_at must include a UTC offset")
+        return value.astimezone(UTC)
+
     @model_validator(mode="after")
     def validate_block(self) -> SamplingBlockPlan:
         change = isinstance(self.procedure, SampledChangePlan)

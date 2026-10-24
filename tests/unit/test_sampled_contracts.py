@@ -1,14 +1,16 @@
 """Content-safe sampled comparisons, checkpoints, and final evidence contracts."""
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone, tzinfo
 from math import nextafter
-from typing import Any
+from typing import Any, override
 
 import pytest
 from pydantic import ValidationError
 
 from ithrl.context import content_digest
 from ithrl.experiment import (
+    SampledChangeConfirmation,
+    SampledChangePlan,
     SampledConfirmationPhase,
     SampledReductionPlan,
     SampledSearchPhase,
@@ -45,6 +47,16 @@ CANDIDATE = "b" * 64
 NEIGHBOR = "c" * 64
 
 
+class _MissingUtcOffset(tzinfo):
+    @override
+    def utcoffset(self, dt: datetime | None) -> None:
+        return None
+
+    @override
+    def dst(self, dt: datetime | None) -> None:
+        return None
+
+
 def _identity(execution: str = "d" * 64) -> ObservationIdentity:
     return ObservationIdentity(
         case_digest="e" * 64,
@@ -70,6 +82,65 @@ def _reduction() -> SampledReductionPlan:
         margin=0.2,
         freshness_seconds=600,
     )
+
+
+@pytest.fixture
+def change_confirmation_plan() -> SamplingBlockPlan:
+    reduction = _reduction()
+    confirmation = reduction.confirmation
+    return SamplingBlockPlan(
+        block_id="change-confirmation",
+        role="confirmation",
+        procedure=SampledChangePlan(
+            campaign_digest=_identity().algorithm_digest,
+            search=reduction.search,
+            confirmation=SampledChangeConfirmation(
+                original=confirmation.original, candidate=confirmation.candidate, alpha=0.05
+            ),
+            screening_decrease=0.4,
+            minimum_decrease=0.1,
+            eligibility_policy=reduction.eligibility_policy,
+            freshness_seconds=reduction.freshness_seconds,
+        ),
+        original_identity=_identity(),
+        candidate_identity=_identity("3" * 64),
+        original_candidate_digest=ORIGINAL,
+        candidate_digest=CANDIDATE,
+        frozen_at=FROZEN + timedelta(seconds=1),
+        selected_at=FROZEN,
+        schedule_seed=17,
+        schedule=sampling_schedule(
+            confirmation.original.max_attempts, confirmation.candidate.max_attempts, 17
+        ),
+        provider_calls_per_attempt=1,
+    )
+
+
+@pytest.mark.parametrize("offset", [timedelta(hours=2), timedelta(hours=-5, minutes=-30)])
+def test_change_selection_time_has_one_canonical_identity(
+    change_confirmation_plan: SamplingBlockPlan, offset: timedelta
+) -> None:
+    data = change_confirmation_plan.model_dump()
+    data["selected_at"] = FROZEN.astimezone(timezone(offset))
+    equivalent = SamplingBlockPlan.model_validate(data)
+    assert equivalent.selected_at is not None
+    assert equivalent.selected_at.tzinfo is UTC
+    assert equivalent.model_dump_json() == change_confirmation_plan.model_dump_json()
+    assert equivalent.digest == change_confirmation_plan.digest
+    restored = SamplingBlockPlan.model_validate_json(equivalent.model_dump_json())
+    assert restored.digest == change_confirmation_plan.digest
+
+
+@pytest.mark.parametrize(
+    "selected_at", [FROZEN.replace(tzinfo=None), FROZEN.replace(tzinfo=_MissingUtcOffset())]
+)
+def test_change_selection_time_requires_a_usable_offset(
+    change_confirmation_plan: SamplingBlockPlan, selected_at: datetime
+) -> None:
+    data = change_confirmation_plan.model_dump()
+    data["selected_at"] = selected_at
+    with pytest.raises(ValidationError, match="selected_at must include a UTC offset"):
+        SamplingBlockPlan.model_validate(data)
 
 
 def _block(
