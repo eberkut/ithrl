@@ -126,8 +126,10 @@ the all-match lower bound is `.6915028921812392`.
 Exact operating-characteristic enumeration covered original rates `{.10,.50,.80,.90,1.00}`,
 thresholds `{0,.05,.10,.20}`, and feasible decreases `max(0, delta+offset)` for offsets
 `{-.05,0,.05,.20,.80}`. Sample pairs were `(20,20)`, `(40,40)`, `(80,80)`, `(20,40)` and `(40,20)`.
-All count pairs were enumerated. A further 1,001-point null-boundary grid per sample-pair/threshold
-had maximum false-declaration probability `.0020214677846288323`, below the analytic `.05` ceiling.
+Combinations with `p_mutant = p_original - decrease` outside `[0,1]` were excluded, as specified
+in the frozen programme. All count pairs were enumerated. A further 1,001-point null-boundary grid
+per sample-pair/threshold had maximum false-declaration probability `.0020214677846288323`, below
+the analytic `.05` ceiling.
 Neither finite grid establishes coverage outside the model assumptions.
 
 SciPy was selected over a handwritten quantile solver. The study used Python 3.12.3, NumPy 2.5.4

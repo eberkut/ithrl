@@ -10,7 +10,7 @@ duplicate provider calls when acceptance is unknown. Statistical validity theref
 the same durable attempt, eligibility and accounting boundaries as safe execution.
 
 The deterministic example remains a separate execution mode. Its completed single-group sweep
-can establish search 1-minimality. Native sampled search needs a useful exploratory phase and
+can establish search-1-minimality. Native sampled search needs a useful exploratory phase and
 independent final evidence without inheriting that stronger claim.
 
 ## Decision
@@ -103,7 +103,7 @@ reservations prevent uncertain dispatch from becoming an automatic duplicate cal
 of refusing progress when reconciliation cannot prove what happened.
 
 Fixed samples may be expensive near the degradation margin or at lower target rates. Preflight
-checks whether confirmation is attainable under the proposed plan; it does not silently widen
+checks whether confirmation is attainable under the plan; it does not silently widen
 the margin, reduce confidence or turn an exploratory screen into confirmation. Measured
 workload usefulness and practical cost are qualification evidence, separate from numerical
 interval checks. [Results](../results.md#sampled-results) states the public interpretation;

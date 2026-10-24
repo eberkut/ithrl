@@ -546,7 +546,7 @@
       "calls_max": 187,
       "confirmed_without_effect": 0,
       "terminal_counts": {
-        "calibration-not-measurab": 261,
+        "calibration-not-measurable": 261,
         "confirmed-change": 9364,
         "inconclusive": 216,
         "no-candidate-found": 159
@@ -576,7 +576,7 @@
       "calls_max": 91,
       "confirmed_without_effect": 0,
       "terminal_counts": {
-        "calibration-not-measurab": 285,
+        "calibration-not-measurable": 285,
         "confirmed-change": 9411,
         "inconclusive": 143,
         "no-candidate-found": 161
@@ -606,7 +606,7 @@
       "calls_max": 43,
       "confirmed_without_effect": 0,
       "terminal_counts": {
-        "calibration-not-measurab": 265,
+        "calibration-not-measurable": 265,
         "confirmed-change": 2403,
         "inconclusive": 7332
       },
@@ -635,7 +635,7 @@
       "calls_max": 187,
       "confirmed_without_effect": 0,
       "terminal_counts": {
-        "calibration-not-measurab": 282,
+        "calibration-not-measurable": 282,
         "confirmed-change": 9327,
         "inconclusive": 231,
         "no-candidate-found": 160
@@ -665,7 +665,7 @@
       "calls_max": 107,
       "confirmed_without_effect": 0,
       "terminal_counts": {
-        "calibration-not-measurab": 264,
+        "calibration-not-measurable": 264,
         "confirmed-change": 9351,
         "inconclusive": 214,
         "no-candidate-found": 171
@@ -695,7 +695,7 @@
       "calls_max": 43,
       "confirmed_without_effect": 0,
       "terminal_counts": {
-        "calibration-not-measurab": 258,
+        "calibration-not-measurable": 258,
         "confirmed-change": 2433,
         "inconclusive": 7309
       },
@@ -725,7 +725,7 @@
       "confirmed_without_effect": 0,
       "terminal_counts": {
         "calibration-incomplete": 39,
-        "calibration-not-measurab": 258,
+        "calibration-not-measurable": 258,
         "confirmed-change": 9313,
         "inconclusive": 197,
         "no-candidate-found": 165,
@@ -757,7 +757,7 @@
       "confirmed_without_effect": 0,
       "terminal_counts": {
         "calibration-incomplete": 63,
-        "calibration-not-measurab": 275,
+        "calibration-not-measurable": 275,
         "confirmed-change": 9345,
         "inconclusive": 150,
         "no-candidate-found": 161,
@@ -789,7 +789,7 @@
       "confirmed_without_effect": 0,
       "terminal_counts": {
         "calibration-incomplete": 40,
-        "calibration-not-measurab": 283,
+        "calibration-not-measurable": 283,
         "confirmed-change": 2366,
         "inconclusive": 7310,
         "sampling-incomplete": 1
@@ -820,7 +820,7 @@
       "confirmed_without_effect": 0,
       "terminal_counts": {
         "calibration-incomplete": 43,
-        "calibration-not-measurab": 288,
+        "calibration-not-measurable": 288,
         "confirmed-change": 9267,
         "inconclusive": 216,
         "no-candidate-found": 161,
@@ -852,7 +852,7 @@
       "confirmed_without_effect": 0,
       "terminal_counts": {
         "calibration-incomplete": 39,
-        "calibration-not-measurab": 257,
+        "calibration-not-measurable": 257,
         "confirmed-change": 9299,
         "inconclusive": 203,
         "no-candidate-found": 184,
@@ -884,7 +884,7 @@
       "confirmed_without_effect": 0,
       "terminal_counts": {
         "calibration-incomplete": 54,
-        "calibration-not-measurab": 259,
+        "calibration-not-measurable": 259,
         "confirmed-change": 2423,
         "inconclusive": 7260,
         "sampling-incomplete": 4
@@ -917,7 +917,7 @@
         "calls_max": 197,
         "confirmed_without_effect": 0,
         "terminal_counts": {
-          "calibration-not-measurab": 262,
+          "calibration-not-measurable": 262,
           "inconclusive": 87,
           "no-candidate-found": 9651
         },
@@ -947,7 +947,7 @@
         "confirmed_without_effect": 0,
         "terminal_counts": {
           "calibration-incomplete": 3,
-          "calibration-not-measurab": 279,
+          "calibration-not-measurable": 279,
           "inconclusive": 81,
           "no-candidate-found": 9637
         },
@@ -977,7 +977,7 @@
         "confirmed_without_effect": 0,
         "terminal_counts": {
           "calibration-incomplete": 2,
-          "calibration-not-measurab": 294,
+          "calibration-not-measurable": 294,
           "inconclusive": 110,
           "no-candidate-found": 9594
         },
@@ -1006,7 +1006,7 @@
         "calls_max": 238,
         "confirmed_without_effect": 0,
         "terminal_counts": {
-          "calibration-not-measurab": 254,
+          "calibration-not-measurable": 254,
           "inconclusive": 94,
           "no-candidate-found": 9652
         },
@@ -1036,7 +1036,7 @@
         "confirmed_without_effect": 0,
         "terminal_counts": {
           "calibration-incomplete": 2,
-          "calibration-not-measurab": 263,
+          "calibration-not-measurable": 263,
           "inconclusive": 86,
           "no-candidate-found": 9649
         },
@@ -1066,7 +1066,7 @@
         "confirmed_without_effect": 0,
         "terminal_counts": {
           "calibration-incomplete": 1,
-          "calibration-not-measurab": 284,
+          "calibration-not-measurable": 284,
           "inconclusive": 88,
           "no-candidate-found": 9627
         },
@@ -1096,7 +1096,7 @@
         "confirmed_without_effect": 0,
         "terminal_counts": {
           "calibration-incomplete": 3,
-          "calibration-not-measurab": 299,
+          "calibration-not-measurable": 299,
           "inconclusive": 100,
           "no-candidate-found": 9598
         },
@@ -1126,7 +1126,7 @@
         "confirmed_without_effect": 0,
         "terminal_counts": {
           "calibration-incomplete": 5,
-          "calibration-not-measurab": 292,
+          "calibration-not-measurable": 292,
           "inconclusive": 98,
           "no-candidate-found": 9605
         },
@@ -1156,7 +1156,7 @@
         "confirmed_without_effect": 0,
         "terminal_counts": {
           "calibration-incomplete": 4,
-          "calibration-not-measurab": 280,
+          "calibration-not-measurable": 280,
           "inconclusive": 98,
           "no-candidate-found": 9618
         },
@@ -1186,7 +1186,7 @@
         "confirmed_without_effect": 0,
         "terminal_counts": {
           "calibration-incomplete": 2,
-          "calibration-not-measurab": 319,
+          "calibration-not-measurable": 319,
           "inconclusive": 86,
           "no-candidate-found": 9593
         },
@@ -1216,7 +1216,7 @@
         "confirmed_without_effect": 0,
         "terminal_counts": {
           "calibration-incomplete": 2,
-          "calibration-not-measurab": 259,
+          "calibration-not-measurable": 259,
           "inconclusive": 84,
           "no-candidate-found": 9655
         },
@@ -1246,7 +1246,7 @@
         "confirmed_without_effect": 0,
         "terminal_counts": {
           "calibration-incomplete": 3,
-          "calibration-not-measurab": 256,
+          "calibration-not-measurable": 256,
           "inconclusive": 85,
           "no-candidate-found": 9656
         },
@@ -1276,7 +1276,7 @@
         "confirmed_without_effect": 0,
         "terminal_counts": {
           "calibration-incomplete": 1,
-          "calibration-not-measurab": 256,
+          "calibration-not-measurable": 256,
           "inconclusive": 89,
           "no-candidate-found": 9654
         },
@@ -1306,7 +1306,7 @@
         "confirmed_without_effect": 0,
         "terminal_counts": {
           "calibration-incomplete": 6,
-          "calibration-not-measurab": 275,
+          "calibration-not-measurable": 275,
           "inconclusive": 77,
           "no-candidate-found": 9642
         },
@@ -1336,7 +1336,7 @@
         "confirmed_without_effect": 0,
         "terminal_counts": {
           "calibration-incomplete": 2,
-          "calibration-not-measurab": 287,
+          "calibration-not-measurable": 287,
           "inconclusive": 90,
           "no-candidate-found": 9621
         },
@@ -1366,7 +1366,7 @@
         "confirmed_without_effect": 0,
         "terminal_counts": {
           "calibration-incomplete": 1,
-          "calibration-not-measurab": 282,
+          "calibration-not-measurable": 282,
           "inconclusive": 113,
           "no-candidate-found": 9604
         },
@@ -1396,7 +1396,7 @@
         "confirmed_without_effect": 0,
         "terminal_counts": {
           "calibration-incomplete": 5,
-          "calibration-not-measurab": 281,
+          "calibration-not-measurable": 281,
           "inconclusive": 111,
           "no-candidate-found": 9603
         },
@@ -1426,7 +1426,7 @@
         "confirmed_without_effect": 0,
         "terminal_counts": {
           "calibration-incomplete": 3,
-          "calibration-not-measurab": 297,
+          "calibration-not-measurable": 297,
           "inconclusive": 85,
           "no-candidate-found": 9615
         },
@@ -1456,7 +1456,7 @@
         "confirmed_without_effect": 0,
         "terminal_counts": {
           "calibration-incomplete": 1,
-          "calibration-not-measurab": 288,
+          "calibration-not-measurable": 288,
           "inconclusive": 82,
           "no-candidate-found": 9629
         },
@@ -1486,7 +1486,7 @@
         "confirmed_without_effect": 0,
         "terminal_counts": {
           "calibration-incomplete": 1,
-          "calibration-not-measurab": 255,
+          "calibration-not-measurable": 255,
           "inconclusive": 94,
           "no-candidate-found": 9650
         },
@@ -1516,7 +1516,7 @@
         "confirmed_without_effect": 0,
         "terminal_counts": {
           "calibration-incomplete": 3,
-          "calibration-not-measurab": 276,
+          "calibration-not-measurable": 276,
           "inconclusive": 86,
           "no-candidate-found": 9635
         },
@@ -1546,7 +1546,7 @@
         "confirmed_without_effect": 0,
         "terminal_counts": {
           "calibration-incomplete": 3,
-          "calibration-not-measurab": 294,
+          "calibration-not-measurable": 294,
           "inconclusive": 99,
           "no-candidate-found": 9604
         },
@@ -1575,7 +1575,7 @@
         "calls_max": 223,
         "confirmed_without_effect": 0,
         "terminal_counts": {
-          "calibration-not-measurab": 269,
+          "calibration-not-measurable": 269,
           "confirmed-change": 9359,
           "inconclusive": 195,
           "no-candidate-found": 156,
@@ -1608,7 +1608,7 @@
         "terminal_counts": {
           "block-budget-refusal": 2,
           "calibration-incomplete": 126,
-          "calibration-not-measurab": 2620,
+          "calibration-not-measurable": 2620,
           "confirmed-change": 281,
           "inconclusive": 5435,
           "no-candidate-found": 1373,

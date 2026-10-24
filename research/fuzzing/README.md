@@ -17,6 +17,8 @@ results, alternatives, validity assumptions and limitations.
 Shared CSV configuration is in `results.json` under `selected_cells.common`. The
 `selected_cells.by_invalid` summaries describe equally weighted cells; they are not pooled cost
 quantiles. The numerical algorithm and seeded domain are preserved from the completed study.
+The saved terminal counts use the full `calibration-not-measurable` label, correcting historical
+string truncation without changing any counts or numerical results.
 
 ## Reproduce
 

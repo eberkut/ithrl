@@ -237,7 +237,7 @@ def simulate(
     selected = np.full(n, -1, dtype=np.int8)
     masks = np.full(n, 15, dtype=np.int8)
     finished = np.ones(n, dtype=bool) if workflow != "adaptive-shrink" else np.zeros(n, dtype=bool)
-    reason = np.full(n, "", dtype="U24")
+    reason = np.full(n, "", dtype="U32")
     max_seen = 0
     original_invalid = invalid if invalid_original is None else invalid_original
     unchanged_mutant_rate = p_original if p_null_mutant is None else p_null_mutant
