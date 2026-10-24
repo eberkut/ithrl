@@ -1,0 +1,67 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+tone_instructions: >-
+  Be concise and specific. Explain the failing scenario and practical impact.
+  Skip cosmetic wording preferences and unsupported concerns.
+
+reviews:
+  profile: assertive
+  high_level_summary_in_walkthrough: true
+  in_progress_fortune: false
+
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    drafts: false
+
+  pre_merge_checks:
+    docstrings:
+      mode: "off"
+
+  slop_detection:
+    enabled: true
+    include_all_authors: true
+
+  path_instructions:
+    - path: "**/*.py"
+      instructions: >-
+        Use AGENTS.md and inspect affected callers, callees and tests before reporting
+        a defect. Give a concrete input or execution path and the incorrect outcome;
+        check whether an existing control already prevents it. Keep distinct defects
+        separate. Recommend simplifications only when they reduce maintenance work
+        while preserving outputs, exceptions, ordering, side effects, persisted data
+        and safety controls. Reuse established helpers when their semantics match.
+        Support performance concerns with an affected normal-use path or measurements.
+        Prefer regression tests of behavior over assertions that duplicate the code.
+    - path: "**/*.md"
+      instructions: >-
+        Check commands, defaults and support claims against the implementation and
+        recorded evidence. Respect each document's audience and ownership described
+        in CONTRIBUTING.md. Preserve research assumptions, failed alternatives and
+        measurement limits. Identify factual drift and material ambiguity; avoid
+        stylistic rewrites, duplicated guidance and new claims inferred from fixtures.
+
+  finishing_touches:
+    simplify:
+      enabled: true
+    custom:
+      - name: "refresh docs"
+        instructions: >-
+          Refresh only documentation affected by this pull request's implemented
+          behavior. Read AGENTS.md, CONTRIBUTING.md and the changed implementation
+          first. Identify the owning document and link to it instead of repeating
+          content. Preserve structure, tone, research provenance and unrelated text.
+          Follow the documented generation process for CLI reference; leave the
+          generated changelog to release automation. Do not introduce new pages,
+          speculative capabilities or private evidence. Run the focused documentation
+          checks in CONTRIBUTING.md without native harnesses or provider calls.
+          Report changed paths, validation results and any remaining uncertainty.
+
+issue_enrichment:
+  auto_enrich:
+    enabled: true
+  planning:
+    enabled: true
+    auto_planning:
+      enabled: false
+  labeling:
+    auto_apply_labels: false
