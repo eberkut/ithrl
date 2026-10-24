@@ -105,6 +105,20 @@ holdout to select another candidate. [ADR 0002](decisions/0002-fixed-samples-and
 explains fixed samples, eligibility and recovery; [results](results.md#sampled-results) describes
 the resulting claims and assumptions.
 
+Internal fuzz campaigns freeze generated mutation order, exact bounded payloads, consumed proposal
+work and generator/traversal implementation identity in the same private sampled state used by the
+collector. Calibration is completed and charged before campaign initialization. On recovery,
+campaign traversal is reconstructed from the frozen sequence and authoritative exploratory
+observations; this replay performs no runner calls. Candidate-local admission refusals consume
+work without allocating a sampling block. An unavailable screen stops with an incomplete outcome.
+
+One state replacement freezes the selected mutation and its complete final-comparison policy
+before holdout dispatch. Completed confirmation and terminal outcomes are reconstructed from
+their owned observations rather than trusted cached verdicts. An unresolved reservation remains
+charged and cannot be replayed. Implementation, generation or evidence mismatches refuse
+continuation; regenerated campaigns require a new run. These internal services do not expose
+a public fuzz command or qualify a native mutation profile.
+
 ## Execution and privacy boundary
 
 A capability profile states what a runner can do; a safety policy bounds permitted effects.
@@ -158,6 +172,7 @@ they do not promise public Python APIs or additional CLI commands.
 | `reduce/contracts.py`, `reduce/engine.py`, `reduce/search.py` | Deterministic and exploratory sampled reduction, checkpoints and final sweep coverage |
 | `statistics.py` | Independent-arm preservation interval and confirmation classification |
 | `fuzz/contracts.py`, `fuzz/generation.py`, `fuzz/deterministic.py`, `fuzz/simplify.py`, `fuzz/sampling.py`, `fuzz/statistics.py` | Internal bounded mutation, discovery, simplification and change-confirmation components |
+| `fuzz/progress.py`, `fuzz/campaign.py` | Frozen mutation order, authoritative traversal recovery, durable selection and terminal campaign evidence over shared sampled state |
 | `workflow.py`, `results/` | Application phase composition and validated result models, summaries and snapshots |
 | `cli/` | Public command selection, native setup, progress, continuation and presentation |
 | `path_safety.py`, `timestamps.py` | Shared private-path/lock primitives and timestamp validation |

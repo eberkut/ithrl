@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from ithrl.case.contracts import CaseError
 from ithrl.case.filesystem import read_safe_bytes
 from ithrl.context import content_digest
+from ithrl.fuzz.progress import FuzzCampaignProgress
 from ithrl.observations import (
     Observation,
     ObservationArm,
@@ -360,10 +361,11 @@ class SampledRunState(_SampledStateContract):
     provider_calls_per_attempt: Annotated[int, Field(ge=1, le=2)]
     approvals: Annotated[tuple[SamplingBudgetApproval, ...], Field(min_length=1, max_length=10_000)]
     calibration_observation_ids: Annotated[tuple[str, ...], Field(max_length=16)] = ()
-    blocks: Annotated[tuple[SamplingBlockProgress, ...], Field(max_length=10_000)] = ()
+    blocks: Annotated[tuple[SamplingBlockProgress, ...], Field(max_length=20_001)] = ()
     pending: SamplingDispatchReservation | None = None
     checkpoint: SampledReductionCheckpoint | None = None
     selection: SampledFinalSelection | None = None
+    fuzz_progress: FuzzCampaignProgress | None = Field(default=None, repr=False)
 
     @field_validator("started_at")
     @classmethod
@@ -372,6 +374,8 @@ class SampledRunState(_SampledStateContract):
 
     @model_validator(mode="after")
     def validate_history(self) -> SampledRunState:
+        if self.fuzz_progress is not None and self.checkpoint is not None:
+            raise ValueError("fuzz and reduction checkpoints cannot share a run")
         if any(item.allowance.run_id != self.run_id for item in self.approvals):
             raise ValueError("budget approvals must belong to this run")
         if len({item.approval_id for item in self.approvals}) != len(self.approvals):
@@ -435,11 +439,27 @@ class SampledRunState(_SampledStateContract):
                 holdout_id[:16], 16
             ):
                 raise ValueError("confirmation must use the single frozen run holdout")
-            if checkpoint is None or selection.checkpoint_digest != content_digest(
+            if self.fuzz_progress is not None:
+                fuzz = self.fuzz_progress
+                selected = next(
+                    (t for t in fuzz.trials if t.mutation == fuzz.selected_mutation), None
+                )
+                if (
+                    selection.checkpoint_digest != fuzz.selection_digest
+                    or selected is None
+                    or selected.plan is None
+                    or plan.candidate_digest != selected.plan.candidate_digest
+                    or plan.candidate_identity != self.original_identity
+                    or plan.original_identity != self.original_identity
+                    or plan.original_candidate_digest != self.original_candidate_digest
+                    or plan.procedure != selected.plan.procedure
+                ):
+                    raise ValueError("confirmation must bind the frozen fuzz selection")
+            elif checkpoint is None or selection.checkpoint_digest != content_digest(
                 checkpoint.model_dump(mode="json")
             ):
                 raise ValueError("selected search checkpoint cannot change")
-            if (
+            if checkpoint is not None and (
                 plan.procedure != checkpoint.reduction
                 or plan.original_identity != checkpoint.original_identity
                 or plan.original_candidate_digest != checkpoint.original_candidate_digest
@@ -700,6 +720,10 @@ class SampledRunStateFile:
         ):
             raise RunStateError("pending dispatch does not follow the unfinished frozen schedule")
         checkpoint = state.checkpoint
+        if state.fuzz_progress is not None:
+            from ithrl.fuzz.campaign import validate_campaign_progress
+
+            validate_campaign_progress(state, observations, blocks)
         if checkpoint is not None:
             by_digest = {block.plan.digest: block for block in blocks}
             if (
@@ -709,7 +733,7 @@ class SampledRunStateFile:
                 or any(by_digest.get(block.plan.digest) != block for block in checkpoint.blocks)
             ):
                 raise RunStateError("sampled checkpoint differs from authoritative block progress")
-        if state.selection is not None:
+        if state.selection is not None and state.fuzz_progress is None:
             selection = state.selection
             search = tuple(block for block in blocks if block.plan.role == "search")
             if checkpoint is None or checkpoint.blocks != search:
@@ -806,6 +830,8 @@ class SampledRunStateFile:
         """Record an externally admitted plan; whole-block budget scheduling is separate."""
 
         current = self.load(store)
+        if current.selection is not None and plan != current.selection.plan:
+            raise RunStateError("only the frozen final comparison may follow selection")
         if current.pending is not None or (current.blocks and not current.blocks[-1].archived):
             raise RunStateError("previous sampled block must be reconciled and archived")
         return self._publish(
@@ -1038,6 +1064,33 @@ class SampledRunStateFile:
         if current.pending is not None:
             raise RunStateError("checkpoint publication requires dispatch reconciliation")
         return self._publish(current, store, checkpoint=checkpoint)
+
+    def save_fuzz_progress(
+        self, store: ObservationStore, progress: FuzzCampaignProgress
+    ) -> SampledRunState:
+        """Publish campaign metadata under the same run/store lock as dispatch evidence."""
+
+        current = self.load(store)
+        if current.pending is not None:
+            raise RunStateError("campaign publication requires dispatch reconciliation")
+        if current.fuzz_progress is not None and current.fuzz_progress.terminal is not None:
+            raise RunStateError("a terminal fuzz campaign cannot change")
+        return self._publish(current, store, fuzz_progress=progress)
+
+    def select_fuzz_candidate(
+        self,
+        store: ObservationStore,
+        progress: FuzzCampaignProgress,
+        selection: SampledFinalSelection,
+    ) -> SampledRunState:
+        """Freeze exact mutation and final policy together, before any holdout dispatch."""
+
+        current = self.load(store)
+        if current.selection is not None or current.pending is not None:
+            raise RunStateError("fuzz selection requires reconciled, unselected progress")
+        if current.blocks and not current.blocks[-1].archived:
+            raise RunStateError("fuzz selection requires classified exploratory blocks")
+        return self._publish(current, store, fuzz_progress=progress, selection=selection)
 
     def select_candidate(
         self, store: ObservationStore, selection: SampledFinalSelection

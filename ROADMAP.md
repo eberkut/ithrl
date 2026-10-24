@@ -19,23 +19,21 @@ selected experiment, including execution reliability and assumptions. It does no
 model defect, a unique cause or semantic equivalence of the original and changed context.
 
 The feasibility study, immutable mutation contracts, deterministic generation/materialization/
-simplification and sampled comparison services are implemented. Campaign persistence, the public
-command and native mutation qualification remain ahead. See the
+simplification, sampled comparison services and durable campaign recovery are implemented. The
+public command and native mutation qualification remain ahead. See the
 [fuzzing research](docs/research/context-fuzzing.md) and the
 [fuzzing capability issue](https://github.com/eberkut/ithrl/issues/5) and
 [`v0.2.0` milestone](https://github.com/eberkut/ithrl/milestone/1) for implementation work and acceptance.
 
 Remaining deliverables, in dependency order:
 
-1. [Persist bounded campaigns](https://github.com/eberkut/ithrl/issues/6) and recover interruptions
-   without duplicate dispatch or reuse of confirmation data.
-2. [Compose `ithrl fuzz`](https://github.com/eberkut/ithrl/issues/7), explicit configuration,
+1. [Compose `ithrl fuzz`](https://github.com/eberkut/ithrl/issues/7), explicit configuration,
    harness-free dry-run, execution acknowledgement, resume and inspectable private results.
-3. [Validate the composed workflow](https://github.com/eberkut/ithrl/issues/8), failure paths,
+2. [Validate the composed workflow](https://github.com/eberkut/ithrl/issues/8), failure paths,
    safety boundaries and existing commands.
-4. [Qualify one native text-mutation workflow](https://github.com/eberkut/ithrl/issues/9) through
+3. [Qualify one native text-mutation workflow](https://github.com/eberkut/ithrl/issues/9) through
    harmless controls and fresh confirmation.
-5. [Derive practical settings and public claims](https://github.com/eberkut/ithrl/issues/10) from
+4. [Derive practical settings and public claims](https://github.com/eberkut/ithrl/issues/10) from
    complete-workflow usefulness and measured costs.
 
 [Release preparation and publication](https://github.com/eberkut/ithrl/issues/11) follow acceptance.
