@@ -221,6 +221,29 @@ Changes to native protocols, reconstruction, permissions or provider accounting 
 the affected safety boundary. Mock tests establish local contracts; claims of native support also
 need capability, isolation, calibration and live-use evidence for the target profile.
 
+### Pull requests and automated assistance
+
+Use squash merge with a Conventional Commit title. The default-branch rules require signed
+commits, linear history, resolved review conversations and current CI checks from GitHub Actions.
+The CodeQL rule requires analysis and blocks code-scanning errors and high/critical security
+alerts. The sole-maintainer workflow has no mandatory approval count or bypass actors.
+
+[CodeRabbit configuration](.coderabbit.yaml) keeps generated summaries in the walkthrough,
+reviews ready PRs and supplies focused Python/documentation guidance. It reads `AGENTS.md`
+automatically. Review findings against the affected code and evidence before changing anything;
+CodeRabbit supplements the repository checks and maintainer review.
+
+Issue enrichment adds context and label suggestions. Planning is requested explicitly with
+`@coderabbitai plan` on the owning issue; keep its scope and acceptance criteria authoritative.
+Where product access permits, request Simplify code or `@coderabbitai run refresh docs` for
+focused follow-up work. Inspect the resulting diff and run the relevant repository checks.
+Planning and finishing touches can write code or issue comments; request them deliberately.
+
+Contributions must remain possible with free tooling. Optional CodeRabbit planning and agent
+features can depend on account access; no required check depends on a paid subscription or trial.
+Do not enable paid continuation or automatic spending. Findings from automated review do not
+establish native qualification or statistical validity.
+
 ## Preparing a release
 
 Python Semantic Release, pinned in the `release` dependency group, calculates versions from
