@@ -7,6 +7,13 @@ through controlled runners. Treat the supported-inputs table in `README.md` as t
 capability claim. Runner code or a passing fixture alone does not establish supported experimental
 use; capability, isolation, calibration, and live-use gates must pass for the exact target profile.
 
+Use `ROADMAP.md` for direction and linked GitHub issues for current scope, dependencies,
+acceptance criteria and status. Read the owning issue and its linked design/research before
+implementation. `docs/architecture.md` maps current contracts; `docs/decisions/` owns rationale
+and `docs/research/` owns methods and evidence. Keep work status in issues, and link completed
+validation and commits there. Do not create a parallel planning ledger or infer task status from
+an old research result. Planned capabilities must remain clearly distinguished from public support.
+
 ## Architecture
 
 - `src/ithrl/adapters/` discovers and interprets harness-native evidence. Adapters do not invoke
@@ -100,9 +107,11 @@ When adding or removing runtime modules, update the explicit `RUNTIME_MODULES` m
 built wheel and a wheel reconstructed from the sdist; compare CLI versions with artifact metadata.
 
 For documentation changes, follow the commands in `CONTRIBUTING.md`. Generate `docs/cli.md` from
-Typer metadata; do not edit it manually. `mkdocs.yml` must admit only named public files from
-`docs/`, with no repository-root source scan. Update site/sdist/test manifests together when
-adding a page. Run documentation tests and the strict site build; neither needs a native harness.
+Typer metadata; do not edit it manually. Keep `mkdocs.yml` scoped to public pages and dedicated
+public Markdown directories under `docs/`, with no repository-root source scan. Update navigation
+for a new page; update publication boundaries and their tests when introducing a new public
+directory or asset type. Run documentation tests and the strict site build; neither needs a
+native harness.
 
 ## CI and release boundaries
 

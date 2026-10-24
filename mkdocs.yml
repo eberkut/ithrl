@@ -26,6 +26,20 @@ nav:
   - CLI reference: cli.md
   - Troubleshooting: troubleshooting.md
   - Measurements: measurements.md
+  - Development:
+      - Architecture: architecture.md
+      - Decisions:
+          - Overview: decisions/index.md
+          - Native evidence: decisions/0001-native-evidence-and-controlled-runners.md
+          - Sampling and dispatch: decisions/0002-fixed-samples-and-durable-dispatch.md
+          - Fresh baselines: decisions/0003-strict-fresh-baselines.md
+          - Fuzz confirmation: decisions/0004-single-finding-fuzz-confirmation.md
+      - Research:
+          - Overview: research/index.md
+          - Feasibility: research/feasibility.md
+          - Reduction design: research/reduction-design.md
+          - Context fuzzing: research/context-fuzzing.md
+      - Roadmap: https://github.com/eberkut/ithrl/blob/main/ROADMAP.md
 # Navigation alone does not restrict which files MkDocs publishes.
 exclude_docs: |
   *
@@ -36,6 +50,9 @@ exclude_docs: |
   !/troubleshooting.md
   !/measurements.md
   !/third-party-notices.txt
+  !/architecture.md
+  !/decisions/*.md
+  !/research/*.md
 validation:
   nav:
     omitted_files: warn

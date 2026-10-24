@@ -75,6 +75,9 @@ records the tested configurations and how to check another release.
   preservation claims, research references, budgets, resume and sensitive data.
 - [Contributing](https://github.com/eberkut/ithrl/blob/main/CONTRIBUTING.md): issue-first collaboration,
   checkout setup, checks and smoke tests.
+- [Roadmap](https://github.com/eberkut/ithrl/blob/main/ROADMAP.md): current priorities and planned capabilities.
+- [Architecture and research](https://github.com/eberkut/ithrl/blob/main/docs/architecture.md):
+  implementation boundaries, decisions and supporting studies.
 
 For help, bugs or proposals, see [Support](https://github.com/eberkut/ithrl/blob/main/SUPPORT.md).
 Report vulnerabilities through [private reporting](https://github.com/eberkut/ithrl/security/advisories/new).

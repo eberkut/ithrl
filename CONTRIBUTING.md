@@ -92,6 +92,18 @@ README owns the quick start; `docs/` owns user guides and reference. Support, se
 policies live at the repository root. Keep private sessions, cases and credentials out of
 documentation and generated output.
 
+[ROADMAP.md](ROADMAP.md) describes future direction. GitHub issues own actionable scope,
+dependencies, acceptance criteria and status; release milestones group scope and the public
+[Project](https://github.com/users/eberkut/projects/1/views/4) provides views of those same issues.
+Link implementation pull requests to their owning issues and record relevant validation before
+closing them. Keep future plans separate from current support claims.
+
+Use [architecture](docs/architecture.md) to locate current contracts,
+[decision records](docs/decisions/index.md) for significant choices and alternatives, and
+[research](docs/research/index.md) for methods, measurements and reproducibility. Amend the owning
+document instead of maintaining a second plan. A new decision record should explain context,
+decision, alternatives and consequences; supersede an old decision explicitly when needed.
+
 The optional `docs` dependency group pins MkDocs and the shadcn theme. Search runs in the browser;
 fonts and scripts are served with the site. GitHub star-count requests and raw Markdown copying
 are disabled. A local hook admits only the packaged theme assets used by this configuration.
@@ -104,9 +116,12 @@ uv sync --locked --all-groups --all-extras
 uv run --group docs mkdocs serve
 ```
 
-`mkdocs.yml` admits only the named public files under `docs/`. When adding a page, update its
-navigation and file allowlist, the sdist include list in `pyproject.toml`, and the documentation
-manifests in the documentation and packaging tests. Never set `docs_dir` to the repository root.
+`mkdocs.yml` admits public pages and Markdown files in the dedicated `docs/decisions/` and
+`docs/research/` directories. These directories contain publication-ready material only. Add new
+pages to navigation; a page within an admitted directory needs no per-file package/test entry.
+When adding a public directory or asset type, update the site/sdist publication boundaries and
+their tests together. Never set `docs_dir` to the repository root. Keep raw evidence and generated
+research outputs outside the documentation sources.
 
 After changing CLI options or help, regenerate the committed reference with Typer:
 

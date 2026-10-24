@@ -19,7 +19,19 @@ from typer.testing import CliRunner
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SITE_PAGES = frozenset(
-    {"index.md", "native-runs.md", "results.md", "cli.md", "troubleshooting.md", "measurements.md"}
+    {
+        "index.md",
+        "native-runs.md",
+        "results.md",
+        "cli.md",
+        "troubleshooting.md",
+        "measurements.md",
+        "architecture.md",
+    }
+) | frozenset(
+    path.relative_to(PROJECT_ROOT / "docs").as_posix()
+    for directory in ("decisions", "research")
+    for path in (PROJECT_ROOT / "docs" / directory).glob("*.md")
 )
 SITE_ASSETS = frozenset({"third-party-notices.txt"})
 
@@ -55,6 +67,7 @@ def site_sources(tmp_path: Path) -> Path:
     docs = tmp_path / "docs"
     docs.mkdir()
     for page in SITE_PAGES | SITE_ASSETS:
+        (docs / page).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(PROJECT_ROOT / "docs" / page, docs / page)
     return tmp_path
 
@@ -83,7 +96,12 @@ def test_site_build_publishes_only_allowlisted_sources(site_sources: Path) -> No
     assert result.returncode == 0, result.stdout + result.stderr
     site = site_sources / ".local/site"
     for page in SITE_PAGES:
-        target = site / ("index.html" if page == "index.md" else f"{Path(page).stem}/index.html")
+        relative = Path(page)
+        target = site / (
+            relative.with_suffix(".html")
+            if relative.name == "index.md"
+            else relative.with_suffix("") / "index.html"
+        )
         assert target.is_file()
         assets = _PageAssets()
         assets.feed(target.read_text(encoding="utf-8"))
