@@ -1,0 +1,188 @@
+{
+  "name": "ithrl-v02-m1-step1",
+  "version": 2,
+  "revision": "Before sensitivity execution, corrected outcome-dependent validity to apply conditional mutant rate 1/3 to every mutant independently of location/components. Qualification parameters and default simulation law are unchanged. Conditional-rate declarations in that sensitivity are not evidence of an unconditional effect.",
+  "created": "2026-10-23",
+  "scope": "credential-free design study; no native or provider execution",
+  "software": {
+    "python": "3.12",
+    "numpy": "2.5.4",
+    "scipy": "1.18.1"
+  },
+  "confirmation": {
+    "method": "independent one-sided Clopper-Pearson bounds, union allocation",
+    "alpha": 0.05,
+    "delta": 0.1,
+    "comparison": "L_original - U_mutant > delta",
+    "findings_per_campaign": 1,
+    "n_per_arm_menu": [
+      20,
+      40,
+      80
+    ]
+  },
+  "screen": {
+    "n_per_arm_menu": [
+      3,
+      5,
+      8
+    ],
+    "observed_decrease_minimum": 0.4
+  },
+  "attempt_ceiling": "n + ceil(n/2) + 6 per arm; calibration n=3 A=7",
+  "maximum_provider_call_menu": [
+    256,
+    384,
+    512
+  ],
+  "provider_call_bound_per_attempt": 1,
+  "calibration": {
+    "valid": 3,
+    "minimum_matches": 2,
+    "max_attempts": 7
+  },
+  "discovery": {
+    "locations": 4,
+    "order": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "max_candidates": 4,
+    "selection": "first screen-passing location; one final artifact, no holdout reselection"
+  },
+  "mutation": {
+    "family": "append four explicitly synthetic stale/irrelevant paragraphs to a copied prior user text field",
+    "baseline_groups": 4,
+    "paragraph_sizes": [
+      256,
+      1024,
+      512,
+      2048
+    ],
+    "single_component_essential_positions": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "interaction_pairs": [
+      [
+        0,
+        1
+      ],
+      [
+        0,
+        2
+      ],
+      [
+        0,
+        3
+      ],
+      [
+        1,
+        2
+      ],
+      [
+        1,
+        3
+      ],
+      [
+        2,
+        3
+      ]
+    ],
+    "duplicate_text_family": "no-effect control; no native equivalence assumed",
+    "simplification": "remove whole added paragraphs in order, restart on acceptance; deduplicate by location and remaining mask; empty intervention refused without dispatch",
+    "max_simplification_comparisons": 10
+  },
+  "workflows": [
+    "adaptive-shrink",
+    "sweep-unshrunk",
+    "direct-unshrunk"
+  ],
+  "workflow_meaning": {
+    "adaptive-shrink": "calibrate, screen four locations, simplify first hit, fresh final original/mutant comparison",
+    "sweep-unshrunk": "calibrate, same four-location screens, fresh confirmation of first hit without simplification",
+    "direct-unshrunk": "calibrate then confirm one prespecified location chosen uniformly; no discovery or shrinking"
+  },
+  "qualification": {
+    "original_rate": 0.9,
+    "essential_mutant_rate": 0.1,
+    "independent_invalid_rates": [
+      0.0,
+      0.05,
+      0.1,
+      0.2
+    ],
+    "repetitions_per_cell": 10000,
+    "seed": 2026102301,
+    "complete_workflow_success": "calibration, discovery, completed simplification, >=50% irrelevant mutation bytes removed, all essential components retained, fresh eligible confirmed decrease",
+    "success_target": 0.8,
+    "simultaneous_lower_bound_confidence": 0.99,
+    "multiplicity_family": "all 27 adaptive designs x 4 invalid rates x (4 locations x 4 single components + 6 two-component interactions at location 0)",
+    "runtime_choice": "lowest mean attempted calls among designs passing every single-component location/invalid-rate gate; prefer smaller maximum allowance then lower confirm n on ties",
+    "interaction_gate": "report separately; require >=0.8 simultaneous lower bound for all six pairs before including interactions in supported study envelope",
+    "cost_acceptance": "at most 512 calls admitted, compared with 293-observation prior reduction anchor; <=512 is an explicit first-study budget bracket, not a subscription allowance or immutable product limit",
+    "cost_interpretation": "report all-run mean/p50/p95/max, incomplete rates, confirmed rate and simplified-confirmed rate; do not condition spending on success"
+  },
+  "operating_characteristics": {
+    "original_rates": [
+      0.1,
+      0.5,
+      0.8,
+      0.9,
+      1.0
+    ],
+    "deltas": [
+      0.0,
+      0.05,
+      0.1,
+      0.2
+    ],
+    "decrease_offsets": [
+      -0.05,
+      0.0,
+      0.05,
+      0.2,
+      0.8
+    ],
+    "sample_pairs": [
+      [
+        20,
+        20
+      ],
+      [
+        40,
+        40
+      ],
+      [
+        80,
+        80
+      ],
+      [
+        20,
+        40
+      ],
+      [
+        40,
+        20
+      ]
+    ],
+    "definition": "actual D=max(0, delta+offset), retain only p_mutant=p_original-D in [0,1]; enumerate all count pairs"
+  },
+  "sensitivity": {
+    "seed": 2026102302,
+    "repetitions": 10000,
+    "null_campaigns": "all locations unchanged, including duplication control; screen/simplify can select false hits, final comparison remains fresh",
+    "candidate_dependent_validity": "original valid probability .95, mutant .80; conditional target rates held fixed, assess completion and conditional inference",
+    "outcome_dependent_validity": "both unconditional target probabilities .50; original accepts matches with 1 and nonmatches with .50, mutant accepts matches with .50 and nonmatches with 1; resulting conditional rates 2/3 and 1/3",
+    "time_drift": "equal underlying response function .9 to .5 across confirmation block, shuffled arm labels; record assumption violation and empirical declarations without claiming iid coverage"
+  },
+  "decisions": {
+    "go": "at least one feasible complete-workflow design passes prospective single-component utility gates; exact rule/reference validation passes; one safe text overlay seam demonstrated purely",
+    "course_correct": "if no design passes, compare a simpler generation/simplification schedule or revise the supported scenario prospectively; do not enter production contracts merely because infrastructure exists",
+    "open": "native effect size/usefulness and exact practical duration still require later approved execution"
+  }
+}

@@ -96,6 +96,7 @@ jobs:
           version: "0.13.4"
           python-version: "3.14"
           enable-cache: true
+          save-cache: false
 
       - name: Synchronize locked environment
         run: uv sync --locked --all-groups --all-extras
@@ -166,6 +167,7 @@ jobs:
           version: "0.13.4"
           python-version: "3.14"
           enable-cache: true
+          save-cache: false
 
       - name: Synchronize locked environment
         run: uv sync --locked --all-groups
@@ -195,6 +197,7 @@ jobs:
           version: "0.13.4"
           python-version: "3.14"
           enable-cache: true
+          save-cache: false
 
       - name: Synchronize locked environment
         run: uv sync --locked --all-groups
@@ -251,6 +254,7 @@ jobs:
           version: "0.13.4"
           python-version: ${{ matrix.python-version }}
           enable-cache: true
+          save-cache: false
 
       - name: Synchronize locked environment
         run: uv sync --locked --all-groups

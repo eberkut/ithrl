@@ -139,8 +139,13 @@ PUBLIC_DOCS = frozenset(
         "cli.md",
         "troubleshooting.md",
         "measurements.md",
+        "architecture.md",
         "third-party-notices.txt",
     )
+) | frozenset(
+    PurePosixPath("docs", directory, path.name)
+    for directory in ("decisions", "research")
+    for path in (PROJECT_ROOT / "docs" / directory).glob("*.md")
 )
 
 
@@ -217,6 +222,7 @@ def test_sdist_contains_all_inputs_needed_to_rebuild_the_wheel(
         PurePosixPath("LICENSE"),
         PurePosixPath("CHANGELOG.md"),
         PurePosixPath("README.md"),
+        PurePosixPath("ROADMAP.md"),
         PurePosixPath("CONTRIBUTING.md"),
         PurePosixPath("pyproject.toml"),
     } <= set(relative_members)
@@ -236,6 +242,7 @@ def test_sdist_contains_all_inputs_needed_to_rebuild_the_wheel(
         "CHANGELOG.md",
         "PKG-INFO",
         "README.md",
+        "ROADMAP.md",
         "CONTRIBUTING.md",
         "pyproject.toml",
         "src",
