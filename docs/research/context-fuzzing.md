@@ -6,10 +6,12 @@ to `.10`. The minimum complete-workflow success rate was 90.25%, with a simultan
 bound of 88.86896%, exceeding the prospective 80% gate. These results justify the bounded design
 and its implementation; they do not establish native fuzzing support or general session success.
 
-As of 2026-10-24, mutation contracts, deterministic generation/materialization/simplification,
-sampled comparison services and budget admission are implemented at development checkpoint
-`ee9a32f`. Durable campaign orchestration, final-selection persistence, exact campaign resume,
-the public `ithrl fuzz` command and native mutation qualification remain pending. The
+Mutation contracts, deterministic generation/materialization/simplification, sampled comparison
+services and budget admission were implemented at development checkpoint `ee9a32f`. Internal
+durable campaign orchestration now adds frozen generation, final-selection persistence and exact
+recovery through the shared observation store. The [architecture](../architecture.md#measurement-search-and-confirmation)
+describes that contract. The public `ithrl fuzz` command and native mutation qualification remain
+pending. The
 [supported-inputs table](https://github.com/eberkut/ithrl/blob/main/README.md#supported-inputs)
 owns public capability claims. The [decision record](../decisions/0004-single-finding-fuzz-confirmation.md)
 records the selected architecture and alternatives.

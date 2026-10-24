@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Generator
 from dataclasses import dataclass, field
 from enum import StrEnum
 from itertools import pairwise
@@ -39,9 +39,24 @@ async def simplify_mutation(
     Callback errors propagate; invalid trials cannot establish a retained change.
     """
 
+    steps = simplification_steps(mutation, max_trials=max_trials)
+    proposed = next(steps)
+    while True:
+        decision = await evaluate(proposed)
+        try:
+            proposed = steps.send(decision)
+        except StopIteration as finished:
+            return finished.value
+
+
+def simplification_steps(
+    mutation: TextMutation, *, max_trials: int
+) -> Generator[TextMutation, MutationDecision, SimplificationResult]:
+    """Replay the bounded traversal using recorded decisions, without executing a runner."""
+
     if type(max_trials) is not int or not 1 <= max_trials <= MAX_FUZZ_CANDIDATES:
         raise ValueError("simplification requires a finite positive trial bound")
-    if mutation.is_empty or await evaluate(mutation) is not MutationDecision.CHANGED:
+    if mutation.is_empty or (yield mutation) is not MutationDecision.CHANGED:
         raise ValueError("simplification requires an observed changed-behavior mutation")
     edit = mutation.edits[0]
     boundaries = sorted(
@@ -69,7 +84,7 @@ async def simplify_mutation(
             continue
         decision = cache.get(proposed.digest)
         if decision is None:
-            decision = await evaluate(proposed)
+            decision = yield proposed
             evaluations += 1
             cache[proposed.digest] = decision
         if decision is MutationDecision.CHANGED:

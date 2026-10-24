@@ -29,7 +29,7 @@ from ithrl.fuzz.statistics import (
     validate_change_parameters,
 )
 from ithrl.mutation import TextMutation
-from ithrl.observations import SamplingBlockPlan, sampling_schedule
+from ithrl.observations import SamplingBlockEvidence, SamplingBlockPlan, sampling_schedule
 from ithrl.runner import PreparedAttempt, prepare_candidate
 from ithrl.runner.contracts import CandidateAdmission
 from ithrl.sampling import SamplingCollectionResult
@@ -180,15 +180,22 @@ def fuzz_budget_bounds(
 def screen_fuzz_block(result: SamplingCollectionResult) -> MutationDecision | None:
     """An exploratory point screen; incomplete/ineligible evidence has no decision."""
 
-    plan = result.evidence.plan
+    decision = screen_fuzz_evidence(result.evidence)
+    return decision if result.complete else None
+
+
+def screen_fuzz_evidence(evidence: SamplingBlockEvidence) -> MutationDecision | None:
+    """Reconstruct a screen from complete, eligible authoritative block evidence."""
+
+    plan = evidence.plan
     if not isinstance(plan.procedure, SampledChangePlan) or plan.role not in {
         "discovery",
         "simplification",
     }:
         raise ValueError("fuzz screening requires exploratory change evidence")
-    if not result.complete:
+    if not evidence.complete or not evidence.eligible:
         return None
-    original, mutant = result.evidence.original_counts, result.evidence.candidate_counts
+    original, mutant = evidence.original_counts, evidence.candidate_counts
     decrease = Fraction(original.matches, original.valid) - Fraction(mutant.matches, mutant.valid)
     return (
         MutationDecision.CHANGED
@@ -203,13 +210,20 @@ def confirm_fuzz_block(result: SamplingCollectionResult) -> ChangeConfirmation:
         raise ValueError("change confirmation requires its fresh selected comparison")
     if not result.complete:
         return ChangeConfirmation(FuzzOutcome.INCOMPLETE, None, None, None, None)
+    return confirm_fuzz_evidence(result.evidence)
+
+
+def confirm_fuzz_evidence(evidence: SamplingBlockEvidence) -> ChangeConfirmation:
+    """Recompute a final verdict from its fixed, eligible observations."""
+
+    plan = evidence.plan
+    if not isinstance(plan.procedure, SampledChangePlan) or plan.role != "confirmation":
+        raise ValueError("change confirmation requires its fresh selected comparison")
+    if not evidence.complete or not evidence.eligible:
+        return ChangeConfirmation(FuzzOutcome.INCOMPLETE, None, None, None, None)
     return confirm_change(
-        BinomialSample(
-            result.evidence.original_counts.matches, result.evidence.original_counts.valid
-        ),
-        BinomialSample(
-            result.evidence.candidate_counts.matches, result.evidence.candidate_counts.valid
-        ),
+        BinomialSample(evidence.original_counts.matches, evidence.original_counts.valid),
+        BinomialSample(evidence.candidate_counts.matches, evidence.candidate_counts.valid),
         required_original=plan.procedure.confirmation.original.required_valid,
         required_mutant=plan.procedure.confirmation.candidate.required_valid,
         alpha=plan.procedure.confirmation.alpha,

@@ -64,6 +64,8 @@ RUNTIME_MODULES = frozenset(
         PurePosixPath("ithrl/extraction.py"),
         PurePosixPath("ithrl/fuzz/__init__.py"),
         PurePosixPath("ithrl/fuzz/contracts.py"),
+        PurePosixPath("ithrl/fuzz/campaign.py"),
+        PurePosixPath("ithrl/fuzz/progress.py"),
         PurePosixPath("ithrl/fuzz/deterministic.py"),
         PurePosixPath("ithrl/fuzz/generation.py"),
         PurePosixPath("ithrl/fuzz/sampling.py"),
