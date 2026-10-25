@@ -285,7 +285,7 @@ class SamplingDispatchReservation(_SampledStateContract):
     attempt_id: Annotated[str, Field(pattern=r"^attempt-[0-9a-f]{32}$")]
     attempt_digest: _StateDigest
     reserved_at: datetime
-    provider_calls: Annotated[int, Field(ge=1, le=2)]
+    provider_calls: Annotated[int, Field(ge=0, le=2)]
     runner_seconds: Annotated[int, Field(ge=1)]
 
     @field_validator("reserved_at")
@@ -358,7 +358,7 @@ class SampledRunState(_SampledStateContract):
     started_at: datetime
     original_identity: ObservationIdentity
     original_candidate_digest: _StateDigest
-    provider_calls_per_attempt: Annotated[int, Field(ge=1, le=2)]
+    provider_calls_per_attempt: Annotated[int, Field(ge=0, le=2)]
     approvals: Annotated[tuple[SamplingBudgetApproval, ...], Field(min_length=1, max_length=10_000)]
     calibration_observation_ids: Annotated[tuple[str, ...], Field(max_length=16)] = ()
     blocks: Annotated[tuple[SamplingBlockProgress, ...], Field(max_length=20_001)] = ()

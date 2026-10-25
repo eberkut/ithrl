@@ -116,7 +116,9 @@ def native_selection(
     persisted = (
         experiment if experiment is not None else parse_experiment_toml(evidence.default_experiment)
     )
-    if isinstance(persisted, SampledExperimentDefinition):
+    if isinstance(persisted, SampledExperimentDefinition) and isinstance(
+        persisted.runner, NativeRunnerConfig
+    ):
         harness = persisted.runner.type
         required_digest = persisted.runner.required_capability_digest
         phase = calibration or persisted.calibration

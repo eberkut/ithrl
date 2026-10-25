@@ -40,7 +40,7 @@ class FuzzConfirmation(_Contract):
     alpha: Annotated[float, Field(gt=0, lt=1, allow_inf_nan=False)]
 
 
-class FuzzCampaignConfig(_Contract):
+class FuzzCampaignSettings(_Contract):
     """One original, explicit finite exploration, and one fresh final comparison.
 
     Sampling and work counts are explicit; these contracts install no practical
@@ -53,7 +53,6 @@ class FuzzCampaignConfig(_Contract):
     schema_version: Literal[1] = 1
     kind: Literal["fuzz"] = "fuzz"
     objective: Literal["decrease-target-rate"] = "decrease-target-rate"
-    original: Candidate = Field(repr=False)
     seed: Annotated[int, Field(ge=0, le=2**64 - 1)]
     mutators: Annotated[
         tuple[Literal["duplicate-text", "append-stale-text"], ...],
@@ -73,9 +72,7 @@ class FuzzCampaignConfig(_Contract):
     freshness_seconds: Annotated[int, Field(ge=1, le=MAX_SAMPLING_FRESHNESS_SECONDS)]
 
     @model_validator(mode="after")
-    def validate_campaign(self) -> FuzzCampaignConfig:
-        if self.original.removed_context_ids or not self.original.mutation.is_empty:
-            raise ValueError("campaign baseline must be the unchanged original candidate")
+    def validate_campaign(self) -> FuzzCampaignSettings:
         if len(set(self.mutators)) != len(self.mutators):
             raise ValueError("mutators must be unique")
         return self
@@ -83,6 +80,18 @@ class FuzzCampaignConfig(_Contract):
     @property
     def digest(self) -> str:
         return content_digest(self.model_dump(mode="json"))
+
+
+class FuzzCampaignConfig(FuzzCampaignSettings):
+    """Operator settings bound to the exact unchanged original execution candidate."""
+
+    original: Candidate = Field(repr=False)
+
+    @model_validator(mode="after")
+    def validate_original(self) -> FuzzCampaignConfig:
+        if self.original.removed_context_ids or not self.original.mutation.is_empty:
+            raise ValueError("campaign baseline must be the unchanged original candidate")
+        return self
 
 
 class FuzzOutcome(StrEnum):

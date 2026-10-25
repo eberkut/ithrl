@@ -21,6 +21,7 @@ from ithrl.case import CaseWorkspace
 from ithrl.cli import ExitCode, app
 from ithrl.execution import CapabilityProfile
 from ithrl.experiment import (
+    NativeRunnerConfig,
     SampledCalibrationPhase,
     SampledConfirmationPhase,
     SampledExperimentDefinition,
@@ -675,6 +676,7 @@ def test_opt_in_smoke_workflow_with_mock_processes_only(
         original_workspace=scenario.original,
         calibration=SampledCalibrationPhase(required_valid=2, minimum_matches=2, max_attempts=2),
     )
+    assert isinstance(selection.experiment.runner, NativeRunnerConfig)
     options = SmokeOptions(
         "run" if mode == "run" else "preflight",
         profile,

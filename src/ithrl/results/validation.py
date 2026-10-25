@@ -25,6 +25,7 @@ from ithrl.execution import ResolvedExecutionPlan
 from ithrl.experiment import (
     ExperimentDefinition,
     ExperimentFormatError,
+    NativeRunnerConfig,
     SampledExperimentDefinition,
 )
 from ithrl.reduce import CandidateTrial, ReductionCheckpoint, SampledConfirmation, SampledReducer
@@ -296,7 +297,10 @@ def _validate_plan_identity(
     if isinstance(experiment, SampledExperimentDefinition):
         if experiment.runner.type != execution_plan.capability.runner_type:
             raise ResultSnapshotError("experiment runner type does not match execution plan")
-        if experiment.runner.required_capability_digest != execution_plan.capability.digest:
+        if (
+            isinstance(experiment.runner, NativeRunnerConfig)
+            and experiment.runner.required_capability_digest != execution_plan.capability.digest
+        ):
             raise ResultSnapshotError("experiment capability does not match execution plan")
 
 

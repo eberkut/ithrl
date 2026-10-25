@@ -250,7 +250,7 @@ class SamplingBlockPlan(_SamplingContract):
     selected_at: datetime | None = None
     schedule_seed: Annotated[int, Field(ge=0, le=2**64 - 1)]
     schedule: Annotated[tuple[SamplingArm, ...], Field(max_length=2 * MAX_SAMPLING_ATTEMPTS)]
-    provider_calls_per_attempt: Annotated[int, Field(ge=1, le=2)]
+    provider_calls_per_attempt: Annotated[int, Field(ge=0, le=2)]
 
     @field_validator("frozen_at")
     @classmethod
@@ -271,6 +271,8 @@ class SamplingBlockPlan(_SamplingContract):
     @model_validator(mode="after")
     def validate_block(self) -> SamplingBlockPlan:
         change = isinstance(self.procedure, SampledChangePlan)
+        if self.provider_calls_per_attempt == 0 and not change:
+            raise ValueError("zero-call collection is restricted to credential-free fuzz workflows")
         if (change and self.role == "search") or (
             not change and self.role in {"discovery", "simplification"}
         ):
@@ -563,10 +565,10 @@ class SamplingBudgetAllowance(_SamplingContract):
     """
 
     run_id: Annotated[str, Field(min_length=1, max_length=128)]
-    max_provider_calls: Annotated[int, Field(ge=1)]
+    max_provider_calls: Annotated[int, Field(ge=0)]
     max_wall_time_seconds: Annotated[int, Field(ge=1)]
-    max_candidate_comparisons: Annotated[int, Field(ge=1, le=10_000)]
-    confirmation_provider_calls: Annotated[int, Field(ge=1)]
+    max_candidate_comparisons: Annotated[int, Field(ge=1, le=20_000)]
+    confirmation_provider_calls: Annotated[int, Field(ge=0)]
     confirmation_runner_seconds: Annotated[int, Field(ge=1)]
     inter_attempt_delay_seconds: Annotated[int, Field(ge=0, le=86_400)] = 0
     max_tokens: Annotated[int | None, Field(ge=1)] = None

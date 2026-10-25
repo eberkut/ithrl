@@ -132,6 +132,96 @@ This makes real model requests. Calibration, search and fresh confirmation run w
 limits. Keep the printed result directory and inspect `summary.json`; see [results and
 resume](results.md) for its interpretation and continuation rules.
 
+
+## Context fuzzing
+
+`ithrl fuzz` explores bounded text appends and confirms at most one decrease in the selected
+behavior's match rate. Install the optional numerical dependency with `uv tool install 'ithrl[fuzz]'`
+(or `uv sync --locked --all-groups --all-extras` in a checkout). Native text mutation is awaiting
+qualification; current native profiles refuse execution of this operation.
+
+To exercise the complete workflow locally, extract the [bundled example](https://github.com/eberkut/ithrl/blob/main/README.md#try-it)
+and save the following as `ithrl-demo/fuzz.toml`, with mode `0600`:
+
+```toml
+seed = 1
+mutators = ["append-stale-text"]
+stale_text = "An irrelevant earlier instruction."
+max_candidates = 4
+max_simplification_trials = 4
+minimum_decrease = 0.1
+eligibility_policy = "independent-safe-preaccept-only"
+freshness_seconds = 86400
+
+[calibration]
+required_valid = 2
+minimum_matches = 2
+max_attempts = 2
+
+[screening]
+minimum_decrease = 0.4
+
+[screening.original]
+required_valid = 2
+max_attempts = 2
+
+[screening.mutant]
+required_valid = 2
+max_attempts = 2
+
+[confirmation]
+alpha = 0.05
+
+[confirmation.original]
+required_valid = 20
+max_attempts = 20
+
+[confirmation.mutant]
+required_valid = 20
+max_attempts = 20
+
+[limits]
+max_provider_calls = 0
+max_wall_time_seconds = 10000
+attempt_timeout_seconds = 1
+inter_attempt_delay_seconds = 0
+```
+
+These small fixed counts demonstrate the fake runner; they are not native sampling defaults.
+The alternative mutator, `duplicate-text`, appends a copy of an existing editable text item.
+Both mutators preserve protected records and keep payloads bounded. `stale_text` is private input
+and is never printed in normal output.
+
+Inspect without execution, then run with a dedicated store:
+
+```bash
+ithrl fuzz ithrl-demo/case --config ithrl-demo/fuzz.toml \
+  --observation-store ithrl-demo/fuzz-observations.sqlite --dry-run
+ithrl fuzz ithrl-demo/case --config ithrl-demo/fuzz.toml \
+  --observation-store ithrl-demo/fuzz-observations.sqlite
+```
+
+The fake runner makes zero provider calls and executes no actions. Fixed original/mutant samples
+exercise the shared collector and fresh confirmation; [fuzz results](results.md#fuzz-results)
+explains the saved evidence and resume behavior. Use `--format json` for one JSON report on stdout;
+execution progress and the inspected plan go to stderr.
+
+For a future qualified native profile, detection is a separate explicit operation:
+
+```bash
+ithrl fuzz CASE --config PRIVATE_TOML --original-workspace ORIGINAL \
+  --detect --profile PRIVATE_PROFILE
+ithrl fuzz CASE --config PRIVATE_TOML --original-workspace ORIGINAL \
+  --profile PRIVATE_PROFILE --dry-run
+```
+
+Fuzz `--dry-run` starts no harness or provider. Without a saved native profile it reports
+`detection-required`; it does not guess capabilities, destination or call bounds. `--detect`
+performs credential-free structural discovery and saves private planning metadata. Inspect the
+model, provider, destination, mutation scope, fixed samples, action denial and resource limits.
+Execution additionally requires `--acknowledge-model-execution`, rechecks the current exact
+profile and refuses unsupported text mutation before any provider attempt.
+
 ## Compatibility and measurements
 
 Extraction validates record structure and recognized relationships. Codex rollouts are recognized

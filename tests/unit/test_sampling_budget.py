@@ -308,10 +308,19 @@ def test_attempt_cost_requires_enforceable_per_attempt_call_limit() -> None:
 
 @pytest.mark.parametrize(
     ("provider_calls", "runner_seconds"),
-    [(0, 1), (1, 0), (True, 1), (1, True)],
+    [(-1, 1), (1, 0), (True, 1), (1, True)],
 )
-def test_attempt_cost_requires_positive_integer_fields(
+def test_attempt_cost_requires_nonnegative_calls_and_positive_seconds(
     provider_calls: int, runner_seconds: int
 ) -> None:
-    with pytest.raises(ValueError, match="positive integer"):
+    with pytest.raises(ValueError, match="integer"):
         SamplingAttemptCost(provider_calls=provider_calls, runner_seconds=runner_seconds)
+
+
+def test_credential_free_fake_collection_has_zero_provider_cost() -> None:
+    profile = CapabilityProfile.deterministic_fake()
+    assert sampling_attempt_cost(
+        profile, ResourceLimits(max_wall_time_seconds=1)
+    ) == SamplingAttemptCost(provider_calls=0, runner_seconds=1)
+    with pytest.raises(ValueError, match="at least one provider call"):
+        sampling_attempt_cost(profile.model_copy(update={"deterministic": False}), ResourceLimits())

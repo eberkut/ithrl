@@ -44,6 +44,9 @@ use a new directory to repeat it. You can remove the directory and its contents 
   available sessions and select a decision.
 - `ithrl shrink CASE` tests context removals and saves the result. `--dry-run` inspects the plan;
   `--format json` produces machine-readable output. A stopped search prints its resume command.
+- `ithrl fuzz CASE --config PRIVATE_TOML` explores text appends and independently confirms one
+  target-rate decrease. The [local walkthrough](https://github.com/eberkut/ithrl/blob/main/docs/native-runs.md#context-fuzzing)
+  uses the fake runner; native text mutation still requires qualification.
 
 For example, extract a saved session file:
 
@@ -57,11 +60,11 @@ experiment; see the [native-run guide](https://github.com/eberkut/ithrl/blob/mai
 
 ### Supported inputs
 
-| Input | Extracted decisions | Reduction |
-| --- | --- | --- |
-| Bundled synthetic example | Synthetic tool request | Deterministic local runner |
-| Codex CLI rollouts | Final responses | Experimental native runner |
-| Copilot CLI session events | Final responses and shell requests | Experimental final-response and denied `bash` runner |
+| Input | Extracted decisions | Reduction | Fuzzing |
+| --- | --- | --- | --- |
+| Bundled synthetic example | Synthetic tool request | Deterministic local runner | Local fake runner |
+| Codex CLI rollouts | Final responses | Experimental native runner | Not qualified |
+| Copilot CLI session events | Final responses and shell requests | Experimental final-response and denied `bash` runner | Not qualified |
 
 Native compatibility is checked against the installed harness's protocol, capabilities and safety
 controls. [Compatibility and measurements](https://github.com/eberkut/ithrl/blob/main/docs/native-runs.md#compatibility-and-measurements)

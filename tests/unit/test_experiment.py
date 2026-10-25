@@ -467,7 +467,7 @@ def test_sampled_experiment_digest_binds_capability_and_budget() -> None:
 @pytest.mark.parametrize(
     ("old", "new", "error"),
     [
-        ('type = "codex"', 'type = "fake"', "Input should be 'codex' or 'copilot'"),
+        ('type = "codex"', 'type = "fake"', "Field required"),
         (
             'required_capability_digest = "' + "a" * 64 + '"',
             'required_capability_digest = "' + "A" * 64 + '"',

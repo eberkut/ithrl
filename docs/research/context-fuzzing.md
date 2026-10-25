@@ -10,8 +10,8 @@ Mutation contracts, deterministic generation/materialization/simplification, sam
 services and budget admission were implemented at development checkpoint `ee9a32f`. Internal
 durable campaign orchestration now adds frozen generation, final-selection persistence and exact
 recovery through the shared observation store. The [architecture](../architecture.md#measurement-search-and-confirmation)
-describes that contract. The public `ithrl fuzz` command and native mutation qualification remain
-pending. The
+describes that contract. The public `ithrl fuzz` command exposes a credential-free walkthrough and saved campaign evidence.
+Native mutation qualification remains pending. The
 [supported-inputs table](https://github.com/eberkut/ithrl/blob/main/README.md#supported-inputs)
 owns public capability claims. The [decision record](../decisions/0004-single-finding-fuzz-confirmation.md)
 records the selected architecture and alternatives.

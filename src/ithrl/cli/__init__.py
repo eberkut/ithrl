@@ -24,6 +24,7 @@ from ithrl.case import (
 )
 from ithrl.case.filesystem import read_safe_text
 from ithrl.cli.extract import ExtractionSelectionError, create_case_report
+from ithrl.cli.fuzz import fuzz as fuzz_command
 from ithrl.cli.native import NativeSelection, NativeSelectionError, native_selection
 from ithrl.cli.output import (
     CommandOutput,
@@ -79,6 +80,9 @@ app = typer.Typer(
     no_args_is_help=True,
     pretty_exceptions_enable=False,
 )
+
+
+app.command()(fuzz_command)
 
 
 def _version_option(value: bool) -> None:

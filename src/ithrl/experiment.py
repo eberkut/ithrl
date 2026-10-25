@@ -265,7 +265,7 @@ class SampledExperimentDefinition(_ImmutableContract):
     kind: Literal["sampled"] = "sampled"
     target: BehaviorTarget
     oracle: StructuralOracleConfig
-    runner: NativeRunnerConfig
+    runner: Annotated[NativeRunnerConfig | FakeRunnerConfig, Field(discriminator="type")]
     calibration: SampledCalibrationPhase
     reduction: SampledReductionPlan | None = None
 

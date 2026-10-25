@@ -17,8 +17,36 @@ $ ithrl [OPTIONS] COMMAND [ARGS]...
 
 **Commands**:
 
+* `fuzz`: Find and independently confirm a bounded...
 * `extract`: Create a case from a saved agent session...
 * `shrink`: Find a smaller context that preserves the...
+
+## `ithrl fuzz`
+
+Find and independently confirm a bounded decrease in the selected target rate.
+
+**Usage**:
+
+```console
+$ ithrl fuzz [OPTIONS] {CASE_OR_RUN}
+```
+
+**Arguments**:
+
+* `CASE_OR_RUN`: Case, or saved run/result with --resume.  [required]
+
+**Options**:
+
+* `--config <path>`: Private TOML with explicit mutation, sampling and resource limits.
+* `--profile <path>`: Private structural profile; output path with --detect.
+* `--original-workspace <path>`: Protected original workspace for a native case.
+* `--observation-store <path>`: Private SQLite store outside protected state.
+* `--dry-run`: Inspect saved inputs and limits without starting a harness or provider.
+* `--detect`: Explicit credential-free structural harness detection; save a profile.
+* `--resume`: Continue exactly the saved campaign, without changing its inputs or budget.
+* `--acknowledge-model-execution`: Approve the inspected native execution within its frozen limits.
+* `--format <human|json>`: Output format.  [default: human]
+* `--help`: Show this message and exit.
 
 ## `ithrl extract`
 
