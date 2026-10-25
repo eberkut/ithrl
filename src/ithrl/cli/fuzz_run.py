@@ -186,7 +186,11 @@ def _calibrate(
         return stop.reason
     finally:
         refresh()
-    return None if result.outcome == "measurable" else result.stop_reason
+    if result.outcome == "measurable":
+        return None
+    if result.stop_reason == "valid-sample-limit":
+        return f"calibration-{result.outcome}"
+    return result.stop_reason
 
 
 def _report(
@@ -235,6 +239,11 @@ def _report(
         status = "ready"
     elif stop_reason == "user-interrupt" and terminal is None:
         status = "interrupted"
+    elif (
+        stop_reason in {"calibration-not-measurable", "calibration-inconclusive"}
+        and terminal is None
+    ):
+        status = "inconclusive"
     selected = progress.selected_mutation if progress else None
     safe_resume = (
         terminal is None
@@ -246,7 +255,14 @@ def _report(
         )
         and usage.wall_time_seconds < state.allowance.max_wall_time_seconds
         and stop_reason
-        not in {"attempt-limit", "unsafe-retry", "safety-refusal", "valid-sample-limit"}
+        not in {
+            "attempt-limit",
+            "unsafe-retry",
+            "safety-refusal",
+            "valid-sample-limit",
+            "calibration-not-measurable",
+            "calibration-inconclusive",
+        }
     )
     command, shell = (
         shell_command(

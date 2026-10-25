@@ -64,9 +64,11 @@ threshold, alpha, original/mutant counts and rates appear in the summary. This e
 among valid observations under independent, stationary attempts; it does not establish causality,
 global minimality or overall execution reliability.
 
-`no-candidate-found` describes the bounded exploration. `inconclusive` means a complete eligible
-holdout did not confirm the declared decrease. `incomplete` means required work or eligible
-evidence was unavailable. Errors remain separate from valid match/no-match counts.
+`no-candidate-found` describes the bounded exploration. `inconclusive` means calibration did not
+establish a measurable target, or a complete eligible holdout did not confirm the declared
+decrease. The stop reason distinguishes unsuccessful calibration; confirmation remains `not-run`
+when calibration stops the campaign. `incomplete` means required work or eligible evidence was
+unavailable. Errors remain separate from valid match/no-match counts.
 
 Private fuzz results contain `summary.json`, `fuzz-session.json` and
 `sampling/sampling-state.json`; the observation database remains at its frozen external path.

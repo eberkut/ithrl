@@ -506,3 +506,51 @@ def test_calibration_uses_frozen_policy_for_a_verified_overload(
     assert report["unknown_acceptance_attempts"] == 1
     assert report["usage"]["charged_provider_calls"] == len(runner.calls)
     assert report["execution_reliability"]["runner_errors"] == 1
+
+
+@pytest.mark.parametrize(
+    ("matches", "reason"),
+    [(0, "calibration-not-measurable"), (1, "calibration-inconclusive")],
+)
+def test_completed_unmeasurable_calibration_reports_inconclusive_without_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, matches: int, reason: str
+) -> None:
+    from ithrl.cli.output import ExitCode
+
+    args, runner, _ = mock_native(tmp_path, monkeypatch)
+    runner.original_matching = matches
+    profile = tmp_path / "profile.json"
+    detected = CliRunner().invoke(app, [*args, "--detect", "--profile", str(profile)])
+    assert detected.exit_code == ExitCode.SUCCESS, detected.output
+    result = CliRunner().invoke(
+        app, [*args, "--profile", str(profile), "--acknowledge-model-execution"]
+    )
+    report = json.loads(result.stdout)
+    assert result.exit_code == ExitCode.INCONCLUSIVE, report
+    assert report["status"] == "inconclusive"
+    assert report["stop_reason"] == reason
+    assert report["calibration"]["matches"] == matches
+    assert report["calibration"]["valid"] == 2
+    assert report["calibration"]["runner_errors"] == 0
+    assert report["confirmation_result"] == "not-run"
+    assert report["next_command"] is None
+    assert len(runner.calls) == 2
+    assert all(attempt.phase == "calibration" for attempt in runner.calls)
+    saved = json.loads((Path(report["result_path"]) / "summary.json").read_text())
+    assert saved["status"] == "inconclusive"
+    assert saved["stop_reason"] == reason
+    resumed = CliRunner().invoke(
+        app,
+        [
+            "fuzz",
+            report["result_path"],
+            "--resume",
+            "--acknowledge-model-execution",
+            "--format",
+            "json",
+        ],
+    )
+    assert resumed.exit_code == ExitCode.INCONCLUSIVE, resumed.output
+    assert json.loads(resumed.stdout)["stop_reason"] == reason
+    assert json.loads(resumed.stdout)["next_command"] is None
+    assert len(runner.calls) == 2
