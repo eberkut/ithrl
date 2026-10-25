@@ -16,6 +16,7 @@ from ithrl.execution.contracts import (
 from ithrl.experiment import (
     AnyExperimentDefinition,
     ExperimentDefinition,
+    FakeRunnerConfig,
     NativeRunnerConfig,
     SampledExperimentDefinition,
     UnavailableRunnerConfig,
@@ -80,7 +81,13 @@ def resolve_execution_plan(
             )
         )
     if isinstance(experiment, SampledExperimentDefinition):
-        if capability.deterministic:
+        fake = isinstance(experiment.runner, FakeRunnerConfig) and (
+            capability.runner_type == "fake"
+            and capability.deterministic
+            and capability.provider_transport == "forbidden"
+            and capability.provider_calls_per_attempt == 0
+        )
+        if capability.deterministic and not fake:
             issues.append(
                 PreflightIssue(
                     code="sampled-runner-required",
@@ -88,9 +95,12 @@ def resolve_execution_plan(
                 )
             )
         native_runner = experiment.runner
-        if not isinstance(native_runner, NativeRunnerConfig):
-            raise TypeError("schema-v2 experiment requires a native runner configuration")
-        if capability.digest != native_runner.required_capability_digest:
+        if not isinstance(native_runner, NativeRunnerConfig) and not fake:
+            raise TypeError("sampled execution requires a native or credential-free fake runner")
+        if (
+            isinstance(native_runner, NativeRunnerConfig)
+            and capability.digest != native_runner.required_capability_digest
+        ):
             issues.append(
                 PreflightIssue(
                     code="capability-profile-mismatch",

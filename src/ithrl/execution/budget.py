@@ -31,8 +31,8 @@ class SamplingAttemptCost:
     runner_seconds: int
 
     def __post_init__(self) -> None:
-        if type(self.provider_calls) is not int or self.provider_calls < 1:
-            raise ValueError("provider calls per attempt must be a positive integer")
+        if type(self.provider_calls) is not int or self.provider_calls < 0:
+            raise ValueError("provider calls per attempt must be a nonnegative integer")
         if type(self.runner_seconds) is not int or self.runner_seconds < 1:
             raise ValueError("runner seconds per attempt must be a positive integer")
 
@@ -42,9 +42,13 @@ def sampling_attempt_cost(
 ) -> SamplingAttemptCost:
     """Resolve one attempt's maximum calls and timeout including cancellation grace."""
 
-    if capability.deterministic:
-        raise ValueError("sampling requires a nondeterministic runner profile")
-    if capability.provider_calls_per_attempt < 1:
+    if capability.deterministic and not (
+        capability.runner_type == "fake"
+        and capability.provider_transport == "forbidden"
+        and capability.provider_calls_per_attempt == 0
+    ):
+        raise ValueError("deterministic collection requires the credential-free fake runner")
+    if not capability.deterministic and capability.provider_calls_per_attempt < 1:
         raise ValueError("sampling requires at least one provider call per attempt")
     if capability.provider_calls_per_attempt > limits.max_provider_calls:
         raise ValueError("provider-call limit is below the runner profile maximum")
@@ -125,8 +129,12 @@ def calibration_budget_bounds(
 ) -> CalibrationBudgetBounds:
     """Calculate only limits the resolved runner can enforce before dispatch."""
 
-    if capability.deterministic:
-        raise ValueError("sampled calibration requires a nondeterministic runner profile")
+    if capability.deterministic and not (
+        capability.runner_type == "fake"
+        and capability.provider_transport == "forbidden"
+        and capability.provider_calls_per_attempt == 0
+    ):
+        raise ValueError("deterministic calibration requires the credential-free fake runner")
     if capability.provider_calls_per_attempt > limits.max_provider_calls:
         raise ValueError("provider-call limit is below the runner profile maximum")
     if limits.max_input_tokens is not None and (

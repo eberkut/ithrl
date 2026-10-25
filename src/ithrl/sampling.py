@@ -325,7 +325,15 @@ def _validate_inputs(
             )
             or prepared.identity != identity
             or partition.digest != digest
-            or profile.deterministic
+            or (
+                profile.deterministic
+                and not (
+                    isinstance(plan.procedure, SampledChangePlan)
+                    and profile.runner_type == "fake"
+                    and profile.provider_transport == "forbidden"
+                    and profile.provider_calls_per_attempt == 0
+                )
+            )
             or profile.provider_calls_per_attempt != plan.provider_calls_per_attempt
             or profile != prepared.execution_plan.capability
             or prepared.runner.fingerprint != identity.runner_fingerprint

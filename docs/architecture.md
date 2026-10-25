@@ -7,9 +7,9 @@ the configured experiment; it is not a causal explanation or a reconstruction of
 agent runtime.
 
 The [README supported-inputs table](https://github.com/eberkut/ithrl/blob/main/README.md#supported-inputs)
-defines the public capability claim. The public commands are `extract` and `shrink`.
-Internal fuzz components do not expose a public `fuzz` command or establish qualified native
-text-mutation support. See [native runs](native-runs.md) for the qualified execution profiles and
+defines the public capability claim. The public commands are `extract`, `shrink` and `fuzz`.
+Fuzzing has a credential-free local walkthrough; native text-mutation support requires separate
+qualification. See [native runs](native-runs.md) for the qualified execution profiles and
 [results](results.md) for interpreting their output.
 
 ## Evidence and execution have different owners
@@ -94,7 +94,7 @@ search coverage separately from final preservation; it does not establish sample
 The shared collector in `sampling.py` admits and collects a complete frozen block sequentially.
 It owns pacing, bounded attempts, eligibility, confirmation reserves and durable dispatch
 reconciliation. It returns evidence and accounting, not candidate-selection or statistical
-verdicts. Reduction owns exploratory admission and search coverage. Internal fuzz components own
+verdicts. Reduction owns exploratory admission and search coverage. Fuzz components own
 mutation generation, discovery, simplification and change classification. Sharing a collector
 does not make preservation and change the same statistical question.
 
@@ -105,7 +105,7 @@ holdout to select another candidate. [ADR 0002](decisions/0002-fixed-samples-and
 explains fixed samples, eligibility and recovery; [results](results.md#sampled-results) describes
 the resulting claims and assumptions.
 
-Internal fuzz campaigns freeze generated mutation order, exact bounded payloads, consumed proposal
+Fuzz campaigns freeze generated mutation order, exact bounded payloads, consumed proposal
 work and generator/traversal implementation identity in the same private sampled state used by the
 collector. Calibration is completed and charged before campaign initialization. On recovery,
 campaign traversal is reconstructed from the frozen sequence and authoritative exploratory
@@ -116,8 +116,11 @@ One state replacement freezes the selected mutation and its complete final-compa
 before holdout dispatch. Completed confirmation and terminal outcomes are reconstructed from
 their owned observations rather than trusted cached verdicts. An unresolved reservation remains
 charged and cannot be replayed. Implementation, generation or evidence mismatches refuse
-continuation; regenerated campaigns require a new run. These internal services do not expose
-a public fuzz command or qualify a native mutation profile.
+continuation; regenerated campaigns require a new run. The CLI persists a private frozen session
+and immutable sampling receipts. Fuzz dry-run reads saved inputs without a harness; explicit
+structural detection saves a private profile, and acknowledged execution rechecks its identity.
+The fake runner uses the same collector with zero provider calls and truthful deterministic
+capabilities. Native profiles must separately qualify text mutation.
 
 ## Execution and privacy boundary
 
@@ -172,6 +175,8 @@ they do not promise public Python APIs or additional CLI commands.
 | `reduce/contracts.py`, `reduce/engine.py`, `reduce/search.py` | Deterministic and exploratory sampled reduction, checkpoints and final sweep coverage |
 | `statistics.py` | Independent-arm preservation interval and confirmation classification |
 | `fuzz/contracts.py`, `fuzz/generation.py`, `fuzz/deterministic.py`, `fuzz/simplify.py`, `fuzz/sampling.py`, `fuzz/statistics.py` | Internal bounded mutation, discovery, simplification and change-confirmation components |
+| `cli/fuzz.py`, `cli/fuzz_run.py`, `cli/fuzz_output.py`, `cli/fuzz_session.py` | Fuzz preflight, consent, composition, content-safe reports and private resume/results |
+| `fuzz/configuration.py` | Private operator policy and command limits, bound to an immutable original |
 | `fuzz/progress.py`, `fuzz/campaign.py` | Frozen mutation order, authoritative traversal recovery, durable selection and terminal campaign evidence over shared sampled state |
 | `workflow.py`, `results/` | Application phase composition and validated result models, summaries and snapshots |
 | `cli/` | Public command selection, native setup, progress, continuation and presentation |

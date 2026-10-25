@@ -55,6 +55,34 @@ overload with no captured output, unchanged protected state and verified cleanup
 observations, unknown acceptance and their full conservative call charge remain recorded. Its
 valid-only interpretation assumes independent, stationary attempts with prespecified validity.
 
+## Fuzz results
+
+Fuzzing explores text appends to editable context, selects at most one mutation and confirms a
+**decrease** in the original target's match rate. `confirmed-change` requires separate fresh fixed
+samples and an exact Clopper–Pearson union-bound lower bound above the declared decrease. The
+threshold, alpha, original/mutant counts and rates appear in the summary. This estimates behavior
+among valid observations under independent, stationary attempts; it does not establish causality,
+global minimality or overall execution reliability.
+
+`no-candidate-found` describes the bounded exploration. `inconclusive` means calibration did not
+establish a measurable target, or a complete eligible holdout did not confirm the declared
+decrease. The stop reason distinguishes unsuccessful calibration; confirmation remains `not-run`
+when calibration stops the campaign. `incomplete` means required work or eligible evidence was
+unavailable. Errors remain separate from valid match/no-match counts.
+
+Private fuzz results contain `summary.json`, `fuzz-session.json` and
+`sampling/sampling-state.json`; the observation database remains at its frozen external path.
+The session and state retain exact mutation payloads and configuration. Normal human/JSON output
+shows mutation type, byte count and digest without printing payload text. Keep the entire result
+and database private.
+
+Resume with `ithrl fuzz RUN_OR_RESULT --resume`, adding `--acknowledge-model-execution` for a
+native campaign. The session freezes configuration, source, profile, store and limits. Resume
+continues only that campaign, rechecks native identity before execution and preserves actual,
+additional possible, pending and conservatively charged calls. It never redispatches an unresolved
+attempt, changes final selection or repeats completed confirmation. `--dry-run --resume` inspects
+the saved state without starting a harness.
+
 ## Research basis
 
 The design draws on these papers and preprints:

@@ -1252,13 +1252,13 @@ def test_unexpected_cli_failures_are_sanitized_without_a_traceback(
     assert "Traceback" not in result.output
 
 
-def test_cli_help_exposes_only_the_milestone_commands() -> None:
+def test_cli_help_exposes_only_the_public_commands() -> None:
     result = CliRunner().invoke(app, ["--help"], color=False)
 
     assert result.exit_code == ExitCode.SUCCESS
-    for command in ("extract", "shrink"):
+    for command in ("extract", "shrink", "fuzz"):
         assert command in result.output
-    for unavailable in ("record", "preflight", "reproduce", "fuzz", "compare", "export"):
+    for unavailable in ("record", "preflight", "reproduce", "compare", "export"):
         assert unavailable not in result.output
 
 

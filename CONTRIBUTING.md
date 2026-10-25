@@ -168,6 +168,13 @@ accounting and budget refusal:
 uv run pytest -o addopts= tests/integration/test_native_calibration.py -q
 ```
 
+Fuzz CLI tests cover harness-free inspection, consent, bounded collection, unsuccessful outcomes,
+interruption and exact resume without provider requests:
+
+```bash
+uv run pytest -o addopts= tests/integration/test_fuzz_cli.py -q
+```
+
 These tests establish local contracts. Native qualification is recorded in the
 [measurement notes](docs/native-runs.md#compatibility-and-measurements).
 

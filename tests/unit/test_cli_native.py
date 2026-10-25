@@ -125,6 +125,7 @@ def test_ordinary_case_resolves_explicit_samples_without_rewriting_evidence(
     assert selection.experiment.kind == "sampled"
     assert selection.experiment.calibration == PHASE
     assert selection.experiment.reduction is None
+    assert isinstance(selection.experiment.runner, NativeRunnerConfig)
     assert selection.experiment.runner.required_capability_digest == profile.digest
     bounds = calibration_budget_bounds(PHASE, profile, selection.resource_limits)
     assert (bounds.attempts, bounds.provider_calls, bounds.runner_seconds) == (3, 6, 45)

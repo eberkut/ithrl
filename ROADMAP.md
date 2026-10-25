@@ -20,7 +20,8 @@ model defect, a unique cause or semantic equivalence of the original and changed
 
 The feasibility study, immutable mutation contracts, deterministic generation/materialization/
 simplification, sampled comparison services and durable campaign recovery are implemented. The
-public command and native mutation qualification remain ahead. See the
+public command exposes these contracts through a local walkthrough; native mutation qualification
+remains ahead. See the
 [fuzzing research](docs/research/context-fuzzing.md) and the
 [fuzzing capability issue](https://github.com/eberkut/ithrl/issues/5) and
 [`v0.2.0` milestone](https://github.com/eberkut/ithrl/milestone/1) for implementation work and acceptance.

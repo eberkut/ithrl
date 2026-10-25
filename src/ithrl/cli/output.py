@@ -100,7 +100,7 @@ class CommandOutput(_OutputEnvelope):
 
 class ErrorOutput(_OutputEnvelope):
     kind: Literal["deterministic"] = "deterministic"
-    command: Literal["ithrl", "extract", "shrink"]
+    command: Literal["ithrl", "extract", "shrink", "fuzz"]
     status: Literal["error"] = "error"
     exit_code: int
     error_code: str
@@ -328,11 +328,13 @@ class JsonAwareGroup(TyperGroup):
                 **extra,
             )
         except ClickException as error:
-            command: Literal["ithrl", "extract", "shrink"] = "ithrl"
+            command: Literal["ithrl", "extract", "shrink", "fuzz"] = "ithrl"
             if "extract" in arguments:
                 command = "extract"
             elif "shrink" in arguments:
                 command = "shrink"
+            elif "fuzz" in arguments:
+                command = "fuzz"
             report = ErrorOutput(
                 command=command,
                 exit_code=error.exit_code,

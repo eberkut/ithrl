@@ -89,31 +89,52 @@ def initialize_fuzz_campaign(
     service accepts only its exact, measurable, charged calibration evidence.
     """
 
-    bound = prepare_fuzz_sampling(evidence, prepared, campaign)
     with state_file.acquire_lock(store):
-        state = state_file.load(store)
-        if state.blocks or state.selection or state.checkpoint or state.fuzz_progress:
-            raise RunStateError("campaign initialization requires unused sampled progress")
-        if state.original_identity != bound.identity:
-            raise RunStateError("campaign requires its prepared observation identity")
-        bounds = fuzz_budget_bounds(
-            campaign, sampling_attempt_cost(bound.runner.capability_profile, bound.resource_limits)
-        )
-        if (
-            state.allowance.confirmation_provider_calls != bounds.confirmation_provider_calls
-            or state.allowance.confirmation_runner_seconds != bounds.confirmation_runner_seconds
-        ):
-            raise RunStateError("campaign requires its complete frozen confirmation reserve")
-        batch = generate_mutations(evidence.editable_text(), campaign, stale_text=stale_text)
-        progress = FuzzCampaignProgress(
-            config=campaign,
-            implementation_digest=campaign_implementation_digest(),
-            generation_input_digest=_generation_input(evidence, stale_text),
+        _initialize_fuzz_campaign_owned(
+            evidence=evidence,
+            prepared=prepared,
+            campaign=campaign,
             stale_text=stale_text,
-            generated=batch.mutations,
-            proposals_examined=batch.proposals_examined,
+            state_file=state_file,
+            store=store,
         )
-        state_file.save_fuzz_progress(store, progress)
+
+
+def _initialize_fuzz_campaign_owned(
+    *,
+    evidence: CaseEvidence,
+    prepared: PreparedExperiment,
+    campaign: FuzzCampaignConfig,
+    stale_text: str,
+    state_file: SampledRunStateFile,
+    store: ObservationStore,
+) -> None:
+    """Caller owns the shared run/store locks throughout composition."""
+
+    bound = prepare_fuzz_sampling(evidence, prepared, campaign)
+    state = state_file.load(store)
+    if state.blocks or state.selection or state.checkpoint or state.fuzz_progress:
+        raise RunStateError("campaign initialization requires unused sampled progress")
+    if state.original_identity != bound.identity:
+        raise RunStateError("campaign requires its prepared observation identity")
+    bounds = fuzz_budget_bounds(
+        campaign, sampling_attempt_cost(bound.runner.capability_profile, bound.resource_limits)
+    )
+    if (
+        state.allowance.confirmation_provider_calls != bounds.confirmation_provider_calls
+        or state.allowance.confirmation_runner_seconds != bounds.confirmation_runner_seconds
+    ):
+        raise RunStateError("campaign requires its complete frozen confirmation reserve")
+    batch = generate_mutations(evidence.editable_text(), campaign, stale_text=stale_text)
+    progress = FuzzCampaignProgress(
+        config=campaign,
+        implementation_digest=campaign_implementation_digest(),
+        generation_input_digest=_generation_input(evidence, stale_text),
+        stale_text=stale_text,
+        generated=batch.mutations,
+        proposals_examined=batch.proposals_examined,
+    )
+    state_file.save_fuzz_progress(store, progress)
 
 
 def _replay(
@@ -319,138 +340,148 @@ async def run_fuzz_campaign(
     """Finish or recover the same campaign; complete terminal evidence is never redrawn."""
 
     with state_file.acquire_lock(store):
+        return await _run_fuzz_campaign_owned(
+            evidence=evidence,
+            prepared=prepared,
+            state_file=state_file,
+            store=store,
+            clock=clock,
+            verify_independence=verify_independence,
+        )
+
+
+async def _run_fuzz_campaign_owned(
+    *,
+    evidence: CaseEvidence,
+    prepared: PreparedExperiment,
+    state_file: SampledRunStateFile,
+    store: ObservationStore,
+    clock: Callable[[], datetime] = _now,
+    verify_independence: Callable[[Observation], str | None] | None = None,
+) -> FuzzCampaignResult:
+    """Caller owns the shared run/store locks throughout composition."""
+
+    state = state_file.load(store)
+    _validate_materializations(evidence, prepared, state)
+    while True:
         state = state_file.load(store)
-        _validate_materializations(evidence, prepared, state)
-        while True:
-            state = state_file.load(store)
-            progress = state.fuzz_progress
-            if progress is None:
-                raise RunStateError("fuzz campaign has not been initialized")
-            if progress.terminal is not None:
-                return _result(state_file, store, clock(), None)
-            blocks = state_file.evidence(store)
-            if (
-                state.blocks
-                and not state.blocks[-1].archived
-                and state.blocks[-1].plan.role != "confirmation"
-                and blocks[-1].complete
-                and blocks[-1].eligible
-            ):
-                state_file.archive_block(store)
+        progress = state.fuzz_progress
+        if progress is None:
+            raise RunStateError("fuzz campaign has not been initialized")
+        if progress.terminal is not None:
+            return _result(state_file, store, clock(), None)
+        blocks = state_file.evidence(store)
+        if (
+            state.blocks
+            and not state.blocks[-1].archived
+            and state.blocks[-1].plan.role != "confirmation"
+            and blocks[-1].complete
+            and blocks[-1].eligible
+        ):
+            state_file.archive_block(store)
+            continue
+        if state.selection is not None:
+            mutation, plan = progress.selected_mutation, state.selection.plan
+            if mutation is None:
+                raise RunStateError("fuzz selection has no frozen mutation")
+            if blocks and blocks[-1].plan == plan and blocks[-1].complete and blocks[-1].eligible:
+                confirmation = confirm_fuzz_evidence(blocks[-1])
+                _finish(state_file, store, progress, confirmation.outcome, "confirmation-finished")
                 continue
-            if state.selection is not None:
-                mutation, plan = progress.selected_mutation, state.selection.plan
-                if mutation is None:
-                    raise RunStateError("fuzz selection has no frozen mutation")
-                if (
-                    blocks
-                    and blocks[-1].plan == plan
-                    and blocks[-1].complete
-                    and blocks[-1].eligible
-                ):
-                    confirmation = confirm_fuzz_evidence(blocks[-1])
-                    _finish(
-                        state_file, store, progress, confirmation.outcome, "confirmation-finished"
-                    )
-                    continue
-            else:
-                position = _replay(state, blocks)
-                if isinstance(position, TextMutation):
-                    selected_at = clock()
-                    holdout = content_digest({"run_id": state.run_id, "role": "confirmation"})
+        else:
+            position = _replay(state, blocks)
+            if isinstance(position, TextMutation):
+                selected_at = clock()
+                holdout = content_digest({"run_id": state.run_id, "role": "confirmation"})
+                plan = fuzz_block_plan(
+                    evidence=evidence,
+                    prepared=prepared,
+                    campaign=progress.config,
+                    mutation=position,
+                    role="confirmation",
+                    block_id=f"confirmation-{holdout}",
+                    frozen_at=max(clock(), selected_at + timedelta(microseconds=1)),
+                    selected_at=selected_at,
+                    schedule_seed=int(holdout[:16], 16),
+                )
+                selected = progress.model_copy(update={"selected_mutation": position})
+                state_file.select_fuzz_candidate(
+                    store,
+                    selected,
+                    SampledFinalSelection(
+                        checkpoint_digest=selected.selection_digest,
+                        selected_at=selected_at,
+                        plan=plan,
+                    ),
+                )
+                continue
+            if position is None:
+                _finish(state_file, store, progress, FuzzOutcome.NO_CANDIDATE_FOUND, "no-candidate")
+                continue
+            role, mutation = position
+            active = next((t for t in progress.trials if t.mutation == mutation), None)
+            if active is None:
+                index = len(progress.trials)
+                key = content_digest(
+                    {"run_id": state.run_id, "trial": index, "mutation": mutation.digest}
+                )
+                try:
                     plan = fuzz_block_plan(
                         evidence=evidence,
                         prepared=prepared,
                         campaign=progress.config,
-                        mutation=position,
-                        role="confirmation",
-                        block_id=f"confirmation-{holdout}",
-                        frozen_at=max(clock(), selected_at + timedelta(microseconds=1)),
-                        selected_at=selected_at,
-                        schedule_seed=int(holdout[:16], 16),
+                        mutation=mutation,
+                        role=role,
+                        block_id=f"fuzz-{key}",
+                        frozen_at=clock(),
+                        schedule_seed=int(key[:16], 16),
                     )
-                    selected = progress.model_copy(update={"selected_mutation": position})
-                    state_file.select_fuzz_candidate(
-                        store,
-                        selected,
-                        SampledFinalSelection(
-                            checkpoint_digest=selected.selection_digest,
-                            selected_at=selected_at,
-                            plan=plan,
-                        ),
-                    )
-                    continue
-                if position is None:
-                    _finish(
-                        state_file, store, progress, FuzzOutcome.NO_CANDIDATE_FOUND, "no-candidate"
-                    )
-                    continue
-                role, mutation = position
-                active = next((t for t in progress.trials if t.mutation == mutation), None)
-                if active is None:
-                    index = len(progress.trials)
-                    key = content_digest(
-                        {"run_id": state.run_id, "trial": index, "mutation": mutation.digest}
-                    )
-                    try:
-                        plan = fuzz_block_plan(
-                            evidence=evidence,
-                            prepared=prepared,
-                            campaign=progress.config,
-                            mutation=mutation,
-                            role=role,
-                            block_id=f"fuzz-{key}",
-                            frozen_at=clock(),
-                            schedule_seed=int(key[:16], 16),
-                        )
-                    except CandidateInvalidError:
-                        plan = None
-                    active = FuzzTrial(role=role, mutation=mutation, plan=plan)
-                    progress = progress.model_copy(update={"trials": (*progress.trials, active)})
-                    state_file.save_fuzz_progress(store, progress)
-                if active.plan is None:
-                    continue
-                plan = active.plan
-            collected = await _collect_sampling_block_owned(
-                evidence=evidence,
-                original=prepared,
-                candidate=prepared,
-                removed_context_ids=(),
-                plan=plan,
-                state_file=state_file,
-                store=store,
-                clock=clock,
-                verify_independence=verify_independence,
-                mutation=mutation,
+                except CandidateInvalidError:
+                    plan = None
+                active = FuzzTrial(role=role, mutation=mutation, plan=plan)
+                progress = progress.model_copy(update={"trials": (*progress.trials, active)})
+                state_file.save_fuzz_progress(store, progress)
+            if active.plan is None:
+                continue
+            plan = active.plan
+        collected = await _collect_sampling_block_owned(
+            evidence=evidence,
+            original=prepared,
+            candidate=prepared,
+            removed_context_ids=(),
+            plan=plan,
+            state_file=state_file,
+            store=store,
+            clock=clock,
+            verify_independence=verify_independence,
+            mutation=mutation,
+        )
+        if collected.stop_reason == "unresolved-dispatch":
+            return _result(state_file, store, clock(), "unresolved-dispatch")
+        if plan.role == "confirmation":
+            # Reconciliation may have recovered the last owned observation after
+            # the execution deadline. Complete eligible evidence still has its
+            # original timestamps; no further dispatch or admission is needed.
+            confirmation = confirm_fuzz_evidence(collected.evidence)
+            _finish(
+                state_file,
+                store,
+                progress,
+                confirmation.outcome,
+                "confirmation-finished",
+                collected.stop_reason if confirmation.outcome is FuzzOutcome.INCOMPLETE else None,
             )
-            if collected.stop_reason == "unresolved-dispatch":
-                return _result(state_file, store, clock(), "unresolved-dispatch")
-            if plan.role == "confirmation":
-                # Reconciliation may have recovered the last owned observation after
-                # the execution deadline. Complete eligible evidence still has its
-                # original timestamps; no further dispatch or admission is needed.
-                confirmation = confirm_fuzz_evidence(collected.evidence)
-                _finish(
-                    state_file,
-                    store,
-                    progress,
-                    confirmation.outcome,
-                    "confirmation-finished",
-                    collected.stop_reason
-                    if confirmation.outcome is FuzzOutcome.INCOMPLETE
-                    else None,
-                )
-            elif screen_fuzz_block(collected) is None:
-                _finish(
-                    state_file,
-                    store,
-                    progress,
-                    FuzzOutcome.INCOMPLETE,
-                    "screen-incomplete",
-                    collected.stop_reason,
-                )
-            else:
-                state_file.archive_block(store)
+        elif screen_fuzz_block(collected) is None:
+            _finish(
+                state_file,
+                store,
+                progress,
+                FuzzOutcome.INCOMPLETE,
+                "screen-incomplete",
+                collected.stop_reason,
+            )
+        else:
+            state_file.archive_block(store)
 
 
 def _finish(

@@ -17,7 +17,12 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from ithrl.case import CaseEvidence, CaseWorkspace
 from ithrl.context import content_digest
-from ithrl.experiment import SampledExperimentDefinition
+from ithrl.experiment import (
+    FakeRunnerConfig,
+    NativeRunnerConfig,
+    SampledExperimentDefinition,
+    SamplingEligibilityPolicy,
+)
 from ithrl.measurement import RunnerExecutionError, observe_once
 from ithrl.observations import (
     Observation,
@@ -84,6 +89,7 @@ def run_sampled_calibration(
     prepared: PreparedExperiment,
     store: ObservationStore,
     before_attempt: Callable[[], None] | None = None,
+    eligibility_policy: SamplingEligibilityPolicy | None = None,
 ) -> SampledCalibrationResult:
     """Run or resume calibration, checking optional command admission before each attempt.
 
@@ -92,6 +98,7 @@ def run_sampled_calibration(
     """
 
     experiment = _sampled_experiment(prepared)
+    eligibility_policy = _eligibility_policy(experiment, eligibility_policy)
     with _calibration_lock(store):
         _reconcile_inflight(store)
         candidate = prepare_candidate(evidence, prepared.execution_plan)
@@ -104,11 +111,16 @@ def run_sampled_calibration(
                     candidate=candidate,
                     experiment=experiment,
                     before_attempt=before_attempt,
+                    eligibility_policy=eligibility_policy,
                 )
             )
         except (KeyboardInterrupt, asyncio.CancelledError):
-            observations = _compatible(prepared, store, candidate.digest, experiment)
-            classified = _classify(observations, experiment, interrupted=True)
+            observations = _compatible(
+                prepared, store, candidate.digest, experiment, eligibility_policy=eligibility_policy
+            )
+            classified = _classify(
+                observations, experiment, interrupted=True, eligibility_policy=eligibility_policy
+            )
             if classified is None:
                 raise RuntimeError(
                     "interrupted calibration has no terminal classification"
@@ -211,11 +223,16 @@ async def _run_sampled_calibration(
     candidate: Candidate,
     experiment: SampledExperimentDefinition,
     before_attempt: Callable[[], None] | None = None,
+    eligibility_policy: SamplingEligibilityPolicy | None = None,
 ) -> SampledCalibrationResult:
     # The candidate is always the unchanged full-context baseline.
     while True:
-        observations = _compatible(prepared, store, candidate.digest, experiment)
-        classified = _classify(observations, experiment, interrupted=False)
+        observations = _compatible(
+            prepared, store, candidate.digest, experiment, eligibility_policy=eligibility_policy
+        )
+        classified = _classify(
+            observations, experiment, interrupted=False, eligibility_policy=eligibility_policy
+        )
         if classified is not None:
             return classified
         if before_attempt is not None:
@@ -231,11 +248,7 @@ async def _run_sampled_calibration(
                 runner=prepared.runner,
                 identity=prepared.identity,
                 store=store,
-                eligibility_policy=(
-                    experiment.reduction.eligibility_policy
-                    if experiment.reduction is not None
-                    else "independent-safe-preaccept-only"
-                ),
+                eligibility_policy=_eligibility_policy(experiment, eligibility_policy),
                 attempt=PreparedAttempt(
                     evidence=evidence,
                     candidate=candidate,
@@ -256,11 +269,23 @@ async def _run_sampled_calibration(
             _reconcile_inflight(store)
 
 
+def _eligibility_policy(
+    experiment: SampledExperimentDefinition,
+    override: SamplingEligibilityPolicy | None,
+) -> SamplingEligibilityPolicy:
+    return override or (
+        experiment.reduction.eligibility_policy
+        if experiment.reduction is not None
+        else "independent-safe-preaccept-only"
+    )
+
+
 def _classify(
     observations: tuple[Observation, ...],
     experiment: SampledExperimentDefinition,
     *,
     interrupted: bool,
+    eligibility_policy: SamplingEligibilityPolicy | None = None,
 ) -> SampledCalibrationResult | None:
     phase = experiment.calibration
     if sum(item.valid for item in observations) >= phase.required_valid:
@@ -276,11 +301,7 @@ def _classify(
         (
             item
             for item in reversed(observations)
-            if not item.allows_fresh_attempt(
-                experiment.reduction.eligibility_policy
-                if experiment.reduction is not None
-                else "independent-safe-preaccept-only"
-            )
+            if not item.allows_fresh_attempt(_eligibility_policy(experiment, eligibility_policy))
         ),
         None,
     )
@@ -306,12 +327,19 @@ def _stopped_for_error(
 def _sampled_experiment(prepared: PreparedExperiment) -> SampledExperimentDefinition:
     experiment = prepared.experiment
     if not isinstance(experiment, SampledExperimentDefinition):
-        raise ValueError("sampled calibration requires a schema-v2 experiment")
+        raise ValueError("sampled calibration requires a sampled experiment")
     if prepared.execution_plan.experiment_digest != experiment.digest:
         raise ValueError("sampled calibration plan does not match the experiment")
-    if prepared.runner.capability_profile.deterministic:
-        raise ValueError("sampled calibration requires a nondeterministic runner profile")
-    if prepared.runner.capability_profile.digest != experiment.runner.required_capability_digest:
+    profile = prepared.runner.capability_profile
+    if profile.deterministic and not isinstance(experiment.runner, FakeRunnerConfig):
+        raise ValueError("deterministic calibration requires the credential-free fake runner")
+    if profile.digest != prepared.execution_plan.capability.digest:
+        raise ValueError("sampled calibration runner profile changed after preflight")
+    if (
+        isinstance(experiment.runner, NativeRunnerConfig)
+        and prepared.runner.capability_profile.digest
+        != experiment.runner.required_capability_digest
+    ):
         raise ValueError("sampled calibration runner profile changed after preflight")
     return experiment
 
@@ -321,6 +349,8 @@ def _compatible(
     store: ObservationStore,
     candidate_digest: str,
     experiment: SampledExperimentDefinition,
+    *,
+    eligibility_policy: SamplingEligibilityPolicy | None = None,
 ) -> tuple[Observation, ...]:
     observations = store.list_compatible(
         prepared.identity,
@@ -337,9 +367,7 @@ def _compatible(
         if valid >= experiment.calibration.required_valid:
             raise ValueError("stored calibration attempts continue after a complete sample block")
         if index and not observations[index - 1].allows_fresh_attempt(
-            experiment.reduction.eligibility_policy
-            if experiment.reduction is not None
-            else "independent-safe-preaccept-only"
+            _eligibility_policy(experiment, eligibility_policy)
         ):
             raise ValueError("stored calibration attempts continue after an unsafe attempt")
         valid += item.valid
@@ -388,8 +416,8 @@ def _reserve_attempt(store: ObservationStore, reservation: _InFlightAttempt) -> 
     _sync_directory(path.parent)
 
 
-def _reconcile_inflight(store: ObservationStore) -> None:
-    """Clear a reservation only when its exact observation is durable."""
+def _read_inflight(store: ObservationStore) -> _InFlightAttempt | None:
+    """Read a bounded private dispatch marker without clearing or redispatching it."""
 
     path = _inflight_path(store)
     try:
@@ -398,19 +426,33 @@ def _reconcile_inflight(store: ObservationStore) -> None:
             flags |= os.O_NOFOLLOW
         descriptor = os.open(path, flags)
     except FileNotFoundError:
-        return
+        return None
     except OSError as error:
         raise CalibrationInFlightError("calibration attempt marker is unavailable") from error
     try:
         with os.fdopen(descriptor, "rb") as marker:
             metadata = os.fstat(marker.fileno())
-            if not stat.S_ISREG(metadata.st_mode) or (
-                os.name == "posix" and stat.S_IMODE(metadata.st_mode) != 0o600
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_nlink != 1
+                or (os.name == "posix" and stat.S_IMODE(metadata.st_mode) != 0o600)
             ):
                 raise CalibrationInFlightError("calibration attempt marker is unsafe")
-            reservation = _InFlightAttempt.model_validate_json(marker.read())
+            raw = marker.read(65_537)
+            if len(raw) > 65_536:
+                raise CalibrationInFlightError("calibration attempt marker exceeds its limit")
+            reservation = _InFlightAttempt.model_validate_json(raw)
     except (ValidationError, ValueError) as error:
         raise CalibrationInFlightError("calibration attempt marker is invalid") from error
+    return reservation
+
+
+def _reconcile_inflight(store: ObservationStore) -> None:
+    """Clear a reservation only when its exact observation is durable."""
+    reservation = _read_inflight(store)
+    if reservation is None:
+        return
+    path = _inflight_path(store)
     observations = store.list_compatible(
         reservation.identity,
         candidate_digest=reservation.candidate_digest,
