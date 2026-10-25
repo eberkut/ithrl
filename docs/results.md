@@ -83,6 +83,10 @@ additional possible, pending and conservatively charged calls. It never redispat
 attempt, changes final selection or repeats completed confirmation. `--dry-run --resume` inspects
 the saved state without starting a harness.
 
+If result saving fails, `result-publication-failed` retains the known usage and canonical run
+path and exits with code 70. Resolve the storage problem, then resume from `run_state_path` to
+save a new receipt. Completed observations and confirmation are retained.
+
 ## Research basis
 
 The design draws on these papers and preprints:

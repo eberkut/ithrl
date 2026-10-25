@@ -430,5 +430,29 @@ def execute_fuzz(
         except Exception:
             stop = "execution-refused"
         report = _report(session, state_file, store, stop_reason=stop, dry_run=False)
-        result_path = publish_fuzz_result(session, state_file, store, report)
+        try:
+            result_path = publish_fuzz_result(session, state_file, store, report)
+        except Exception:
+            # Sampling evidence is already durable. Retain its accounting and run
+            # identity even when the separate immutable receipt cannot be saved.
+            command, shell = report.next_command, report.next_command_shell
+            if report.status in {"confirmed-change", "inconclusive", "no-candidate-found"}:
+                command, shell = shell_command(
+                    (
+                        "ithrl",
+                        "fuzz",
+                        str(session.run_directory),
+                        "--resume",
+                        "--acknowledge-model-execution",
+                    )
+                )
+            return report.model_copy(
+                update={
+                    "status": "incomplete",
+                    "error_code": "result-publication-failed",
+                    "next_action": "Result receipt could not be saved. Inspect the canonical run before resuming; completed observations remain recorded.",
+                    "next_command": command,
+                    "next_command_shell": shell,
+                }
+            )
         return report.model_copy(update={"result_path": str(result_path)})

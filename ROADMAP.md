@@ -28,13 +28,11 @@ remains ahead. See the
 
 Remaining deliverables, in dependency order:
 
-1. [Compose `ithrl fuzz`](https://github.com/eberkut/ithrl/issues/7), explicit configuration,
-   harness-free dry-run, execution acknowledgement, resume and inspectable private results.
-2. [Validate the composed workflow](https://github.com/eberkut/ithrl/issues/8), failure paths,
+1. [Validate the composed workflow](https://github.com/eberkut/ithrl/issues/8), failure paths,
    safety boundaries and existing commands.
-3. [Qualify one native text-mutation workflow](https://github.com/eberkut/ithrl/issues/9) through
+2. [Qualify one native text-mutation workflow](https://github.com/eberkut/ithrl/issues/9) through
    harmless controls and fresh confirmation.
-4. [Derive practical settings and public claims](https://github.com/eberkut/ithrl/issues/10) from
+3. [Derive practical settings and public claims](https://github.com/eberkut/ithrl/issues/10) from
    complete-workflow usefulness and measured costs.
 
 [Release preparation and publication](https://github.com/eberkut/ithrl/issues/11) follow acceptance.
