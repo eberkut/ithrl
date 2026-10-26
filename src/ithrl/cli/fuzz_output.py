@@ -270,6 +270,8 @@ def render_fuzz(
 
 
 def fuzz_exit_code(report: FuzzOutput) -> ExitCode:
+    if report.error_code == "result-publication-failed":
+        return ExitCode.INTERNAL
     if report.status in (
         "ready",
         "detected",
