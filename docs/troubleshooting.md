@@ -13,9 +13,11 @@ output; progress is written to stderr. Review output before sharing it, includin
 | `conflicting-options` with `--example` | Use `--example` without a source, harness, session, inference, decision or target selector. |
 | `case-exists` | Choose a new output directory. Extraction never overwrites a case. |
 
-Extraction accepts the record structures described in [compatibility](native-runs.md#compatibility-and-measurements).
-If a new harness record is unsupported, keep the source unchanged. Report the harness/version
-and sanitized refusal through the compatibility form; do not attach the session.
+Extraction accepts the record structures described in
+[compatibility](native-runs.md#compatibility-and-measurements). If a new harness record is
+unsupported, keep the source unchanged. Report the harness/version and sanitized refusal through the
+[compatibility form](https://github.com/eberkut/ithrl/issues/new?template=compatibility.yml);
+do not attach the session.
 
 ## Native setup and preflight
 
@@ -51,6 +53,23 @@ behavior requires investigation.
 | `acknowledgement-required` / `acknowledgement-declined` | Inspect the complete dry-run plan. Add `--acknowledge-model-execution` only when ready to authorize those model requests. |
 | `sampled-resume-mismatch` | Use the original case, workspace, observation store and frozen statistical plan. Only supported administrative limits may increase. |
 
+## Fuzz setup and resume
+
+The [fuzzing walkthrough](native-runs.md#context-fuzzing) uses a development checkout and the fake
+runner. Current native profiles do not qualify text mutation.
+
+| Error code | Next action |
+| --- | --- |
+| `fuzz-configuration-required` | Supply the private TOML with `--config`; see the walkthrough for a complete example. |
+| `detection-required` | Native planning needs a capability profile from explicit `--detect`. A fuzz dry-run never starts a harness; detection can refuse an unsupported mutation profile. |
+| `profile-input-mismatch` | Use the case, configuration and original workspace bound to the saved profile. Changed inputs require a new profile. |
+| `model-execution-not-acknowledged` | Inspect the plan before authorizing model requests with `--acknowledge-model-execution`. Acknowledgement cannot enable an unsupported operation. |
+| `resume-input-conflict` | Use `ithrl fuzz RUN_OR_RESULT --resume` without overriding configuration, profile, workspace or observation store. Resume preserves the original limits. |
+
+Use `--dry-run --resume` to inspect a saved fuzz campaign without starting a harness. See
+[fuzz results](results.md#fuzz-results) for terminal outcomes, saved evidence and publication
+recovery.
+
 ## Provider errors and interruption
 
 For authentication or quota failures, inspect the selected harness's account status privately.
@@ -68,6 +87,7 @@ must be reconciled before execution can continue. Completed confirmation is neve
 When no continuation is available, follow `next_action` and retain the private evidence rather
 than modifying JSON/SQLite files or replaying the same attempt.
 
-If the problem remains, use the [support routes](https://github.com/eberkut/ithrl/blob/main/SUPPORT.md).
-Include versions, platform, safe reproduction steps, sanitized error codes and expected/actual
-outcomes. Keep source sessions, raw diagnostics, credentials and case contents private.
+If the problem remains, use the
+[support routes](https://github.com/eberkut/ithrl/blob/main/SUPPORT.md). Include versions, platform,
+safe reproduction steps, sanitized error codes and expected/actual outcomes. Keep source sessions,
+raw diagnostics, credentials and case contents private.

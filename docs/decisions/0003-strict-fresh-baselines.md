@@ -10,12 +10,13 @@ screens and changes observation ownership, budget admission, expiry and resume c
 Current production blocks require block-local observations; copying a baseline into another
 ordinary block would violate that contract.
 
-The [reduction-design studies](../research/reduction-design.md#baseline-sharing-failed-prefetch-and-useful-conditional-design)
-tested alternatives. Eager prefetch wasted work after an accepted removal and increased cost
-for one instruction position. Lazy sharing of a frozen two-sibling group saved about 6.61%
-charged calls per confirmed useful result in a declared synthetic workload. A strict allocation
-with 40 original/80 candidate observations saved more but narrowly failed its mildly degraded
-usefulness gate. Neither alternative is a native qualification result.
+The
+[reduction-design studies](../research/reduction-design.md#baseline-sharing-failed-prefetch-and-useful-conditional-design)
+tested alternatives. Eager prefetch wasted work after an accepted removal and increased cost for one
+instruction position. Lazy sharing of a frozen two-sibling group saved about 6.61% charged calls per
+confirmed useful result in a declared synthetic workload. A strict allocation with 40 original/80
+candidate observations saved more but narrowly failed its mildly degraded usefulness gate. Neither
+alternative is a native qualification result.
 
 Freshness is material: an exclusive 240-slot synthetic lifetime made lazy sharing fail at three
 of four positions, reducing aggregate useful success to 25%. Synthetic slots do not define a
@@ -30,11 +31,12 @@ relative to the immutable original. Use a separate fresh original/candidate bloc
 single durably selected final candidate. Calibration, search and confirmation observations
 remain disjoint. Shared-baseline production support stays disabled.
 
-Keep lazy groups of two as a conditional optimization, without adding shared ownership or
-epoch machinery now. The previous 20% fixed-budget threshold and benefit-at-every-position
-rule had no workload-derived justification and are not future acceptance requirements. A
-smaller saving can be worthwhile if native evidence supports it and the implementation cost
-is justified. Fixed-six arithmetic or synthetic point savings alone are insufficient.
+Keep lazy groups of two as a conditional optimization. Add shared ownership or epoch machinery only
+after the conditions below are met. The previous 20% fixed-budget threshold and
+benefit-at-every-position rule had no workload-derived justification and are not future acceptance
+requirements. A smaller saving can be worthwhile if native evidence supports it and the
+implementation cost is justified. Fixed-six arithmetic or synthetic point savings alone are
+insufficient.
 
 ## Conditions for reconsideration
 
@@ -63,5 +65,5 @@ needs representative evidence. This decision creates no provider-call or publica
 
 Strict sampling spends more original-context calls than the qualified synthetic lazy policy,
 but preserves the tested evidence ownership and resume model. The current approximately 10k
-profile measurements remain applicable. Larger contexts, shared-baseline savings and separate
-construction/initialization timings retain their own uncompleted gates.
+profile measurements remain applicable. They do not cover larger contexts, shared-baseline savings
+or separately timed construction and initialization.

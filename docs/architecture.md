@@ -1,18 +1,19 @@
 # Architecture
 
-`ithrl` studies one selected coding-agent decision under controlled context interventions.
-It preserves the evidence needed to locate that decision, constructs dependency-valid candidates,
-and records what a configured runner actually observed. A smaller reproducer is evidence about
-the configured experiment; it is not a causal explanation or a reconstruction of the original
-agent runtime.
+`ithrl` tests how context changes affect one selected coding-agent decision. It preserves the
+source evidence, constructs candidates that respect context dependencies, and records the
+configured runner's observations. Results record retained context, observations and confirmation
+status. They do not explain the cause of the original decision or reproduce the original agent
+runtime.
 
-The [README supported-inputs table](https://github.com/eberkut/ithrl/blob/main/README.md#supported-inputs)
-defines the public capability claim. The public commands are `extract`, `shrink` and `fuzz`.
-Fuzzing has a credential-free local walkthrough; native text-mutation support requires separate
+The
+[README supported-inputs table](https://github.com/eberkut/ithrl/blob/main/README.md#supported-inputs)
+defines the public capability claim. The public commands are `extract`, `shrink` and `fuzz`. Fuzzing
+has a credential-free local walkthrough; native text-mutation support requires separate
 qualification. See [native runs](native-runs.md) for the qualified execution profiles and
 [results](results.md) for interpreting their output.
 
-## Evidence and execution have different owners
+## Adapters and runners
 
 Adapters discover and parse harness-native evidence, identify completed decisions and compile an
 edit graph. They do not construct case directories, invoke models or enforce execution policy.
@@ -26,10 +27,10 @@ normalization. Application workflow selects runners through a registry rather th
 concrete harnesses into shared reduction code.
 
 There is no universal agent-session representation. Native records can include tool identities,
-reasoning state, compaction, provider references and lifecycle metadata that a portable message
-list would lose. Shared contracts describe edits, experiments and observations while preserving
-the original native evidence. Unknown records remain opaque and frozen until the adapter and
-runner can support an intervention safely. [ADR 0001](decisions/0001-native-evidence-and-controlled-runners.md)
+reasoning state, compaction, provider references and lifecycle metadata that a portable message list
+would lose. Shared contracts describe edits, experiments and observations while preserving the
+original native evidence. Unknown records remain opaque and frozen until the adapter and runner can
+support an intervention safely. [ADR 0001](decisions/0001-native-evidence-and-controlled-runners.md)
 records this boundary and its qualification requirements.
 
 ## Case and experiment lifecycle
@@ -61,7 +62,7 @@ candidate-local reconstruction failure before sampling resources are allocated. 
 pure and follows validation of the immutable original; runtime validation still occurs at
 execution.
 
-Content addressing keeps incompatible evidence separate:
+Digests identify the inputs and configuration used for each measurement:
 
 - The case digest identifies immutable capture facts, source evidence and edit graph.
 - The experiment digest identifies the resolved experimental definition, including its target,
@@ -73,10 +74,10 @@ Content addressing keeps incompatible evidence separate:
 - The runner fingerprint identifies behavior-relevant runtime configuration. Observation identity
   additionally includes target and algorithm digests; each attempt has its own binding.
 
-Administrative sampled-run allowances are recorded separately from frozen statistical identity.
-Increasing an allowance does not change sample targets, freshness, effective policy or per-attempt
-limits. Observation reuse requires compatible identities and roles; a matching candidate digest
-alone is insufficient.
+Sampled-run resource limits are recorded separately from the statistical settings. Increasing a
+run allowance leaves sample targets, freshness, effective policy and per-attempt limits unchanged.
+Observation reuse requires compatible identities and roles; a matching candidate digest alone
+is insufficient.
 
 ## Measurement, search and confirmation
 
@@ -91,19 +92,19 @@ make different claims. The deterministic reducer can establish `search-1-minimal
 completed final single-group sweep. Sampled search uses exploratory screens and reports its
 search coverage separately from final preservation; it does not establish sampled minimality.
 
-The shared collector in `sampling.py` admits and collects a complete frozen block sequentially.
+The shared collector in `sampling.py` checks the budget for a complete sampling block, then
+collects its observations sequentially using fixed sample targets and attempt limits.
 It owns pacing, bounded attempts, eligibility, confirmation reserves and durable dispatch
-reconciliation. It returns evidence and accounting, not candidate-selection or statistical
-verdicts. Reduction owns exploratory admission and search coverage. Fuzz components own
-mutation generation, discovery, simplification and change classification. Sharing a collector
-does not make preservation and change the same statistical question.
+reconciliation. It returns evidence and accounting. Reduction owns exploratory admission, search
+coverage and preservation classification. Fuzz components own mutation generation, discovery,
+simplification and change classification.
 
 Application workflow requires calibration, durably selects one candidate and then collects a
 separate fresh final confirmation against the immutable original. Calibration and exploratory
 observations never enter that holdout. Once selection is final, search cannot resume or use the
-holdout to select another candidate. [ADR 0002](decisions/0002-fixed-samples-and-durable-dispatch.md)
-explains fixed samples, eligibility and recovery; [results](results.md#sampled-results) describes
-the resulting claims and assumptions.
+holdout to select another candidate.
+[ADR 0002](decisions/0002-fixed-samples-and-durable-dispatch.md) explains fixed samples, eligibility
+and recovery; [results](results.md#sampled-results) describes the resulting claims and assumptions.
 
 Fuzz campaigns freeze generated mutation order, exact bounded payloads, consumed proposal
 work and generator/traversal implementation identity in the same private sampled state used by the
@@ -112,11 +113,11 @@ campaign traversal is reconstructed from the frozen sequence and authoritative e
 observations; this replay performs no runner calls. Candidate-local admission refusals consume
 work without allocating a sampling block. An unavailable screen stops with an incomplete outcome.
 
-One state replacement freezes the selected mutation and its complete final-comparison policy
-before holdout dispatch. Completed confirmation and terminal outcomes are reconstructed from
-their owned observations rather than trusted cached verdicts. An unresolved reservation remains
-charged and cannot be replayed. Implementation, generation or evidence mismatches refuse
-continuation; regenerated campaigns require a new run. The CLI persists a private frozen session
+Before final confirmation starts, the run state freezes the selected mutation and its complete
+comparison policy. Resume reconstructs completed confirmation and terminal outcomes from the
+observations belonging to each block. An unresolved reservation remains charged and cannot be
+replayed. Resume stops if implementation, generation or evidence identities no longer match;
+regenerated campaigns require a new run. The CLI persists a private frozen session
 and immutable sampling receipts. Fuzz dry-run reads saved inputs without a harness; explicit
 structural detection saves a private profile, and acknowledged execution rechecks its identity.
 The fake runner uses the same collector with zero provider calls and truthful deterministic
@@ -154,8 +155,8 @@ safety constraints.
 
 ## Developer map
 
-The package uses a `src` layout. The following names describe the implemented ownership map;
-they do not promise public Python APIs or additional CLI commands.
+The package uses a `src` layout. The table maps internal implementation responsibilities;
+Python module names are not public API commitments.
 
 | Modules under `src/ithrl/` | Responsibility |
 | --- | --- |

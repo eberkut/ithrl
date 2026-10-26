@@ -1,11 +1,38 @@
 # Post-hoc experiment feasibility
 
-The feasibility study completed on **2026-09-02** with a qualified decision to proceed:
-ordinary saved sessions can supply decision evidence, and harness-specific runners can support
-context interventions. Exact provider-request capture is optional. This is a historical research
-record, not a compatibility table for current installations. The [README supported-inputs
-table](https://github.com/eberkut/ithrl/blob/main/README.md#supported-inputs) owns public support;
-the later [native measurements](../measurements.md) describe the qualified reduction profiles.
+The feasibility study completed on **2026-09-02**. It found that ordinary saved sessions can supply
+decision evidence and harness-specific runners can support context interventions. Exact
+provider-request capture is optional. The results describe the installations inspected during the
+study. For current capabilities, see the [README supported-inputs
+table](https://github.com/eberkut/ithrl/blob/main/README.md#supported-inputs); the later
+[native measurements](../measurements.md) describe the qualified reduction profiles.
+
+## Research basis
+
+The project investigates context as an experimental input. These papers motivated its initial
+questions and design boundaries:
+
+- Sydney Lewis,
+    [*Same Model, Different Harness: Different Coding-Agent Results*](https://arxiv.org/abs/2608.26218),
+    motivates recording harness behavior and context reconstruction alongside the model.
+- Shuyu Liu, [*What Does Context Compression Cost an Agent? Interaction Costs Unrevealed by
+  Task-Completion Metrics*](https://arxiv.org/abs/2608.16370), motivates the planned analysis of
+  information retrieved again after context removal; see the
+  [roadmap](https://github.com/eberkut/ithrl/blob/main/ROADMAP.md#passive-reacquisition-analysis).
+- I. de Zarzà, J. de Curtò, Jordi Cabot, Pietro Manzoni and Carlos T. Calafate,
+    [*Semantic Invariance in Agentic AI*](https://arxiv.org/abs/2603.13173), motivates testing
+    sensitivity to context changes expected to preserve meaning. Each intervention needs its own
+    validity checks.
+- Jaineet Shah,
+    [*Causal Agent Replay: Counterfactual Attribution for LLM-Agent Failures*](https://arxiv.org/abs/2606.08275),
+    provides related intervention-based work. ithrl's selected-decision experiments do not identify
+    the cause of an entire failed run.
+- R. G. Newcombe, [*Interval estimation for the difference between independent proportions:
+  comparison of eleven methods*](https://pubmed.ncbi.nlm.nih.gov/9595617/), supplies the interval
+  construction evaluated in the [reduction-design studies](reduction-design.md).
+
+The feasibility controls below test whether the required evidence and execution mechanisms exist.
+The later reduction studies evaluate sampling, usefulness and cost under explicit assumptions.
 
 ## What the study established
 
@@ -18,10 +45,10 @@ product change. Four separate questions determine the answer:
 3. Can the runner observe the target behavior while preventing action execution?
 4. Has that exact profile passed calibration, useful reduction and fresh confirmation?
 
-Evidence extraction does not establish reconstruction. A working fork does not establish
-filesystem or network isolation. A visible denied action does not establish useful reduction.
-The initial study answered bounded technical-feasibility questions; later implementation and
-native gates established the narrower product claims.
+Each capability needs separate evidence: saved-record parsing for extraction, controlled
+reconstruction and isolation for execution, then calibration, useful reduction and fresh
+confirmation for an experimental profile. The initial study tested the mechanisms in bounded
+controls. Later implementation and native qualification established the product claims.
 
 The credential-free control reduced a planted ten-node case to five nodes while retaining the
 two behavior-relevant input items. It demonstrated dependency-aware reduction with zero provider
@@ -53,19 +80,21 @@ remain versioned adapter/runner responsibilities.
 
 ### A Codex rollout trace is not necessarily a provider request
 
-Two successful public-profile Codex captures contained four completed inference requests. Both
+Two Codex captures contained four completed inference requests. Both
 first requests embedded `additional_tools` inside logical `input`, included internal message
 metadata and lacked the required top-level public Responses tool declaration. Continuations
 used `previous_response_id` and `custom_tool_call_output`. Preflight refused direct Responses
 replay before network access. No direct replay was sent.
 
-That four-request sample rejects this capture seam for the tested version/configuration; it is
-not an applicability estimate for ordinary Codex sessions or every trace transport. The trace
-event name is insufficient to infer capture completeness. The [rollout-trace documentation](https://github.com/openai/codex/blob/main/codex-rs/rollout-trace/README.md)
-and [inference implementation](https://github.com/openai/codex/blob/main/codex-rs/rollout-trace/src/inference.rs)
+That four-request sample rejects this capture seam for the tested version/configuration; it is not
+an applicability estimate for ordinary Codex sessions or every trace transport. The trace event name
+is insufficient to infer capture completeness. The
+[rollout-trace documentation](https://github.com/openai/codex/blob/main/codex-rs/rollout-trace/README.md)
+and
+[inference implementation](https://github.com/openai/codex/blob/main/codex-rs/rollout-trace/src/inference.rs)
 were the original research references; those moving links do not pin the historical installation.
-The subsequent native-surface audit used [Codex source commit
-`316795b3`](https://github.com/openai/codex/tree/316795b3cf2a45e90d121d9f46499d4658b2645c)
+The subsequent native-surface audit used
+[Codex source commit `316795b3`](https://github.com/openai/codex/tree/316795b3cf2a45e90d121d9f46499d4658b2645c)
 for `rust-v0.152.0`. It found no supported isolated reconstruction path that restored the recorded
 native tool registry. History injection restores model-visible history, not that runtime state.
 
@@ -84,10 +113,10 @@ not run. The two attempts took 8.796 and 10.250 seconds, with verified cleanup, 
 and workspace, zero executed actions and zero residual state. Four possible provider calls were
 charged against an eight-call bound; exact transport request counts were unavailable.
 
-The result is **unsupported for that controlled mapping and plan**. It is neither proof that all
-Codex dynamic-tool use is impossible nor evidence of historical native `exec` equivalence.
-Because no action appeared, these attempts do not establish live action visibility or denial.
-They did not change the already qualified final-response capability.
+That controlled mapping failed calibration. Because no action appeared, the attempts could not
+establish live action visibility, denial or equivalence to historical native `exec`. Other
+dynamic-tool mappings would require their own controls. The qualified final-response capability
+was unaffected.
 
 ### OpenCode denial must preserve action visibility
 
@@ -125,37 +154,42 @@ Bands used observed input tokens: short below 16,000; medium 16,000–63,999; lo
 For Codex long turns, ninetieth-percentile observations were 234,443 input tokens, 309.8 seconds
 whole-turn latency and 14.3 seconds to first token. Complete-session sizes were 63.4 MB total
 for Codex (755 KB median, 5.2 MB maximum), and 15.1 MB/3,956 events for Copilot (3.3 MB median).
-They are not per-candidate state-growth measurements.
+These are whole-session sizes; per-candidate state growth was not measured.
 
 Illustrative serialized arithmetic applied those medians to 380 requests: eight candidates at
 20 observations, one 20-observation baseline epoch and 100 fresh observations per confirmation
 arm. It yielded 12.19 million input tokens/33 minutes for Codex medium, and 48.58 million/5.7
 hours for Codex long. Applying the long ninetieth percentile instead yielded about 89.1 million
-input tokens/32.7 hours. These were planning scenarios, not production defaults, measured
-campaigns, permission to share baselines, or predictions of current provider cost. The historic
+input tokens/32.7 hours. These planning scenarios assumed shared baselines; they were never
+production defaults or measured campaigns. The historic
 five-percentage-point planning example required 470 requests for a final candidate and 5,170
 for it plus ten independently tested neighbors, before search.
 
-Candidate materialization and startup were unmeasured in this study. No defensible monetary
-price existed for the Codex/Copilot access paths. The result motivated budget-first exploratory
-screening with independent final confirmation, rather than promising narrow noninferiority or
-confirmed minimality for an ordinary interactive run. [Reduction-design research](reduction-design.md)
-records how later studies tested that choice.
+Candidate materialization and startup were unmeasured in this study. No defensible monetary price
+existed for the Codex/Copilot access paths. These costs motivated exploratory screening with
+independent final confirmation. Narrow noninferiority margins and confirmed minimality required
+more sampling than the intended interactive workflow could afford.
+[Reduction-design research](reduction-design.md) records how later studies tested that choice.
 
 ## Research sources and limits
 
-The original source review used the [Claude CLI reference](https://code.claude.com/docs/en/cli-usage),
+The original source review used the
+[Claude CLI reference](https://code.claude.com/docs/en/cli-usage),
 [SDK sessions](https://code.claude.com/docs/en/agent-sdk/sessions),
 [permissions](https://code.claude.com/docs/en/permissions),
 [sandboxing](https://code.claude.com/docs/en/sandboxing) and
 [data usage](https://code.claude.com/docs/en/data-usage). OpenCode references were its
 [server API](https://opencode.ai/docs/server/), [CLI](https://opencode.ai/docs/cli/),
 [permissions](https://opencode.ai/docs/permissions/) and [sharing](https://opencode.ai/docs/share/),
-plus pinned `1.18.5` source for [agent permission merging](https://github.com/anomalyco/opencode/blob/v1.18.5/packages/opencode/src/agent/agent.ts),
+plus pinned `1.18.5` source for
+[agent permission merging](https://github.com/anomalyco/opencode/blob/v1.18.5/packages/opencode/src/agent/agent.ts),
 [request preparation](https://github.com/anomalyco/opencode/blob/v1.18.5/packages/opencode/src/session/llm/request.ts),
 [session handling](https://github.com/anomalyco/opencode/blob/v1.18.5/packages/opencode/src/session/session.ts)
-and [message/part schema](https://github.com/anomalyco/opencode/blob/v1.18.5/packages/opencode/src/session/message-v2.ts).
+and
+[message/part schema](https://github.com/anomalyco/opencode/blob/v1.18.5/packages/opencode/src/session/message-v2.ts).
 Vendor documentation links describe the research basis and may have changed since inspection.
 
-Raw native evidence stays private. These aggregates preserve conclusions and their limitations;
-they do not make the historical local controls independently rerunnable from the public tree.
+The portability controls are reported through their methods, source references and aggregate
+observations. The
+[reduction study package](https://github.com/eberkut/ithrl/tree/main/research/reduction) replays
+synthetic cost models; it does not repeat these native controls.

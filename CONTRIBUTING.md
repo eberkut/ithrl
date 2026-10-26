@@ -5,7 +5,8 @@ change. Pull requests are limited to collaborators; discuss the work before prep
 
 For bug reports, include the ithrl version, platform, sanitized error code and steps to reproduce.
 Keep full sessions, cases, proprietary source and credentials out of public reports. Report
-suspected vulnerabilities through [private vulnerability reporting](https://github.com/eberkut/ithrl/security/advisories/new).
+suspected vulnerabilities through
+[private vulnerability reporting](https://github.com/eberkut/ithrl/security/advisories/new).
 
 ## Development setup
 
@@ -28,6 +29,8 @@ Run the same entry points used by CI:
 uv lock --check
 uv run ruff check .
 uv run ruff format --check .
+uv run rumdl fmt --check .
+uv run rumdl check .
 uv run pyrefly check
 uv run pytest --ignore=tests/packaging
 uv run radon cc src/ithrl --min B --show-complexity --total-average
@@ -47,6 +50,17 @@ an isolated tool, pass its path to `uv tool install` or `pipx install`.
 For local matrix runs, set `UV_PYTHON` on every command. Use separate environments, test caches and
 coverage files for parallel runs; otherwise run versions sequentially.
 
+Install the local hooks with `uv run pre-commit install`; run them on the whole repository with
+`uv run pre-commit run --all-files`. Ruff and rumdl format files in place. CI checks formatting
+without modifying files.
+
+Recognized Markdown-only PRs skip Python linting, typing, unit-test matrices and dependency audits.
+They retain Markdown formatting/linting, documentation tests, the strict site build, workflow and
+dependency review, and all package build/install checks. Mixed changes, unknown paths, configuration
+changes and PRs with 3,000 or more changed files run full validation. Rename detection considers
+both paths; deletions participate. Failed path detection fails the required Workflows check.
+Main-branch, scheduled, manual and release runs always perform full validation.
+
 ## Workflow and dependency checks
 
 For GitHub Actions or Dependabot changes, use the jactionlint release pinned in
@@ -58,8 +72,9 @@ jactionlint --no-online --strict-exit
 
 CI uses its default correctness/security profile, with online lookups and automatic fixes disabled.
 
-Audit the resolved runtime dependencies, optional extras and every dependency group, including development, docs
-and audit tooling, from `uv.lock`. Run this in Bash with the locked environment synchronized:
+Audit the resolved runtime dependencies, optional extras and every dependency group, including
+development, docs and audit tooling, from `uv.lock`. Run this in Bash with the locked environment
+synchronized:
 
 ```bash
 set -o pipefail
@@ -88,9 +103,16 @@ never automatically merged. Hosted dependency-graph coverage is a separate verif
 
 ## Documentation
 
-README owns the quick start; `docs/` owns user guides and reference. Support, security and conduct
-policies live at the repository root. Keep private sessions, cases and credentials out of
-documentation and generated output.
+Use `uv run rumdl fmt .` to format Markdown, then `uv run rumdl check .` to lint it. The same
+version and `pyproject.toml` configuration apply to pre-commit and CI. Prose wraps at 100
+characters; commands and tables retain their layout. MkDocs syntax is recognized within `docs/`. The
+generated CLI reference has narrow exceptions for Typer's prompts, option alignment and wrapping;
+its byte-for-byte generation check remains enforced. The generated changelog is checked under the
+shared rules.
+
+Keep installation and first-use instructions in README, and detailed user guides and reference in
+`docs/`. Support, security and conduct policies live at the repository root. Keep private sessions,
+cases and credentials out of documentation and generated output.
 
 [ROADMAP.md](ROADMAP.md) describes future direction. GitHub issues own actionable scope,
 dependencies, acceptance criteria and status; release milestones group scope and the public
@@ -147,7 +169,7 @@ runs in a separate `github-pages` environment job without checking out or execut
 Pull requests receive read-only documentation checks through CI and cannot deploy.
 
 Repository administrators must select **Settings → Pages → Source: GitHub Actions** and restrict
-the `github-pages` environment to `main` before the first deployment. No custom domain, separate
+the `github-pages` environment to `main`. No custom domain, separate
 site repository, `gh-pages` branch or personal access token is needed. After a successful
 deployment, check the published pages, navigation and static assets at the URL above.
 
@@ -177,6 +199,10 @@ uv run pytest -o addopts= tests/integration/test_fuzz_cli.py -q
 
 These tests establish local contracts. Native qualification is recorded in the
 [measurement notes](docs/native-runs.md#compatibility-and-measurements).
+
+The Quality job also verifies the [reduction research reference](research/reduction/README.md).
+Its short check covers reference data, finite calculations and output boundaries without a
+provider. Follow that guide when changing the research models or data; full simulations are opt-in.
 
 ## Opt-in native smoke tests
 
@@ -214,9 +240,9 @@ workspace. Calibration requires two matching attempts and permits at most two, e
 120 seconds plus cancellation grace. Final-response profiles allow up to two provider calls;
 Copilot shell allows up to four, with `pwd` visible but denied.
 
-Returned actions never execute. Hosted tools, MCP and tool-side network effects remain forbidden.
-An input-token cap cannot be enforced. Private evidence records known counts and unknown
-acceptance explicitly. Unsupported or unsuccessful profiles fail the test without skipping or retrying.
+Returned actions never execute. Hosted tools, MCP and tool-side network effects remain forbidden. An
+input-token cap cannot be enforced. Private evidence records known counts and unknown acceptance
+explicitly. Unsupported or unsuccessful profiles fail the test without skipping or retrying.
 
 ## Preparing a change
 
@@ -231,8 +257,10 @@ need capability, isolation, calibration and live-use evidence for the target pro
 ### Pull request review
 
 Pull requests are squash-merged, with the PR title becoming the commit subject. Use a Conventional
-Commit title, make sure the required CI and CodeQL checks pass, and resolve review conversations
-before merging.
+Commit title, such as `fix(codex): handle overload responses` or
+`docs: explain confirmation results`. The title check reruns on title edits and new pushes; it reads
+metadata without checking out PR code. Make sure the required CI and CodeQL checks pass and resolve
+review conversations before merging.
 
 CodeRabbit reviews PRs when they are ready for review and posts feedback in a walkthrough and
 inline comments. Address relevant findings or explain why a suggestion does not apply. The

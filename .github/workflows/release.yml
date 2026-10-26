@@ -60,6 +60,8 @@ jobs:
     needs: preflight
     permissions:
       contents: read
+      # The reusable CI workflow declares this for PR path detection.
+      pull-requests: read
     uses: ./.github/workflows/ci.yml
     with:
       release: true

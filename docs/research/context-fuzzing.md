@@ -3,23 +3,24 @@
 The 2026-10-23 credential-free study selected a useful synthetic discovery, mutation
 simplification and fresh-confirmation procedure for a planted target-rate decrease from `.90`
 to `.10`. The minimum complete-workflow success rate was 90.25%, with a simultaneous 99% lower
-bound of 88.86896%, exceeding the prospective 80% gate. These results justify the bounded design
-and its implementation; they do not establish native fuzzing support or general session success.
+bound of 88.86896%, exceeding the prospective 80% gate. These results support the design for the
+specified synthetic workload. Native fuzzing and ordinary-session success rates require separate
+measurements.
 
-Mutation contracts, deterministic generation/materialization/simplification, sampled comparison
-services and budget admission were implemented at development checkpoint `ee9a32f`. Internal
-durable campaign orchestration now adds frozen generation, final-selection persistence and exact
-recovery through the shared observation store. The [architecture](../architecture.md#measurement-search-and-confirmation)
-describes that contract. The public `ithrl fuzz` command exposes a credential-free walkthrough and saved campaign evidence.
-Native mutation qualification remains pending. The
-[supported-inputs table](https://github.com/eberkut/ithrl/blob/main/README.md#supported-inputs)
-owns public capability claims. The [decision record](../decisions/0004-single-finding-fuzz-confirmation.md)
-records the selected architecture and alternatives.
+The implementation provides deterministic mutation generation and simplification, sampled
+comparisons and durable campaign recovery through the shared observation store. The
+[architecture](../architecture.md#measurement-search-and-confirmation) describes the current
+contracts. The public `ithrl fuzz` command provides a credential-free walkthrough and saved results.
+The [supported-inputs table](https://github.com/eberkut/ithrl/blob/main/README.md#supported-inputs)
+lists current capabilities. The
+[decision record](../decisions/0004-single-finding-fuzz-confirmation.md) explains the selected
+procedure and alternatives.
 
 ## Question and scope
 
 The debugging question is whether a bounded context intervention decreases the probability of
-the case's existing mechanical binary target. The target stays fixed. Define
+the case's existing mechanical binary target: a match or nonmatch determined by the configured
+oracle. The target stays fixed. Define
 `D = p_original - p_mutant`, where each probability is conditional on valid execution, and test
 `D > delta` for a frozen meaningful decrease `delta`. Two distinct nonmatching answers do not
 constitute distinct findings under this target.
@@ -211,8 +212,8 @@ All-run cost includes calibration failures, rejected mutants, simplification, in
 incomplete work and independent invalid attempts. The maximum realized cost among selected
 single-component cells was 302 calls. The equal-weight mean over their 64 location/component/
 invalid-rate cells was 164.95 calls. This weighting describes the simulation grid, not a measured
-distribution of user workloads. Per-cell p50, p95, maximum and terminal counts are retained with
-the [reproducibility artifacts](https://github.com/eberkut/ithrl/blob/main/research/fuzzing/README.md).
+distribution of user workloads. Per-cell p50, p95, maximum and terminal counts are retained with the
+[reproducibility artifacts](https://github.com/eberkut/ithrl/blob/main/research/fuzzing/README.md).
 
 Whole comparisons are admitted using maximum arm-attempt capacity while protecting the complete
 final reserve. The model charges the required samples plus realized independent failures, capped
@@ -290,10 +291,10 @@ behavior. There is no planted causative paragraph in this sensitivity, so geomet
 simplification-success metrics are inapplicable. An unconditional claim needs a different justified
 measurement design; outcome-driven filtering cannot be silently treated as benign missing data.
 
-Across 22 all-null/duplication-control cells of 10,000 campaigns each, no final declaration occurred.
-This does not prove zero error. A shuffled-arm common-drift sensitivity decreasing the common
-response probability from `.90` to `.50` during confirmation produced 3 declarations in 10,000
-campaigns. It deliberately violates stationarity, and the low observed count does not qualify
+Across 22 all-null/duplication-control cells of 10,000 campaigns each, no final declaration
+occurred. This does not prove zero error. A shuffled-arm common-drift sensitivity decreasing the
+common response probability from `.90` to `.50` during confirmation produced 3 declarations in
+10,000 campaigns. It deliberately violates stationarity, and the low observed count does not qualify
 drift robustness. Interleaving and finite freshness mitigate temporal separation; they do not
 demonstrate independence or stationarity.
 
@@ -325,9 +326,8 @@ The corrected study freeze used these SHA-256 identities:
 The original pre-correction programme and study identities were respectively
 `ba830b8596048fd46292ca749c5f92ad6485d3302721a52597072c8c21687639` and
 `8894418399aaeeaddcf61731f9e52d9d961bbcf06250704e66f7391b18e8a8bb`.
-Any publication-only path or wording adjustments have their own identities in the artifact index;
-these historical hashes identify the executed research freeze rather than claiming byte equality
-with an edited public copy.
+These identities describe the study's evaluated sources. Each reproduction records the source
+and dependency identities used for that run; see the artifact index for commands and coverage.
 
 The [architecture map](../architecture.md#developer-map) locates the current implementation;
 [statistical tests](https://github.com/eberkut/ithrl/blob/main/tests/unit/test_fuzz_statistics.py)
@@ -335,21 +335,12 @@ independently check tail equations, endpoints, unequal arms and strict boundarie
 [sampling checks](https://github.com/eberkut/ithrl/blob/main/tests/integration/test_fuzz_sampling.py)
 cover role separation, complete-block admission and failure handling.
 
-The initial implementation checkpoint ([PR #3](https://github.com/eberkut/ithrl/pull/3)) was
-validated with focused Python 3.12–3.14 suites, base/extra package installations and dependency
-audits. Its full regression runs first
-exposed stale fixtures; the corrected affected tests passed on each version, but those full runs
-were not repeated locally as all-green runs. Hosted CI on PR #3 subsequently passed the full
-Python 3.12–3.14 matrix and package checks. This implementation validation does not establish
-native mutation qualification. Ongoing scope, acceptance and evidence belong in the
-[fuzzing capability issue](https://github.com/eberkut/ithrl/issues/5).
-
 ## Native applicability
 
 These synthetic results do not supply a native model effect, runtime estimate or universal preset.
-Qualification must measure a useful complete workflow for a safe text-mutation profile with
-faithful no-op/reconstruction controls, original calibration, protected-state checks and fresh
-confirmation. Existing extraction/reduction support alone does not qualify insertion or replacement.
-The [native qualification issue](https://github.com/eberkut/ithrl/issues/9) owns that gate's
-scope, approvals and acceptance; the [practical-settings issue](https://github.com/eberkut/ithrl/issues/10)
-owns the resulting supported envelope and limits.
+Qualification must measure a useful complete workflow for a safe text-mutation profile with faithful
+no-op/reconstruction controls, original calibration, protected-state checks and fresh confirmation.
+Existing extraction/reduction support alone does not qualify insertion or replacement. The
+[native qualification issue](https://github.com/eberkut/ithrl/issues/9) defines that gate's scope,
+approvals and acceptance. The [practical-settings issue](https://github.com/eberkut/ithrl/issues/10)
+tracks the resulting supported workloads and limits.

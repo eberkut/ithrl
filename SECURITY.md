@@ -2,7 +2,8 @@
 
 ## Report a vulnerability
 
-Use [GitHub's private vulnerability reporting](https://github.com/eberkut/ithrl/security/advisories/new)
+Use
+[GitHub's private vulnerability reporting](https://github.com/eberkut/ithrl/security/advisories/new)
 to report a suspected vulnerability. Keep security reports out of public issues.
 
 Include the affected version or commit, platform, impact, and a minimal reproduction using
@@ -16,8 +17,8 @@ reporter. Response and resolution times depend on maintainer availability.
 ## Supported versions
 
 Security fixes target the latest published release. Older releases do not have separate
-maintenance branches; upgrading may be necessary to receive a fix. Before the first release,
-report issues against the default branch.
+maintenance branches; upgrading may be necessary to receive a fix. For unreleased code, report
+the affected commit on the default branch.
 
 Pre-1.0 releases may change persisted formats and APIs. Review release notes before upgrading.
 

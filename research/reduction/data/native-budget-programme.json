@@ -1,0 +1,67 @@
+{
+  "kind": "prospective-fixed-native-layout-budget-family",
+  "reason": "The preserved cap-10 programme falls below 80% usefulness at instruction position 0 primarily because the final sweep exhausts the comparison budget.",
+  "frozen_before_evaluation": true,
+  "comparison_caps": [
+    14,
+    20
+  ],
+  "instruction_positions": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "live_instruction_position": 0,
+  "independent_preaccept_failure_probabilities": [
+    0.0,
+    0.05,
+    0.1
+  ],
+  "original_and_retained_behavior_probability": 0.9,
+  "instruction_removed_behavior_probability": 0.1,
+  "calibration_required_valid_minimum_matches_max_attempts": [
+    3,
+    2,
+    7
+  ],
+  "search_original_valid_max_attempts": [
+    4,
+    8
+  ],
+  "search_candidate_valid_max_attempts": [
+    5,
+    9
+  ],
+  "confirmation_each_valid_max_attempts": [
+    100,
+    124
+  ],
+  "confirmation_method": "newcombe-method-10",
+  "one_sided_confidence": 0.95,
+  "margin": 0.2,
+  "trial_cap": 10000,
+  "groups": [
+    "history0",
+    "history1",
+    "history2",
+    "history3",
+    "trigger"
+  ],
+  "history_byte_weights": [
+    1,
+    1,
+    1,
+    1
+  ],
+  "trigger_removal": "zero-call invalid trial before sampling admission",
+  "useful_outcome": "calibration ready, complete final sweep, instruction retained, at least two histories removed, independently complete preserving fresh confirmation",
+  "selection_rule": "lowest prospective cap with unconditional useful probability at least 0.80 in every instruction position at zero failures; report 5% and 10% failure sensitivity without changing criteria",
+  "attempt_deadline_seconds": 120,
+  "cancellation_grace_seconds": 3,
+  "command_wall_limit_seconds": 86400,
+  "maximum_family_evaluation_seconds": 60,
+  "native_probe_or_provider_approval": false,
+  "baseline_source_sha256": "e393174b675866111be84bda67f1e60e560a7509de6657c3e7645c6ccf92e1c6",
+  "baseline_result_sha256": "54bb78ac8a24a665248084cf7af28af1cc901ee5db8d9733a0bd1a76d6dfdbb6"
+}

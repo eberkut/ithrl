@@ -1,0 +1,1704 @@
+{
+  "cap": 6,
+  "nodes": {
+    "": {
+      "base": [],
+      "effective": [
+        "g0",
+        "g1"
+      ],
+      "key": "8bf04581bc81d7f4baa6f7db87c01bd25021a9fce21e7aa0a3d8be373ff222a5",
+      "phase": "chunk",
+      "request": [
+        "g0",
+        "g1"
+      ]
+    },
+    "0": {
+      "base": [],
+      "effective": [
+        "g2",
+        "g3"
+      ],
+      "key": "671dfd7360c2f3ae509d240836fc012ca856035a48a95b20e854484b82d76676",
+      "phase": "chunk",
+      "request": [
+        "g2",
+        "g3"
+      ]
+    },
+    "00": {
+      "base": [],
+      "effective": [
+        "g0"
+      ],
+      "key": "88ad2cac8daa4d0d5d31c30f3b346776af2f1fb9d028a47cda6052c25ccd8424",
+      "phase": "chunk",
+      "request": [
+        "g0"
+      ]
+    },
+    "000": {
+      "base": [],
+      "effective": [
+        "g1"
+      ],
+      "key": "7d69a94dd7d721083d8486231c8d03e3acf55ce1aa5a985bb64be26096556dc9",
+      "phase": "chunk",
+      "request": [
+        "g1"
+      ]
+    },
+    "0000": {
+      "base": [],
+      "effective": [
+        "g2"
+      ],
+      "key": "20c0ae0acd47a03c9251980c15eb14211de10fe479daa64d81c562a0df6ce1f6",
+      "phase": "chunk",
+      "request": [
+        "g2"
+      ]
+    },
+    "00000": {
+      "base": [],
+      "effective": [
+        "g3"
+      ],
+      "key": "e7659b4c03919728e86992f580b530bdfb828ef8d2d663eaa02860344544fa44",
+      "phase": "chunk",
+      "request": [
+        "g3"
+      ]
+    },
+    "00001": {
+      "base": [
+        "g2"
+      ],
+      "effective": [
+        "g0",
+        "g2"
+      ],
+      "key": "b55a050946968a0ad1c623ee561d10fd56a0472b80d0e0789b69dcbe61bbd2ad",
+      "phase": "chunk",
+      "request": [
+        "g0"
+      ]
+    },
+    "0001": {
+      "base": [
+        "g1"
+      ],
+      "effective": [
+        "g0",
+        "g1"
+      ],
+      "key": "2c9b0c42ec70077e505b289ce59a19fdcafc2cded3938af7488ee56a69652f72",
+      "phase": "chunk",
+      "request": [
+        "g0"
+      ]
+    },
+    "00010": {
+      "base": [
+        "g1"
+      ],
+      "effective": [
+        "g1",
+        "g2"
+      ],
+      "key": "ac6e0aa98d80454948c640c27173593832871b793496ef10806bbf4bf8fcc590",
+      "phase": "chunk",
+      "request": [
+        "g2"
+      ]
+    },
+    "00011": {
+      "base": [
+        "g0",
+        "g1"
+      ],
+      "effective": [
+        "g0",
+        "g1",
+        "g2"
+      ],
+      "key": "4b4c6331fbdfaec20b8723dd01919be004b98ae186c77aba3d6d9e8949466d0e",
+      "phase": "chunk",
+      "request": [
+        "g2"
+      ]
+    },
+    "001": {
+      "base": [
+        "g0"
+      ],
+      "effective": [
+        "g0",
+        "g1"
+      ],
+      "key": "95b90ca15ca509164dc96230258409ce160e0e36f35ecaf1b1e9a497eb9ac28f",
+      "phase": "chunk",
+      "request": [
+        "g1"
+      ]
+    },
+    "0010": {
+      "base": [
+        "g0"
+      ],
+      "effective": [
+        "g0",
+        "g2"
+      ],
+      "key": "f33d4fbac82635f863a7a3ebce35e717e79181cf48ef6d53266993930dce4b5a",
+      "phase": "chunk",
+      "request": [
+        "g2"
+      ]
+    },
+    "00100": {
+      "base": [
+        "g0"
+      ],
+      "effective": [
+        "g0",
+        "g3"
+      ],
+      "key": "655fff6241828f4fccb2f3a1fa37487f14674bc6b06e1460bf6bc08677a14072",
+      "phase": "chunk",
+      "request": [
+        "g3"
+      ]
+    },
+    "00101": {
+      "base": [
+        "g0",
+        "g2"
+      ],
+      "effective": [
+        "g0",
+        "g1",
+        "g2"
+      ],
+      "key": "1987ed3db0c6052ee12540ae581e04cbc42ac735337c0d30cfbe51bf9faf0072",
+      "phase": "chunk",
+      "request": [
+        "g1"
+      ]
+    },
+    "0011": {
+      "base": [
+        "g0",
+        "g1"
+      ],
+      "effective": [
+        "g0",
+        "g1",
+        "g2"
+      ],
+      "key": "4b4c6331fbdfaec20b8723dd01919be004b98ae186c77aba3d6d9e8949466d0e",
+      "phase": "chunk",
+      "request": [
+        "g2"
+      ]
+    },
+    "00110": {
+      "base": [
+        "g0",
+        "g1"
+      ],
+      "effective": [
+        "g0",
+        "g1",
+        "g3"
+      ],
+      "key": "30a0a6346f8c002a4b350b622d59a7a295d8a163403975962b0ce24b73cb4e98",
+      "phase": "chunk",
+      "request": [
+        "g3"
+      ]
+    },
+    "00111": {
+      "base": [
+        "g0",
+        "g1",
+        "g2"
+      ],
+      "effective": [
+        "g0",
+        "g1",
+        "g2",
+        "g3"
+      ],
+      "key": "2204ed1e150e9f61a17e47ad7c35a2dbf92cb0b38280a109166255185c09e375",
+      "phase": "chunk",
+      "request": [
+        "g3"
+      ]
+    },
+    "01": {
+      "base": [
+        "g2",
+        "g3"
+      ],
+      "effective": [
+        "g0",
+        "g2",
+        "g3"
+      ],
+      "key": "bf5902fe85737d71e4b12fcc0c172e649ea760829ee77f52ff16289fae85bd34",
+      "phase": "chunk",
+      "request": [
+        "g0"
+      ]
+    },
+    "010": {
+      "base": [
+        "g2",
+        "g3"
+      ],
+      "effective": [
+        "g1",
+        "g2",
+        "g3"
+      ],
+      "key": "ab6a1eae1f8e2bcb2c54df4d41f31c97ec6ed47f473207abab835662a347499f",
+      "phase": "chunk",
+      "request": [
+        "g1"
+      ]
+    },
+    "0100": {
+      "base": [
+        "g2",
+        "g3"
+      ],
+      "effective": [
+        "g0",
+        "g2",
+        "g3"
+      ],
+      "key": "a0aa527305fe0be9708c39b64f4714114adad5263cbf43f32b40e9f215b5b6b9",
+      "phase": "final-sweep",
+      "request": [
+        "g0"
+      ]
+    },
+    "01000": {
+      "base": [
+        "g2",
+        "g3"
+      ],
+      "effective": [
+        "g1",
+        "g2",
+        "g3"
+      ],
+      "key": "7cbaefb57aa4275b544d2d8878e95760358214ee56cf6e38cd15f56654b5841c",
+      "phase": "final-sweep",
+      "request": [
+        "g1"
+      ]
+    },
+    "01001": {
+      "base": [
+        "g0",
+        "g2",
+        "g3"
+      ],
+      "effective": [
+        "g0",
+        "g1",
+        "g2",
+        "g3"
+      ],
+      "key": "6ae190d5b08a523cc0c494a58f38e16846f325375153fe464ffdc57236bcba0a",
+      "phase": "final-sweep",
+      "request": [
+        "g1"
+      ]
+    },
+    "0101": {
+      "base": [
+        "g1",
+        "g2",
+        "g3"
+      ],
+      "effective": [
+        "g0",
+        "g1",
+        "g2",
+        "g3"
+      ],
+      "key": "2ff356ee600d9d43da597a975dff55113e27e67dbe697beb28801771b9d97cd3",
+      "phase": "chunk",
+      "request": [
+        "g0"
+      ]
+    },
+    "01010": {
+      "base": [
+        "g1",
+        "g2",
+        "g3"
+      ],
+      "effective": [
+        "g0",
+        "g1",
+        "g2",
+        "g3"
+      ],
+      "key": "829b214d2ed11be37df84742a1a28e744af8484f434be184c20fee1004939e4c",
+      "phase": "final-sweep",
+      "request": [
+        "g0"
+      ]
+    },
+    "011": {
+      "base": [
+        "g0",
+        "g2",
+        "g3"
+      ],
+      "effective": [
+        "g0",
+        "g1",
+        "g2",
+        "g3"
+      ],
+      "key": "265d50521f79b0284bb1ac9568844b1d9fd7336e1b047e35ccf12c99706f0c1f",
+      "phase": "chunk",
+      "request": [
+        "g1"
+      ]
+    },
+    "0110": {
+      "base": [
+        "g0",
+        "g2",
+        "g3"
+      ],
+      "effective": [
+        "g0",
+        "g1",
+        "g2",
+        "g3"
+      ],
+      "key": "6ae190d5b08a523cc0c494a58f38e16846f325375153fe464ffdc57236bcba0a",
+      "phase": "final-sweep",
+      "request": [
+        "g1"
+      ]
+    },
+    "1": {
+      "base": [
+        "g0",
+        "g1"
+      ],
+      "effective": [
+        "g0",
+        "g1",
+        "g2"
+      ],
+      "key": "4b4c6331fbdfaec20b8723dd01919be004b98ae186c77aba3d6d9e8949466d0e",
+      "phase": "chunk",
+      "request": [
+        "g2"
+      ]
+    },
+    "10": {
+      "base": [
+        "g0",
+        "g1"
+      ],
+      "effective": [
+        "g0",
+        "g1",
+        "g3"
+      ],
+      "key": "30a0a6346f8c002a4b350b622d59a7a295d8a163403975962b0ce24b73cb4e98",
+      "phase": "chunk",
+      "request": [
+        "g3"
+      ]
+    },
+    "100": {
+      "base": [
+        "g0",
+        "g1"
+      ],
+      "effective": [
+        "g0",
+        "g1",
+        "g2"
+      ],
+      "key": "a89a465867b2265abfe548a6b6acb4ae3b058ed97f25fd1582205f523efe9ff8",
+      "phase": "final-sweep",
+      "request": [
+        "g2"
+      ]
+    },
+    "1000": {
+      "base": [
+        "g0",
+        "g1"
+      ],
+      "effective": [
+        "g0",
+        "g1",
+        "g3"
+      ],
+      "key": "82cff1f3bfab54e1996fa6ef5cf66a7c6e3cdf0dd315857657398f391cc1d82d",
+      "phase": "final-sweep",
+      "request": [
+        "g3"
+      ]
+    },
+    "10001": {
+      "base": [
+        "g0",
+        "g1",
+        "g3"
+      ],
+      "effective": [
+        "g0",
+        "g1",
+        "g2",
+        "g3"
+      ],
+      "key": "11e3bdef310e27c9dbb06b660313b26e94306fd60291168ccda3644c1d8e25f2",
+      "phase": "final-sweep",
+      "request": [
+        "g2"
+      ]
+    },
+    "1001": {
+      "base": [
+        "g0",
+        "g1",
+        "g2"
+      ],
+      "effective": [
+        "g0",
+        "g1",
+        "g2",
+        "g3"
+      ],
+      "key": "76f4876769bcf69831a2caa0f920ab7560e0126164ba5268ff87472b3d4d8858",
+      "phase": "final-sweep",
+      "request": [
+        "g3"
+      ]
+    },
+    "101": {
+      "base": [
+        "g0",
+        "g1",
+        "g3"
+      ],
+      "effective": [
+        "g0",
+        "g1",
+        "g2",
+        "g3"
+      ],
+      "key": "c7c7cbf92a6a2c7c616b352b7b07801e79727b3d798d02812db9b5c9979ec449",
+      "phase": "chunk",
+      "request": [
+        "g2"
+      ]
+    },
+    "1010": {
+      "base": [
+        "g0",
+        "g1",
+        "g3"
+      ],
+      "effective": [
+        "g0",
+        "g1",
+        "g2",
+        "g3"
+      ],
+      "key": "11e3bdef310e27c9dbb06b660313b26e94306fd60291168ccda3644c1d8e25f2",
+      "phase": "final-sweep",
+      "request": [
+        "g2"
+      ]
+    },
+    "11": {
+      "base": [
+        "g0",
+        "g1",
+        "g2"
+      ],
+      "effective": [
+        "g0",
+        "g1",
+        "g2",
+        "g3"
+      ],
+      "key": "2204ed1e150e9f61a17e47ad7c35a2dbf92cb0b38280a109166255185c09e375",
+      "phase": "chunk",
+      "request": [
+        "g3"
+      ]
+    },
+    "110": {
+      "base": [
+        "g0",
+        "g1",
+        "g2"
+      ],
+      "effective": [
+        "g0",
+        "g1",
+        "g2",
+        "g3"
+      ],
+      "key": "76f4876769bcf69831a2caa0f920ab7560e0126164ba5268ff87472b3d4d8858",
+      "phase": "final-sweep",
+      "request": [
+        "g3"
+      ]
+    }
+  },
+  "paths": [
+    {
+      "bits": "000000",
+      "prefix": "000000",
+      "visited": [
+        "",
+        "0",
+        "00",
+        "000",
+        "0000",
+        "00000"
+      ]
+    },
+    {
+      "bits": "000001",
+      "prefix": "000001",
+      "visited": [
+        "",
+        "0",
+        "00",
+        "000",
+        "0000",
+        "00000"
+      ]
+    },
+    {
+      "bits": "000010",
+      "prefix": "000010",
+      "visited": [
+        "",
+        "0",
+        "00",
+        "000",
+        "0000",
+        "00001"
+      ]
+    },
+    {
+      "bits": "000011",
+      "prefix": "000011",
+      "visited": [
+        "",
+        "0",
+        "00",
+        "000",
+        "0000",
+        "00001"
+      ]
+    },
+    {
+      "bits": "000100",
+      "prefix": "000100",
+      "visited": [
+        "",
+        "0",
+        "00",
+        "000",
+        "0001",
+        "00010"
+      ]
+    },
+    {
+      "bits": "000101",
+      "prefix": "000101",
+      "visited": [
+        "",
+        "0",
+        "00",
+        "000",
+        "0001",
+        "00010"
+      ]
+    },
+    {
+      "bits": "000110",
+      "prefix": "000110",
+      "visited": [
+        "",
+        "0",
+        "00",
+        "000",
+        "0001",
+        "00011"
+      ]
+    },
+    {
+      "bits": "000111",
+      "prefix": "000111",
+      "visited": [
+        "",
+        "0",
+        "00",
+        "000",
+        "0001",
+        "00011"
+      ]
+    },
+    {
+      "bits": "001000",
+      "prefix": "001000",
+      "visited": [
+        "",
+        "0",
+        "00",
+        "001",
+        "0010",
+        "00100"
+      ]
+    },
+    {
+      "bits": "001001",
+      "prefix": "001001",
+      "visited": [
+        "",
+        "0",
+        "00",
+        "001",
+        "0010",
+        "00100"
+      ]
+    },
+    {
+      "bits": "001010",
+      "prefix": "001010",
+      "visited": [
+        "",
+        "0",
+        "00",
+        "001",
+        "0010",
+        "00101"
+      ]
+    },
+    {
+      "bits": "001011",
+      "prefix": "001011",
+      "visited": [
+        "",
+        "0",
+        "00",
+        "001",
+        "0010",
+        "00101"
+      ]
+    },
+    {
+      "bits": "001100",
+      "prefix": "001100",
+      "visited": [
+        "",
+        "0",
+        "00",
+        "001",
+        "0011",
+        "00110"
+      ]
+    },
+    {
+      "bits": "001101",
+      "prefix": "001101",
+      "visited": [
+        "",
+        "0",
+        "00",
+        "001",
+        "0011",
+        "00110"
+      ]
+    },
+    {
+      "bits": "001110",
+      "prefix": "001110",
+      "visited": [
+        "",
+        "0",
+        "00",
+        "001",
+        "0011",
+        "00111"
+      ]
+    },
+    {
+      "bits": "001111",
+      "prefix": "001111",
+      "visited": [
+        "",
+        "0",
+        "00",
+        "001",
+        "0011",
+        "00111"
+      ]
+    },
+    {
+      "bits": "010000",
+      "prefix": "010000",
+      "visited": [
+        "",
+        "0",
+        "01",
+        "010",
+        "0100",
+        "01000"
+      ]
+    },
+    {
+      "bits": "010001",
+      "prefix": "010001",
+      "visited": [
+        "",
+        "0",
+        "01",
+        "010",
+        "0100",
+        "01000"
+      ]
+    },
+    {
+      "bits": "010010",
+      "prefix": "010010",
+      "visited": [
+        "",
+        "0",
+        "01",
+        "010",
+        "0100",
+        "01001"
+      ]
+    },
+    {
+      "bits": "010011",
+      "prefix": "010011",
+      "visited": [
+        "",
+        "0",
+        "01",
+        "010",
+        "0100",
+        "01001"
+      ]
+    },
+    {
+      "bits": "010100",
+      "prefix": "010100",
+      "visited": [
+        "",
+        "0",
+        "01",
+        "010",
+        "0101",
+        "01010"
+      ]
+    },
+    {
+      "bits": "010101",
+      "prefix": "010101",
+      "visited": [
+        "",
+        "0",
+        "01",
+        "010",
+        "0101",
+        "01010"
+      ]
+    },
+    {
+      "bits": "010110",
+      "prefix": "01011",
+      "visited": [
+        "",
+        "0",
+        "01",
+        "010",
+        "0101"
+      ]
+    },
+    {
+      "bits": "010111",
+      "prefix": "01011",
+      "visited": [
+        "",
+        "0",
+        "01",
+        "010",
+        "0101"
+      ]
+    },
+    {
+      "bits": "011000",
+      "prefix": "01100",
+      "visited": [
+        "",
+        "0",
+        "01",
+        "011",
+        "0110"
+      ]
+    },
+    {
+      "bits": "011001",
+      "prefix": "01100",
+      "visited": [
+        "",
+        "0",
+        "01",
+        "011",
+        "0110"
+      ]
+    },
+    {
+      "bits": "011010",
+      "prefix": "01101",
+      "visited": [
+        "",
+        "0",
+        "01",
+        "011",
+        "0110"
+      ]
+    },
+    {
+      "bits": "011011",
+      "prefix": "01101",
+      "visited": [
+        "",
+        "0",
+        "01",
+        "011",
+        "0110"
+      ]
+    },
+    {
+      "bits": "011100",
+      "prefix": "0111",
+      "visited": [
+        "",
+        "0",
+        "01",
+        "011"
+      ]
+    },
+    {
+      "bits": "011101",
+      "prefix": "0111",
+      "visited": [
+        "",
+        "0",
+        "01",
+        "011"
+      ]
+    },
+    {
+      "bits": "011110",
+      "prefix": "0111",
+      "visited": [
+        "",
+        "0",
+        "01",
+        "011"
+      ]
+    },
+    {
+      "bits": "011111",
+      "prefix": "0111",
+      "visited": [
+        "",
+        "0",
+        "01",
+        "011"
+      ]
+    },
+    {
+      "bits": "100000",
+      "prefix": "10000",
+      "visited": [
+        "",
+        "1",
+        "10",
+        "100",
+        "1000"
+      ]
+    },
+    {
+      "bits": "100001",
+      "prefix": "10000",
+      "visited": [
+        "",
+        "1",
+        "10",
+        "100",
+        "1000"
+      ]
+    },
+    {
+      "bits": "100010",
+      "prefix": "100010",
+      "visited": [
+        "",
+        "1",
+        "10",
+        "100",
+        "1000",
+        "10001"
+      ]
+    },
+    {
+      "bits": "100011",
+      "prefix": "100011",
+      "visited": [
+        "",
+        "1",
+        "10",
+        "100",
+        "1000",
+        "10001"
+      ]
+    },
+    {
+      "bits": "100100",
+      "prefix": "10010",
+      "visited": [
+        "",
+        "1",
+        "10",
+        "100",
+        "1001"
+      ]
+    },
+    {
+      "bits": "100101",
+      "prefix": "10010",
+      "visited": [
+        "",
+        "1",
+        "10",
+        "100",
+        "1001"
+      ]
+    },
+    {
+      "bits": "100110",
+      "prefix": "10011",
+      "visited": [
+        "",
+        "1",
+        "10",
+        "100",
+        "1001"
+      ]
+    },
+    {
+      "bits": "100111",
+      "prefix": "10011",
+      "visited": [
+        "",
+        "1",
+        "10",
+        "100",
+        "1001"
+      ]
+    },
+    {
+      "bits": "101000",
+      "prefix": "10100",
+      "visited": [
+        "",
+        "1",
+        "10",
+        "101",
+        "1010"
+      ]
+    },
+    {
+      "bits": "101001",
+      "prefix": "10100",
+      "visited": [
+        "",
+        "1",
+        "10",
+        "101",
+        "1010"
+      ]
+    },
+    {
+      "bits": "101010",
+      "prefix": "10101",
+      "visited": [
+        "",
+        "1",
+        "10",
+        "101",
+        "1010"
+      ]
+    },
+    {
+      "bits": "101011",
+      "prefix": "10101",
+      "visited": [
+        "",
+        "1",
+        "10",
+        "101",
+        "1010"
+      ]
+    },
+    {
+      "bits": "101100",
+      "prefix": "1011",
+      "visited": [
+        "",
+        "1",
+        "10",
+        "101"
+      ]
+    },
+    {
+      "bits": "101101",
+      "prefix": "1011",
+      "visited": [
+        "",
+        "1",
+        "10",
+        "101"
+      ]
+    },
+    {
+      "bits": "101110",
+      "prefix": "1011",
+      "visited": [
+        "",
+        "1",
+        "10",
+        "101"
+      ]
+    },
+    {
+      "bits": "101111",
+      "prefix": "1011",
+      "visited": [
+        "",
+        "1",
+        "10",
+        "101"
+      ]
+    },
+    {
+      "bits": "110000",
+      "prefix": "1100",
+      "visited": [
+        "",
+        "1",
+        "11",
+        "110"
+      ]
+    },
+    {
+      "bits": "110001",
+      "prefix": "1100",
+      "visited": [
+        "",
+        "1",
+        "11",
+        "110"
+      ]
+    },
+    {
+      "bits": "110010",
+      "prefix": "1100",
+      "visited": [
+        "",
+        "1",
+        "11",
+        "110"
+      ]
+    },
+    {
+      "bits": "110011",
+      "prefix": "1100",
+      "visited": [
+        "",
+        "1",
+        "11",
+        "110"
+      ]
+    },
+    {
+      "bits": "110100",
+      "prefix": "1101",
+      "visited": [
+        "",
+        "1",
+        "11",
+        "110"
+      ]
+    },
+    {
+      "bits": "110101",
+      "prefix": "1101",
+      "visited": [
+        "",
+        "1",
+        "11",
+        "110"
+      ]
+    },
+    {
+      "bits": "110110",
+      "prefix": "1101",
+      "visited": [
+        "",
+        "1",
+        "11",
+        "110"
+      ]
+    },
+    {
+      "bits": "110111",
+      "prefix": "1101",
+      "visited": [
+        "",
+        "1",
+        "11",
+        "110"
+      ]
+    },
+    {
+      "bits": "111000",
+      "prefix": "111",
+      "visited": [
+        "",
+        "1",
+        "11"
+      ]
+    },
+    {
+      "bits": "111001",
+      "prefix": "111",
+      "visited": [
+        "",
+        "1",
+        "11"
+      ]
+    },
+    {
+      "bits": "111010",
+      "prefix": "111",
+      "visited": [
+        "",
+        "1",
+        "11"
+      ]
+    },
+    {
+      "bits": "111011",
+      "prefix": "111",
+      "visited": [
+        "",
+        "1",
+        "11"
+      ]
+    },
+    {
+      "bits": "111100",
+      "prefix": "111",
+      "visited": [
+        "",
+        "1",
+        "11"
+      ]
+    },
+    {
+      "bits": "111101",
+      "prefix": "111",
+      "visited": [
+        "",
+        "1",
+        "11"
+      ]
+    },
+    {
+      "bits": "111110",
+      "prefix": "111",
+      "visited": [
+        "",
+        "1",
+        "11"
+      ]
+    },
+    {
+      "bits": "111111",
+      "prefix": "111",
+      "visited": [
+        "",
+        "1",
+        "11"
+      ]
+    }
+  ],
+  "synthetic_group_bytes": [
+    128,
+    128,
+    128,
+    128
+  ],
+  "terminals": {
+    "000000": {
+      "applied": 6,
+      "complete": false,
+      "removed": [],
+      "retained": [
+        "g0",
+        "g1",
+        "g2",
+        "g3"
+      ]
+    },
+    "000001": {
+      "applied": 6,
+      "complete": false,
+      "removed": [
+        "g3"
+      ],
+      "retained": [
+        "g0",
+        "g1",
+        "g2"
+      ]
+    },
+    "000010": {
+      "applied": 6,
+      "complete": false,
+      "removed": [
+        "g2"
+      ],
+      "retained": [
+        "g0",
+        "g1",
+        "g3"
+      ]
+    },
+    "000011": {
+      "applied": 6,
+      "complete": false,
+      "removed": [
+        "g0",
+        "g2"
+      ],
+      "retained": [
+        "g1",
+        "g3"
+      ]
+    },
+    "000100": {
+      "applied": 6,
+      "complete": false,
+      "removed": [
+        "g1"
+      ],
+      "retained": [
+        "g0",
+        "g2",
+        "g3"
+      ]
+    },
+    "000101": {
+      "applied": 6,
+      "complete": false,
+      "removed": [
+        "g1",
+        "g2"
+      ],
+      "retained": [
+        "g0",
+        "g3"
+      ]
+    },
+    "000110": {
+      "applied": 6,
+      "complete": false,
+      "removed": [
+        "g0",
+        "g1"
+      ],
+      "retained": [
+        "g2",
+        "g3"
+      ]
+    },
+    "000111": {
+      "applied": 6,
+      "complete": false,
+      "removed": [
+        "g0",
+        "g1",
+        "g2"
+      ],
+      "retained": [
+        "g3"
+      ]
+    },
+    "001000": {
+      "applied": 6,
+      "complete": false,
+      "removed": [
+        "g0"
+      ],
+      "retained": [
+        "g1",
+        "g2",
+        "g3"
+      ]
+    },
+    "001001": {
+      "applied": 6,
+      "complete": false,
+      "removed": [
+        "g0",
+        "g3"
+      ],
+      "retained": [
+        "g1",
+        "g2"
+      ]
+    },
+    "001010": {
+      "applied": 6,
+      "complete": false,
+      "removed": [
+        "g0",
+        "g2"
+      ],
+      "retained": [
+        "g1",
+        "g3"
+      ]
+    },
+    "001011": {
+      "applied": 6,
+      "complete": false,
+      "removed": [
+        "g0",
+        "g1",
+        "g2"
+      ],
+      "retained": [
+        "g3"
+      ]
+    },
+    "001100": {
+      "applied": 6,
+      "complete": false,
+      "removed": [
+        "g0",
+        "g1"
+      ],
+      "retained": [
+        "g2",
+        "g3"
+      ]
+    },
+    "001101": {
+      "applied": 6,
+      "complete": false,
+      "removed": [
+        "g0",
+        "g1",
+        "g3"
+      ],
+      "retained": [
+        "g2"
+      ]
+    },
+    "001110": {
+      "applied": 6,
+      "complete": false,
+      "removed": [
+        "g0",
+        "g1",
+        "g2"
+      ],
+      "retained": [
+        "g3"
+      ]
+    },
+    "001111": {
+      "applied": 6,
+      "complete": true,
+      "removed": [
+        "g0",
+        "g1",
+        "g2",
+        "g3"
+      ],
+      "retained": []
+    },
+    "010000": {
+      "applied": 6,
+      "complete": true,
+      "removed": [
+        "g2",
+        "g3"
+      ],
+      "retained": [
+        "g0",
+        "g1"
+      ]
+    },
+    "010001": {
+      "applied": 6,
+      "complete": false,
+      "removed": [
+        "g1",
+        "g2",
+        "g3"
+      ],
+      "retained": [
+        "g0"
+      ]
+    },
+    "010010": {
+      "applied": 6,
+      "complete": true,
+      "removed": [
+        "g0",
+        "g2",
+        "g3"
+      ],
+      "retained": [
+        "g1"
+      ]
+    },
+    "010011": {
+      "applied": 6,
+      "complete": true,
+      "removed": [
+        "g0",
+        "g1",
+        "g2",
+        "g3"
+      ],
+      "retained": []
+    },
+    "010100": {
+      "applied": 6,
+      "complete": true,
+      "removed": [
+        "g1",
+        "g2",
+        "g3"
+      ],
+      "retained": [
+        "g0"
+      ]
+    },
+    "010101": {
+      "applied": 6,
+      "complete": true,
+      "removed": [
+        "g0",
+        "g1",
+        "g2",
+        "g3"
+      ],
+      "retained": []
+    },
+    "01011": {
+      "applied": 5,
+      "complete": true,
+      "removed": [
+        "g0",
+        "g1",
+        "g2",
+        "g3"
+      ],
+      "retained": []
+    },
+    "01100": {
+      "applied": 5,
+      "complete": true,
+      "removed": [
+        "g0",
+        "g2",
+        "g3"
+      ],
+      "retained": [
+        "g1"
+      ]
+    },
+    "01101": {
+      "applied": 5,
+      "complete": true,
+      "removed": [
+        "g0",
+        "g1",
+        "g2",
+        "g3"
+      ],
+      "retained": []
+    },
+    "0111": {
+      "applied": 4,
+      "complete": true,
+      "removed": [
+        "g0",
+        "g1",
+        "g2",
+        "g3"
+      ],
+      "retained": []
+    },
+    "10000": {
+      "applied": 5,
+      "complete": true,
+      "removed": [
+        "g0",
+        "g1"
+      ],
+      "retained": [
+        "g2",
+        "g3"
+      ]
+    },
+    "100010": {
+      "applied": 6,
+      "complete": true,
+      "removed": [
+        "g0",
+        "g1",
+        "g3"
+      ],
+      "retained": [
+        "g2"
+      ]
+    },
+    "100011": {
+      "applied": 6,
+      "complete": true,
+      "removed": [
+        "g0",
+        "g1",
+        "g2",
+        "g3"
+      ],
+      "retained": []
+    },
+    "10010": {
+      "applied": 5,
+      "complete": true,
+      "removed": [
+        "g0",
+        "g1",
+        "g2"
+      ],
+      "retained": [
+        "g3"
+      ]
+    },
+    "10011": {
+      "applied": 5,
+      "complete": true,
+      "removed": [
+        "g0",
+        "g1",
+        "g2",
+        "g3"
+      ],
+      "retained": []
+    },
+    "10100": {
+      "applied": 5,
+      "complete": true,
+      "removed": [
+        "g0",
+        "g1",
+        "g3"
+      ],
+      "retained": [
+        "g2"
+      ]
+    },
+    "10101": {
+      "applied": 5,
+      "complete": true,
+      "removed": [
+        "g0",
+        "g1",
+        "g2",
+        "g3"
+      ],
+      "retained": []
+    },
+    "1011": {
+      "applied": 4,
+      "complete": true,
+      "removed": [
+        "g0",
+        "g1",
+        "g2",
+        "g3"
+      ],
+      "retained": []
+    },
+    "1100": {
+      "applied": 4,
+      "complete": true,
+      "removed": [
+        "g0",
+        "g1",
+        "g2"
+      ],
+      "retained": [
+        "g3"
+      ]
+    },
+    "1101": {
+      "applied": 4,
+      "complete": true,
+      "removed": [
+        "g0",
+        "g1",
+        "g2",
+        "g3"
+      ],
+      "retained": []
+    },
+    "111": {
+      "applied": 3,
+      "complete": true,
+      "removed": [
+        "g0",
+        "g1",
+        "g2",
+        "g3"
+      ],
+      "retained": []
+    }
+  }
+}

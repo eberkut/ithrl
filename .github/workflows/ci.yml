@@ -33,6 +33,34 @@ env:
   UV_NO_PROGRESS: "1"
 
 jobs:
+  changes:
+    name: Classify changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      # GitHub's PR files API caps responses at 3,000 files. Such PRs run every check.
+      full: ${{ github.event_name != 'pull_request' && 'true' || github.event.pull_request.changed_files >= 3000 && 'true' || steps.filter.outputs.full }}
+    steps:
+      - name: Identify changes requiring full validation
+        if: github.event_name == 'pull_request' && github.event.pull_request.changed_files < 3000
+        id: filter
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          predicate-quantifier: every
+          # Everything outside these known Markdown paths requires full validation.
+          # Renames test both the old and new paths; deletions also participate.
+          filters: |
+            full:
+              - '**'
+              - '!{AGENTS,CHANGELOG,CODE_OF_CONDUCT,CONTRIBUTING,README,ROADMAP,SECURITY,SUPPORT}.md'
+              - '!docs/{index,native-runs,results,cli,troubleshooting,measurements,architecture}.md'
+              - '!docs/decisions/*.md'
+              - '!docs/research/*.md'
+              - '!research/{fuzzing,reduction}/README.md'
+
   dependency-review:
     name: Dependency review
     if: github.event_name == 'pull_request'
@@ -64,9 +92,23 @@ jobs:
 
   workflows:
     name: Workflows
+    needs: changes
+    if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      # This existing required check must fail if classification failed or produced no decision.
+      - name: Require successful change classification
+        env:
+          CLASSIFICATION_RESULT: ${{ needs.changes.result }}
+          FULL_VALIDATION: ${{ needs.changes.outputs.full }}
+        run: |
+          test "$CLASSIFICATION_RESULT" = success
+          case "$FULL_VALIDATION" in
+            true|false) ;;
+            *) echo "::error::Missing or invalid change classification"; exit 1 ;;
+          esac
+
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -82,6 +124,8 @@ jobs:
 
   quality:
     name: Quality
+    needs: changes
+    if: needs.changes.outputs.full == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -118,8 +162,16 @@ jobs:
       - name: Check types
         run: uv run pyrefly check
 
+      - name: Check reduction research reference
+        run: |
+          uv run --offline --no-sync python research/reduction/reproduce.py freeze --output research/reduction/outputs/ci
+          uv run --offline --no-sync python research/reduction/reproduce.py verify --output research/reduction/outputs/ci
+          uv run --offline --no-sync pytest -o addopts= research/reduction/test_reproduce.py -q
+
   test:
     name: Python ${{ matrix.python-version }}
+    needs: changes
+    if: needs.changes.outputs.full == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -171,6 +223,11 @@ jobs:
 
       - name: Synchronize locked environment
         run: uv sync --locked --all-groups
+
+      - name: Check Markdown formatting and lint
+        run: |
+          uv run rumdl fmt --check .
+          uv run rumdl check .
 
       - name: Check CLI reference, site boundaries and issue forms
         run: uv run pytest -o addopts= tests/unit/test_documentation.py -q

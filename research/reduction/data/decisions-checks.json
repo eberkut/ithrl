@@ -1,0 +1,426 @@
+{
+  "source": "../../../docs/research/reduction-design.md",
+  "interpretation": "Published summary values; tolerances follow their printed precision. This independently defined domain is specified in decisions-programme.json.",
+  "checks": [
+    {
+      "kind": "conditional",
+      "selector": {
+        "screen": "confirm-5",
+        "scenario": "healthy"
+      },
+      "expected": 0.00517,
+      "absolute_tolerance": 5e-06
+    },
+    {
+      "kind": "conditional",
+      "selector": {
+        "screen": "confirm-10",
+        "scenario": "healthy"
+      },
+      "expected": 0.25784,
+      "absolute_tolerance": 5e-06
+    },
+    {
+      "kind": "conditional",
+      "selector": {
+        "screen": "point-4-4",
+        "scenario": "healthy"
+      },
+      "expected": 0.6068,
+      "absolute_tolerance": 5e-05
+    },
+    {
+      "kind": "conditional",
+      "selector": {
+        "screen": "point-4-5",
+        "scenario": "healthy"
+      },
+      "expected": 0.8632,
+      "absolute_tolerance": 5e-05
+    },
+    {
+      "kind": "conditional",
+      "selector": {
+        "screen": "point-8-8",
+        "scenario": "healthy"
+      },
+      "expected": 0.8227,
+      "absolute_tolerance": 5e-05
+    },
+    {
+      "kind": "conditional",
+      "selector": {
+        "screen": "point-12-12",
+        "scenario": "healthy"
+      },
+      "expected": 0.9176,
+      "absolute_tolerance": 5e-05
+    },
+    {
+      "kind": "conditional",
+      "selector": {
+        "screen": "veto-4-4",
+        "scenario": "healthy"
+      },
+      "expected": 0.7962,
+      "absolute_tolerance": 5e-05
+    },
+    {
+      "kind": "conditional",
+      "selector": {
+        "screen": "veto-4-5",
+        "scenario": "healthy"
+      },
+      "expected": 0.7937,
+      "absolute_tolerance": 5e-05
+    },
+    {
+      "kind": "conditional",
+      "selector": {
+        "screen": "point-4-5",
+        "scenario": "healthy"
+      },
+      "expected": 0.8631725339,
+      "absolute_tolerance": 1e-10,
+      "position": 0
+    },
+    {
+      "kind": "conditional",
+      "selector": {
+        "screen": "point-4-5",
+        "scenario": "healthy"
+      },
+      "expected": 0.9189502698,
+      "absolute_tolerance": 1e-10,
+      "position": 1
+    },
+    {
+      "kind": "conditional",
+      "selector": {
+        "screen": "point-4-5",
+        "scenario": "healthy"
+      },
+      "expected": 0.9189744495,
+      "absolute_tolerance": 1e-10,
+      "position": 2
+    },
+    {
+      "kind": "conditional",
+      "selector": {
+        "screen": "point-4-5",
+        "scenario": "healthy"
+      },
+      "expected": 0.9266704484,
+      "absolute_tolerance": 1e-10,
+      "position": 3
+    },
+    {
+      "kind": "failure",
+      "selector": {
+        "plan": "no-extras",
+        "scenario": "healthy",
+        "failure_probability": 0.0
+      },
+      "expected": 0.8095,
+      "absolute_tolerance": 5e-05
+    },
+    {
+      "kind": "failure",
+      "selector": {
+        "plan": "no-extras",
+        "scenario": "healthy",
+        "failure_probability": 0.01
+      },
+      "expected": 0.065,
+      "absolute_tolerance": 5e-05
+    },
+    {
+      "kind": "failure",
+      "selector": {
+        "plan": "no-extras",
+        "scenario": "mild",
+        "failure_probability": 0.0
+      },
+      "expected": 0.3865,
+      "absolute_tolerance": 5e-05
+    },
+    {
+      "kind": "failure",
+      "selector": {
+        "plan": "no-extras",
+        "scenario": "mild",
+        "failure_probability": 0.01
+      },
+      "expected": 0.031,
+      "absolute_tolerance": 5e-05
+    },
+    {
+      "kind": "failure",
+      "selector": {
+        "plan": "no-extras",
+        "scenario": "equal-half",
+        "failure_probability": 0.0
+      },
+      "expected": 0.0679,
+      "absolute_tolerance": 5e-05
+    },
+    {
+      "kind": "failure",
+      "selector": {
+        "plan": "no-extras",
+        "scenario": "equal-half",
+        "failure_probability": 0.01
+      },
+      "expected": 0.0055,
+      "absolute_tolerance": 5e-05
+    },
+    {
+      "kind": "failure",
+      "selector": {
+        "plan": "fraction-40",
+        "scenario": "healthy",
+        "failure_probability": 0.0
+      },
+      "expected": 0.9685,
+      "absolute_tolerance": 5e-05
+    },
+    {
+      "kind": "failure",
+      "selector": {
+        "plan": "fraction-40",
+        "scenario": "healthy",
+        "failure_probability": 0.01
+      },
+      "expected": 0.8462,
+      "absolute_tolerance": 5e-05
+    },
+    {
+      "kind": "failure",
+      "selector": {
+        "plan": "fraction-40",
+        "scenario": "mild",
+        "failure_probability": 0.0
+      },
+      "expected": 0.5279,
+      "absolute_tolerance": 5e-05
+    },
+    {
+      "kind": "failure",
+      "selector": {
+        "plan": "fraction-40",
+        "scenario": "mild",
+        "failure_probability": 0.01
+      },
+      "expected": 0.4612,
+      "absolute_tolerance": 5e-05
+    },
+    {
+      "kind": "failure",
+      "selector": {
+        "plan": "fraction-40",
+        "scenario": "equal-half",
+        "failure_probability": 0.0
+      },
+      "expected": 0.3826,
+      "absolute_tolerance": 5e-05
+    },
+    {
+      "kind": "failure",
+      "selector": {
+        "plan": "fraction-40",
+        "scenario": "equal-half",
+        "failure_probability": 0.01
+      },
+      "expected": 0.3343,
+      "absolute_tolerance": 5e-05
+    },
+    {
+      "kind": "failure",
+      "selector": {
+        "plan": "fraction-80",
+        "scenario": "healthy",
+        "failure_probability": 0.0
+      },
+      "expected": 0.99998,
+      "absolute_tolerance": 5e-06
+    },
+    {
+      "kind": "failure",
+      "selector": {
+        "plan": "fraction-80",
+        "scenario": "healthy",
+        "failure_probability": 0.01
+      },
+      "expected": 0.8871,
+      "absolute_tolerance": 5e-05
+    },
+    {
+      "kind": "failure",
+      "selector": {
+        "plan": "fraction-80",
+        "scenario": "mild",
+        "failure_probability": 0.0
+      },
+      "expected": 0.827,
+      "absolute_tolerance": 5e-05
+    },
+    {
+      "kind": "failure",
+      "selector": {
+        "plan": "fraction-80",
+        "scenario": "mild",
+        "failure_probability": 0.01
+      },
+      "expected": 0.7336,
+      "absolute_tolerance": 5e-05
+    },
+    {
+      "kind": "failure",
+      "selector": {
+        "plan": "fraction-80",
+        "scenario": "equal-half",
+        "failure_probability": 0.0
+      },
+      "expected": 0.967,
+      "absolute_tolerance": 5e-05
+    },
+    {
+      "kind": "failure",
+      "selector": {
+        "plan": "fraction-80",
+        "scenario": "equal-half",
+        "failure_probability": 0.01
+      },
+      "expected": 0.8579,
+      "absolute_tolerance": 5e-05
+    },
+    {
+      "kind": "failure",
+      "selector": {
+        "plan": "fixed-small",
+        "scenario": "healthy",
+        "failure_probability": 0.05
+      },
+      "expected": 0.838754,
+      "absolute_tolerance": 5e-07
+    },
+    {
+      "kind": "failure",
+      "selector": {
+        "plan": "fixed-small",
+        "scenario": "healthy",
+        "failure_probability": 0.1
+      },
+      "expected": 0.831356,
+      "absolute_tolerance": 5e-07
+    },
+    {
+      "kind": "failure",
+      "selector": {
+        "plan": "fixed-large",
+        "scenario": "healthy",
+        "failure_probability": 0.05
+      },
+      "expected": 0.999974,
+      "absolute_tolerance": 5e-07
+    },
+    {
+      "kind": "failure",
+      "selector": {
+        "plan": "fixed-large",
+        "scenario": "healthy",
+        "failure_probability": 0.1
+      },
+      "expected": 0.988117,
+      "absolute_tolerance": 5e-07
+    },
+    {
+      "kind": "failure",
+      "selector": {
+        "plan": "fixed-large",
+        "scenario": "mild",
+        "failure_probability": 0.05
+      },
+      "expected": 0.827006,
+      "absolute_tolerance": 5e-07
+    },
+    {
+      "kind": "failure",
+      "selector": {
+        "plan": "fixed-large",
+        "scenario": "mild",
+        "failure_probability": 0.1
+      },
+      "expected": 0.8172,
+      "absolute_tolerance": 5e-07
+    },
+    {
+      "kind": "failure",
+      "selector": {
+        "plan": "fixed-large",
+        "scenario": "equal-half",
+        "failure_probability": 0.05
+      },
+      "expected": 0.967022,
+      "absolute_tolerance": 5e-07
+    },
+    {
+      "kind": "failure",
+      "selector": {
+        "plan": "fixed-large",
+        "scenario": "equal-half",
+        "failure_probability": 0.1
+      },
+      "expected": 0.955556,
+      "absolute_tolerance": 5e-07
+    },
+    {
+      "kind": "grid-maximum",
+      "selector": {
+        "samples_per_arm": 20
+      },
+      "expected": 0.07004,
+      "absolute_tolerance": 5e-06
+    },
+    {
+      "kind": "grid-maximum",
+      "selector": {
+        "samples_per_arm": 40
+      },
+      "expected": 0.05869,
+      "absolute_tolerance": 5e-06
+    },
+    {
+      "kind": "grid-maximum",
+      "selector": {
+        "samples_per_arm": 50
+      },
+      "expected": 0.05981,
+      "absolute_tolerance": 5e-06
+    },
+    {
+      "kind": "grid-maximum",
+      "selector": {
+        "samples_per_arm": 80
+      },
+      "expected": 0.05758,
+      "absolute_tolerance": 5e-06
+    },
+    {
+      "kind": "grid-maximum",
+      "selector": {
+        "samples_per_arm": 100
+      },
+      "expected": 0.0528,
+      "absolute_tolerance": 5e-06
+    },
+    {
+      "kind": "grid-maximum",
+      "selector": {
+        "samples_per_arm": 200
+      },
+      "expected": 0.05355,
+      "absolute_tolerance": 5e-06
+    }
+  ]
+}
