@@ -11,6 +11,7 @@ from typer.testing import CliRunner
 
 from ithrl.cli import app
 from ithrl.cli.fuzz_session import FuzzSessionError, load_fuzz_session
+from ithrl.cli.output import ExitCode
 from ithrl.observations import ObservationStore
 from ithrl.run_state import SampledRunStateFile
 from ithrl.runner import PreparedAttempt, RunResult
@@ -540,8 +541,6 @@ def test_calibration_uses_frozen_policy_for_a_verified_overload(
 def test_completed_unmeasurable_calibration_reports_inconclusive_without_retry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, matches: int, reason: str
 ) -> None:
-    from ithrl.cli.output import ExitCode
-
     args, runner, _ = mock_native(tmp_path, monkeypatch)
     runner.original_matching = matches
     profile = tmp_path / "profile.json"
@@ -613,7 +612,7 @@ def test_tampered_fuzz_resume_refuses_before_execution(
     refused = CliRunner().invoke(
         app, ["fuzz", str(receipt), "--resume", "--acknowledge-model-execution", "--format", "json"]
     )
-    assert refused.exit_code != 0
+    assert refused.exit_code == ExitCode.UNSUPPORTED
     assert json.loads(refused.stdout)["error_code"] == "invalid-saved-fuzz-metadata"
     assert "PRIVATE-CORRUPTION" not in refused.output
     assert len(runner.calls) == before
@@ -724,7 +723,7 @@ def test_interrupted_campaign_refuses_busy_resume_and_expired_block_without_disp
     ]
     with state_file.acquire_lock(store):
         busy = CliRunner().invoke(app, resume)
-    assert busy.exit_code != 0
+    assert busy.exit_code == ExitCode.UNSUPPORTED
     assert len(runner.calls) == before
 
     # Resume the recorded block after its frozen freshness allowance, without sleeping.
@@ -751,7 +750,6 @@ def test_failed_result_publication_retains_accounting_and_resumes_without_dispat
     from pydantic import BaseModel
 
     from ithrl.cli.fuzz_session import _save_private
-    from ithrl.cli.output import ExitCode
 
     args, runner = _detected_mock_command(tmp_path, monkeypatch)
 
