@@ -26,6 +26,8 @@ def hashes() -> dict[str, str]:
             Path(__file__).with_name("reference.py"),
             Path(__file__).with_name("native_layout.py"),
             Path(__file__).parent / "data/native-budget-programme.json",
+            Path(__file__).parent / "data/native-layout-results.json",
+            Path(__file__).with_name("provenance.json"),
         )
     }
 
@@ -51,9 +53,14 @@ async def evaluate() -> dict:
     }
     if any(CONFIGURATION[key] != value for key, value in baseline_contract.items()):
         raise ValueError("budget programme does not match the frozen baseline sampling model")
-    baseline_result = json.loads(
-        (Path(__file__).parent / "data/native-layout-results.json").read_text(encoding="utf-8")
-    )
+    baseline_bytes = (Path(__file__).parent / "data/native-layout-results.json").read_bytes()
+    provenance = json.loads(Path(__file__).with_name("provenance.json").read_text(encoding="utf-8"))
+    if (
+        hashlib.sha256(baseline_bytes).hexdigest()
+        != provenance["published_reference_sha256"]["data/native-layout-results.json"]
+    ):
+        raise ValueError("native layout baseline does not match its recorded provenance")
+    baseline_result = json.loads(baseline_bytes)
     deadline = (
         CONFIGURATION["attempt_deadline_seconds"] + CONFIGURATION["cancellation_grace_seconds"]
     )

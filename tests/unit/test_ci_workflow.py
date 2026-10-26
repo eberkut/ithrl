@@ -45,6 +45,8 @@ def test_required_workflows_gate_refuses_failed_or_missing_classification(
 
 
 def test_documentation_and_distribution_checks_cannot_be_filtered_out() -> None:
+    # The positive catch-all and negative Markdown patterns must all apply.
+    assert CI["jobs"]["changes"]["steps"][0]["with"]["predicate-quantifier"] == "every"
     for name in ("docs", "package", "package-test"):
         assert "if" not in CI["jobs"][name]
     assert CI["jobs"]["package-test"]["needs"] == "package"

@@ -21,6 +21,9 @@
     "native-budget-programme.json": "4127f5c41e4d559afd778da57f0e0ce578dda004a9f137789feaf8123424a536",
     "native-budget-results.json": "0cfbdfa866b3e1deca76c0921d6c0e9b407303f811e7245c792a62c982b219d7"
   },
+  "published_reference_sha256": {
+    "data/native-layout-results.json": "7bc1e951a3434c8f6b609d93ecc9dbe1a1a33cce9889935bb52e5939f775eace"
+  },
   "adjustments": [
     "Portable paths and explicit output handling.",
     "Standalone copies of the exercised statistical/search algorithms; no application imports.",
