@@ -293,9 +293,19 @@ def test_mock_native_terminal_outcomes_are_not_retried(
         assert output["execution_reliability"]["runner_errors"] == 1
         assert output["confirmation_original"]["no_matches"] == 0
         assert output["confirmation_mutant"]["no_matches"] == 0
-        assert output["confirmation_result"] != "confirmed-change"
-        if failure_phase == "confirmation":
+        if failure_phase == "discovery":
+            assert output["selected_mutation_digest"] is None
+            assert output["confirmation_result"] == "not-run"
+            assert output["confirmation_original"]["dispatched"] == 0
+            assert output["confirmation_mutant"]["dispatched"] == 0
+        else:
             assert output["selected_mutation_digest"] is not None
+            assert output["confirmation_result"] == "incomplete"
+            assert (
+                output["confirmation_original"]["runner_errors"]
+                + output["confirmation_mutant"]["runner_errors"]
+                == 1
+            )
     before = len(runner.calls)
     resumed = CliRunner().invoke(
         app,
@@ -630,6 +640,7 @@ def test_tampered_fuzz_resume_refuses_before_execution(
             "json",
         ],
     )
+    assert conflict.exit_code == ExitCode.UNSUPPORTED
     assert json.loads(conflict.stdout)["error_code"] == "resume-input-conflict"
     assert len(runner.calls) == before
 
@@ -670,7 +681,11 @@ def test_budget_exhaustion_protects_confirmation_and_is_terminal_through_cli(
             "json",
         ],
     )
-    assert json.loads(resumed.stdout)["status"] == "incomplete", resumed.output
+    resumed_report = json.loads(resumed.stdout)
+    assert resumed.exit_code == ExitCode.BUDGET, resumed.output
+    assert resumed_report["status"] == "incomplete"
+    assert resumed_report["stop_reason"] == "provider-call-budget"
+    assert resumed_report["confirmation_result"] == "not-run"
     assert len(runner.calls) == 6
 
 
@@ -736,6 +751,7 @@ def test_interrupted_campaign_refuses_busy_resume_and_expired_block_without_disp
     monkeypatch.setattr("ithrl.cli.fuzz_run.datetime", SimpleNamespace(now=now))
     expired = CliRunner().invoke(app, resume)
     output = json.loads(expired.stdout)
+    assert expired.exit_code == ExitCode.PROVIDER, expired.output
     assert output["status"] == "incomplete", output
     assert output["stop_reason"] == "freshness-expired"
     assert output["usage"]["charged_provider_calls"] == before
