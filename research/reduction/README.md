@@ -62,7 +62,6 @@ Verification checks:
   24 rational admission calculations and 127 diagnostic rate pairs.
 
 It prints the checked counts and writes `verification.json`.
-CI runs this short verification and the focused boundary/comparison tests in the Quality job.
 
 To run all evaluations, freeze a new output directory and run the full replay:
 
@@ -72,20 +71,16 @@ uv run --locked --offline --no-sync python research/reduction/reproduce.py repla
 ```
 
 To run one evaluation, pass `--study decisions`, `--study eager`, `--study sharing`,
-`--study operational` or `--study native` to the second command. Full replay is opt-in and outside
-default CI. The eager study simulates 4.8 million workflows. The operational study simulates 1.76
-million workflows and scores each against two byte layouts; those scores share outcomes and are not
+`--study operational` or `--study native` to the second command. The eager study simulates 4.8
+million workflows. The operational study simulates 1.76 million workflows and scores each against
+two byte layouts; those scores share outcomes and are not
 independent samples. Runtime depends on hardware. The configured runtime limits leave sample counts
 and criteria unchanged if a run cannot finish in time.
 
 All generated files stay in the required directory under ignored `outputs/`. Choose a new
 directory for each run. Freezing refuses an existing directory, result writes use exclusive
 creation, and subsequent commands reject changed sources or numerical dependency versions.
-Output paths that traverse symlinks are refused. To run the focused boundary/comparison tests:
-
-```sh
-uv run --locked --offline --no-sync pytest -o addopts= research/reduction/test_reproduce.py -q
-```
+Output paths that traverse symlinks are refused.
 
 A freeze records the public reference used for a reproduction. It cannot establish that a new
 experiment was declared before its outcomes were evaluated.

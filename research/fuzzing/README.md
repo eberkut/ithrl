@@ -53,9 +53,9 @@ later commands verify them. Each reproduction records its own source and depende
 The short replay covers the checks listed above; use the full replay to evaluate the complete
 qualification grid.
 
-The full replay is outside default CI. It simulates 7,128 qualification rows of 10,000 campaigns
-each (71,280,000 campaigns), followed by 24 sensitivity cells and a drift block. Runtime depends
-on hardware. Run these commands sequentially:
+The full replay simulates 7,128 qualification rows of 10,000 campaigns each (71,280,000 campaigns),
+followed by 24 sensitivity cells and a drift block. Runtime depends on hardware. Run these commands
+sequentially:
 
 ```sh
 uv run --locked --offline --no-sync python research/fuzzing/study.py freeze --output research/fuzzing/outputs/full

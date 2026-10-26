@@ -10,6 +10,7 @@ import asyncio
 import hashlib
 import json
 import math
+import os
 import platform
 from pathlib import Path
 
@@ -73,10 +74,10 @@ def output_directory(value: str) -> Path:
             raise ValueError("--output must not traverse symlinks")
         if component == ROOT:
             break
-    path = path.resolve()
-    if path == OUTPUTS or not path.is_relative_to(OUTPUTS):
+    normalized = os.path.realpath(path)
+    if not normalized.startswith(str(OUTPUTS) + os.sep):
         raise ValueError("--output must name a run directory under research/reduction/outputs")
-    return path
+    return Path(normalized)
 
 
 def freeze(output: Path) -> None:
@@ -282,19 +283,23 @@ def replay_decisions() -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=("freeze", "verify", "replay"))
-    parser.add_argument("--output", required=True, type=output_directory)
+    parser.add_argument("--output", required=True)
     parser.add_argument(
         "--study", choices=("eager", "sharing", "operational", "native", "decisions")
     )
     args = parser.parse_args()
+    try:
+        output = output_directory(args.output)
+    except ValueError as error:
+        parser.error(str(error))
     if args.study is not None and args.mode != "replay":
         parser.error("--study is available only with replay")
     if args.mode == "freeze":
-        freeze(args.output)
+        freeze(output)
         return
-    verify_freeze(args.output)
+    verify_freeze(output)
     if args.mode == "verify":
-        if (args.output / "verification.json").exists():
+        if (output / "verification.json").exists():
             raise FileExistsError("verification already completed; choose a fresh output directory")
         checked = check_saved_results()
         compare(replay_sharing(), read("sharing-results.json"), "sharing")
@@ -302,10 +307,8 @@ def main() -> None:
         decision_result = replay_decisions()
         compare(decision_result, read("decisions-results.json"), "decisions")
         checked.update(decisions.validate(decision_result))
-        verify_freeze(args.output)
-        write(
-            args.output, "verification.json", {"checked": checked, "native_layout_replayed": True}
-        )
+        verify_freeze(output)
+        write(output, "verification.json", {"checked": checked, "native_layout_replayed": True})
         print(json.dumps(checked, sort_keys=True))
         return
     studies = {
@@ -315,18 +318,20 @@ def main() -> None:
         "native": replay_native,
         "decisions": replay_decisions,
     }
-    for name in [args.study] if args.study is not None else studies:
+    for name, replay in studies.items():
+        if args.study is not None and name != args.study:
+            continue
         target = f"{name}-replay.json"
-        if (args.output / target).exists():
+        if (output / target).exists():
             raise FileExistsError(
                 f"{name} replay already completed; choose a fresh output directory"
             )
         print(f"Replaying {name}", flush=True)
-        result = studies[name]()
+        result = replay()
         if name != "native":
             compare(result, read(f"{name}-results.json"), name)
-        verify_freeze(args.output)
-        write(args.output, target, result)
+        verify_freeze(output)
+        write(output, target, result)
         print(f"{name}: matches the reference results", flush=True)
 
 

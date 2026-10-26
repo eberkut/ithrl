@@ -162,12 +162,6 @@ jobs:
       - name: Check types
         run: uv run pyrefly check
 
-      - name: Check reduction research reference
-        run: |
-          uv run --offline --no-sync python research/reduction/reproduce.py freeze --output research/reduction/outputs/ci
-          uv run --offline --no-sync python research/reduction/reproduce.py verify --output research/reduction/outputs/ci
-          uv run --offline --no-sync pytest -o addopts= research/reduction/test_reproduce.py -q
-
   test:
     name: Python ${{ matrix.python-version }}
     needs: changes

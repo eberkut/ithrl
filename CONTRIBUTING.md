@@ -200,10 +200,6 @@ uv run pytest -o addopts= tests/integration/test_fuzz_cli.py -q
 These tests establish local contracts. Native qualification is recorded in the
 [measurement notes](docs/native-runs.md#compatibility-and-measurements).
 
-The Quality job also verifies the [reduction research reference](research/reduction/README.md).
-Its short check covers reference data, finite calculations and output boundaries without a
-provider. Follow that guide when changing the research models or data; full simulations are opt-in.
-
 ## Opt-in native smoke tests
 
 Profiles are `codex-final`, `copilot-final` and `copilot-shell`. They are skipped by default and
