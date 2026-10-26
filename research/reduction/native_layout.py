@@ -214,6 +214,7 @@ async def evaluate() -> dict:
         for failure in (0.0, 0.05, 0.10)
     }
     assert hashes() == FROZEN_HASHES, "frozen source changed during evaluation"
+    maximum_attempts = 7 + MAX_COMPARISONS * (8 + 9) + 2 * 124
     return {
         "kind": "exact-finite-binomial-native-layout-enumeration",
         "frozen_source_sha256": FROZEN_HASHES,
@@ -241,10 +242,10 @@ async def evaluate() -> dict:
         "every_position_above_0_80_by_failure": {
             key: value >= 0.80 for key, value in minimums.items()
         },
-        "worst_case_attempts": 7 + 10 * (8 + 9) + 2 * 124,
-        "worst_case_final_response_provider_calls": 425,
-        "worst_case_shell_possible_provider_calls": 850,
-        "wall_time_upper_bound_at_120_second_deadline_plus_3_second_grace": 425 * 123,
+        "worst_case_attempts": maximum_attempts,
+        "worst_case_final_response_provider_calls": maximum_attempts,
+        "worst_case_shell_possible_provider_calls": 2 * maximum_attempts,
+        "wall_time_upper_bound_at_120_second_deadline_plus_3_second_grace": maximum_attempts * 123,
         "evaluation_wall_seconds": time.perf_counter() - started,
         "evaluation_max_rss_kib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
         "limitations": [

@@ -26,7 +26,8 @@
     "Standalone copies of the exercised statistical/search algorithms; no application imports.",
     "Direct JSON encoding of independent synthetic histories, checked against all retained byte-map fixtures.",
     "Stationary terminal details are regenerated; retained per-cell summaries and aggregates are unchanged.",
-    "New reproduction freezes identify current public sources and numerical dependencies."
+    "New reproduction freezes identify current public sources and numerical dependencies.",
+    "The frozen screen preserves the binary-float margin conversion used in the original 0.20-margin studies; the current runtime applies decimal-margin boundary semantics."
   ],
   "independent_evaluations": {
     "decisions": {

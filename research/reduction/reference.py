@@ -17,6 +17,9 @@ from math import hypot, isfinite, sqrt
 from statistics import NormalDist
 from typing import Any, Literal, Protocol
 
+if not __debug__:
+    raise RuntimeError("Research reproduction requires Python without -O or PYTHONOPTIMIZE.")
+
 type CaseEvidence = Any
 
 type SearchPhase = Literal["chunk", "final-sweep"]
@@ -61,6 +64,7 @@ def _sampled_screen_action(evidence: SamplingBlockEvidence) -> SampledScreenActi
     difference = Fraction(candidate.matches, candidate.valid) - Fraction(
         original.matches, original.valid
     )
+    # Preserve the float-margin convention of the frozen 0.20-margin studies.
     return "admit" if difference >= -Fraction(evidence.plan.reduction.margin) else "retain"
 
 

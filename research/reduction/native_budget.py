@@ -14,7 +14,7 @@ from pathlib import Path
 import native_layout as BASELINE
 
 CONFIGURATION = json.loads(
-    (Path(__file__).parent / "data/native-budget-programme.json").read_text()
+    (Path(__file__).parent / "data/native-budget-programme.json").read_text(encoding="utf-8")
 )
 
 
@@ -25,6 +25,7 @@ def hashes() -> dict[str, str]:
             Path(__file__),
             Path(__file__).with_name("reference.py"),
             Path(__file__).with_name("native_layout.py"),
+            Path(__file__).parent / "data/native-budget-programme.json",
         )
     }
 
@@ -34,44 +35,84 @@ FROZEN_HASHES = hashes()
 
 async def evaluate() -> dict:
     started = time.perf_counter()
+    baseline_contract = {
+        "calibration_required_valid_minimum_matches_max_attempts": [3, 2, 7],
+        "search_original_valid_max_attempts": [4, 8],
+        "search_candidate_valid_max_attempts": [5, 9],
+        "confirmation_each_valid_max_attempts": [100, 124],
+        "confirmation_method": "newcombe-method-10",
+        "one_sided_confidence": 0.95,
+        "margin": BASELINE.MARGIN,
+        "original_and_retained_behavior_probability": BASELINE.P_ORIGINAL,
+        "instruction_removed_behavior_probability": BASELINE.P_REMOVED,
+        "groups": list(BASELINE.GROUPS),
+        "history_byte_weights": [1, 1, 1, 1],
+        "trial_cap": BASELINE.TRIAL_CAP,
+    }
+    if any(CONFIGURATION[key] != value for key, value in baseline_contract.items()):
+        raise ValueError("budget programme does not match the frozen baseline sampling model")
+    baseline_result = json.loads(
+        (Path(__file__).parent / "data/native-layout-results.json").read_text(encoding="utf-8")
+    )
+    deadline = (
+        CONFIGURATION["attempt_deadline_seconds"] + CONFIGURATION["cancellation_grace_seconds"]
+    )
     holdout = {
         str(p): BASELINE.holdout_probabilities(p) for p in (BASELINE.P_ORIGINAL, BASELINE.P_REMOVED)
     }
     family = []
-    for cap in CONFIGURATION["comparison_caps"]:
-        BASELINE.MAX_COMPARISONS = cap
-        rows = []
-        for failure in CONFIGURATION["independent_preaccept_failure_probabilities"]:
-            for position in CONFIGURATION["instruction_positions"]:
-                rows.append(
-                    await BASELINE.enumerate_position(
-                        position, failure, holdout["0.9"]["preserves"]
+    original_cap = BASELINE.MAX_COMPARISONS
+    try:
+        for cap in CONFIGURATION["comparison_caps"]:
+            BASELINE.MAX_COMPARISONS = cap
+            rows = []
+            for failure in CONFIGURATION["independent_preaccept_failure_probabilities"]:
+                for position in CONFIGURATION["instruction_positions"]:
+                    rows.append(
+                        await BASELINE.enumerate_position(
+                            position, failure, holdout["0.9"]["preserves"]
+                        )
                     )
+                    if (
+                        time.perf_counter() - started
+                        > CONFIGURATION["maximum_family_evaluation_seconds"]
+                    ):
+                        raise TimeoutError("native budget family exceeded its evaluation limit")
+            minimums = {
+                str(failure): min(
+                    row["unconditional_useful_probability"]
+                    for row in rows
+                    if row["independent_preaccept_failure_probability"] == failure
                 )
-        minimums = {
-            str(failure): min(
-                row["unconditional_useful_probability"]
-                for row in rows
-                if row["independent_preaccept_failure_probability"] == failure
-            )
-            for failure in CONFIGURATION["independent_preaccept_failure_probabilities"]
-        }
-        maximum_attempts = 7 + cap * (8 + 9) + 2 * 124
-        family.append(
-            {
-                "comparison_cap": cap,
-                "rows": rows,
-                "minimum_unconditional_useful_probability_by_failure": minimums,
-                "every_position_at_least_0_80_by_failure": {
-                    key: value >= 0.80 for key, value in minimums.items()
-                },
-                "worst_case_attempts_and_final_response_calls": maximum_attempts,
-                "worst_case_shell_possible_provider_calls": 2 * maximum_attempts,
-                "deadline_plus_grace_upper_bound_seconds": maximum_attempts * 123,
-                "fits_frozen_86400_second_command_limit_at_deadlines": maximum_attempts * 123
-                <= 86400,
+                for failure in CONFIGURATION["independent_preaccept_failure_probabilities"]
             }
-        )
+            maximum_attempts = (
+                CONFIGURATION["calibration_required_valid_minimum_matches_max_attempts"][2]
+                + cap
+                * (
+                    CONFIGURATION["search_original_valid_max_attempts"][1]
+                    + CONFIGURATION["search_candidate_valid_max_attempts"][1]
+                )
+                + 2 * CONFIGURATION["confirmation_each_valid_max_attempts"][1]
+            )
+            family.append(
+                {
+                    "comparison_cap": cap,
+                    "rows": rows,
+                    "minimum_unconditional_useful_probability_by_failure": minimums,
+                    "every_position_at_least_0_80_by_failure": {
+                        key: value >= 0.80 for key, value in minimums.items()
+                    },
+                    "worst_case_attempts_and_final_response_calls": maximum_attempts,
+                    "worst_case_shell_possible_provider_calls": 2 * maximum_attempts,
+                    "deadline_plus_grace_upper_bound_seconds": maximum_attempts * deadline,
+                    "fits_frozen_86400_second_command_limit_at_deadlines": maximum_attempts
+                    * deadline
+                    <= CONFIGURATION["command_wall_limit_seconds"],
+                }
+            )
+    finally:
+        BASELINE.MAX_COMPARISONS = original_cap
     passing = [
         item["comparison_cap"]
         for item in family
@@ -90,11 +131,11 @@ async def evaluate() -> dict:
         "selected_lowest_cap_passing_all_positions_at_zero_failures": min(passing)
         if passing
         else None,
-        "live_instruction_position_unchanged": 0,
+        "live_instruction_position_unchanged": CONFIGURATION["live_instruction_position"],
         "evaluation_wall_seconds": time.perf_counter() - started,
         "evaluation_max_rss_kib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
-        "baseline_cap_10_failure_preserved": True,
-        "limitations": json.loads(
-            (Path(__file__).parent / "data/native-layout-results.json").read_text()
-        )["limitations"],
+        "baseline_cap_10_failure_preserved": not baseline_result[
+            "every_position_above_0_80_by_failure"
+        ]["0.0"],
+        "limitations": baseline_result["limitations"],
     }

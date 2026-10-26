@@ -294,22 +294,35 @@ def test_search_screen_and_confirmation_are_separate() -> None:
 
 
 @pytest.mark.parametrize(
-    ("margin", "action"),
-    [(nextafter(0.2, 0.0), "retain"), (0.2, "admit"), (nextafter(0.2, 1.0), "admit")],
+    ("valid", "original_matches", "candidate_matches", "margin", "action"),
+    [
+        (5, 4, 3, nextafter(0.2, 0.0), "retain"),
+        (5, 4, 3, 0.2, "admit"),
+        (5, 4, 3, nextafter(0.2, 1.0), "admit"),
+        (10, 10, 7, nextafter(0.3, 0.0), "retain"),
+        (10, 10, 7, 0.3, "admit"),
+        (10, 10, 7, nextafter(0.3, 1.0), "admit"),
+    ],
 )
 def test_search_admission_preserves_nonbinary_margin_boundary(
-    margin: float, action: SampledScreenAction
+    valid: int,
+    original_matches: int,
+    candidate_matches: int,
+    margin: float,
+    action: SampledScreenAction,
 ) -> None:
-    target = SamplingArmTarget(required_valid=5, max_attempts=6)
+    target = SamplingArmTarget(required_valid=valid, max_attempts=valid + 1)
     reduction = _reduction().model_copy(
         update={"search": SampledSearchPhase(original=target, candidate=target), "margin": margin}
     )
     block = _block(
         reduction=reduction,
-        original=(ObservationOutcome.MATCH,) * 4 + (ObservationOutcome.NO_MATCH,),
-        candidate=(ObservationOutcome.MATCH,) * 3 + (ObservationOutcome.NO_MATCH,) * 2,
+        original=(ObservationOutcome.MATCH,) * original_matches
+        + (ObservationOutcome.NO_MATCH,) * (valid - original_matches),
+        candidate=(ObservationOutcome.MATCH,) * candidate_matches
+        + (ObservationOutcome.NO_MATCH,) * (valid - candidate_matches),
     )
-    assert block.point_difference == 3 / 5 - 4 / 5
+    assert block.point_difference == candidate_matches / valid - original_matches / valid
     assert SampledComparison(evidence=block, action=action).action == action
     with pytest.raises(ValidationError, match="screen action"):
         SampledComparison(evidence=block, action="retain" if action == "admit" else "admit")
