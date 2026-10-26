@@ -1,0 +1,43 @@
+{
+  "original_sha256": {
+    "runtime/statistics.py": "e1ce66fa89e268ff9c0789a7b90b05124b46e18e90afe2961058938cb20fba0b",
+    "runtime/reduce/search.py": "cb3cb8e57425a92f1c6058512633cf4d3111678326bd9d8dae42d49887473a62",
+    "runtime/reduce/contracts.py": "352148d7931a682cab70cdfacbffafc5a06354f95d9f1894682b777966a44bbc",
+    "eager/study.py": "2d76c3077da9159e9767994b7b87f4d93f95af6affe4d4820f6671edf11bc96a",
+    "sharing/stationary.py": "77b4a0ab65c7bcf151942bb07415d73638fe2f0fc32456ef6e692f3996b9889e",
+    "sharing/driver.py": "2d10cf795c7393d3467781546b2a3c9ea7c90fb83e8f216c3587057e3dd9bf73",
+    "sharing/stress.py": "f07429d5cffb2b4dd5672118a856a2369fd07eb140ef4e35baba69b9d10f768d",
+    "sharing/stress_driver.py": "47d9e453b7310a489ca355c0b459b751c290b7aa2117a6860ed0f661db1af5a9",
+    "native-layout/study.py": "e393174b675866111be84bda67f1e60e560a7509de6657c3e7645c6ccf92e1c6",
+    "native-layout/budget.py": "b3228fa898ebef320ab949dd998f46348073e91e59246630096748ffaf07ead8",
+    "eager-programme.json": "c7c01c6e132a661b8d61ebf9767e6bde16e47f11ce11d6317f0b79c52c88517c",
+    "eager-results.json": "c7cbee6c653af26a27c502d5ef35e254d8016637364488fc8b2baefcbceb1e84",
+    "eager/frozen.json": "14ddfcf6cacd313219a6f42f385c25846b63a4e47609c9a47bffe456ac954fe2",
+    "sharing-programme.json": "7d4bdc6f45cc08e400222c0fbdfcc390673bd4bf258523dfee06b571a4a8ea2e",
+    "sharing-results.json": "717c8a301b8cf5fdcb6ca1227360357232e32f213226c53eadf25d9ebb3dcd9c",
+    "operational-programme.json": "2b445a33d28552c7c721043d378fd9494598b729467b28d294bf0ba4e4aacd24",
+    "operational-results.json": "8b1020733fc17e068baad9230fa59b8467897b542152bc91b54c838b818d28dd",
+    "native-layout-results.json": "54bb78ac8a24a665248084cf7af28af1cc901ee5db8d9733a0bd1a76d6dfdbb6",
+    "native-budget-programme.json": "4127f5c41e4d559afd778da57f0e0ce578dda004a9f137789feaf8123424a536",
+    "native-budget-results.json": "0cfbdfa866b3e1deca76c0921d6c0e9b407303f811e7245c792a62c982b219d7"
+  },
+  "published_reference_sha256": {
+    "data/native-layout-results.json": "7bc1e951a3434c8f6b609d93ecc9dbe1a1a33cce9889935bb52e5939f775eace"
+  },
+  "adjustments": [
+    "Portable paths and explicit output handling.",
+    "Standalone copies of the exercised statistical/search algorithms; no application imports.",
+    "Direct JSON encoding of independent synthetic histories, checked against all retained byte-map fixtures.",
+    "Stationary terminal details are regenerated; retained per-cell summaries and aggregates are unchanged.",
+    "New reproduction freezes identify current public sources and numerical dependencies.",
+    "The frozen screen preserves the binary-float margin conversion used in the original 0.20-margin studies; the current runtime applies decimal-margin boundary semantics."
+  ],
+  "independent_evaluations": {
+    "decisions": {
+      "programme": "data/decisions-programme.json",
+      "result": "data/decisions-results.json",
+      "documented_checks": "data/decisions-checks.json",
+      "scope": "Finite validation of selected screening, confirmation and attempt-ceiling decisions with an explicit rate domain and independent arithmetic checks."
+    }
+  }
+}

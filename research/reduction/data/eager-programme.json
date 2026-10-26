@@ -1,0 +1,301 @@
+{
+  "seed": 2026100607,
+  "n": 200000,
+  "pilot_n": 200,
+  "pilot_seed": 917310067,
+  "batch_size": 2000,
+  "bonferroni_tails": 16384,
+  "tail_alpha": 0.01,
+  "plans": [
+    "small",
+    "large"
+  ],
+  "instruction_positions": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "stable_savings_scenario": "stationary",
+  "runtime_limit_seconds": 600,
+  "report_limit_bytes": 67108864,
+  "scenarios": [
+    {
+      "margin": 0.2,
+      "q": 0,
+      "mode": "stationary",
+      "drift_at": 400,
+      "drift_size": 0,
+      "shock": 0,
+      "cohort_expiry_slots": {
+        "small": 50,
+        "large": 520
+      },
+      "cohort_expiry_candidates": 4,
+      "resume": "none",
+      "pause_slots": 1,
+      "unsupported": false,
+      "assumption_violation": false,
+      "name": "stationary",
+      "p0": 0.9,
+      "ph": 0.9,
+      "pr": 0.1
+    },
+    {
+      "margin": 0.2,
+      "q": 0,
+      "mode": "stationary",
+      "drift_at": 400,
+      "drift_size": 0,
+      "shock": 0,
+      "cohort_expiry_slots": {
+        "small": 50,
+        "large": 520
+      },
+      "cohort_expiry_candidates": 4,
+      "resume": "none",
+      "pause_slots": 1,
+      "unsupported": false,
+      "assumption_violation": false,
+      "name": "near-null",
+      "p0": 0.9,
+      "ph": 0.69,
+      "pr": 0.1
+    },
+    {
+      "margin": 0.2,
+      "q": 0,
+      "mode": "stationary",
+      "drift_at": 400,
+      "drift_size": 0,
+      "shock": 0,
+      "cohort_expiry_slots": {
+        "small": 50,
+        "large": 520
+      },
+      "cohort_expiry_candidates": 4,
+      "resume": "none",
+      "pause_slots": 1,
+      "unsupported": false,
+      "assumption_violation": false,
+      "name": "boundary",
+      "p0": 0.5,
+      "ph": 0.3,
+      "pr": 0.1
+    },
+    {
+      "margin": 0.2,
+      "q": 0,
+      "mode": "stationary",
+      "drift_at": 400,
+      "drift_size": 0,
+      "shock": 0,
+      "cohort_expiry_slots": {
+        "small": 50,
+        "large": 520
+      },
+      "cohort_expiry_candidates": 4,
+      "resume": "none",
+      "pause_slots": 1,
+      "unsupported": false,
+      "assumption_violation": false,
+      "name": "rare",
+      "p0": 0.05,
+      "ph": 0.05,
+      "pr": 0
+    },
+    {
+      "margin": 0.2,
+      "q": 0.05,
+      "mode": "stationary",
+      "drift_at": 400,
+      "drift_size": 0,
+      "shock": 0,
+      "cohort_expiry_slots": {
+        "small": 50,
+        "large": 520
+      },
+      "cohort_expiry_candidates": 4,
+      "resume": "none",
+      "pause_slots": 1,
+      "unsupported": false,
+      "assumption_violation": false,
+      "name": "safe-fail05",
+      "p0": 0.9,
+      "ph": 0.9,
+      "pr": 0.1
+    },
+    {
+      "margin": 0.2,
+      "q": 0.1,
+      "mode": "stationary",
+      "drift_at": 400,
+      "drift_size": 0,
+      "shock": 0,
+      "cohort_expiry_slots": {
+        "small": 50,
+        "large": 520
+      },
+      "cohort_expiry_candidates": 4,
+      "resume": "none",
+      "pause_slots": 1,
+      "unsupported": false,
+      "assumption_violation": false,
+      "name": "safe-fail10",
+      "p0": 0.9,
+      "ph": 0.8,
+      "pr": 0.1
+    },
+    {
+      "margin": 0.2,
+      "q": 0.05,
+      "mode": "stationary",
+      "drift_at": 400,
+      "drift_size": 0,
+      "shock": 0,
+      "cohort_expiry_slots": {
+        "small": 50,
+        "large": 520
+      },
+      "cohort_expiry_candidates": 4,
+      "resume": "none",
+      "pause_slots": 1,
+      "unsupported": true,
+      "assumption_violation": false,
+      "name": "dependent-invalid",
+      "p0": 0.9,
+      "ph": 0.69,
+      "pr": 0.1
+    },
+    {
+      "margin": 0.2,
+      "q": 0,
+      "mode": "smooth",
+      "drift_at": 800,
+      "drift_size": -0.3,
+      "shock": 0,
+      "cohort_expiry_slots": {
+        "small": 50,
+        "large": 520
+      },
+      "cohort_expiry_candidates": 4,
+      "resume": "none",
+      "pause_slots": 1,
+      "unsupported": false,
+      "assumption_violation": false,
+      "name": "smooth-drift",
+      "p0": 0.9,
+      "ph": 0.8,
+      "pr": 0.1
+    },
+    {
+      "margin": 0.2,
+      "q": 0,
+      "mode": "abrupt",
+      "drift_at": 400,
+      "drift_size": 0.3,
+      "shock": 0,
+      "cohort_expiry_slots": {
+        "small": 50,
+        "large": 520
+      },
+      "cohort_expiry_candidates": 4,
+      "resume": "none",
+      "pause_slots": 1,
+      "unsupported": false,
+      "assumption_violation": false,
+      "name": "abrupt-drift",
+      "p0": 0.5,
+      "ph": 0.29,
+      "pr": 0.1
+    },
+    {
+      "margin": 0.2,
+      "q": 0,
+      "mode": "shock",
+      "drift_at": 400,
+      "drift_size": 0,
+      "shock": 0.15,
+      "cohort_expiry_slots": {
+        "small": 50,
+        "large": 520
+      },
+      "cohort_expiry_candidates": 4,
+      "resume": "none",
+      "pause_slots": 1,
+      "unsupported": false,
+      "assumption_violation": false,
+      "name": "common-time-shock",
+      "p0": 0.5,
+      "ph": 0.29,
+      "pr": 0.1
+    },
+    {
+      "margin": 0.2,
+      "q": 0,
+      "mode": "stationary",
+      "drift_at": 400,
+      "drift_size": 0,
+      "shock": 0,
+      "cohort_expiry_slots": {
+        "small": 50,
+        "large": 520
+      },
+      "cohort_expiry_candidates": 2,
+      "resume": "same",
+      "pause_slots": 1,
+      "unsupported": false,
+      "assumption_violation": false,
+      "name": "same-plan-resume",
+      "force_slots": true,
+      "p0": 0.9,
+      "ph": 0.9,
+      "pr": 0.1
+    },
+    {
+      "margin": 0.2,
+      "q": 0,
+      "mode": "stationary",
+      "drift_at": 400,
+      "drift_size": 0,
+      "shock": 0,
+      "cohort_expiry_slots": {
+        "small": 50,
+        "large": 520
+      },
+      "cohort_expiry_candidates": 4,
+      "resume": "stale",
+      "pause_slots": 1000,
+      "unsupported": false,
+      "assumption_violation": false,
+      "name": "stale-resume",
+      "force_slots": true,
+      "p0": 0.9,
+      "ph": 0.9,
+      "pr": 0.1
+    },
+    {
+      "name": "time-expiry",
+      "expected_search_refusal_cohorts": [
+        2,
+        4
+      ],
+      "margin": 0.2,
+      "q": 0,
+      "mode": "stationary",
+      "p0": 0.9,
+      "ph": 0.9,
+      "pr": 0.1,
+      "cohort_expiry_slots": {
+        "small": 10,
+        "large": 200
+      },
+      "cohort_expiry_candidates": 4,
+      "force_slots": true,
+      "resume": "none",
+      "pause_slots": 1,
+      "unsupported": false,
+      "assumption_violation": false
+    }
+  ]
+}

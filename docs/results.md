@@ -43,8 +43,9 @@ ithrl shrink ithrl-demo/case --observation-store ithrl-demo/observations.sqlite 
 
 Native reduction screens candidates against fresh samples of the original context, freezes one
 selected candidate, then compares it with the immutable original using separate fresh observations.
-A confirmed result estimates preservation among valid observations. Errors remain outside
-behavioral denominators; execution reliability is reported separately.
+A confirmed result supports preservation within the declared degradation margin among valid
+observations. Errors are excluded from match-rate calculations; execution reliability is reported
+separately.
 
 The inference assumes independent valid observations and stationarity within each comparison.
 Sampled confirmation does not establish global or confirmed minimality, causality or campaign-wide
@@ -64,11 +65,16 @@ threshold, alpha, original/mutant counts and rates appear in the summary. This e
 among valid observations under independent, stationary attempts; it does not establish causality,
 global minimality or overall execution reliability.
 
-`no-candidate-found` describes the bounded exploration. `inconclusive` means calibration did not
-establish a measurable target, or a complete eligible holdout did not confirm the declared
-decrease. The stop reason distinguishes unsuccessful calibration; confirmation remains `not-run`
-when calibration stops the campaign. `incomplete` means required work or eligible evidence was
-unavailable. Errors remain separate from valid match/no-match counts.
+| Outcome | Meaning |
+| --- | --- |
+| `confirmed-change` | Fresh confirmation establishes a decrease greater than the configured threshold. |
+| `no-candidate-found` | The bounded exploration selected no mutation for confirmation. |
+| `inconclusive` | Calibration did not establish a measurable target, or complete eligible confirmation did not establish the declared decrease. |
+| `incomplete` | Required work or eligible evidence was unavailable. |
+
+Use the stop reason to distinguish calibration failure from inconclusive confirmation.
+Confirmation remains `not-run` when calibration stops the campaign. Errors remain separate from
+valid match/nonmatch counts.
 
 Private fuzz results contain `summary.json`, `fuzz-session.json` and
 `sampling/sampling-state.json`; the observation database remains at its frozen external path.
@@ -89,16 +95,10 @@ save a new receipt. Completed observations and confirmation are retained.
 
 ## Research basis
 
-The design draws on these papers and preprints:
-
-- Sydney Lewis, [*Same Model, Different Harness: Different Coding-Agent Results*](https://arxiv.org/abs/2608.26218).
-- Shuyu Liu, [*What Does Context Compression Cost an Agent? Interaction Costs Unrevealed by
-  Task-Completion Metrics*](https://arxiv.org/abs/2608.16370).
-- I. de Zarzà, J. de Curtò, Jordi Cabot, Pietro Manzoni and Carlos T. Calafate,
-  [*Semantic Invariance in Agentic AI*](https://arxiv.org/abs/2603.13173).
-- Jaineet Shah, [*Causal Agent Replay: Counterfactual Attribution for LLM-Agent Failures*](https://arxiv.org/abs/2606.08275).
-- R. G. Newcombe, [*Interval estimation for the difference between independent proportions:
-  comparison of eleven methods*](https://pubmed.ncbi.nlm.nih.gov/9595617/).
+The [feasibility study](research/feasibility.md#research-basis) explains the original research
+motivations and source papers. [Reduction design](research/reduction-design.md) and
+[context fuzzing](research/context-fuzzing.md) describe the statistical methods, measured usefulness
+and limits behind the result claims.
 
 ## Budgets and resume
 
@@ -109,8 +109,9 @@ explicit.
 
 When a search stops at a budget, follow its printed continuation command. Deterministic searches
 can resume from a saved result or active run. Sampled resume preserves the experiment and completed
-work; administrative limits may increase. It never repeats completed confirmation or automatically
-replays an unresolved dispatch.
+work. For sampled `shrink`, supported administrative limits may increase; fuzz resume keeps its
+original limits. Neither repeats completed confirmation or automatically replays an unresolved
+dispatch.
 
 `--inter-attempt-delay SECONDS` defaults to zero, persists across sampled resume and consumes the
 overall wall-time allowance. A run also stops when its evidence becomes stale or its safety
@@ -123,8 +124,8 @@ observation stores and native output private. Never commit them or attach them t
 without reviewing and sanitizing their contents.
 
 By default, observations are stored in the platform's standard user-data directory. Use
-`--observation-store PATH` for a dedicated SQLite store inside a private directory. On POSIX systems,
-ithrl refuses case files and directories with unexpected permissions.
+`--observation-store PATH` for a dedicated SQLite store inside a private directory. On POSIX
+systems, ithrl refuses case files and directories with unexpected permissions.
 
 Source evidence is snapshotted before native execution. The original session and workspace remain
 protected; disposable candidate state is separate. Returned actions are observations and never

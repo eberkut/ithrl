@@ -1,0 +1,133 @@
+{
+  "status": "prospective; freeze source and independent numerical validation before evaluation",
+  "method": "stationary finite binomial sums; float64 with independent rational workflow checks",
+  "plans": [
+    "small",
+    "large",
+    "reduced-original"
+  ],
+  "policies": [
+    1,
+    2,
+    4
+  ],
+  "policy_overrides": {
+    "reduced-original": [
+      1
+    ]
+  },
+  "additional_plans": [
+    {
+      "name": "reduced-original",
+      "calibration_n": 10,
+      "calibration_min": 2,
+      "calibration_a": 16,
+      "original_n": 40,
+      "original_a": 50,
+      "candidate_n": 80,
+      "candidate_a": 100,
+      "confirmation_n": 200,
+      "confirmation_a": 239
+    }
+  ],
+  "allocation_ablation": "One prospectively chosen halving of the original exploratory target isolates whether its sampling precision justifies its cost. Only strict sampling uses this ablation; no sample-size search or reduced-target/shared-baseline combination. Calibration, candidate and confirmation targets unchanged. This is not a practical default.",
+  "instruction_positions": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "margin": 0.2,
+  "confirmation_confidence": 0.95,
+  "scenario_weights_for_primary_benefit": {
+    "stationary": 1.0
+  },
+  "instruction_position_weights": [
+    0.25,
+    0.25,
+    0.25,
+    0.25
+  ],
+  "workloads": [
+    {
+      "name": "equal",
+      "content_lengths": [
+        128,
+        128,
+        128,
+        128
+      ],
+      "primary_weight": 0.5
+    },
+    {
+      "name": "uneven",
+      "content_lengths": [
+        128,
+        128,
+        256,
+        512
+      ],
+      "primary_weight": 0.5
+    }
+  ],
+  "byte_accounting": "Determine each effective candidate's canonical materialized request bytes before outcomes; compare editable bytes removed while preserving fixed decision input. Content lengths define fixtures and are not provider token counts.",
+  "scenarios": [
+    {
+      "name": "stationary",
+      "p0": 0.9,
+      "ph": 0.9,
+      "pr": 0.1
+    },
+    {
+      "name": "mild-degradation",
+      "p0": 0.9,
+      "ph": 0.8,
+      "pr": 0.1
+    },
+    {
+      "name": "near-null",
+      "p0": 0.9,
+      "ph": 0.69,
+      "pr": 0.1
+    },
+    {
+      "name": "boundary",
+      "p0": 0.5,
+      "ph": 0.3,
+      "pr": 0.1
+    },
+    {
+      "name": "rare",
+      "p0": 0.05,
+      "ph": 0.05,
+      "pr": 0.0
+    }
+  ],
+  "primary_metric": "Weighted E(all charged calls) / weighted P(confirmed useful result)",
+  "useful_result": "Instruction retained; at least half editable materialized bytes removed; complete final sweep; single fresh confirmation preserves",
+  "prospective_decision": {
+    "benefit": "Positive aggregate reduction in the primary metric beyond independently assessed numerical error. Report absolute and relative savings; no percentage cutoff and no benefit-at-every-position rule.",
+    "usefulness": "Preserve the original stationary equal-workload 0.80 minimum confirmed-useful probability at every position. Apply the same 0.80 per-position floor to mild degradation for any configuration promoted to further validation, reporting reference failures as well. Uneven-workload success remains separately reported, without inventing a native applicability guarantee.",
+    "budget": "Every terminal's lazy candidate work has zero unsampled charges and no more original arms than strict on the same path; cover the actual worst path and retain fresh confirmation capacity.",
+    "risk": "Existing 0.055 conditional confirmation-error ceiling and 0.005 additional selected-result false-preservation risk remain required. Stationary arithmetic alone cannot enable production sharing.",
+    "policy_preference": "Prefer group 2 if both policies improve efficiency; select group 4 only if its incremental benefit is demonstrated and justifies wider shared-control exposure and complexity.",
+    "next_stage": "A positive stationary decision requires a separately frozen bounded failure/drift/expiry/resume evaluation before adoption. Preserve negative and inconclusive findings, with no native or paid cost claims."
+  },
+  "numerical_validation": {
+    "rational_toy_workflow": "All terminal masses, calibration failure, cost components, statuses and useful confirmation independently reproduced with a nonzero calibration threshold",
+    "main_precision": "Finite-sum probabilities checked against independent rational workflow and 60-digit Decimal PMFs/admission sums. Apply conservative diagnostic allowances to ratio comparisons; these are not certified accumulated-error bounds.",
+    "probability_tolerance": 1e-10,
+    "calls_tolerance": 1e-07,
+    "runtime_ceiling_seconds": 120,
+    "report_ceiling_bytes": 67108864
+  },
+  "unsupported_in_this_stage": [
+    "nonzero failures",
+    "provider drift",
+    "expiry",
+    "resume",
+    "native timing",
+    "provider tokens",
+    "monetary cost"
+  ]
+}

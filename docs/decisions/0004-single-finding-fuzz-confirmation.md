@@ -60,16 +60,15 @@ ends the campaign. An unavailable screen is incomplete evidence, not an unchange
 
 ## Consequences
 
-The selected procedure has an inspectable single-selection boundary and finite reserve.
-The conservative exact construction was useful for the studied strong effect; smaller effects
-need a separate power/usefulness study. Simplification buys a smaller witness at an additional
-sampling cost. The [research record](../research/context-fuzzing.md#alternatives-and-effect-size-limits)
-owns the measured settings, costs and effect-size limits.
+The selected procedure has an inspectable single-selection boundary and finite reserve. The
+conservative exact construction was useful for the studied strong effect; smaller effects need a
+separate power/usefulness study. Simplification buys a smaller witness at an additional sampling
+cost. See the [research record](../research/context-fuzzing.md#alternatives-and-effect-size-limits)
+for measured settings, costs and effect-size limits.
 
-The inference concerns conditional behavior. Outcome-dependent invalidity can produce different
-conditional target rates despite equal unconditional rates, and drift violates the stationary
-binomial model. Reliability must remain visible, and those limitations cannot be resolved by a
-quiet error log or a low empirical false-declaration count.
+Outcome-dependent invalidity can produce different conditional target rates despite equal
+unconditional rates, and drift violates the stationary binomial model. Report execution reliability
+separately. Empirical false-declaration counts do not establish validity under these conditions.
 
 The architecture avoids a second sampler or observation database. It does require durable campaign
 ordering/selection and refusal on unresolved dispatches, incompatible identity or stale evidence.

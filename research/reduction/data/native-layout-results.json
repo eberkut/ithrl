@@ -1,0 +1,302 @@
+{
+  "kind": "exact-finite-binomial-native-layout-enumeration",
+  "frozen_source_sha256": {
+    "native-layout/native-layout-study.py": "e393174b675866111be84bda67f1e60e560a7509de6657c3e7645c6ccf92e1c6",
+    "repository/src/ithrl/reduce/search.py": "cb3cb8e57425a92f1c6058512633cf4d3111678326bd9d8dae42d49887473a62",
+    "repository/src/ithrl/reduce/contracts.py": "352148d7931a682cab70cdfacbffafc5a06354f95d9f1894682b777966a44bbc",
+    "repository/src/ithrl/statistics.py": "e1ce66fa89e268ff9c0789a7b90b05124b46e18e90afe2961058938cb20fba0b"
+  },
+  "frozen_configuration": {
+    "groups": [
+      "history0",
+      "history1",
+      "history2",
+      "history3",
+      "trigger"
+    ],
+    "one_equal_byte_instruction_history_position": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "mandatory_trigger_removal": "zero-provider-call invalid candidate",
+    "original_and_retained_behavior_probability": 0.9,
+    "instruction_removed_behavior_probability": 0.1,
+    "failures": [
+      0.0,
+      0.05,
+      0.1
+    ],
+    "max_comparisons": 10,
+    "max_trials": 10000,
+    "calibration": [
+      3,
+      2,
+      7
+    ],
+    "search_original_valid_attempts": [
+      4,
+      8
+    ],
+    "search_candidate_valid_attempts": [
+      5,
+      9
+    ],
+    "confirmation_each_valid_attempts": [
+      100,
+      124
+    ],
+    "confidence": 0.95,
+    "margin": 0.2,
+    "screen": "current production _sampled_screen_action using Fraction ratios and Fraction(float margin)"
+  },
+  "search_admission_probabilities_given_complete": {
+    "0.9": 0.9440356059999999,
+    "0.1": 0.008331093999999999
+  },
+  "holdout_outcome_probabilities_given_complete": {
+    "0.9": {
+      "preserves": 0.9981677789549082,
+      "loses": 9.365704200461439e-11,
+      "inconclusive": 0.0018322209514348576,
+      "incomplete": 0.0
+    },
+    "0.1": {
+      "preserves": 6.35220427840833e-39,
+      "loses": 1.0000000000000029,
+      "inconclusive": 6.949987537661145e-21,
+      "incomplete": 0.0
+    }
+  },
+  "rows": [
+    {
+      "instruction_position": 0,
+      "independent_preaccept_failure_probability": 0.0,
+      "calibration_ready_probability": 0.9720000000000001,
+      "search_block_completion_probability": 1.0,
+      "search_final_sweep_complete_probability_given_calibration": 0.8515168629936796,
+      "instruction_retained_and_sweep_complete_probability_given_calibration": 0.7961362335956125,
+      "useful_search_probability_given_calibration": 0.7961273227358464,
+      "search_sampling_incomplete_probability_given_calibration": 0.0,
+      "search_ceiling_incomplete_probability_given_calibration": 0.14848313700632065,
+      "confirmation_complete_probability": 1.0,
+      "confirmation_preserves_probability_given_complete_and_retained": 0.9981677789549082,
+      "unconditional_useful_probability": 0.7724179195385416,
+      "maximum_sampled_comparisons_in_enumerated_paths": 10,
+      "maximum_trials_in_enumerated_paths": 14,
+      "enumerated_branch_points": 134
+    },
+    {
+      "instruction_position": 1,
+      "independent_preaccept_failure_probability": 0.0,
+      "calibration_ready_probability": 0.9720000000000001,
+      "search_block_completion_probability": 1.0,
+      "search_final_sweep_complete_probability_given_calibration": 0.9861995499936577,
+      "instruction_retained_and_sweep_complete_probability_given_calibration": 0.9374402291753265,
+      "useful_search_probability_given_calibration": 0.9374308171119553,
+      "search_sampling_incomplete_probability_given_calibration": 0.0,
+      "search_ceiling_incomplete_probability_given_calibration": 0.013800450006342566,
+      "confirmation_complete_probability": 1.0,
+      "confirmation_preserves_probability_given_complete_and_retained": 0.9981677789549082,
+      "unconditional_useful_probability": 0.9095132660145906,
+      "maximum_sampled_comparisons_in_enumerated_paths": 10,
+      "maximum_trials_in_enumerated_paths": 14,
+      "enumerated_branch_points": 134
+    },
+    {
+      "instruction_position": 2,
+      "independent_preaccept_failure_probability": 0.0,
+      "calibration_ready_probability": 0.9720000000000001,
+      "search_block_completion_probability": 1.0,
+      "search_final_sweep_complete_probability_given_calibration": 0.9991790551524851,
+      "instruction_retained_and_sweep_complete_probability_given_calibration": 0.9662885766076793,
+      "useful_search_probability_given_calibration": 0.966288546645671,
+      "search_sampling_incomplete_probability_given_calibration": 0.0,
+      "search_ceiling_incomplete_probability_given_calibration": 0.0008209448475149533,
+      "confirmation_complete_probability": 1.0,
+      "confirmation_preserves_probability_given_complete_and_retained": 0.9981677789549082,
+      "unconditional_useful_probability": 0.9375115858466991,
+      "maximum_sampled_comparisons_in_enumerated_paths": 10,
+      "maximum_trials_in_enumerated_paths": 14,
+      "enumerated_branch_points": 134
+    },
+    {
+      "instruction_position": 3,
+      "independent_preaccept_failure_probability": 0.0,
+      "calibration_ready_probability": 0.9720000000000001,
+      "search_block_completion_probability": 1.0,
+      "search_final_sweep_complete_probability_given_calibration": 0.9999959683968163,
+      "instruction_retained_and_sweep_complete_probability_given_calibration": 0.9834019099425236,
+      "useful_search_probability_given_calibration": 0.9834019066553682,
+      "search_sampling_incomplete_probability_given_calibration": 0.0,
+      "search_ceiling_incomplete_probability_given_calibration": 4.031603183707631e-06,
+      "confirmation_complete_probability": 1.0,
+      "confirmation_preserves_probability_given_complete_and_retained": 0.9981677789549082,
+      "unconditional_useful_probability": 0.9541152942705969,
+      "maximum_sampled_comparisons_in_enumerated_paths": 10,
+      "maximum_trials_in_enumerated_paths": 14,
+      "enumerated_branch_points": 134
+    },
+    {
+      "instruction_position": 0,
+      "independent_preaccept_failure_probability": 0.05,
+      "calibration_ready_probability": 0.971994141421875,
+      "search_block_completion_probability": 0.9999513734219404,
+      "search_final_sweep_complete_probability_given_calibration": 0.8511110512446975,
+      "instruction_retained_and_sweep_complete_probability_given_calibration": 0.7957491844900038,
+      "useful_search_probability_given_calibration": 0.7957402779623358,
+      "search_sampling_incomplete_probability_given_calibration": 0.0004779982202804845,
+      "search_ceiling_incomplete_probability_given_calibration": 0.148410950535022,
+      "confirmation_complete_probability": 0.9999999951800345,
+      "confirmation_preserves_probability_given_complete_and_retained": 0.9981677789549082,
+      "unconditional_useful_probability": 0.7720377442278868,
+      "maximum_sampled_comparisons_in_enumerated_paths": 10,
+      "maximum_trials_in_enumerated_paths": 14,
+      "enumerated_branch_points": 134
+    },
+    {
+      "instruction_position": 1,
+      "independent_preaccept_failure_probability": 0.05,
+      "calibration_ready_probability": 0.971994141421875,
+      "search_block_completion_probability": 0.9999513734219404,
+      "search_final_sweep_complete_probability_given_calibration": 0.9857675154503688,
+      "instruction_retained_and_sweep_complete_probability_given_calibration": 0.9370233747902186,
+      "useful_search_probability_given_calibration": 0.9370139673026103,
+      "search_sampling_incomplete_probability_given_calibration": 0.0004387437616443593,
+      "search_ceiling_incomplete_probability_given_calibration": 0.013793740787987029,
+      "confirmation_complete_probability": 0.9999999951800345,
+      "confirmation_preserves_probability_given_complete_and_retained": 0.9981677789549082,
+      "unconditional_useful_probability": 0.9091033464823188,
+      "maximum_sampled_comparisons_in_enumerated_paths": 10,
+      "maximum_trials_in_enumerated_paths": 14,
+      "enumerated_branch_points": 134
+    },
+    {
+      "instruction_position": 2,
+      "independent_preaccept_failure_probability": 0.05,
+      "calibration_ready_probability": 0.971994141421875,
+      "search_block_completion_probability": 0.9999513734219404,
+      "search_final_sweep_complete_probability_given_calibration": 0.9988837069269372,
+      "instruction_retained_and_sweep_complete_probability_given_calibration": 0.9660010130167018,
+      "useful_search_probability_given_calibration": 0.9660009830692597,
+      "search_sampling_incomplete_probability_given_calibration": 0.0002957473355941186,
+      "search_ceiling_incomplete_probability_given_calibration": 0.000820545737468737,
+      "confirmation_complete_probability": 0.9999999951800345,
+      "confirmation_preserves_probability_given_complete_and_retained": 0.9981677789549082,
+      "unconditional_useful_probability": 0.9372269326374506,
+      "maximum_sampled_comparisons_in_enumerated_paths": 10,
+      "maximum_trials_in_enumerated_paths": 14,
+      "enumerated_branch_points": 134
+    },
+    {
+      "instruction_position": 3,
+      "independent_preaccept_failure_probability": 0.05,
+      "calibration_ready_probability": 0.971994141421875,
+      "search_block_completion_probability": 0.9999513734219404,
+      "search_final_sweep_complete_probability_given_calibration": 0.9998447116991557,
+      "instruction_retained_and_sweep_complete_probability_given_calibration": 0.983252766556201,
+      "useful_search_probability_given_calibration": 0.9832527632706436,
+      "search_sampling_incomplete_probability_given_calibration": 0.00015125865766239097,
+      "search_ceiling_incomplete_probability_given_calibration": 4.0296431819634875e-06,
+      "confirmation_complete_probability": 0.9999999951800345,
+      "confirmation_preserves_probability_given_complete_and_retained": 0.9981677789549082,
+      "unconditional_useful_probability": 0.9539648380061445,
+      "maximum_sampled_comparisons_in_enumerated_paths": 10,
+      "maximum_trials_in_enumerated_paths": 14,
+      "enumerated_branch_points": 134
+    },
+    {
+      "instruction_position": 0,
+      "independent_preaccept_failure_probability": 0.1,
+      "calibration_ready_probability": 0.9718284420000001,
+      "search_block_completion_probability": 0.998677814565618,
+      "search_final_sweep_complete_probability_given_calibration": 0.8405448891242161,
+      "instruction_retained_and_sweep_complete_probability_given_calibration": 0.7856722462850305,
+      "useful_search_probability_given_calibration": 0.7856634525448221,
+      "search_sampling_incomplete_probability_given_calibration": 0.012923556520653998,
+      "search_ceiling_incomplete_probability_given_calibration": 0.14653155435512996,
+      "confirmation_complete_probability": 0.9989585802421168,
+      "confirmation_preserves_probability_given_complete_and_retained": 0.9981677789549082,
+      "unconditional_useful_probability": 0.761337434705172,
+      "maximum_sampled_comparisons_in_enumerated_paths": 10,
+      "maximum_trials_in_enumerated_paths": 14,
+      "enumerated_branch_points": 134
+    },
+    {
+      "instruction_position": 1,
+      "independent_preaccept_failure_probability": 0.1,
+      "calibration_ready_probability": 0.9718284420000001,
+      "search_block_completion_probability": 0.998677814565618,
+      "search_final_sweep_complete_probability_given_calibration": 0.9745125698709044,
+      "instruction_retained_and_sweep_complete_probability_given_calibration": 0.9261644271261055,
+      "useful_search_probability_given_calibration": 0.926155138769843,
+      "search_sampling_incomplete_probability_given_calibration": 0.01186836582993864,
+      "search_ceiling_incomplete_probability_given_calibration": 0.013619064299157135,
+      "confirmation_complete_probability": 0.9989585802421168,
+      "confirmation_preserves_probability_given_complete_and_retained": 0.9981677789549082,
+      "unconditional_useful_probability": 0.8974791626187016,
+      "maximum_sampled_comparisons_in_enumerated_paths": 10,
+      "maximum_trials_in_enumerated_paths": 14,
+      "enumerated_branch_points": 134
+    },
+    {
+      "instruction_position": 2,
+      "independent_preaccept_failure_probability": 0.1,
+      "calibration_ready_probability": 0.9718284420000001,
+      "search_block_completion_probability": 0.998677814565618,
+      "search_final_sweep_complete_probability_given_calibration": 0.9911745194156841,
+      "instruction_retained_and_sweep_complete_probability_given_calibration": 0.9584951404706766,
+      "useful_search_probability_given_calibration": 0.9584951109024729,
+      "search_sampling_incomplete_probability_given_calibration": 0.008015325795216303,
+      "search_ceiling_incomplete_probability_given_calibration": 0.0008101547890995897,
+      "confirmation_complete_probability": 0.9989585802421168,
+      "confirmation_preserves_probability_given_complete_and_retained": 0.9981677789549082,
+      "unconditional_useful_probability": 0.9288178119374931,
+      "maximum_sampled_comparisons_in_enumerated_paths": 10,
+      "maximum_trials_in_enumerated_paths": 14,
+      "enumerated_branch_points": 134
+    },
+    {
+      "instruction_position": 3,
+      "independent_preaccept_failure_probability": 0.1,
+      "calibration_ready_probability": 0.9718284420000001,
+      "search_block_completion_probability": 0.998677814565618,
+      "search_final_sweep_complete_probability_given_calibration": 0.9958889511727846,
+      "instruction_retained_and_sweep_complete_probability_given_calibration": 0.9793522885216593,
+      "useful_search_probability_given_calibration": 0.9793522852777086,
+      "search_sampling_incomplete_probability_given_calibration": 0.004107070213259709,
+      "search_ceiling_incomplete_probability_given_calibration": 3.9786139555134945e-06,
+      "confirmation_complete_probability": 0.9989585802421168,
+      "confirmation_preserves_probability_given_complete_and_retained": 0.9981677789549082,
+      "unconditional_useful_probability": 0.949029198355693,
+      "maximum_sampled_comparisons_in_enumerated_paths": 10,
+      "maximum_trials_in_enumerated_paths": 14,
+      "enumerated_branch_points": 134
+    }
+  ],
+  "minimum_unconditional_useful_probability_by_failure": {
+    "0.0": 0.7724179195385416,
+    "0.05": 0.7720377442278868,
+    "0.1": 0.761337434705172
+  },
+  "every_position_above_0_80_by_failure": {
+    "0.0": false,
+    "0.05": false,
+    "0.1": false
+  },
+  "worst_case_attempts": 425,
+  "worst_case_final_response_provider_calls": 425,
+  "worst_case_shell_possible_provider_calls": 850,
+  "wall_time_upper_bound_at_120_second_deadline_plus_3_second_grace": 52275,
+  "evaluation_wall_seconds": 0.6795040899999094,
+  "evaluation_max_rss_kib": 43240,
+  "limitations": [
+    "Idealized stationary independent Bernoulli behavioral rates, not native profile evidence.",
+    "Completion exclusions model only independent safe preaccept failures; model-side invalidity has no proven outcome independence.",
+    "Four equal-byte independent histories, no dependency closures, native reconstruction surprises, token growth, resource drift, or outcome drift.",
+    "Search generator and classifier are real; bounded sampling completion is analytically modeled rather than executing sampling or runners.",
+    "No unresolved dispatches, process failures after provider acceptance, token/cost measurements, or operational freshness expiration are simulated.",
+    "Incomplete search cannot pass final-sweep usefulness; no repeated selection, confirmation, or favorable resampling is permitted."
+  ]
+}

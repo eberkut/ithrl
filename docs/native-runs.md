@@ -34,10 +34,11 @@ Keep it private; see [data and privacy](results.md#data-and-privacy).
 
 You need:
 
-- A supported installed harness and its existing local authentication.
+- An installed Codex or Copilot CLI and its existing local authentication.
 - Linux with Bubblewrap available and usable by the current user.
 - An extracted case and the original workspace to protect.
-- A private directory, mode `0700`, outside the case and original workspace for the observation store.
+- A private directory, mode `0700`, outside the case and original workspace for the observation
+  store.
 
 The model and provider come from captured evidence and supported local harness configuration.
 There is no `--model` override. Returned actions are observed and denied; they never execute.
@@ -52,7 +53,8 @@ ithrl shrink CASE --original-workspace ORIGINAL \
 ```
 
 Native `--dry-run` can start bounded, network-denied local harness probes. It starts no model turn
-and makes no provider call. Inspect the returned capabilities, safety controls and `capability_digest`.
+and makes no provider call. Inspect the returned capabilities, safety controls and
+`capability_digest`.
 
 ### 2. Configure the experiment
 
@@ -103,10 +105,12 @@ For Copilot, use `runner.type = "copilot"`, its target-specific capability diges
 `eligibility_policy = "independent-safe-preaccept-only"`. Keep the extracted target unchanged.
 Leave the case's internal JSON and SQLite files unchanged.
 
-This plan permits a **20-percentage-point decrease** in match probability among valid observations,
-with nominal 95% one-sided Newcombe method 10 confirmation. Choose the margin deliberately and
-budget the complete plan. These settings must be supplied explicitly. See [interpreting sampled
-results](results.md#sampled-results) for assumptions and error handling.
+This plan tests whether the selected candidate's match probability is no more than
+**20 percentage points below the original's**, among valid observations. Confirmation uses Newcombe
+method 10 with nominal 95% one-sided confidence. The counts and margin come from the
+[measured synthetic workload](measurements.md); they are not general-purpose defaults. Choose the
+margin deliberately and budget the complete plan. See [sampled results](results.md#sampled-results)
+for assumptions and error handling.
 
 ### 3. Inspect the complete plan and budget
 
@@ -132,16 +136,21 @@ This makes real model requests. Calibration, search and fresh confirmation run w
 limits. Keep the printed result directory and inspect `summary.json`; see [results and
 resume](results.md) for its interpretation and continuation rules.
 
-
 ## Context fuzzing
 
 `ithrl fuzz` explores bounded text appends and confirms at most one decrease in the selected
-behavior's match rate. Install the optional numerical dependency with `uv tool install 'ithrl[fuzz]'`
-(or `uv sync --locked --all-groups --all-extras` in a checkout). Native text mutation is awaiting
-qualification; current native profiles refuse execution of this operation.
+behavior's match rate. Run this walkthrough from a development checkout, with dependencies installed
+using `uv sync --locked --all-groups --all-extras`.
+Native text mutation is awaiting qualification; current native profiles refuse this operation.
 
-To exercise the complete workflow locally, extract the [bundled example](https://github.com/eberkut/ithrl/blob/main/README.md#try-it)
-and save the following as `ithrl-demo/fuzz.toml`, with mode `0600`:
+To exercise the complete workflow locally, create a fresh example case:
+
+```bash
+mkdir -m 700 ithrl-fuzz-demo
+uv run ithrl extract --example --output ithrl-fuzz-demo/case
+```
+
+Save the following as `ithrl-fuzz-demo/fuzz.toml`, with mode `0600`:
 
 ```toml
 seed = 1
@@ -187,40 +196,31 @@ attempt_timeout_seconds = 1
 inter_attempt_delay_seconds = 0
 ```
 
-These small fixed counts demonstrate the fake runner; they are not native sampling defaults.
-The alternative mutator, `duplicate-text`, appends a copy of an existing editable text item.
+These small fixed counts are for the deterministic fake-runner example. The alternative mutator,
+`duplicate-text`, appends a copy of an existing editable text item.
 Both mutators preserve protected records and keep payloads bounded. `stale_text` is private input
 and is never printed in normal output.
 
 Inspect without execution, then run with a dedicated store:
 
 ```bash
-ithrl fuzz ithrl-demo/case --config ithrl-demo/fuzz.toml \
-  --observation-store ithrl-demo/fuzz-observations.sqlite --dry-run
-ithrl fuzz ithrl-demo/case --config ithrl-demo/fuzz.toml \
-  --observation-store ithrl-demo/fuzz-observations.sqlite
+uv run ithrl fuzz ithrl-fuzz-demo/case --config ithrl-fuzz-demo/fuzz.toml \
+  --observation-store ithrl-fuzz-demo/fuzz-observations.sqlite --dry-run
+uv run ithrl fuzz ithrl-fuzz-demo/case --config ithrl-fuzz-demo/fuzz.toml \
+  --observation-store ithrl-fuzz-demo/fuzz-observations.sqlite
 ```
 
-The fake runner makes zero provider calls and executes no actions. Fixed original/mutant samples
-exercise the shared collector and fresh confirmation; [fuzz results](results.md#fuzz-results)
-explains the saved evidence and resume behavior. Use `--format json` for one JSON report on stdout;
-execution progress and the inspected plan go to stderr.
+The example finishes with `confirmed-change`, zero provider calls and zero executed actions. It uses
+fixed original/mutant samples and fresh confirmation. See [fuzz results](results.md#fuzz-results)
+for saved evidence and resume behavior. Use `--format json` for one JSON report on stdout; execution
+progress and the inspected plan go to stderr.
 
-For a future qualified native profile, detection is a separate explicit operation:
-
-```bash
-ithrl fuzz CASE --config PRIVATE_TOML --original-workspace ORIGINAL \
-  --detect --profile PRIVATE_PROFILE
-ithrl fuzz CASE --config PRIVATE_TOML --original-workspace ORIGINAL \
-  --profile PRIVATE_PROFILE --dry-run
-```
-
-Fuzz `--dry-run` starts no harness or provider. Without a saved native profile it reports
-`detection-required`; it does not guess capabilities, destination or call bounds. `--detect`
-performs credential-free structural discovery and saves private planning metadata. Inspect the
-model, provider, destination, mutation scope, fixed samples, action denial and resource limits.
-Execution additionally requires `--acknowledge-model-execution`, rechecks the current exact
-profile and refuses unsupported text mutation before any provider attempt.
+Fuzz `--dry-run` starts no harness or provider. A native case without a saved capability profile
+reports `detection-required`. The separate `--detect` operation performs credential-free structural
+discovery; current native profiles refuse text mutation before a provider attempt. Native sampling
+settings and execution require their own qualification. See the [CLI reference](cli.md#ithrl-fuzz)
+for detection and profile options, and [troubleshooting](troubleshooting.md#fuzz-setup-and-resume)
+for configuration and resume refusals.
 
 ## Compatibility and measurements
 
@@ -229,10 +229,12 @@ by their initial `session_meta` record; they have no record-schema version field
 adapter reads event schema `1`. Both adapters preserve unknown records without interpreting them.
 
 Native runners check the installed harness's required operations, permissions, isolation and action
-denial locally. Support is determined by these checks and calibration. Harness release numbers are
-recorded for reproducibility; there is no exact-release allowlist. After a harness or configuration
-change, rerun preflight and use its capability digest for a new experiment. A changed digest prevents
-reuse of an old pinned plan or incompatible saved run.
+denial locally. These checks and calibration determine whether the configured run can proceed.
+Public experimental support also requires a qualified live workflow for that target profile; see
+the [supported-inputs table](https://github.com/eberkut/ithrl/blob/main/README.md#supported-inputs).
+Harness release numbers are recorded for reproducibility; there is no exact-release allowlist.
+After a harness or configuration change, rerun preflight and use its capability digest for a new
+experiment. A changed digest prevents reuse of an old pinned plan or incompatible saved run.
 
 The [measurements](measurements.md) record the benchmark construction, completed reductions,
 tested harness versions, confirmation results and costs. Other releases go through the same local

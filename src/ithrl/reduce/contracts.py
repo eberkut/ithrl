@@ -334,7 +334,7 @@ def _sampled_screen_action(evidence: SamplingBlockEvidence) -> SampledScreenActi
     difference = Fraction(candidate.matches, candidate.valid) - Fraction(
         original.matches, original.valid
     )
-    return "admit" if difference >= -Fraction(evidence.plan.preservation.margin) else "retain"
+    return "admit" if difference >= -Fraction(str(evidence.plan.preservation.margin)) else "retain"
 
 
 class SampledReductionCheckpoint(BaseModel):

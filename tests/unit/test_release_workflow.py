@@ -195,7 +195,7 @@ def test_release_uses_required_ci_and_same_run_artifacts_without_privileged_chec
     jobs = RELEASE["jobs"]
     assert jobs["checks"]["uses"] == "./.github/workflows/ci.yml"
     assert jobs["checks"]["needs"] == "preflight"
-    assert jobs["checks"]["permissions"] == {"contents": "read"}
+    assert jobs["checks"]["permissions"] == {"contents": "read", "pull-requests": "read"}
     assert jobs["testpypi"]["needs"] == ["preflight", "checks"]
     assert jobs["pypi"]["needs"] == ["preflight", "checks", "testpypi"]
     assert jobs["github-release"]["needs"] == ["preflight", "checks", "pypi"]

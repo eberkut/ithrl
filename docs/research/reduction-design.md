@@ -1,12 +1,12 @@
 # Sampled reduction design research
 
-Studies completed on **2026-10-03–2026-10-15** led to exploratory candidate screening followed
-by one independent fresh confirmation of a durably selected candidate. They also rejected eager
-baseline prefetch, measured a limited synthetic benefit from lazy sharing, and retained strict
-fresh baselines in production. This page preserves numerical results and failed alternatives.
-[Results](../results.md) owns interpretation of current output; [measurements](../measurements.md)
-owns the completed native workloads, settings and costs. [ADR 0003](../decisions/0003-strict-fresh-baselines.md)
-records the baseline decision.
+Studies completed on **2026-10-03–2026-10-15** led to exploratory candidate screening followed by
+one independent fresh confirmation of a durably selected candidate. They also rejected eager
+baseline prefetch, measured a limited synthetic benefit from lazy sharing, and retained strict fresh
+baselines in production. This page records numerical results and failed alternatives.
+See [results](../results.md) to interpret current output, and [measurements](../measurements.md)
+for the completed native workloads, settings and costs.
+[ADR 0003](../decisions/0003-strict-fresh-baselines.md) records the baseline decision.
 
 ## Method and confidence convention
 
@@ -31,7 +31,8 @@ This is nominal approximate confidence, not an exact finite-sample guarantee. Pr
 uses the lower bound for `p(candidate)-p(original)` and the declared degradation margin.
 
 The [SAS FREQ specification](https://support.sas.com/documentation/onlinedoc/stat/132/freq.pdf)
-(printed page 2675) supplies the square-and-add formula; its [noninferiority documentation](https://support.sas.com/documentation/cdl/en/procstat/68142/PDF/default/procstat.pdf)
+(printed page 2675) supplies the square-and-add formula; its
+[noninferiority documentation](https://support.sas.com/documentation/cdl/en/procstat/68142/PDF/default/procstat.pdf)
 (printed page 182) supplies the central `1-2*alpha` convention. The independent comparator was
 [statsmodels `0.15.0`](https://github.com/statsmodels/statsmodels/blob/v0.15.0/statsmodels/stats/proportion.py),
 with explicit candidate-first `method="newcomb"`, `compare="diff"` and
@@ -41,14 +42,12 @@ Production agreement was within `1e-12`; full count-table maximum absolute diffe
 `3.33e-16`, and 81 scaled cases differed by at most `2.22e-16`. Analytic endpoint identities
 and arm-swap symmetry were also checked. Formula agreement alone does not establish error rates.
 
-The [original Newcombe paper record](https://pubmed.ncbi.nlm.nih.gov/9595617/) identifies the
-1999 erratum, *Statistics in Medicine* 18(10):1293,
-DOI `10.1002/(SICI)1097-0258(19990530)18:10<1293::AID-SIM175>3.0.CO;2-7`.
-The full publisher correction was checked from a supplied screenshot on 2026-10-01: **method
-11** must use the first square-and-add expression because its second expression is not
-equivalent. Method 10's two expressions are equivalent; paired-data definitions are unaffected.
-The correction does not change the method implemented here. The screenshot is not a public
-repository artifact; this records the historical verification, not a fresh publisher retrieval.
+The [original Newcombe paper record](https://pubmed.ncbi.nlm.nih.gov/9595617/) identifies the 1999
+erratum, *Statistics in Medicine* 18(10):1293, DOI
+`10.1002/(SICI)1097-0258(19990530)18:10<1293::AID-SIM175>3.0.CO;2-7`. The correction clarifies that
+**method 11** must use the first square-and-add expression because its second expression is not
+equivalent. Method 10's two expressions are equivalent; paired-data definitions are unaffected. The
+correction does not change the method implemented here.
 
 ## Original joint gate and its failure
 
@@ -67,6 +66,10 @@ The diagnostic rate grid included endpoints, near endpoints, margin boundaries, 
 rates and unequal arms. At `.95` confidence, the engineering error ceiling was `.055`
 (`alpha + min(.005,.10*alpha)`), including false preservation, boundary preservation and false
 loss. Passing this finite grid never established uniform error control over unknown true rates.
+
+False preservation means accepting a candidate whose true degradation exceeds the margin. False
+loss means rejecting one whose true degradation is within the margin. Boundary preservation is
+acceptance when the true degradation equals the margin; the study checks that case separately.
 
 | Equal confirmation samples per arm | Preservation power at `.90/.90` | Worst tested error event | Passed error grid |
 | --- | ---: | ---: | --- |
@@ -91,22 +94,24 @@ errors 5.366%/5.081%. Even the nine combinations meeting error, confirmation-pow
 one call-profile screen achieved at best 16.67% minimum workflow success. Neither alternative
 was added to production. This bounded failure does not prove all counts or methods infeasible.
 
-The score-method comparison used independent constrained-likelihood maximization: 23,900 count
-pairs agreed within `2.86e-13`, and six upstream R vectors agreed at their published tolerances.
-An initial overstrict statistic-tolerance failure was retained; the corrected tolerance was
-frozen before gate evaluation. The pinned statsmodels score path had a known nonzero-difference
-MLE defect, so it was not used as the score oracle. See the [upstream correction](https://github.com/statsmodels/statsmodels/pull/10270)
-and [pinned reference tests](https://github.com/statsmodels/statsmodels/blob/5cc7275739c4a03d023a1f7ac29e16274b61e961/statsmodels/stats/tests/test_proportion.py#L1514-L1567).
+The score-method comparison used independent constrained-likelihood maximization: 23,900 count pairs
+agreed within `2.86e-13`, and six upstream R vectors agreed at their published tolerances. The
+comparison tolerance was fixed before gate evaluation. The pinned statsmodels score path had a
+known nonzero-difference maximum-likelihood estimation defect,
+so it was not used as the score oracle. See the
+[upstream correction](https://github.com/statsmodels/statsmodels/pull/10270) and
+[pinned reference tests](https://github.com/statsmodels/statsmodels/blob/5cc7275739c4a03d023a1f7ac29e16274b61e961/statsmodels/stats/tests/test_proportion.py#L1514-L1567).
 
 ## Exploratory screening and a separate holdout
 
-The adopted search screen admits a complete eligible removal when the candidate-minus-original
-point estimate is at least `-margin`. It attaches no preservation confidence or minimality claim
-to that action. One candidate is selected durably without confirmation feedback; fresh original
-and candidate arms then test it. Search never resumes after selection, and failed confirmation
-cannot trigger reselection or repeated testing until a pass. The [sample-splitting argument](https://academic.oup.com/biomet/article/110/3/597/6955603)
-motivates independent selection/confirmation; it does not prove Newcombe coverage, provider
-independence, historical causality or campaign-wide confidence.
+The adopted search screen admits a complete eligible removal when the candidate-minus-original point
+estimate is at least `-margin`. It attaches no preservation confidence or minimality claim to that
+action. One candidate is selected durably without confirmation feedback; fresh original and
+candidate arms then test it. Search never resumes after selection, and failed confirmation cannot
+trigger reselection or repeated testing until a pass. The
+[sample-splitting argument](https://academic.oup.com/biomet/article/110/3/597/6955603) motivates
+independent selection/confirmation; it does not prove Newcombe coverage, provider independence,
+historical causality or campaign-wide confidence.
 
 In the original six-comparison conditional workload, a 4-original/5-candidate point-estimate
 screen with fresh 100/100 confirmation achieved **86.32%** minimum success and fit 256/512
@@ -127,8 +132,8 @@ required an unconditional workflow model before integration.
 
 The next frozen programme evaluated 312 named plans, including calibration readiness, incomplete
 arms, cap exhaustion, complete selection and independent confirmation. It relaxed the original
-512-call/two-hour development constraints into explicit cost comparisons rather than concealing
-the extra work. Confirmation at 100 and 200 per arm passed the 150-point diagnostic grid:
+512-call/two-hour development constraints and reported the resulting costs. Confirmation at 100
+and 200 per arm passed the 150-point diagnostic grid:
 
 | Confirmation per arm | Maximum false preservation | Boundary preservation | False loss | Power `.90/.90` | Power `.50/.50` |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -204,7 +209,7 @@ The 280-cell stationary finite-sum study produced:
 Group 2 saved **80.002471 calls per useful result (6.611704%)**. Group 4 added only about
 `6.9e-9` calls of benefit, below numerical allowances. The simpler strict 40/80 allocation saved
 16.525388% on the primary workload but missed the 80% mildly degraded position-0 floor by
-0.349139 percentage points. That tradeoff was retained without rounding it into a pass.
+0.349139 percentage points.
 
 A prospective operational study compared large strict and lazy group 2: seed `2026100707`,
 20,000 replicas per cell, 11 scenarios, two shapes and four positions. Its first run stopped
@@ -292,14 +297,12 @@ was ineligible. The two interrupted Copilot searches likewise completed their sw
 removal, but their holdouts stopped at 29/28 and 31/17 original/candidate matches. Neither
 established preservation. All remain distinct from the later successful runs.
 
-An earlier Copilot control also failed with empty output and authentication-error signals;
-its possible call remained charged. After operator reauthentication, two separately requested
-one-call smokes succeeded and remained separate from the controlled cohort. A simultaneous
-control invocation was investigated from durable state and process evidence: there was no
-unresolved reservation or Copilot observation, and the ownership/dispatch audit established
-zero Copilot dispatch. Its generic failure message alone did not prove the cause. Subsequent
-controls ran serially. A changed Codex installation was refused by pinned
-preflight before a provider call; redetection and fresh controls preceded further execution.
+An earlier Copilot control failed with empty output and authentication-error signals; its possible
+call remained charged. After reauthentication, two separate one-call smoke tests succeeded.
+A concurrent invocation had no Copilot dispatch or unresolved reservation, as verified from durable
+state and process evidence; its failure message did not identify the cause. Subsequent controls ran
+serially. Preflight also refused a changed Codex installation before a provider call, requiring
+redetection and fresh controls.
 
 The controls exposed parser defects relevant to validity: a completed tool-free response under
 a shell target must be a valid nonmatch, and optional informational reasoning/opaque metadata
@@ -334,7 +337,7 @@ an unknown dispatch by replay or repeats completed confirmation. The default rem
 `independent-safe-preaccept-only`.
 
 Its estimand is `P(match | valid, frozen plan)`. With independent stationary joint draws of
-validity and behavior and a prespecified validity rule, the first fixed number of valid marks
+validity and behavior and a prespecified validity rule, the first fixed number of valid outcomes
 has that conditional distribution, including conditional arm completion within the fixed
 ceiling. Within-draw independence of validity and behavior is not required for this conditional
 estimand. Between-attempt dependence, drift or outcome-driven replacement invalidates the
@@ -344,27 +347,38 @@ qualification used **no overload replacement**.
 
 ## Reproducibility and remaining limits
 
-The public tree retains the 40 independent formula vectors, statistical unit/property tests,
-sampling/budget/state tests, sanitized harness fixtures and native aggregate measurements.
-Those verify current formula and implementation contracts; they do not rerun the original
-workflow studies or expose private native evidence. The original temporary simulation drivers,
-full numerical reports and some raw Step 1 artifacts are **not available in the public tree**.
-Historical source/result hashes in development records cannot reconstruct absent programs.
-The studies above are retained historical results with independently reviewed calculations,
-not a claim of fresh reproducibility from the current checkout. Repeating a study requires a
-new explicit driver, prospective programme and validation, rather than silently replacing its
-historical evidence.
+The [reduction study package](https://github.com/eberkut/ithrl/tree/main/research/reduction)
+contains the executed eager-prefetch cost stage, all 280 stationary sharing/allocation cells,
+the 176 scored operational rows and the native-layout budget enumeration. Its reference algorithms
+are independent of application changes. Configurations, seeds, source identities and result
+comparisons make the scope of each replay explicit. See the package guide for short verification
+and full replay commands.
 
-Exact finite binomial/path enumeration was used where affordable; Monte Carlo is identified
-for the sharing operational studies. Independent formula vectors, numerical agreement,
-workflow usefulness, operational validity and live safety answer different questions. For
-Monte Carlo, prospective family sizes and simultaneous exact-binomial bounds controlled
-simulation uncertainty; they did not make the behavioral interval exact. See [NIST's
-exact-binomial bounds](https://itl.nist.gov/div898/software/dataplot/refman2/auxillar/exacbino.htm).
-The [NIST sample-size approximation](https://www.itl.nist.gov/div898/handbook/prc/section2/prc242.htm)
+The package also supplies an independent finite evaluation of the selected screening, confirmation
+and attempt-ceiling decisions. It matches 44 documented summary values, checks 48 workflow
+calculations against a separate enumerator, and verifies 24 admission probabilities with exact
+rational binomial sums. Its declared diagnostic domain contains 127 feasible rate pairs; the six
+confirmation sample sizes reproduce the reported finite-grid maxima. It does not enumerate the full
+earlier allocation sweeps or evaluate the alternative score methods.
+
+The 40 independent formula vectors, statistical unit/property tests, sampling and recovery tests,
+harness fixtures and native aggregate measurements provide additional checks of the implemented
+contracts. Synthetic replay does not reproduce native model outcomes or establish the frequency
+of useful results on ordinary sessions.
+
+Exact finite binomial/path enumeration was used where affordable; Monte Carlo is identified for the
+sharing operational studies. Independent formula vectors, numerical agreement, workflow usefulness,
+operational validity and live safety answer different questions. For Monte Carlo, prospective family
+sizes and simultaneous exact-binomial bounds controlled simulation uncertainty; they did not make
+the behavioral interval exact. See
+[NIST's exact-binomial bounds](https://itl.nist.gov/div898/software/dataplot/refman2/auxillar/exacbino.htm).
+The
+[NIST sample-size approximation](https://www.itl.nist.gov/div898/handbook/prc/section2/prc242.htm)
 was planning context, not validation of the classifier or defaults.
 
-Alternative-method research also did not establish a shortcut: [Shan, Lou and Wu (2023)](https://link.springer.com/article/10.1007/s44199-023-00054-8)
-reported regime-dependent performance; the [Hawila–Berg exact-corrected proposal](https://arxiv.org/abs/2104.04660v3)
-was challenged on monotonicity/coherence in a [2024 comment](https://arxiv.org/abs/2404.08352).
-Changing the method would require demonstrated error, numerical and workload-cost benefit.
+Alternative-method research also did not establish a shortcut:
+[Shan, Lou and Wu (2023)](https://link.springer.com/article/10.1007/s44199-023-00054-8) reported
+regime-dependent performance; the
+[Hawila–Berg exact-corrected proposal](https://arxiv.org/abs/2104.04660v3) was challenged on
+monotonicity/coherence in a [2024 comment](https://arxiv.org/abs/2404.08352). Changing the method
+would require demonstrated error, numerical and workload-cost benefit.

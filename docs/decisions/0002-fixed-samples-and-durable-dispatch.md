@@ -32,7 +32,7 @@ Calibration first establishes that the target is measurable on the configured fu
 surface. Exploratory reduction then uses the original/candidate point-rate difference to guide
 search. That screen has no preservation-confidence or minimality claim. The shared collector
 returns complete block evidence and accounting; the owning workflow decides how to screen,
-select and classify it. Internal fuzz discovery and simplification use the same collection
+select and classify it. Fuzz discovery and simplification use the same collection
 boundary with a separate change objective and confirmation procedure.
 
 ### Confirm one selected candidate with untouched observations
@@ -93,12 +93,12 @@ Preserve actual, additional possible and pending provider calls as distinct fact
 acceptance or usage remains explicit and conservatively charged. A denied shell action may
 still leave a possible provider continuation; denying execution does not prove a single-call
 attempt. Administrative allowance extensions retain accumulated consumption and frozen
-experimental settings rather than creating fresh capacity by forgetting prior work.
+experimental settings.
 
 ## Consequences
 
-The final claim rests on one selected artifact and fresh evidence rather than adaptive-search
-luck. Complete-block admission makes cost and confirmation capacity reviewable. Durable
+The final claim rests on one selected artifact and fresh evidence. Complete-block admission makes
+cost and confirmation capacity reviewable. Durable
 reservations prevent uncertain dispatch from becoming an automatic duplicate call, at the cost
 of refusing progress when reconciliation cannot prove what happened.
 
@@ -112,7 +112,7 @@ interval checks. [Results](../results.md#sampled-results) states the public inte
 ## Alternatives
 
 Repeated fixed-interval peeking would add optional-stopping error. Reusing calibration/search
-observations for final selection would contaminate the holdout. Treating errors as nonmatches
+observations for final confirmation would contaminate the holdout. Treating errors as nonmatches
 would conflate reliability with behavior, while dropping failed calls from accounting would
 understate resource use. Automatic replay after unknown acceptance would duplicate uncertain
 work. None meets the frozen experimental contract.

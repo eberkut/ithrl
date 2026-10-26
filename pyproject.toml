@@ -36,7 +36,7 @@ dependencies = [
 [project.urls]
 Source = "https://github.com/eberkut/ithrl"
 Issues = "https://github.com/eberkut/ithrl/issues"
-Documentation = "https://github.com/eberkut/ithrl#readme"
+Documentation = "https://eberkut.github.io/ithrl/"
 Changelog = "https://github.com/eberkut/ithrl/releases"
 
 [project.scripts]
@@ -65,9 +65,11 @@ dev = [
   "pyrefly==1.4.0",
   "pytest>=9",
   "pytest-cov>=7",
+  "pytest-github-actions-annotate-failures>=0.4.2",
   "PyYAML>=6",
   "radon==6.0.1",
   "ruff==0.17.1",
+  "rumdl==0.3.0",
   "scipy-stubs>=1.18",
   "types-jsonschema>=4.25",
   "types-PyYAML>=6",
@@ -155,6 +157,23 @@ exclude_also = [
 ]
 show_missing = true
 skip_covered = true
+
+[tool.rumdl]
+line-length = 100
+
+[tool.rumdl.per-file-ignores]
+# Typer owns usage prompts, aligned option descriptions and prose wrapping.
+"docs/cli.md" = ["MD013", "MD014", "MD064"]
+
+[tool.rumdl.per-file-flavor]
+"docs/**/*.md" = "mkdocs"
+
+[tool.rumdl.MD013]
+line-length = 100
+reflow = true
+# Preserve runnable commands and tables; wrap prose instead.
+code-blocks = false
+tables = false
 
 [tool.ruff]
 extend-exclude = ["*.md"]

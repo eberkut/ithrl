@@ -1,0 +1,55 @@
+{
+  "purpose": "Independent finite-binomial validation of the reduction sampling decisions",
+  "workload": {
+    "groups": 4,
+    "comparison_cap": 6,
+    "instruction_positions": [0, 1, 2, 3],
+    "minimum_removed_groups": 2,
+    "conditional_calibration_calls": 2,
+    "margin": "0.20",
+    "confirmation_confidence": 0.95
+  },
+  "scenarios": [
+    {"name": "healthy", "original": "0.90", "retained": "0.90", "removed": "0.10"},
+    {"name": "mild", "original": "0.90", "retained": "0.80", "removed": "0.10"},
+    {"name": "equal-half", "original": "0.50", "retained": "0.50", "removed": "0.10"}
+  ],
+  "conditional_screens": [
+    {"name": "confirm-5", "method": "preserves", "original": 5, "candidate": 5, "confidence": 0.99},
+    {"name": "confirm-10", "method": "preserves", "original": 10, "candidate": 10, "confidence": 0.95},
+    {"name": "point-4-4", "method": "point", "original": 4, "candidate": 4},
+    {"name": "point-4-5", "method": "point", "original": 4, "candidate": 5},
+    {"name": "point-8-8", "method": "point", "original": 8, "candidate": 8},
+    {"name": "point-12-12", "method": "point", "original": 12, "candidate": 12},
+    {"name": "veto-4-4", "method": "loss-veto", "original": 4, "candidate": 4, "confidence": 0.80},
+    {"name": "veto-4-5", "method": "loss-veto", "original": 4, "candidate": 5, "confidence": 0.80}
+  ],
+  "confirmation_per_arm": 100,
+  "failure_rates": [0.0, 0.01, 0.05, 0.10],
+  "failure_plans": [
+    {"name": "no-extras", "calibration": [3, 2, 3], "original": [3, 3], "candidate": [5, 5], "confirmation": [100, 100]},
+    {"name": "fraction-40", "calibration": [3, 2, 3], "original": [40, 42], "candidate": [40, 42], "confirmation": [100, 105]},
+    {"name": "fraction-80", "calibration": [10, 2, 10], "original": [80, 84], "candidate": [80, 84], "confirmation": [200, 210]},
+    {"name": "fixed-small", "calibration": [3, 2, 7], "original": [4, 8], "candidate": [5, 9], "confirmation": [100, 124]},
+    {"name": "fixed-large", "calibration": [10, 2, 16], "original": [80, 100], "candidate": [80, 100], "confirmation": [200, 239]}
+  ],
+  "ceiling_design": {"failure_probability": 0.10, "completion_probability": 0.999},
+  "confirmation_grid": {
+    "samples_per_arm": [20, 40, 50, 80, 100, 200],
+    "confidence": 0.95,
+    "margin": "0.20",
+    "original_rates": ["0", "0.001", "0.005", "0.01", "0.05", "0.10", "0.20", "0.50", "0.80", "0.90", "0.95", "0.99", "0.995", "0.999", "1"],
+    "boundary_offsets": ["-0.05", "-0.01", "-0.001", "0", "0.001", "0.01", "0.05"],
+    "include_equal_rates": true,
+    "include_reflections": true,
+    "refusal": "Discard infeasible rate pairs; deduplicate exact rational pairs. This defines this evaluation's finite domain and makes no uniform error claim."
+  },
+  "independent_checks": [
+    "Compare Newcombe vectors with the existing independent reference fixture.",
+    "Compare point-screen probabilities with exact rational binomial sums.",
+    "Compare failure-free point workflows with the separate stationary enumerator.",
+    "Check complete plus incomplete path mass equals one.",
+    "Check completion ceilings meet the target and one fewer attempt fails it."
+  ],
+  "coverage": "Selected documented decisions and a fully specified finite diagnostic domain; does not enumerate the original 198, 72, 312 or 224-setting sweeps or evaluate alternative score methods."
+}

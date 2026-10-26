@@ -26,9 +26,9 @@ an old research result. Planned capabilities must remain clearly distinguished f
   filesystem or network sandbox.
 - Application workflow composes registered runners; `src/ithrl/cli/` handles selection and
   presentation. Update owning imports and persisted contracts together when moving code.
-- Before 1.0, keep project-owned schema tags at `1` while evolving formats directly. Breaking
-  format changes are acceptable; do not add migrations or compatibility layers. Keep current
-  structure, kind, evidence-identity and safety validation strict. Revisit schema versioning for 1.0.
+- Before 1.0, keep project-owned schema tags at `1` while evolving formats directly. Breaking format
+  changes are acceptable; do not add migrations or compatibility layers. Keep current structure,
+  kind, evidence-identity and safety validation strict. Revisit schema versioning for 1.0.
 - Preserve unknown native records without interpreting or editing them until adapter and runner
   support is proven. Evidence support and experimental support are separate claims.
 
@@ -113,12 +113,19 @@ for a new page; update publication boundaries and their tests when introducing a
 directory or asset type. Run documentation tests and the strict site build; neither needs a
 native harness.
 
+Use the shared rumdl configuration and pinned version for Markdown formatting and linting. Keep
+generated-file exceptions limited to demonstrated generator conflicts; preserve reproducibility.
+
 ## CI and release boundaries
 
 Keep jobs that execute pull-request code read-only and provider-free. Pin external Actions to
 reviewed full commit SHAs with same-line release comments for dependency updates. Keep checkout
 credentials out of the workspace, bound jobs and artifact retention, and upload only intentional
 public outputs. Dependency-update PRs receive the same checks and review as other changes.
+
+Keep the Markdown-only fast path conservative and fail closed through the required Workflows
+check. Preserve full main, scheduled and release validation and package checks for distributed
+documents. The PR-title workflow reads metadata only; never add PR checkout or execution there.
 
 Changes to triggers, permissions, caches, artifacts or OIDC require review of the complete trust
 path. Publishing authority belongs only in the explicitly approved workflow and protected

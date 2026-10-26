@@ -1,7 +1,8 @@
 # ithrl
 
 `ithrl` extracts a decision from a saved coding-agent session and searches for a smaller context
-that preserves its behavior. Use it to turn a long session into an inspectable debugging case.
+that preserves its behavior. Use it to turn a long session into a debugging case you can inspect
+and test.
 
 ## Install
 
@@ -44,9 +45,10 @@ use a new directory to repeat it. You can remove the directory and its contents 
   available sessions and select a decision.
 - `ithrl shrink CASE` tests context removals and saves the result. `--dry-run` inspects the plan;
   `--format json` produces machine-readable output. A stopped search prints its resume command.
-- `ithrl fuzz CASE --config PRIVATE_TOML` explores text appends and independently confirms one
-  target-rate decrease. The [local walkthrough](https://github.com/eberkut/ithrl/blob/main/docs/native-runs.md#context-fuzzing)
-  uses the fake runner; native text mutation still requires qualification.
+- From a development checkout, `uv run ithrl fuzz CASE --config PRIVATE_TOML` explores text appends
+  and independently confirms one decrease in the selected behavior's match rate. Start with the
+  [fuzzing walkthrough](https://github.com/eberkut/ithrl/blob/main/docs/native-runs.md#context-fuzzing),
+  which uses the fake runner. Native text mutation is not yet qualified.
 
 For example, extract a saved session file:
 
@@ -54,9 +56,10 @@ For example, extract a saved session file:
 ithrl extract path/to/session.jsonl --output .ithrl/case
 ```
 
-Cases contain copied session content and should stay private. Extraction makes no provider calls
-and never executes recorded actions. Native reduction makes model requests and requires an explicit
-experiment; see the [native-run guide](https://github.com/eberkut/ithrl/blob/main/docs/native-runs.md).
+Cases contain copied session content and should stay private. Extraction makes no provider calls and
+never executes recorded actions. Native reduction makes model requests and requires an explicit
+experiment; see the
+[native-run guide](https://github.com/eberkut/ithrl/blob/main/docs/native-runs.md).
 
 ### Supported inputs
 
@@ -67,23 +70,30 @@ experiment; see the [native-run guide](https://github.com/eberkut/ithrl/blob/mai
 | Copilot CLI session events | Final responses and shell requests | Experimental final-response and denied `bash` runner | Not qualified |
 
 Native compatibility is checked against the installed harness's protocol, capabilities and safety
-controls. [Compatibility and measurements](https://github.com/eberkut/ithrl/blob/main/docs/native-runs.md#compatibility-and-measurements)
+controls.
+[Compatibility and measurements](https://github.com/eberkut/ithrl/blob/main/docs/native-runs.md#compatibility-and-measurements)
 records the tested configurations and how to check another release.
 
 ## Documentation
 
+Read the [documentation site](https://eberkut.github.io/ithrl/) or browse the guides below.
+
 - [Native runs](https://github.com/eberkut/ithrl/blob/main/docs/native-runs.md): session selection,
   experiment configuration, preflight, model execution and measured costs.
 - [Results and privacy](https://github.com/eberkut/ithrl/blob/main/docs/results.md): saved files,
-  preservation claims, research references, budgets, resume and sensitive data.
-- [Contributing](https://github.com/eberkut/ithrl/blob/main/CONTRIBUTING.md): issue-first collaboration,
-  checkout setup, checks and smoke tests.
-- [Roadmap](https://github.com/eberkut/ithrl/blob/main/ROADMAP.md): current priorities and planned capabilities.
-- [Architecture](https://github.com/eberkut/ithrl/blob/main/docs/architecture.md): implementation boundaries and decisions.
-- [Research](https://github.com/eberkut/ithrl/blob/main/docs/research/index.md): feasibility studies, statistical methods and measurements.
+  result interpretation, budgets, resume and sensitive data.
+- [Contributing](https://github.com/eberkut/ithrl/blob/main/CONTRIBUTING.md): issue-first
+  collaboration, checkout setup, checks and smoke tests.
+- [Roadmap](https://github.com/eberkut/ithrl/blob/main/ROADMAP.md): current priorities and planned
+  capabilities.
+- [Architecture](https://github.com/eberkut/ithrl/blob/main/docs/architecture.md): implementation
+  boundaries and decisions.
+- [Research](https://github.com/eberkut/ithrl/blob/main/docs/research/index.md): feasibility
+  studies, statistical methods and measurements.
 
 For help, bugs or proposals, see [Support](https://github.com/eberkut/ithrl/blob/main/SUPPORT.md).
-Report vulnerabilities through [private reporting](https://github.com/eberkut/ithrl/security/advisories/new).
+Report vulnerabilities through
+[private reporting](https://github.com/eberkut/ithrl/security/advisories/new).
 
 ## Name
 

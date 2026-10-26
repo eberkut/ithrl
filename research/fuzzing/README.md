@@ -28,14 +28,17 @@ SciPy 1.18.1. There is no separate requirements file. If dependencies are not in
 prepare the environment with `uv sync --locked --extra fuzz`. This preparation may download
 locked packages; the study itself is offline and needs no credentials.
 
-The short replay validates exact bounds against SciPy and binomial tail equations, checks
-the finite operating-characteristic grids, replays twelve selected cells across all three
-workflows, and replays the corrected outcome-dependent sensitivity (130,000 synthetic
-campaigns in total). It checks saved cell aggregates exactly and numerical method summaries
-within 1e-12. It does not re-audit the entire qualification grid.
-It also validates all 64 retained cells against their per-invalid-rate summaries and the
-selected design aggregates, including count and budget consistency. This checks the retained
-64-cell data without resimulating that entire grid.
+The short replay checks:
+
+- Exact bounds against SciPy and binomial tail equations, plus the finite operating-characteristic
+  grids.
+- Twelve selected cells across all three workflows and the outcome-dependent validity sensitivity:
+  130,000 synthetic campaigns in total.
+- All 64 retained cells against their per-invalid-rate summaries and selected-design aggregates,
+  including count and budget consistency.
+
+Saved cell aggregates must match exactly; numerical method summaries allow differences within
+`1e-12`. The short replay checks the retained 64-cell data without resimulating the whole grid.
 
 ```sh
 uv run --locked --offline --no-sync python research/fuzzing/study.py freeze --output research/fuzzing/outputs/replay
@@ -46,14 +49,13 @@ Every generated file belongs to the required `--output` directory under the igno
 `research/fuzzing/outputs/` tree. Choose a new directory for each run: freezing requires
 a directory that does not exist, and writes use exclusive creation. The freeze records
 the public programme, numerical sources, validator, saved results and dependency versions;
-later commands verify them. Public file hashes changed during relocation and output cleanup.
-A new freeze identifies this reproduction, not the historical preregistration or a new
-prospective experiment. The full qualification grid has not been rerun after relocation.
+later commands verify them. Each reproduction records its own source and dependency identities.
+The short replay covers the checks listed above; use the full replay to evaluate the complete
+qualification grid.
 
-The full replay is explicit and outside default CI. It simulates 7,128 qualification cells
-of 10,000 campaigns each (71,280,000 campaigns), followed by 24 sensitivity cells and a drift
-block. It can take substantially longer than the short replay; runtime depends on hardware
-and no portable duration is asserted. Run these commands sequentially:
+The full replay simulates 7,128 qualification rows of 10,000 campaigns each (71,280,000 campaigns),
+followed by 24 sensitivity cells and a drift block. Runtime depends on hardware. Run these commands
+sequentially:
 
 ```sh
 uv run --locked --offline --no-sync python research/fuzzing/study.py freeze --output research/fuzzing/outputs/full

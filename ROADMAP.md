@@ -1,8 +1,7 @@
 # Roadmap
 
-`ithrl` turns agent behavior into an inspectable experiment: first find context that preserves
-a decision, then find small interventions that change it. Development follows demonstrated
-usefulness, reliable measurement and bounded execution cost.
+`ithrl` tests which context preserves a selected agent decision and which changes alter it.
+Development priorities depend on useful results, reliable measurement and measured execution cost.
 
 The [supported-inputs table](README.md#supported-inputs) describes current public capabilities.
 The directions below describe future work; their version labels establish an intended sequence,
@@ -10,29 +9,28 @@ with scope and release dates decided from evidence.
 
 ## Current work: context fuzzing
 
-Version 0.1.0 ships `extract` and `shrink`. The next capability is `ithrl fuzz`: generate bounded
-context changes, simplify an interesting intervention and independently confirm its effect.
+Version 0.1.0 ships `extract` and `shrink`. Development of `ithrl fuzz` adds bounded context
+changes, simplification of an interesting intervention and independent confirmation of its effect.
 
 The first fuzzing milestone aims for **one confirmed finding per campaign**: a declared decrease
 in the existing target's match probability among valid observations. A finding describes the
 selected experiment, including execution reliability and assumptions. It does not establish a
 model defect, a unique cause or semantic equivalence of the original and changed context.
 
-The feasibility study, immutable mutation contracts, deterministic generation/materialization/
-simplification, sampled comparison services and durable campaign recovery are implemented. The
-public command exposes these contracts through a local walkthrough; native mutation qualification
-remains ahead. See the
+The feasibility study, mutation contracts, deterministic generation and reconstruction, mutation
+simplification, sampled comparisons and durable campaign recovery are implemented. The
+public command provides a local fake-runner walkthrough, and its composed workflow and recovery
+checks have passed. Native text-mutation qualification remains open. See the
 [fuzzing research](docs/research/context-fuzzing.md) and the
 [fuzzing capability issue](https://github.com/eberkut/ithrl/issues/5) and
-[`v0.2.0` milestone](https://github.com/eberkut/ithrl/milestone/1) for implementation work and acceptance.
+[`v0.2.0` milestone](https://github.com/eberkut/ithrl/milestone/1) for implementation work and
+acceptance.
 
 Remaining deliverables, in dependency order:
 
-1. [Validate the composed workflow](https://github.com/eberkut/ithrl/issues/8), failure paths,
-   safety boundaries and existing commands.
-2. [Qualify one native text-mutation workflow](https://github.com/eberkut/ithrl/issues/9) through
+1. [Qualify one native text-mutation workflow](https://github.com/eberkut/ithrl/issues/9) through
    harmless controls and fresh confirmation.
-3. [Derive practical settings and public claims](https://github.com/eberkut/ithrl/issues/10) from
+2. [Derive practical settings and public claims](https://github.com/eberkut/ithrl/issues/10) from
    complete-workflow usefulness and measured costs.
 
 [Release preparation and publication](https://github.com/eberkut/ithrl/issues/11) follow acceptance.
@@ -98,19 +96,21 @@ Passive analysis should work without provider calls; implementing agent handoffs
 - Optional editor/agent integrations and handoff analysis that compose the CLI rather than
   introducing separate experimental semantics.
 
-These candidates have no assigned release. [Broader native workloads and costs](https://github.com/eberkut/ithrl/issues/16)
-and [baseline-sharing strategies](https://github.com/eberkut/ithrl/issues/17) remain research opportunities.
-The qualified reduction measurements cover a planted approximately 10k workload; 100k qualification
-is an optional expansion with a separate cost proposal.
+These candidates have no assigned release.
+[Broader native workloads and costs](https://github.com/eberkut/ithrl/issues/16) and
+[baseline-sharing strategies](https://github.com/eberkut/ithrl/issues/17) remain research
+opportunities. The qualified reduction measurements cover a planted approximately 10k workload; 100k
+qualification is an optional expansion with a separate cost proposal.
 
 ## Planning and release policy
 
 Repository issues own executable scope, acceptance criteria and dependencies. Release milestones
 group accepted scope; the [public Project](https://github.com/users/eberkut/projects/1/views/4)
-provides views over those same issues. Design rationale
-lives in [decision records](docs/decisions/index.md), methods and evidence in
+provides views over those same issues. Design rationale lives in
+[decision records](docs/decisions/index.md), methods and evidence in
 [research](docs/research/index.md), and the current system model in
-[architecture](docs/architecture.md). Keep task status in GitHub rather than a second checklist here.
+[architecture](docs/architecture.md). Keep task status in GitHub rather than a second checklist
+here.
 
 Before 1.0, project-owned schema tags remain at `1` while formats evolve directly. Breaking changes
 are acceptable; current-format validation and evidence identity remain strict. A future stable

@@ -6,6 +6,12 @@ repos:
         args: [--fix]
       - id: ruff-format
 
+  - repo: https://github.com/rvben/rumdl-pre-commit
+    rev: 03a7d1a4936b5889602852175bca2d39acb3281e # frozen: v0.3.0
+    hooks:
+      - id: rumdl-fmt
+      - id: rumdl
+
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c # frozen: v6.0.0
     hooks:

@@ -1,8 +1,8 @@
 # Measurements
 
-These measurements describe three completed synthetic native reductions using `gpt-6.1-sol`.
-They provide a reference for interpreting the [example experiment](native-runs.md#2-configure-the-experiment)
-and its costs.
+These measurements describe three completed synthetic native reductions using `gpt-6.1-sol`. They
+provide a reference for interpreting the
+[example experiment](native-runs.md#2-configure-the-experiment) and its costs.
 
 ## Workload
 
@@ -71,7 +71,8 @@ from Newcombe method 10. `one_sided_confidence = 0.95` uses the normal quantile 
 bound; the corresponding central interval has nominal coefficient 0.90. The preservation test
 uses the lower bound for candidate match probability minus original match probability.
 
-Public [reference vectors](https://github.com/eberkut/ithrl/blob/main/tests/fixtures/statistics_reference.json)
+Public
+[reference vectors](https://github.com/eberkut/ithrl/blob/main/tests/fixtures/statistics_reference.json)
 were generated independently using statsmodels 0.15.0's `confint_proportions_2indep` with
 `method="newcomb"`, `compare="diff"` and `alpha = 2 * (1 - confidence)`. The fixture records source
 URLs, source hashes and arm ordering. They cover unequal samples and boundary counts. From a
@@ -81,6 +82,7 @@ development checkout, run the credential-free checks with:
 uv run pytest -o addopts= tests/unit/test_statistics.py -q
 ```
 
-Those checks reproduce the comparison with the stored vectors. Historical temporary simulation
-artifacts are not reproduced by that command. Native observations and raw receipts remain private;
-the public aggregate table supplies the workload and cost context without session content.
+Those checks reproduce the comparison with the stored vectors. The
+[reduction study package](https://github.com/eberkut/ithrl/tree/main/research/reduction) separately
+replays synthetic sharing, failure, freshness and layout-budget models. The table above reports
+the observed native workload, confirmation and cost aggregates.

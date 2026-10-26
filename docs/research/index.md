@@ -2,8 +2,8 @@
 
 The research asks whether controlled context interventions can produce useful, inspectable agent
 experiments at a defensible cost. Each study states its workload, method, evidence and limits.
-The [README](https://github.com/eberkut/ithrl/blob/main/README.md#supported-inputs) owns current
-product support; research into a mechanism can precede a supported integration.
+The [README](https://github.com/eberkut/ithrl/blob/main/README.md#supported-inputs) lists supported
+capabilities. A research result can precede a supported integration.
 
 | Study | What it establishes |
 | --- | --- |
@@ -12,12 +12,18 @@ product support; research into a mechanism can precede a supported integration.
 | [Native reduction measurements](../measurements.md) | Workload, measured costs and completed confirmation for three approximately 10k profiles |
 | [Context fuzzing](context-fuzzing.md) | A bounded synthetic discovery/simplification/confirmation design, exact inference and validity sensitivities |
 
-Reproducible source and aggregate evidence for the synthetic fuzzing study live in
-[`research/fuzzing/`](https://github.com/eberkut/ithrl/tree/main/research/fuzzing). Its short replay
-is credential-free. The full numerical programme is opt-in and does not call a provider.
-Historical reduction studies identify which source/reference material remains available;
-their original temporary drivers are not all retained. Native cases and observations can contain
-private content, so their published evidence consists of sanitized methods and aggregate results.
+## Reproduce the synthetic studies
+
+Two source packages contain the models, configurations and reference results:
+
+- [`research/reduction/`](https://github.com/eberkut/ithrl/tree/main/research/reduction): selected
+  sampling decisions, baseline sharing, failure/freshness scenarios and native-layout budgets.
+- [`research/fuzzing/`](https://github.com/eberkut/ithrl/tree/main/research/fuzzing): numerical
+  confirmation checks, discovery, mutation simplification and validity sensitivities.
+
+Each package documents a short check and an opt-in full replay, including their coverage. Both
+run without credentials or provider calls. Native measurements are reported separately;
+synthetic replay does not repeat model execution.
 
 Analytic guarantees, simulations, fixture checks and live measurements answer different questions.
 Keep failed alternatives and corrections visible when interpreting a result. New studies should

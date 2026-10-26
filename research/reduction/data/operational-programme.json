@@ -1,0 +1,127 @@
+{
+  "status": "prospective bounded operational qualification; freeze source and tests before outcomes",
+  "parent_frozen": "frozen.json",
+  "parent_results": "results.json",
+  "plan": "large",
+  "policies": [
+    1,
+    2
+  ],
+  "instruction_positions": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "workloads": [
+    "equal",
+    "uneven"
+  ],
+  "replicas_per_position_scenario_policy": 20000,
+  "batch_size": 1000,
+  "seed": 2026100707,
+  "family_alpha": 0.01,
+  "maximum_reported_confidence_tails": 10000,
+  "runtime_ceiling_seconds": 120,
+  "report_ceiling_bytes": 67108864,
+  "scenarios": [
+    {
+      "name": "healthy",
+      "p0": 0.9,
+      "ph": 0.9,
+      "pr": 0.1,
+      "q": 0.0
+    },
+    {
+      "name": "healthy-failure1",
+      "p0": 0.9,
+      "ph": 0.9,
+      "pr": 0.1,
+      "q": 0.01
+    },
+    {
+      "name": "healthy-failure5",
+      "p0": 0.9,
+      "ph": 0.9,
+      "pr": 0.1,
+      "q": 0.05
+    },
+    {
+      "name": "mild",
+      "p0": 0.9,
+      "ph": 0.8,
+      "pr": 0.1,
+      "q": 0.0
+    },
+    {
+      "name": "mild-failure5",
+      "p0": 0.9,
+      "ph": 0.8,
+      "pr": 0.1,
+      "q": 0.05
+    },
+    {
+      "name": "boundary",
+      "p0": 0.5,
+      "ph": 0.3,
+      "pr": 0.1,
+      "q": 0.0
+    },
+    {
+      "name": "search-change",
+      "p0": 0.9,
+      "ph": 0.9,
+      "pr": 0.1,
+      "q": 0.0,
+      "mode": "abrupt",
+      "drift_at": 200,
+      "drift_size": -0.1
+    },
+    {
+      "name": "search-change-boundary",
+      "p0": 0.5,
+      "ph": 0.3,
+      "pr": 0.1,
+      "q": 0.0,
+      "mode": "abrupt",
+      "drift_at": 200,
+      "drift_size": -0.1
+    },
+    {
+      "name": "exclusive-expiry",
+      "p0": 0.9,
+      "ph": 0.9,
+      "pr": 0.1,
+      "q": 0.0,
+      "cohort_expiry_slots": 240,
+      "force_slots": true
+    },
+    {
+      "name": "compatible-resume",
+      "p0": 0.9,
+      "ph": 0.9,
+      "pr": 0.1,
+      "q": 0.0,
+      "resume": "same",
+      "pause_slots": 7
+    },
+    {
+      "name": "stale-resume",
+      "p0": 0.9,
+      "ph": 0.9,
+      "pr": 0.1,
+      "q": 0.0,
+      "resume": "stale",
+      "pause_slots": 7
+    }
+  ],
+  "qualification": {
+    "primary": "Healthy equal/uneven weighted calls per confirmed useful result, with all dispatched attempts conservatively charged and fresh confirmation included; require resolved positive saving versus strict using simultaneous bounds.",
+    "operational": "No unsampled candidate charges; no confirmation after incomplete search or stale resume; strict reference and lazy same-path maxima fit their frozen reservations; compatible resume uses the existing original sample and adds its pause once, with no age reset.",
+    "usefulness": "Healthy and mildly degraded complete-workflow success reported with simultaneous uncertainty. Original 80% per-position promotion floor retained; uncertainty overlapping the floor remains unresolved, not a pass.",
+    "risk": "Applicable conditional fresh-confirmation error at most .055, selected-result publication-risk excess versus strict at most .005. Use the constant-rate independent completed-arm component bound for conditional error. For a null category with one fixed candidate-rate component, publication probability equals its complete-selected probability times the fresh component error; multiply simultaneous selection-probability bounds by diagnostic component-error bounds to assess excess. Refuse this factorization for mixed components. Keep realized paired publication intervals separately and report their insufficient precision.",
+    "expiry": "Lifetime endpoint exclusive; expiration may lower completion and usefulness and must forbid classification/confirmation, rather than count as behavioral loss. Refuse unsupported remaining-time models.",
+    "drift_scope": "One shared downward step during search; prove every eligible confirmation starts after the step. Drift within final confirmation, continuous hosted drift and detection guarantees are unsupported.",
+    "stop": "Select a bounded synthetically qualified sharing design or actionable course correction, with implementation burden assessed separately. No outcome from this simulation establishes native eligibility, safe replacement, timing, tokens, or paid savings."
+  }
+}

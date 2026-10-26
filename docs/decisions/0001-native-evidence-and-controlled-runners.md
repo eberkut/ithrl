@@ -39,10 +39,10 @@ runner-scoped experiment and reports its deviations; successful full-context cal
 not prove equivalence to the historical runtime.
 
 Qualify experimental support for the exact profile through compatible evidence, capability
-detection, preventive isolation, effective action denial, calibration and bounded live-use
-evidence. Capabilities describe available mechanisms and do not grant permission. A passing
-fixture or installed version string cannot replace these gates. Current public support belongs
-in the [README supported-inputs table](https://github.com/eberkut/ithrl/blob/main/README.md#supported-inputs),
+detection, preventive isolation, effective action denial, calibration and bounded live-use evidence.
+Capabilities describe available mechanisms and do not grant permission. A passing fixture or
+installed version string cannot replace these gates. Current public support belongs in the
+[README supported-inputs table](https://github.com/eberkut/ithrl/blob/main/README.md#supported-inputs),
 with measured boundaries in [native runs](../native-runs.md#compatibility-and-measurements).
 
 The shared process runtime owns bounded lifecycle and disposable state, not general filesystem or
@@ -70,11 +70,11 @@ Schema versioning is reconsidered for 1.0.
 
 ## Alternatives
 
-A universal normalized transcript would simplify shared editing but hide native identity and
-state requirements. Direct replay of every captured request would incorrectly treat logical
-session evidence as an authoritative provider request. Executing or rewinding the original
-session/workspace would make experimental state disposable evidence. These alternatives do not
-meet the evidence and safety requirements.
+A universal normalized transcript would simplify shared editing but hide native identity and state
+requirements. Direct replay of every captured request would incorrectly treat logical session
+evidence as an authoritative provider request. Executing or rewinding the original session/workspace
+would treat source evidence as disposable experimental state. These alternatives do not meet the
+evidence and safety requirements.
 
 See the [architecture reference](../architecture.md) for current module ownership and contract
 lifecycles. Operational safety and contributor checks belong in
