@@ -197,6 +197,27 @@ jobs:
       - name: Run tests
         run: uv run pytest --ignore=tests/packaging
 
+  python-tests:
+    name: Python tests
+    needs: [changes, test]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - name: Require successful tests or an intentional documentation-only skip
+        env:
+          CLASSIFICATION_RESULT: ${{ needs.changes.result }}
+          FULL_VALIDATION: ${{ needs.changes.outputs.full }}
+          TEST_RESULT: ${{ needs.test.result }}
+        run: |
+          test "$CLASSIFICATION_RESULT" = success
+          case "$FULL_VALIDATION:$TEST_RESULT" in
+            true:success|false:success) ;;
+            false:skipped) echo 'Python tests skipped for Markdown-only changes.' ;;
+            *) echo '::error::Python tests did not satisfy the required validation policy'; exit 1 ;;
+          esac
+
   docs:
     name: Documentation
     runs-on: ubuntu-latest
