@@ -267,6 +267,9 @@ CodeRabbit's optional planning and code-generation features are configured in
 
 ## Preparing a release
 
+For every feature, aim for parity across supported harnesses. Any exception must be clearly
+justified and documented before release.
+
 Python Semantic Release, pinned in the `release` dependency group, calculates versions from
 Conventional Commits. `pyproject.toml` is the version source; installed CLI and Codex client
 metadata read that distribution version. The tool generates `CHANGELOG.md` from the full release
