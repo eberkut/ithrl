@@ -33,7 +33,7 @@ DISABLED_FEATURES = frozenset(
 POLICY_VERSION = "codex-final-response-isolated-discovery-v2"
 RUNNER_VERSION = "1"
 CAPTURE_TYPE = "logical-session"
-CONTEXT_OPERATION = "dependency-closed-removal"
+CONTEXT_OPERATIONS = ("dependency-closed-removal", "append-text")
 MATERIALIZATION = "source-backed"
 RECONSTRUCTION_METHOD = "codex-app-server-inject-items-v1"
 SOURCE_SCHEMA = "codex-rollout-jsonl"
@@ -54,7 +54,7 @@ def runtime_deviation(runtime_identity: str) -> str:
 
 __all__ = [
     "CAPTURE_TYPE",
-    "CONTEXT_OPERATION",
+    "CONTEXT_OPERATIONS",
     "DISABLED_FEATURES",
     "MATERIALIZATION",
     "POLICY_VERSION",

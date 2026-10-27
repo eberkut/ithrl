@@ -17,12 +17,14 @@ from ithrl.context import (
     stable_source_context_id,
 )
 from ithrl.decisions import DecisionSelector
+from ithrl.mutation import EditableText, editable_message_text
 
 _HARNESS = "codex"
 _SOURCE = "source/rollout.jsonl"
 _CALL_TYPES = frozenset({"custom_tool_call", "function_call"})
 _OUTPUT_TYPES = frozenset({"custom_tool_call_output", "function_call_output"})
 _STRUCTURAL_RECORD_TYPES = frozenset({"session_meta", "turn_context", "world_state"})
+_MODEL_INPUT_TYPES = frozenset({"message", "custom_tool_call_output", "function_call_output"})
 _OPAQUE_RECORD_TYPES = frozenset(
     {
         "inter_agent_communication_metadata",
@@ -44,6 +46,47 @@ def compile_context(session: NativeSession, selector: DecisionSelector) -> Conte
             "selected decision has too many preceding context records",
         )
     return ContextGraph(nodes=_context_nodes(records[:context_count]))
+
+
+def editable_text(
+    session: NativeSession, selector: DecisionSelector, context: ContextGraph
+) -> tuple[EditableText, ...]:
+    """Discover ordinary prior-user text while preserving the selected turn input."""
+
+    records = session.records
+    trigger_id = _trigger_node_id(context.nodes, records, selector.context_before_line)
+    return tuple(
+        site
+        for node in context.nodes
+        if node.id != trigger_id and node.selector is not None
+        for record in (records[node.selector.line - 1],)
+        if record.get("type") == "response_item"
+        for site in editable_message_text(node, _object(record.get("payload")))
+    )
+
+
+def _trigger_node_id(
+    nodes: tuple[ContextNode, ...], records: tuple[JsonObject, ...], boundary: int
+) -> str:
+    """Identify the last native model input before the selected decision boundary."""
+
+    for node in reversed(nodes):
+        selector = node.selector
+        if selector is None or selector.line >= boundary:
+            continue
+        record = records[selector.line - 1]
+        if record.get("type") != "response_item":
+            continue
+        payload = _object(record.get("payload"))
+        item_type = _string(payload.get("type"))
+        if item_type not in _MODEL_INPUT_TYPES:
+            continue
+        if item_type != "message" or payload.get("role") in {"user", "developer", "system"}:
+            return node.id
+    raise AdapterError(
+        AdapterErrorCode.INVALID_SESSION,
+        "the selected Codex decision has no supported triggering input",
+    )
 
 
 def source_selector(index: int, record: JsonObject) -> SourceRecordSelector:

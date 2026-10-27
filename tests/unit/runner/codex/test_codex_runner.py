@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import stat
+from copy import deepcopy
 from dataclasses import replace
 from importlib.metadata import version as distribution_version
 from pathlib import Path
@@ -12,6 +13,7 @@ import pytest
 
 import ithrl.runner.codex.runner as codex_runner_module
 from ithrl.case import CaseEvidence, CaseWorkspace
+from ithrl.context import content_digest
 from ithrl.execution import (
     CapabilityProfile,
     ResolvedExecutionPlan,
@@ -19,6 +21,7 @@ from ithrl.execution import (
     SafetyPolicy,
 )
 from ithrl.experiment import ExperimentDefinition
+from ithrl.mutation import TextAppend, TextMutation
 from ithrl.runner import (
     PreparedAttempt,
     RunnerCancelled,
@@ -30,6 +33,7 @@ from ithrl.runner.codex import CodexProviderConfiguration, CodexRunner, CodexRun
 from ithrl.runner.codex.materialize import (
     CodexMaterializationError,
     CodexMaterializationErrorCode,
+    editable_codex_text,
 )
 from ithrl.runner.contracts import CandidateInvalidError
 from ithrl.runner.evidence import AttemptEvidence
@@ -355,6 +359,69 @@ def test_runs_one_final_response_inside_shared_isolation(tmp_path: Path) -> None
     assert not (tmp_path / "attempts" / result.attempt_id).exists()
     assert stat.S_IMODE((tmp_path / "output").stat().st_mode) == 0o700
     assert (tmp_path / "original-workspace" / "marker.txt").read_text() == "unchanged\n"
+
+
+def test_registered_runner_delivers_exact_append_without_changing_trigger_or_policy(
+    tmp_path: Path,
+) -> None:
+    workspace, evidence = _case(tmp_path)
+    runner = _runner(tmp_path, workspace)
+    baseline = _attempt(evidence, runner)
+    site = editable_codex_text(baseline)[0]
+    appended = "\n\nSynthetic archived note."
+    mutation = TextMutation(
+        edits=(
+            TextAppend(
+                context_id=site.context_id,
+                content_index=site.content_index,
+                original_text_digest=content_digest(site.original_text),
+                text=appended,
+            ),
+        )
+    )
+    changed = replace(
+        baseline,
+        candidate=prepare_candidate(evidence, baseline.execution_plan, mutation=mutation),
+        phase="search",
+        arm="candidate",
+    )
+    runner.validate_candidate(changed)
+    assert not (tmp_path / "attempts").exists()
+    source = (FIXTURES / "codex-session" / "rollout.jsonl").read_bytes()
+    requests = []
+    for attempt in (baseline, changed):
+        result = asyncio.run(runner.run(attempt))
+        assert result.native_output is not None
+        output = ProtectedOutputStore.open(tmp_path / "output").read(result.native_output)
+        records = [json.loads(line) for line in output.stdout.splitlines()]
+        requests.append([record["value"] for record in records if record["kind"] == "client"])
+        assert result.accounting.source_store_effect == "unchanged"
+        assert result.accounting.original_workspace_effect == "unchanged"
+        assert result.accounting.cleanup_outcome == "verified"
+        assert result.accounting.actions_executed == 0
+
+    expected = deepcopy(requests[0])
+    inject = next(request for request in expected if request.get("method") == "thread/inject_items")
+    message = inject["params"]["items"][0]
+    assert message["role"] == "user"
+    assert message["content"][site.content_index]["text"] == site.original_text
+    message["content"][site.content_index]["text"] = site.original_text + appended
+    assert requests[1] == expected
+    assert (FIXTURES / "codex-session" / "rollout.jsonl").read_bytes() == source
+    assert workspace.load().digest == evidence.digest
+    assert (tmp_path / "original-workspace" / "marker.txt").read_text() == "unchanged\n"
+
+
+def test_rejects_old_removal_only_capability(tmp_path: Path) -> None:
+    workspace, _ = _case(tmp_path)
+    runner = _runner(tmp_path, workspace)
+    previous = runner.capability_profile.model_copy(
+        update={"supported_context_operations": ("dependency-closed-removal",)}
+    )
+    assert previous.digest != runner.capability_profile.digest
+    with pytest.raises(ValueError, match="does not satisfy"):
+        _runner(tmp_path, workspace, capability=previous)
+    assert not (tmp_path / "attempts").exists()
 
 
 def test_rejects_action_request_before_any_action_loop(tmp_path: Path) -> None:

@@ -11,7 +11,7 @@ from ithrl.adapters.registry import parse_session_bytes
 from ithrl.case import CaseFormatError
 from ithrl.context import ContextNode, JsonObject, JsonValue
 from ithrl.extraction import validate_extracted_case
-from ithrl.mutation import EditableText, MutationError, append_message_text, editable_message_text
+from ithrl.mutation import EditableText, MutationError, append_message_text
 from ithrl.runner.codex.policy import (
     CAPTURE_TYPE,
     MATERIALIZATION,
@@ -237,15 +237,8 @@ def editable_codex_text(attempt: PreparedAttempt) -> tuple[EditableText, ...]:
 
     if attempt.candidate.removed_context_ids or not attempt.candidate.mutation.is_empty:
         raise MutationError("text discovery requires the unchanged original")
-    materialized = materialize_codex_attempt(attempt)
-    nodes = attempt.evidence.context.by_id
-    return tuple(
-        site
-        for node_id, message in zip(
-            materialized.history_context_ids, materialized.history, strict=True
-        )
-        for site in editable_message_text(nodes[node_id], message)
-    )
+    materialize_codex_attempt(attempt)
+    return attempt.evidence.editable_text()
 
 
 def _trigger_node_id(

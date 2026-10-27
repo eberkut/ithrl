@@ -55,15 +55,17 @@ behavior requires investigation.
 
 ## Fuzz setup and resume
 
-The [fuzzing walkthrough](native-runs.md#context-fuzzing) uses a development checkout and the fake
-runner. Current native profiles do not qualify text mutation.
+The [fuzzing walkthrough](native-runs.md#context-fuzzing) covers the fake-runner example and native
+setup. Detection makes no provider requests; inspecting a saved profile with `--dry-run` starts no
+harness.
 
 | Error code | Next action |
 | --- | --- |
 | `fuzz-configuration-required` | Supply the private TOML with `--config`; see the walkthrough for a complete example. |
-| `detection-required` | Native planning needs a capability profile from explicit `--detect`. A fuzz dry-run never starts a harness; detection can refuse an unsupported mutation profile. |
+| `detection-required` | Create a private structural profile with `--detect` and the original workspace, then review it with `--profile ... --dry-run`. Detection uses bounded local harness probes without provider requests. |
+| `unsupported-context-operation` | The detected runner does not support the requested mutation. Codex supports append-text for eligible prior user input; Copilot does not. |
 | `profile-input-mismatch` | Use the case, configuration and original workspace bound to the saved profile. Changed inputs require a new profile. |
-| `model-execution-not-acknowledged` | Inspect the plan before authorizing model requests with `--acknowledge-model-execution`. Acknowledgement cannot enable an unsupported operation. |
+| `model-execution-not-acknowledged` | Inspect the complete plan and set an explicit provider-call budget before authorizing model requests with `--acknowledge-model-execution`. Acknowledgement cannot enable an unsupported operation. |
 | `resume-input-conflict` | Use `ithrl fuzz RUN_OR_RESULT --resume` without overriding configuration, profile, workspace or observation store. Resume preserves the original limits. |
 
 Use `--dry-run --resume` to inspect a saved fuzz campaign without starting a harness. See

@@ -139,15 +139,17 @@ resume](results.md) for its interpretation and continuation rules.
 ## Context fuzzing
 
 `ithrl fuzz` explores bounded text appends and confirms at most one decrease in the selected
-behavior's match rate. Run this walkthrough from a development checkout, with dependencies installed
-using `uv sync --locked --all-groups --all-extras`.
-Native text mutation is awaiting qualification; current native profiles refuse this operation.
+behavior's match rate. Fuzzing requires the optional `fuzz` extra (`ithrl[fuzz]`).
+Codex supports appends to eligible prior
+user input while preserving the selected decision's triggering input. A synthetic native campaign
+completed qualification; its [settings, result and costs](measurements.md#native-context-fuzzing)
+provide a measured example. Copilot text mutation remains unsupported.
 
 To exercise the complete workflow locally, create a fresh example case:
 
 ```bash
 mkdir -m 700 ithrl-fuzz-demo
-uv run ithrl extract --example --output ithrl-fuzz-demo/case
+ithrl extract --example --output ithrl-fuzz-demo/case
 ```
 
 Save the following as `ithrl-fuzz-demo/fuzz.toml`, with mode `0600`:
@@ -204,9 +206,9 @@ and is never printed in normal output.
 Inspect without execution, then run with a dedicated store:
 
 ```bash
-uv run ithrl fuzz ithrl-fuzz-demo/case --config ithrl-fuzz-demo/fuzz.toml \
+ithrl fuzz ithrl-fuzz-demo/case --config ithrl-fuzz-demo/fuzz.toml \
   --observation-store ithrl-fuzz-demo/fuzz-observations.sqlite --dry-run
-uv run ithrl fuzz ithrl-fuzz-demo/case --config ithrl-fuzz-demo/fuzz.toml \
+ithrl fuzz ithrl-fuzz-demo/case --config ithrl-fuzz-demo/fuzz.toml \
   --observation-store ithrl-fuzz-demo/fuzz-observations.sqlite
 ```
 
@@ -216,11 +218,30 @@ for saved evidence and resume behavior. Use `--format json` for one JSON report 
 progress and the inspected plan go to stderr.
 
 Fuzz `--dry-run` starts no harness or provider. A native case without a saved capability profile
-reports `detection-required`. The separate `--detect` operation performs credential-free structural
-discovery; current native profiles refuse text mutation before a provider attempt. Native sampling
-settings and execution require their own qualification. See the [CLI reference](cli.md#ithrl-fuzz)
-for detection and profile options, and [troubleshooting](troubleshooting.md#fuzz-setup-and-resume)
-for configuration and resume refusals.
+reports `detection-required`. To create the private structural profile for a native case, run:
+
+```bash
+ithrl fuzz CASE --config PRIVATE_CONFIG --detect --profile PRIVATE_PROFILE \
+  --original-workspace ORIGINAL_WORKSPACE
+```
+
+Detection runs bounded, network-denied local harness probes without a provider request. Inspect
+the result, then use its profile in a harness-free plan review:
+
+```bash
+ithrl fuzz CASE --config PRIVATE_CONFIG --profile PRIVATE_PROFILE \
+  --original-workspace ORIGINAL_WORKSPACE --observation-store PRIVATE_STORE --dry-run
+```
+
+The profile binds the case, configuration and original workspace. Freshly extracted Codex cases
+can use detection directly without editing the case's experiment. Choose native sampling and
+resource limits explicitly in `PRIVATE_CONFIG`; the fake-runner example above uses demonstration
+settings. The [measured native campaign](measurements.md#native-context-fuzzing) records one
+complete configuration without establishing general defaults. Review the provider, model,
+destination, isolation, action-denial policy and complete budget before using the returned command
+with `--acknowledge-model-execution`.
+See the [CLI reference](cli.md#ithrl-fuzz) for options and
+[troubleshooting](troubleshooting.md#fuzz-setup-and-resume) for refusals.
 
 ## Compatibility and measurements
 
@@ -236,7 +257,7 @@ Harness release numbers are recorded for reproducibility; there is no exact-rele
 After a harness or configuration change, rerun preflight and use its capability digest for a new
 experiment. A changed digest prevents reuse of an old pinned plan or incompatible saved run.
 
-The [measurements](measurements.md) record the benchmark construction, completed reductions,
-tested harness versions, confirmation results and costs. Other releases go through the same local
-compatibility checks. The example's 24-hour wall-time limit is an administrative ceiling;
+The [measurements](measurements.md) record benchmark construction, completed reduction and fuzzing
+workflows, tested harness versions, confirmation results and costs. Other releases go through the
+same local compatibility checks. The example's 24-hour wall-time limit is an administrative ceiling;
 use the measured times to understand the completed workload's duration.

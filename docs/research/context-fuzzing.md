@@ -1,11 +1,11 @@
 # Context fuzzing: a bounded single-finding design
 
-The 2026-10-23 credential-free study selected a useful synthetic discovery, mutation
-simplification and fresh-confirmation procedure for a planted target-rate decrease from `.90`
-to `.10`. The minimum complete-workflow success rate was 90.25%, with a simultaneous 99% lower
-bound of 88.86896%, exceeding the prospective 80% gate. These results support the design for the
-specified synthetic workload. Native fuzzing and ordinary-session success rates require separate
-measurements.
+The 2026-10-23 credential-free study selected a useful synthetic discovery, mutation simplification
+and fresh-confirmation procedure for a planted target-rate decrease from `.90` to `.10`. The minimum
+complete-workflow success rate was 90.25%, with a simultaneous 99% lower bound of 88.86896%,
+exceeding the prospective 80% gate. These results support the design for the specified synthetic
+workload. A later [native Codex campaign](../measurements.md#native-context-fuzzing) measured one
+complete append-text workflow. Ordinary-session success rates remain unmeasured.
 
 The implementation provides deterministic mutation generation and simplification, sampled
 comparisons and durable campaign recovery through the shared observation store. The
@@ -72,8 +72,10 @@ The implemented materializers revalidate selectors, protected fields and origina
 on defensive copies. Pure candidate admission occurs before sampling allocation. Candidate identity
 binds the complete intervention and the source, target, reconstruction, effective policy and
 experiment; a generation seed/index or retained/removed partition alone cannot identify a mutation.
-Native Codex and Copilot capability profiles remain removal-only. A fixture profile that exercises
-the seam does not qualify a native execution profile.
+Codex capability profiles advertise `append-text` for this seam; Copilot profiles remain
+removal-only. Native text discovery re-derives the saved decision and context before the adapter
+enumerates editable fields. The fixed triggering input is excluded. Native experimental support
+requires the [qualification gate](#native-applicability).
 
 ## Confirmation method and assumptions
 
@@ -337,10 +339,19 @@ cover role separation, complete-block admission and failure handling.
 
 ## Native applicability
 
-These synthetic results do not supply a native model effect, runtime estimate or universal preset.
-Qualification must measure a useful complete workflow for a safe text-mutation profile with faithful
-no-op/reconstruction controls, original calibration, protected-state checks and fresh confirmation.
-Existing extraction/reduction support alone does not qualify insertion or replacement. The
-[native qualification issue](https://github.com/eberkut/ithrl/issues/9) defines that gate's scope,
-approvals and acceptance. The [practical-settings issue](https://github.com/eberkut/ithrl/issues/10)
-tracks the resulting supported workloads and limits.
+The synthetic study selected the procedure and tested its assumptions before native execution.
+Its rates and modeled costs remain specific to that study.
+
+A completed Codex final-response campaign qualified appending text to eligible prior user input.
+It preserved the fixed triggering input, passed a duplication control and original calibration,
+simplified a stress append and independently confirmed the selected intervention with fresh samples.
+Protected-state and cleanup checks passed, and no returned actions executed. The
+[measurements](../measurements.md#native-context-fuzzing) own the native workload, exact result,
+configuration, usage and resource costs; the [native-run guide](../native-runs.md#context-fuzzing)
+owns the execution procedure.
+
+This is evidence for one synthetic case and the qualified append-text profile. It does not qualify
+Copilot mutation, establish ordinary-session success rates or supply a universal preset. The
+[native qualification issue](https://github.com/eberkut/ithrl/issues/9) defines the acceptance
+boundary; the [practical-settings issue](https://github.com/eberkut/ithrl/issues/10) owns further
+work on supported workloads and limits.

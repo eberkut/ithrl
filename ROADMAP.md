@@ -9,29 +9,25 @@ with scope and release dates decided from evidence.
 
 ## Current work: context fuzzing
 
-Version 0.1.0 ships `extract` and `shrink`. Development of `ithrl fuzz` adds bounded context
-changes, simplification of an interesting intervention and independent confirmation of its effect.
+The `ithrl fuzz` command explores bounded context changes, simplifies interventions and
+independently confirms their effects.
 
-The first fuzzing milestone aims for **one confirmed finding per campaign**: a declared decrease
+The first fuzzing milestone supports **one confirmed finding per campaign**: a declared decrease
 in the existing target's match probability among valid observations. A finding describes the
 selected experiment, including execution reliability and assumptions. It does not establish a
 model defect, a unique cause or semantic equivalence of the original and changed context.
 
-The feasibility study, mutation contracts, deterministic generation and reconstruction, mutation
-simplification, sampled comparisons and durable campaign recovery are implemented. The
-public command provides a local fake-runner walkthrough, and its composed workflow and recovery
-checks have passed. Native text-mutation qualification remains open. See the
-[fuzzing research](docs/research/context-fuzzing.md) and the
+The Codex prior-user append workflow has completed qualification, including
+simplification and fresh confirmation. See
+[measurements](docs/measurements.md#native-context-fuzzing) for its workload, result and cost, and
+[fuzzing research](docs/research/context-fuzzing.md) for the method and assumptions.
+
+The next deliverable is to
+[derive practical settings and public claims](https://github.com/eberkut/ithrl/issues/10) from
+complete-workflow usefulness and measured costs. One synthetic case supplies no general sampling
+preset or ordinary-session success rate. The
 [fuzzing capability issue](https://github.com/eberkut/ithrl/issues/5) and
-[`v0.2.0` milestone](https://github.com/eberkut/ithrl/milestone/1) for implementation work and
-acceptance.
-
-Remaining deliverables, in dependency order:
-
-1. [Qualify one native text-mutation workflow](https://github.com/eberkut/ithrl/issues/9) through
-   harmless controls and fresh confirmation.
-2. [Derive practical settings and public claims](https://github.com/eberkut/ithrl/issues/10) from
-   complete-workflow usefulness and measured costs.
+[`v0.2.0` milestone](https://github.com/eberkut/ithrl/milestone/1) own scope and acceptance.
 
 [Release preparation and publication](https://github.com/eberkut/ithrl/issues/11) follow acceptance.
 They remain separate from implementing the capability. Broader mutation families and multiple-

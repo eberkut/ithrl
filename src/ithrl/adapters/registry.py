@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from ithrl.adapters._jsonl import JsonlDocument, read_jsonl, read_jsonl_bytes
 from ithrl.adapters.codex import PARSER as CODEX_PARSER
 from ithrl.adapters.codex.context import compile_context as compile_codex_context
+from ithrl.adapters.codex.context import editable_text as editable_codex_text
 from ithrl.adapters.codex.decisions import enumerate_decisions as enumerate_codex_decisions
 from ithrl.adapters.codex.discovery import discover_sources as discover_codex_sources
 from ithrl.adapters.contracts import NativeSession, ParsingLimits
@@ -32,6 +33,7 @@ from ithrl.adapters.discovery import (
 from ithrl.adapters.errors import AdapterError, AdapterErrorCode
 from ithrl.context import ContextGraph
 from ithrl.decisions import DecisionDraft, DecisionSelector, DecisionSummary, SelectedDecision
+from ithrl.mutation import EditableText
 
 
 class NativeSessionParser(Protocol):
@@ -68,6 +70,14 @@ class SessionDiscoverer(Protocol):
     ) -> SourceScan: ...
 
 
+class TextDiscoverer(Protocol):
+    """Interpret editable text in one verified native decision context."""
+
+    def __call__(
+        self, session: NativeSession, selector: DecisionSelector, context: ContextGraph
+    ) -> tuple[EditableText, ...]: ...
+
+
 @dataclass(frozen=True, slots=True)
 class _AdapterRegistration:
     harness: HarnessName
@@ -75,6 +85,7 @@ class _AdapterRegistration:
     discoverer: SessionDiscoverer
     decision_enumerator: DecisionEnumerator
     context_compiler: ContextCompiler
+    text_discoverer: TextDiscoverer | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,6 +103,7 @@ _BUILTIN_ADAPTERS = (
         discoverer=discover_codex_sources,
         decision_enumerator=enumerate_codex_decisions,
         context_compiler=compile_codex_context,
+        text_discoverer=editable_codex_text,
     ),
     _AdapterRegistration(
         harness="copilot",
@@ -104,6 +116,17 @@ _BUILTIN_ADAPTERS = (
 _ADAPTERS_BY_HARNESS = {adapter.harness: adapter for adapter in _BUILTIN_ADAPTERS}
 _ADAPTERS_BY_FORMAT = {adapter.parser.format_name: adapter for adapter in _BUILTIN_ADAPTERS}
 _BUILTIN_PARSERS = tuple(adapter.parser for adapter in _BUILTIN_ADAPTERS)
+
+
+def editable_session_text(
+    session: NativeSession, selector: DecisionSelector, context: ContextGraph
+) -> tuple[EditableText, ...]:
+    """Discover text through the native adapter after source and decision validation."""
+
+    adapter = _ADAPTERS_BY_FORMAT.get(session.metadata.format.name)
+    if adapter is None or adapter.text_discoverer is None:
+        return ()
+    return adapter.text_discoverer(session, selector, context)
 
 
 def discover_sessions(

@@ -27,6 +27,7 @@ from ithrl.experiment import (
     FakeRunnerConfig,
     NativeRunnerConfig,
     SampledExperimentDefinition,
+    UnavailableRunnerConfig,
     parse_experiment_toml,
 )
 from ithrl.fuzz.configuration import (
@@ -53,16 +54,22 @@ def prepare_fuzz_profile(
 ) -> tuple[FuzzProfile, PreparedExperiment]:
     evidence = workspace.load()
     persisted = parse_experiment_toml(evidence.default_experiment)
-    if not isinstance(persisted.runner, (FakeRunnerConfig, NativeRunnerConfig)):
+    if not isinstance(
+        persisted.runner, (FakeRunnerConfig, NativeRunnerConfig, UnavailableRunnerConfig)
+    ):
         raise ValueError("unsupported fuzz runner")
-    experiment = SampledExperimentDefinition(
-        schema_version=1,
-        target=persisted.target,
-        oracle=persisted.oracle,
-        runner=persisted.runner,
-        calibration=config.calibration,
+    experiment = (
+        None
+        if isinstance(persisted.runner, UnavailableRunnerConfig)
+        else SampledExperimentDefinition(
+            schema_version=1,
+            target=persisted.target,
+            oracle=persisted.oracle,
+            runner=persisted.runner,
+            calibration=config.calibration,
+        )
     )
-    if isinstance(experiment.runner, FakeRunnerConfig):
+    if experiment is not None and isinstance(experiment.runner, FakeRunnerConfig):
         prepared = prepare_experiment(
             evidence,
             experiment=experiment,
@@ -78,6 +85,7 @@ def prepare_fuzz_profile(
             evidence,
             original_workspace=original_workspace,
             experiment=experiment,
+            calibration=config.calibration,
             attempt_timeout_seconds=config.limits.attempt_timeout_seconds,
         )
         prepared = prepare_experiment(
@@ -149,7 +157,7 @@ def _handle(
         profile = load_fuzz_profile(profile_path) if profile_path and not detect else None
     evidence = workspace.load()
     persisted = parse_experiment_toml(evidence.default_experiment)
-    native = isinstance(persisted.runner, NativeRunnerConfig)
+    native = isinstance(persisted.runner, (NativeRunnerConfig, UnavailableRunnerConfig))
     if native and original_workspace is None:
         raise FuzzInputRefusal("original-workspace-required")
     # Pure path validation precedes both consent and detection. It creates no storage.
@@ -184,7 +192,11 @@ def _handle(
             case_path=str(workspace.root),
             case_digest=evidence.digest,
             configuration_digest=config.digest,
-            harness=persisted.runner.type,
+            harness=(
+                persisted.runner.harness
+                if isinstance(persisted.runner, UnavailableRunnerConfig)
+                else persisted.runner.type
+            ),
             model=evidence.manifest.model_requested,
             target=persisted.target.type,
             calibration_plan=config.calibration,

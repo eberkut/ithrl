@@ -143,8 +143,12 @@ class CaseEvidence:
         return request
 
     def editable_text(self) -> tuple[EditableText, ...]:
-        """Discover prior-user request text without a runner or provider call."""
+        """Discover prior-user text from preserved evidence without runtime operations."""
 
+        if self._manifest.capture.request == "logical-session":
+            from ithrl.extraction import editable_extracted_text
+
+            return editable_extracted_text(self)
         request = self.request
         found = []
         for node in self._context.nodes:

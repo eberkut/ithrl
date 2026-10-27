@@ -25,7 +25,7 @@ from ithrl.runner.codex.materialize import (
 )
 from ithrl.runner.codex.policy import (
     CAPTURE_TYPE,
-    CONTEXT_OPERATION,
+    CONTEXT_OPERATIONS,
     MATERIALIZATION,
     POLICY_VERSION,
     RECONSTRUCTION_METHOD,
@@ -292,7 +292,7 @@ def _validate_capability(capability: CapabilityProfile) -> None:
         "deterministic": False,
         "supported_capture_types": (CAPTURE_TYPE,),
         "supported_materializations": (MATERIALIZATION,),
-        "supported_context_operations": (CONTEXT_OPERATION,),
+        "supported_context_operations": CONTEXT_OPERATIONS,
         "reconstruction_method": RECONSTRUCTION_METHOD,
         "supported_targets": (TARGET_TYPE,),
         "provider_transport": "required",

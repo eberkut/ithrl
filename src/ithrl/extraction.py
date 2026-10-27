@@ -21,7 +21,7 @@ from ithrl.adapters import (
     resolve_session,
     select_decision,
 )
-from ithrl.adapters.registry import parse_session_bytes
+from ithrl.adapters.registry import editable_session_text, parse_session_bytes
 from ithrl.behavior import BehaviorTarget
 from ithrl.case import (
     CaptureFacts,
@@ -40,6 +40,7 @@ from ithrl.experiment import (
     StructuralOracleConfig,
     UnavailableRunnerConfig,
 )
+from ithrl.mutation import EditableText
 
 
 def extract_decision(
@@ -125,9 +126,26 @@ def list_native_decisions(session: NativeSession) -> tuple[DecisionSummary, ...]
 def validate_extracted_case(evidence: CaseEvidence) -> None:
     """Re-derive a logical-session case from its preserved native source."""
 
+    _rederive_extracted_case(evidence)
+
+
+def editable_extracted_text(evidence: CaseEvidence) -> tuple[EditableText, ...]:
+    """Discover native text only after re-deriving the preserved decision and context."""
+
+    session = _rederive_extracted_case(evidence)
+    decision = evidence.decision
+    if session is None or decision is None:
+        return ()
+    try:
+        return editable_session_text(session, decision.selector, evidence.context)
+    except AdapterError:
+        raise CaseFormatError("logical-session editable text cannot be derived safely") from None
+
+
+def _rederive_extracted_case(evidence: CaseEvidence) -> NativeSession | None:
     decision = evidence.decision
     if decision is None:
-        return
+        return None
     source = next(
         (
             artifact
@@ -155,6 +173,7 @@ def validate_extracted_case(evidence: CaseEvidence) -> None:
         raise CaseFormatError("logical-session case source type does not match the adapter")
     if _case_manifest(session, selected) != evidence.manifest:
         raise CaseFormatError("logical-session case metadata does not match preserved source")
+    return session
 
 
 def load_extracted_case(workspace: CaseWorkspace) -> CaseEvidence:

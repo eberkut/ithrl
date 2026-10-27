@@ -28,7 +28,7 @@ from ithrl.runner.codex.isolation import (
 )
 from ithrl.runner.codex.policy import (
     CAPTURE_TYPE,
-    CONTEXT_OPERATION,
+    CONTEXT_OPERATIONS,
     DISABLED_FEATURES,
     MATERIALIZATION,
     POLICY_VERSION,
@@ -189,7 +189,7 @@ def detect_codex_capability(
         deterministic=False,
         supported_capture_types=(CAPTURE_TYPE,),
         supported_materializations=(MATERIALIZATION,),
-        supported_context_operations=(CONTEXT_OPERATION,),
+        supported_context_operations=CONTEXT_OPERATIONS,
         reconstruction_method=RECONSTRUCTION_METHOD,
         supported_targets=(TARGET_TYPE,),
         provider_transport="required",
