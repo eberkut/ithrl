@@ -53,12 +53,17 @@ attempt_timeout_seconds = 1
 """
 
 
-def inputs(tmp_path: Path) -> list[str]:
-    extract_inference(
-        Path(__file__).parents[1] / "fixtures/synthetic-trace.json",
-        inference_call_id="synthetic-ac-001",
-        case_path=tmp_path / "case",
-    )
+def inputs(tmp_path: Path, *, source_backed: bool = False) -> list[str]:
+    if source_backed:
+        from native_support.codex import _case
+
+        _case(tmp_path)
+    else:
+        extract_inference(
+            Path(__file__).parents[1] / "fixtures/synthetic-trace.json",
+            inference_call_id="synthetic-ac-001",
+            case_path=tmp_path / "case",
+        )
     config = tmp_path / "fuzz.toml"
     config.write_text(CONFIGURATION)
     config.chmod(0o600)
@@ -133,7 +138,13 @@ def test_fake_campaign_saved_rates_and_terminal_resume(tmp_path: Path) -> None:
         assert state.snapshot(store, now=datetime.now(UTC)).state == before.state
 
 
-def mock_native(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def mock_native(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    source_backed: bool = False,
+    fresh: bool = False,
+):
     from fuzz_support import FuzzRunner
     from ithrl.behavior import FinalResponseTarget
     from ithrl.cli.native import NativeSelection
@@ -146,8 +157,39 @@ def mock_native(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from ithrl.fuzz.configuration import FuzzConfiguration
     from ithrl.runner import RunnerRegistry
 
-    args = inputs(tmp_path)
+    args = inputs(tmp_path, source_backed=source_backed)
     runner = FuzzRunner()
+    if source_backed:
+        from ithrl.runner import RunAccounting
+        from ithrl.runner.codex.materialize import materialize_codex_attempt
+
+        runner.capability_profile = runner.capability_profile.model_copy(
+            update={
+                "harness": "codex",
+                "source_schema": "codex-rollout-jsonl",
+                "supported_capture_types": ("logical-session",),
+                "supported_materializations": ("source-backed",),
+                "reconstruction_method": "codex-app-server-inject-items-v1",
+            }
+        )
+
+        async def native_run(attempt: PreparedAttempt) -> RunResult:
+            materialize_codex_attempt(attempt)
+            runner.calls.append(attempt)
+            return RunResult(
+                attempt_id=attempt.attempt_id,
+                effective_policy_digest=attempt.safety_policy.digest,
+                final_text="Fixture complete." if attempt.candidate.mutation.is_empty else "RED",
+                provider=runner.capability_profile.provider,
+                endpoint=runner.capability_profile.endpoint,
+                model_requested=attempt.execution_plan.model_requested,
+                model_returned=attempt.execution_plan.model_requested,
+                accounting=RunAccounting(
+                    provider_calls_started=1, provider_calls_completed=1, elapsed_milliseconds=1
+                ),
+            )
+
+        monkeypatch.setattr(runner, "run", native_run)
     config_path = tmp_path / "fuzz.toml"
     config_path.write_text(
         CONFIGURATION.replace("max_provider_calls = 0", "max_provider_calls = 500")
@@ -155,14 +197,15 @@ def mock_native(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     config = FuzzConfiguration.from_toml(config_path.read_text())
     experiment = SampledExperimentDefinition(
         schema_version=1,
-        target=FinalResponseTarget(text_equals="BLUE"),
+        target=FinalResponseTarget(text_equals="Fixture complete." if source_backed else "BLUE"),
         oracle=StructuralOracleConfig(),
         runner=NativeRunnerConfig(
             type="codex", required_capability_digest=runner.capability_profile.digest
         ),
         calibration=config.calibration,
     )
-    (tmp_path / "case/experiments/default.toml").write_text(experiment.to_toml())
+    if not fresh:
+        (tmp_path / "case/experiments/default.toml").write_text(experiment.to_toml())
     selection = NativeSelection(
         registry=RunnerRegistry({"codex": lambda _c, _e: runner}),
         safety_policy=SafetyPolicy(
@@ -180,7 +223,13 @@ def mock_native(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
         detections.append(True)
         requested = _kwargs.get("experiment")
+        if fresh:
+            assert requested is None
+            assert _kwargs["calibration"] == config.calibration
+            return selection
         assert isinstance(requested, SampledExperimentDefinition)
+        assert isinstance(requested.runner, NativeRunnerConfig)
+        assert requested.runner.required_capability_digest == runner.capability_profile.digest
         return replace(
             selection,
             experiment=requested.model_copy(
@@ -199,14 +248,19 @@ def mock_native(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     return [*args, "--original-workspace", str(original)], runner, detections
 
 
+@pytest.mark.parametrize(("source_backed", "fresh"), [(False, False), (True, False), (True, True)])
 def test_native_detection_consent_and_saved_profile_dry_run(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source_backed: bool, fresh: bool
 ) -> None:
-    args, runner, detections = mock_native(tmp_path, monkeypatch)
+    args, runner, detections = mock_native(
+        tmp_path, monkeypatch, source_backed=source_backed, fresh=fresh
+    )
+    experiment_before = (tmp_path / "case/experiments/default.toml").read_bytes()
     protected = _protected_inputs(tmp_path)
     preflight = CliRunner().invoke(app, [*args, "--dry-run"])
     assert preflight.exit_code == 0, preflight.output
     assert json.loads(preflight.stdout)["status"] == "detection-required"
+    assert json.loads(preflight.stdout)["harness"] == "codex"
     assert not detections
     assert not runner.calls
     profile = tmp_path / "profile.json"
@@ -216,6 +270,7 @@ def test_native_detection_consent_and_saved_profile_dry_run(
     assert not runner.calls
     report = json.loads(detected.stdout)
     assert report["provider"] == "synthetic-provider"
+    assert report["editable_text_sites"] == (1 if source_backed else 6)
     assert profile.stat().st_mode & 0o777 == 0o600
     args += ["--profile", str(profile)]
     dry = CliRunner().invoke(app, [*args, "--dry-run"])
@@ -244,7 +299,26 @@ def test_native_detection_consent_and_saved_profile_dry_run(
     assert json.loads(saved.stdout)["harness_started"] is False
     assert len(detections) == 2
     assert len(runner.calls) == before
+    if source_backed:
+        assert any(not call.candidate.mutation.is_empty for call in runner.calls)
+        assert all(not call.evidence.has_request for call in runner.calls)
+        resumed = CliRunner().invoke(
+            app,
+            [
+                "fuzz",
+                output["result_path"],
+                "--resume",
+                "--acknowledge-model-execution",
+                "--format",
+                "json",
+            ],
+        )
+        assert resumed.exit_code == 0, resumed.output
+        assert json.loads(resumed.stdout)["status"] == "confirmed-change"
+        assert len(detections) == 3
+        assert len(runner.calls) == before
     assert protected == _protected_inputs(tmp_path)
+    assert (tmp_path / "case/experiments/default.toml").read_bytes() == experiment_before
 
 
 @pytest.mark.parametrize(
@@ -433,6 +507,8 @@ def test_unresolved_calibration_dispatch_stays_charged_without_reexecution(
 def test_profile_change_and_unsupported_mutation_refuse_before_attempts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from ithrl.experiment import NativeRunnerConfig, SampledExperimentDefinition
+
     args, runner, _ = mock_native(tmp_path, monkeypatch)
     profile = tmp_path / "profile.json"
     assert CliRunner().invoke(app, [*args, "--detect", "--profile", str(profile)]).exit_code == 0
@@ -444,6 +520,17 @@ def test_profile_change_and_unsupported_mutation_refuse_before_attempts(
     )
     assert changed.exit_code != 0
     assert not runner.calls
+    experiment_path = tmp_path / "case/experiments/default.toml"
+    experiment = SampledExperimentDefinition.from_toml(experiment_path.read_text())
+    experiment_path.write_text(
+        experiment.model_copy(
+            update={
+                "runner": NativeRunnerConfig(
+                    type="codex", required_capability_digest=runner.capability_profile.digest
+                )
+            }
+        ).to_toml()
+    )
     current = tmp_path / "current.json"
     detected = CliRunner().invoke(app, [*args, "--detect", "--profile", str(current)])
     assert detected.exit_code == 0, detected.output

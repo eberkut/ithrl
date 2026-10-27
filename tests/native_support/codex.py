@@ -179,7 +179,7 @@ def _capability(
         deterministic=False,
         supported_capture_types=("logical-session",),
         supported_materializations=("source-backed",),
-        supported_context_operations=("dependency-closed-removal",),
+        supported_context_operations=("dependency-closed-removal", "append-text"),
         reconstruction_method="codex-app-server-inject-items-v1",
         supported_targets=("final-response",),
         provider_transport="required",

@@ -9,17 +9,19 @@ runtime.
 The
 [README supported-inputs table](https://github.com/eberkut/ithrl/blob/main/README.md#supported-inputs)
 defines the public capability claim. The public commands are `extract`, `shrink` and `fuzz`. Fuzzing
-has a credential-free local walkthrough; native text-mutation support requires separate
-qualification. See [native runs](native-runs.md) for the qualified execution profiles and
-[results](results.md) for interpreting their output.
+has a credential-free local walkthrough and a qualified Codex append-text profile for eligible
+prior user input. Copilot remains removal-only. See [native runs](native-runs.md) for the operator
+procedure, [measurements](measurements.md#native-context-fuzzing) for qualification evidence and
+[results](results.md) for interpreting output.
 
 ## Adapters and runners
 
 Adapters discover and parse harness-native evidence, identify completed decisions and compile an
-edit graph. They do not construct case directories, invoke models or enforce execution policy.
-`extraction.py` composes those outputs into a case. Codex and Copilot retain separate parsers,
-decision selectors and context compilers because their event formats and decision boundaries
-have different meanings.
+edit graph. After source evidence is verified, extraction re-derives the selected native decision
+and its context from that evidence. Adapters do not construct case directories, invoke models or
+enforce execution policy. `extraction.py` composes those outputs into a case. Codex and Copilot
+retain separate parsers, decision selectors and context compilers because their event formats and
+decision boundaries have different meanings.
 
 Runners reconstruct candidates and execute through a controlled harness interface. Each concrete
 runner owns native materialization, isolation, effective policy, protocol handling and output
@@ -121,7 +123,8 @@ regenerated campaigns require a new run. The CLI persists a private frozen sessi
 and immutable sampling receipts. Fuzz dry-run reads saved inputs without a harness; explicit
 structural detection saves a private profile, and acknowledged execution rechecks its identity.
 The fake runner uses the same collector with zero provider calls and truthful deterministic
-capabilities. Native profiles must separately qualify text mutation.
+capabilities. Native text mutation requires detected support for the exact editable seam and a
+separately qualified execution profile.
 
 ## Execution and privacy boundary
 

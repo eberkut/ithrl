@@ -79,7 +79,7 @@ def _attempt(evidence: CaseEvidence, *remove_ids: str) -> PreparedAttempt:
         deterministic=False,
         supported_capture_types=("logical-session",),
         supported_materializations=("source-backed",),
-        supported_context_operations=("dependency-closed-removal",),
+        supported_context_operations=("dependency-closed-removal", "append-text"),
         reconstruction_method="codex-app-server-inject-items-v1",
         supported_targets=("final-response",),
         provider_transport="required",
@@ -177,15 +177,9 @@ def test_materializes_dependency_valid_removal_without_reordering(tmp_path: Path
 
 
 def _with_mutation(attempt: PreparedAttempt, mutation: TextMutation) -> PreparedAttempt:
-    capability = attempt.execution_plan.capability.model_copy(
-        update={"supported_context_operations": ("dependency-closed-removal", "append-text")}
-    )
-    # This is a pure materialization fixture profile, never a detected/registered native profile.
-    plan = attempt.execution_plan.model_copy(update={"capability": capability})
     return replace(
         attempt,
-        execution_plan=plan,
-        candidate=prepare_candidate(attempt.evidence, plan, mutation=mutation),
+        candidate=prepare_candidate(attempt.evidence, attempt.execution_plan, mutation=mutation),
     )
 
 
@@ -194,6 +188,7 @@ def test_text_append_changes_only_copied_prior_user_block(tmp_path: Path) -> Non
     before = materialize_codex_attempt(attempt)
     source = tuple(artifact.content for artifact in attempt.evidence.source_artifacts)
     sites = editable_codex_text(attempt)
+    assert sites == attempt.evidence.editable_text()
     assert len(sites) == 1
     assert sites[0].original_text == "Inspect the fixture context."
     site = sites[0]

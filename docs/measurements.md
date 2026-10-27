@@ -1,8 +1,10 @@
 # Measurements
 
-These measurements describe three completed synthetic native reductions using `gpt-6.1-sol`. They
-provide a reference for interpreting the
-[example experiment](native-runs.md#2-configure-the-experiment) and its costs.
+These measurements describe completed synthetic native reductions and a Codex context-fuzzing
+campaign using `gpt-6.1-sol`. The reduction sections provide a reference for interpreting the
+[example experiment](native-runs.md#2-configure-the-experiment). The
+[native context-fuzzing section](#native-context-fuzzing) records the qualified append-text
+workflow and its limits.
 
 ## Workload
 
@@ -86,3 +88,93 @@ Those checks reproduce the comparison with the stored vectors. The
 [reduction study package](https://github.com/eberkut/ithrl/tree/main/research/reduction) separately
 replays synthetic sharing, failure, freshness and layout-budget models. The table above reports
 the observed native workload, confirmation and cost aggregates.
+
+## Native context fuzzing
+
+A synthetic Codex final-response case completed discovery, intervention simplification and one
+fresh confirmation. The measured harness was Codex CLI `0.164.0`, using `gpt-6.1-sol` through the
+`openai` provider's ChatGPT Responses endpoint. The editable surface was one eligible prior-user
+text field; the selected decision's triggering input remained fixed. These version and provider
+facts identify the measured configuration. Ongoing use still requires structural detection,
+plan review and calibration as described in the [native-run guide](native-runs.md#context-fuzzing).
+
+A prior user message establishes a response token, and the fixed triggering input asks for the
+latest active token. The stress append contains four paragraphs: three irrelevant notes and one
+instruction revising the active token. The target checks for the original token. This workload
+deliberately introduces a competing instruction so the campaign can locate and simplify it.
+
+### Controls and configuration
+
+An identical-text duplication control produced six matching observations: four original and two
+duplicated-input observations. Transcript checks verified the exact append and unchanged remaining
+history, triggering input and thread settings. This control checks reconstruction on the selected
+case; it does not establish that repetition preserves meaning for arbitrary inputs.
+
+The main campaign used caller-supplied synthetic stale text, one generated candidate and at most
+ten simplification trials. It completed one discovery comparison and five simplification
+comparisons. Its sampling and resource limits were:
+
+| Setting | Measured configuration |
+| --- | --- |
+| Calibration | 3 valid observations, at least 2 matches, at most 7 attempts |
+| Exploratory comparison | Fresh original 8 valid / 18 attempts; mutant 8 valid / 18 attempts |
+| Exploratory threshold | Original-minus-mutant match-rate decrease at least `.40` |
+| Fresh confirmation | Original 20 valid / 36 attempts; selected mutant 20 valid / 36 attempts |
+| Final inference | One selected finding, `alpha=.05`, exact Clopper–Pearson union-bound method |
+| Required decrease | Strictly greater than `.10` |
+| Provider-call ceiling | 350 charged calls |
+| Command wall-time ceiling | 6 hours |
+| Per-attempt timeout | 120 seconds |
+| Inter-attempt pacing | 15 seconds |
+| Freshness | 24 hours |
+| Eligibility | Opt-in `safe-provider-overload`; no overload replacement occurred |
+
+These are the executed campaign's settings. The
+[practical-settings issue](https://github.com/eberkut/ithrl/issues/10) owns evaluation of broader
+workloads and suitable defaults.
+
+### Confirmed result
+
+Calibration matched the original target in all three observations. Simplification reduced the
+appended intervention from **1,674 to 142 UTF-8 bytes**, a **91.5% decrease**. It changed only the
+append; it did not reduce the original history.
+
+Fresh confirmation produced **20/20 original matches and 0/20 mutant matches**. The estimated
+original-minus-mutant difference was `1.0`; its exact one-sided lower bound was
+`0.6631330580338293`, exceeding the required `.10` decrease at `alpha=.05`. The campaign ended
+with `confirmed-change`.
+
+All exploratory observations preceded durable selection, and all 40 confirmation observations
+followed it in one confirmation block. The confirmation transcripts verified the exact selected
+142-byte append, unchanged remaining history, triggering input and thread settings, and distinct
+attempts. The selected payload was fixed before confirmation and no completed holdout was repeated.
+See [fuzz results](results.md#fuzz-results) and the
+[research method](research/context-fuzzing.md#confirmation-method-and-assumptions) for
+interpretation and assumptions.
+
+### Calls, duration and resource use
+
+| Workflow | Actual / additional possible / charged calls | Known input + output tokens | Whole-command time |
+| --- | --- | --- | --- |
+| Duplication control | 6 / 0 / 6 | 30,820 | 104.15 seconds |
+| Complete fuzz campaign | 139 / 0 / 139 | 722,235 | 2,772.42 seconds (46 minutes 12 seconds) |
+
+The main campaign had 139 valid observations, zero runner errors, zero invalid observations and
+zero observations with unknown provider acceptance. No calls remained pending, and no token usage
+was unknown. Runner time totaled 654.263 seconds; CLI wall time was 2,768.789216 seconds. The
+whole-command measurement includes process startup and exit; the command includes the configured
+15-second inter-attempt pacing.
+
+Native output was at most 12,921 bytes per observation, with median 11,517 bytes. Peak disposable
+state was 3,817,339 bytes across 104 entries. All 139 attempts verified cleanup without residual
+state and unchanged source/workspace. No returned actions executed and no tool-side network
+effects occurred.
+
+A separate interrupted campaign consumed 34 actual calls and remains incomplete. Including that
+work and the six control calls, qualification consumed **179 actual calls**; the completed result
+above uses only its own 139 observations. Interrupted work is not confirmation evidence.
+
+This single synthetic case demonstrates the complete qualified workflow and its measured cost.
+It does not estimate ordinary-session success rates, repeated-campaign costs or monetary cost.
+Intervention-byte reduction does not establish provider-token savings, causal explanation or a
+model defect. Copilot text mutation remains unsupported.

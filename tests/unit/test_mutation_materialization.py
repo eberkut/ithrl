@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
-from ithrl.case import CaseEvidence
+from ithrl.adapters import enumerate_decisions
+from ithrl.adapters.registry import parse_session_bytes
+from ithrl.case import CaseEvidence, CaseFormatError
 from ithrl.context import ContextGraph, JsonObject, content_digest
+from ithrl.extraction import extract_decision
 from ithrl.mutation import (
     MutationError,
     TextAppend,
@@ -92,6 +96,55 @@ def test_request_trigger_and_protected_nodes_are_not_mutation_sites(tmp_path: Pa
         with pytest.raises(MutationError, match="editable"):
             protected.materialize(mutation=mutation)
         assert node_id not in {site.context_id for site in protected.editable_text()}
+
+
+@pytest.mark.parametrize("user_trigger", [False, True])
+def test_native_text_discovery_is_pure_and_excludes_fixed_trigger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, user_trigger: bool
+) -> None:
+    source = Path(__file__).parents[1] / "fixtures/codex-session/rollout.jsonl"
+    records = [json.loads(line) for line in source.read_bytes().splitlines()]
+    if user_trigger:
+        records[8]["payload"] = {
+            "type": "message",
+            "id": "message-fixed-current-input",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "Fixed current input."}],
+        }
+    session = parse_session_bytes("\n".join(json.dumps(record) for record in records).encode())
+    decision = enumerate_decisions(session)[0]
+    evidence = extract_decision(
+        session,
+        decision_id=decision.decision_id,
+        target_id=decision.targets[0].target_id,
+        case_path=tmp_path / "case",
+    ).load()
+    before = evidence.digest, tuple(artifact.content for artifact in evidence.source_artifacts)
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("native evidence discovery must not invoke runner reconstruction")
+
+    monkeypatch.setattr("ithrl.runner.codex.materialize.materialize_codex_attempt", forbidden)
+    sites = evidence.editable_text()
+    assert [site.original_text for site in sites] == ["Inspect the fixture context."]
+    assert not evidence.has_request
+    assert (evidence.digest, tuple(a.content for a in evidence.source_artifacts)) == before
+    changed_context = ContextGraph(
+        nodes=tuple(
+            node.model_copy(update={"protected": True}) if node.id == sites[0].context_id else node
+            for node in evidence.context.nodes
+        )
+    )
+    changed = CaseEvidence(
+        manifest=evidence.manifest,
+        request=None,
+        context=changed_context,
+        default_experiment=evidence.default_experiment,
+        source_artifacts=evidence.source_artifacts,
+        decision=evidence.decision,
+    )
+    with pytest.raises(CaseFormatError, match="does not match preserved source"):
+        changed.editable_text()
 
 
 def test_unadvertised_operation_and_foreign_plan_fail_before_materialization(

@@ -45,10 +45,9 @@ use a new directory to repeat it. You can remove the directory and its contents 
   available sessions and select a decision.
 - `ithrl shrink CASE` tests context removals and saves the result. `--dry-run` inspects the plan;
   `--format json` produces machine-readable output. A stopped search prints its resume command.
-- From a development checkout, `uv run ithrl fuzz CASE --config PRIVATE_TOML` explores text appends
+- `ithrl fuzz CASE --config PRIVATE_TOML` explores text appends
   and independently confirms one decrease in the selected behavior's match rate. Start with the
-  [fuzzing walkthrough](https://github.com/eberkut/ithrl/blob/main/docs/native-runs.md#context-fuzzing),
-  which uses the fake runner. Native text mutation is not yet qualified.
+  [fuzzing walkthrough](https://github.com/eberkut/ithrl/blob/main/docs/native-runs.md#context-fuzzing).
 
 For example, extract a saved session file:
 
@@ -66,8 +65,15 @@ experiment; see the
 | Input | Extracted decisions | Reduction | Fuzzing |
 | --- | --- | --- | --- |
 | Bundled synthetic example | Synthetic tool request | Deterministic local runner | Local fake runner |
-| Codex CLI rollouts | Final responses | Experimental native runner | Not qualified |
+| Codex CLI rollouts | Final responses | Experimental native runner | Experimental prior-user text appends |
 | Copilot CLI session events | Final responses and shell requests | Experimental final-response and denied `bash` runner | Not qualified |
+
+Native Codex fuzzing is qualified for appending text to eligible prior user input while preserving
+its fixed triggering input. One synthetic case completed discovery, simplification and fresh
+confirmation;
+[measurements](https://github.com/eberkut/ithrl/blob/main/docs/measurements.md#native-context-fuzzing)
+record its effect, costs and limits. Copilot text mutation remains unsupported. This evidence does
+not establish ordinary-session success rates or general sampling defaults.
 
 Native compatibility is checked against the installed harness's protocol, capabilities and safety
 controls.

@@ -191,6 +191,7 @@ def test_detects_support_from_structure_without_version_allowlist(tmp_path: Path
     assert capability.provider == "fixture-provider"
     assert capability.endpoint == "https://provider.invalid/v1/responses"
     assert capability.supported_targets == ("final-response",)
+    assert capability.supported_context_operations == ("dependency-closed-removal", "append-text")
     assert capability.action_execution == "denied"
 
 
