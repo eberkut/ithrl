@@ -55,6 +55,48 @@ def test_documentation_and_distribution_checks_cannot_be_filtered_out() -> None:
     assert CI["on"]["push"] == {"branches": ["main"]}
 
 
+@pytest.mark.parametrize(
+    ("classification", "full", "tests", "succeeds"),
+    [
+        ("success", "true", "success", True),
+        ("success", "false", "success", True),
+        ("success", "false", "skipped", True),
+        ("success", "true", "skipped", False),
+        ("success", "true", "failure", False),
+        ("success", "true", "cancelled", False),
+        ("success", "true", "", False),
+        ("success", "false", "failure", False),
+        ("success", "false", "cancelled", False),
+        ("success", "false", "", False),
+        ("success", "", "success", False),
+        ("success", "unexpected", "success", False),
+        ("failure", "false", "skipped", False),
+        ("cancelled", "false", "skipped", False),
+        ("skipped", "false", "skipped", False),
+    ],
+)
+def test_required_python_gate_accepts_only_success_or_classified_skip(
+    classification: str, full: str, tests: str, succeeds: bool
+) -> None:
+    job = CI["jobs"]["python-tests"]
+    assert job["name"] == "Python tests"
+    assert job["needs"] == ["changes", "test"]
+    assert job["if"] == "always()"
+    assert job["permissions"] == {}
+    result = subprocess.run(  # noqa: S603 - execute the checked-in gate without credentials.
+        ["/bin/bash", "--noprofile", "--norc", "-euo", "pipefail", "-c", job["steps"][0]["run"]],
+        env={
+            "PATH": os.defpath,
+            "CLASSIFICATION_RESULT": classification,
+            "FULL_VALIDATION": full,
+            "TEST_RESULT": tests,
+        },
+        capture_output=True,
+        check=False,
+    )
+    assert (result.returncode == 0) is succeeds
+
+
 def test_pr_title_workflow_reads_metadata_without_executing_pr_code() -> None:
     workflow = yaml.safe_load((ROOT / ".github/workflows/pr-title.yml").read_text())
     assert workflow["permissions"] == {"pull-requests": "read"}

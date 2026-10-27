@@ -7,6 +7,11 @@ The [supported-inputs table](README.md#supported-inputs) describes current publi
 The directions below describe future work; their version labels establish an intended sequence,
 with scope and release dates decided from evidence.
 
+## Harness priorities
+
+Codex and GitHub Copilot are the primary supported harnesses. Closing feature gaps between them
+is the current priority.
+
 ## Current work: context fuzzing
 
 The `ithrl fuzz` command explores bounded context changes, simplifies interventions and
@@ -22,14 +27,20 @@ simplification and fresh confirmation. See
 [measurements](docs/measurements.md#native-context-fuzzing) for its workload, result and cost, and
 [fuzzing research](docs/research/context-fuzzing.md) for the method and assumptions.
 
-The next deliverable is to
-[derive practical settings and public claims](https://github.com/eberkut/ithrl/issues/10) from
-complete-workflow usefulness and measured costs. One synthetic case supplies no general sampling
-preset or ordinary-session success rate. The
+The next deliverables are:
+
+1. [Derive practical settings and public claims](https://github.com/eberkut/ithrl/issues/10) from
+   complete-workflow usefulness and measured costs.
+2. [Qualify Copilot final-response text-mutation fuzzing](https://github.com/eberkut/ithrl/issues/29)
+   with faithful reconstruction, useful simplification and fresh confirmation. This is required
+   v0.2 scope before release preparation.
+
+One synthetic case supplies no general sampling preset or ordinary-session success rate. The
 [fuzzing capability issue](https://github.com/eberkut/ithrl/issues/5) and
 [`v0.2.0` milestone](https://github.com/eberkut/ithrl/milestone/1) own scope and acceptance.
 
-[Release preparation and publication](https://github.com/eberkut/ithrl/issues/11) follow acceptance.
+[Release preparation and publication](https://github.com/eberkut/ithrl/issues/11) follow acceptance
+for both Codex and Copilot.
 They remain separate from implementing the capability. Broader mutation families and multiple-
 finding campaigns need their own evidence and prospective error allocation.
 
@@ -61,11 +72,13 @@ interventions. It must establish comparability of target, oracle, model/provider
 environment and effective runner policy before attributing a regression to context. Differences in
 model, harness or execution environment remain explicit experimental factors.
 
-Claude Code and OpenCode have promising portability evidence, described in the
-[feasibility study](docs/research/feasibility.md). They require adapters, faithful reconstruction,
-isolation, calibration and a useful live workflow before becoming supported integrations. Pi
-remains unassessed. [Select the next integration](https://github.com/eberkut/ithrl/issues/14)
-from evidence and user value.
+Claude Code, OpenCode and Pi are planned additional integrations. Claude Code and OpenCode have
+promising portability evidence in the [feasibility study](docs/research/feasibility.md); Pi needs
+an initial applicability assessment. Each requires an adapter, faithful reconstruction, isolation,
+calibration and a useful live workflow before becoming supported. Their order and release scope
+remain open; [the integration issue](https://github.com/eberkut/ithrl/issues/14) owns assessment,
+prioritization and scoped implementation work. Add them incrementally while maintaining Codex and
+Copilot parity.
 
 ### Passive reacquisition analysis
 

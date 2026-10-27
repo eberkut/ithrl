@@ -61,6 +61,10 @@ changes and PRs with 3,000 or more changed files run full validation. Rename det
 both paths; deletions participate. Failed path detection fails the required Workflows check.
 Main-branch, scheduled, manual and release runs always perform full validation.
 
+The required `Python tests` check summarizes the test matrix. It accepts a skipped matrix only
+after successful Markdown-only classification. Failed classification, missing decisions, test
+failures and unexpected skips fail this check.
+
 ## Workflow and dependency checks
 
 For GitHub Actions or Dependabot changes, use the jactionlint release pinned in
@@ -266,6 +270,9 @@ CodeRabbit's optional planning and code-generation features are configured in
 [`.coderabbit.yaml`](.coderabbit.yaml). A paid CodeRabbit account is not required to contribute.
 
 ## Preparing a release
+
+For every feature, aim for parity across supported harnesses. Any exception must be clearly
+justified and documented before release.
 
 Python Semantic Release, pinned in the `release` dependency group, calculates versions from
 Conventional Commits. `pyproject.toml` is the version source; installed CLI and Codex client
