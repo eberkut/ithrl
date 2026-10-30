@@ -74,6 +74,11 @@ recovery.
 
 ## Provider errors and interruption
 
+Sampled reduction and fuzz reports include `runner_error_category` and
+`runner_error_reason_code` when available. These contain machine codes; native error messages and
+response bodies stay in private evidence. Structural fuzz detection refusals also report the probe
+stage, exit code and private diagnostic path when available.
+
 For authentication or quota failures, inspect the selected harness's account status privately.
 Provider-call limits do not predict subscription allowance. Repeated full-run attempts can spend
 calls without completing confirmation; preserve every failed run and its charge.

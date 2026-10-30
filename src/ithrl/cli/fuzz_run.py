@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -12,7 +13,8 @@ from ithrl.calibration import CalibrationInFlightError, _read_inflight, run_samp
 from ithrl.case import CaseWorkspace
 from ithrl.cli.fuzz_output import FuzzCounts, FuzzOutput, render_fuzz
 from ithrl.cli.fuzz_session import FuzzProfile, FuzzSession, publish_fuzz_result, save_fuzz_session
-from ithrl.cli.output import OutputFormat, error_console, print_plain, shell_command
+from ithrl.cli.output import OutputFormat, error_console, last_runner_error, shell_command
+from ithrl.cli.progress import calibration_status, progress_display, sampling_status
 from ithrl.execution.budget import sampling_attempt_cost
 from ithrl.fuzz.campaign import _initialize_fuzz_campaign_owned, _run_fuzz_campaign_owned
 from ithrl.fuzz.sampling import confirm_fuzz_evidence, fuzz_budget_bounds
@@ -20,6 +22,7 @@ from ithrl.observations import (
     ObservationArm,
     ObservationRole,
     ObservationStore,
+    SamplingBlockEvidence,
     SamplingBudgetAllowance,
 )
 from ithrl.run_state import SampledRunState, SampledRunStateFile, SamplingBudgetApproval
@@ -31,6 +34,17 @@ from ithrl.workflow import PreparedExperiment
 class _CalibrationBudgetStop(RuntimeError):
     def __init__(self, reason: str) -> None:
         self.reason = reason
+
+
+def _sampling_status(trial: int, block: SamplingBlockEvidence) -> str:
+    phase = (
+        "Confirmation"
+        if block.plan.role == "confirmation"
+        else f"Simplification trial {trial}"
+        if block.plan.role == "simplification"
+        else f"Exploratory trial {trial}"
+    )
+    return sampling_status(block, phase=phase, candidate_label="mutant")
 
 
 def report_for_profile(profile: FuzzProfile, *, harness_started: bool) -> FuzzOutput:
@@ -98,6 +112,7 @@ def report_for_profile(profile: FuzzProfile, *, harness_started: bool) -> FuzzOu
         limits=config.limits,
         max_attempts=bounds.planned_attempts,
         planned_provider_calls=bounds.planned_provider_calls,
+        max_provider_calls_per_attempt=capability.provider_calls_per_attempt,
         confirmation_provider_calls=bounds.confirmation_provider_calls,
         max_native_output_bytes=plan.resource_limits.max_native_output_bytes,
         max_disposable_state_bytes=plan.resource_limits.max_disposable_state_bytes,
@@ -131,6 +146,7 @@ def _calibrate(
     prepared: PreparedExperiment,
     state_file: SampledRunStateFile,
     store: ObservationStore,
+    progress: Callable[[str], None],
 ) -> str | None:
     profile = session.profile
     config = profile.configuration
@@ -144,7 +160,10 @@ def _calibrate(
             role=ObservationRole.CALIBRATION,
             arm=ObservationArm.BASELINE,
         )
-        return state_file.record_calibration(store, tuple(o.observation_id for o in observations))
+        state = state_file.record_calibration(store, tuple(o.observation_id for o in observations))
+        valid = sum(o.valid for o in observations)
+        progress(calibration_status(valid, config.calibration.required_valid, len(observations)))
+        return state
 
     cost = sampling_attempt_cost(prepared.runner.capability_profile, prepared.resource_limits)
     search = config.screening.original.max_attempts + config.screening.mutant.max_attempts
@@ -173,7 +192,6 @@ def _calibrate(
             raise _CalibrationBudgetStop("wall-time-budget")
 
     refresh()
-    print_plain(error_console, "Calibrating the unchanged original context")
     try:
         result = run_sampled_calibration(
             evidence=evidence,
@@ -212,6 +230,7 @@ def _report(
     holdout = next((b for b in blocks if b.plan.role == "confirmation"), None)
     confirmation = confirm_fuzz_evidence(holdout) if holdout else None
     observations = (*snapshot.calibration, *(a.observation for b in blocks for a in b.attempts))
+    runner_error_category, runner_error_reason_code = last_runner_error(observations)
     unknown = bool(
         usage.unknown_provider_attempts
         or usage.possible_provider_calls
@@ -298,6 +317,8 @@ def _report(
             if holdout
             else FuzzCounts(),
             "execution_reliability": FuzzCounts.observations(observations),
+            "runner_error_category": runner_error_category,
+            "runner_error_reason_code": runner_error_reason_code,
             "provider_call_accounting": "started-unknown"
             if unknown
             else "accounted"
@@ -329,11 +350,13 @@ def _report(
             "trials_used": len(progress.trials) if progress else 0,
             "stop_reason": stop_reason
             or (progress.collection_refusal or progress.stop_reason if progress else None),
-            "next_action": "Resume the same frozen campaign within its remaining limits."
+            "next_action": "The per-attempt provider call budget was exhausted. Inspect the saved evidence; a different limit requires a new run."
+            if runner_error_category == "provider-call-limit"
+            else "Resume the same frozen campaign within its remaining limits."
             if safe_resume
             else "Inspect the saved evidence. Final selection and completed confirmation are never repeated.",
-            "next_command": command,
-            "next_command_shell": shell,
+            "next_command": None if runner_error_category == "provider-call-limit" else command,
+            "next_command_shell": None if runner_error_category == "provider-call-limit" else shell,
         }
     )
 
@@ -395,40 +418,41 @@ def execute_fuzz(
             target=error_console,
         )
         stop = None
-        try:
-            if state.fuzz_progress is None:
-                stop = _calibrate(session, prepared, state_file, store)
+        with progress_display() as progress:
+            try:
+                if state.fuzz_progress is None:
+                    stop = _calibrate(session, prepared, state_file, store, progress)
+                    if stop is None:
+                        evidence = CaseWorkspace(session.profile.case_path).load()
+                        _initialize_fuzz_campaign_owned(
+                            evidence=evidence,
+                            prepared=prepared,
+                            campaign=session.profile.configuration.bind(
+                                prepare_candidate(evidence, prepared.execution_plan)
+                            ),
+                            stale_text=session.profile.configuration.stale_text,
+                            state_file=state_file,
+                            store=store,
+                        )
                 if stop is None:
-                    evidence = CaseWorkspace(session.profile.case_path).load()
-                    _initialize_fuzz_campaign_owned(
-                        evidence=evidence,
-                        prepared=prepared,
-                        campaign=session.profile.configuration.bind(
-                            prepare_candidate(evidence, prepared.execution_plan)
-                        ),
-                        stale_text=session.profile.configuration.stale_text,
-                        state_file=state_file,
-                        store=store,
+                    result = asyncio.run(
+                        _run_fuzz_campaign_owned(
+                            evidence=CaseWorkspace(session.profile.case_path).load(),
+                            prepared=prepared,
+                            state_file=state_file,
+                            store=store,
+                            on_progress=lambda trial, block: progress(
+                                _sampling_status(trial, block)
+                            ),
+                        )
                     )
-            if stop is None:
-                print_plain(
-                    error_console, "Exploring mutations and confirming one selected finding"
-                )
-                result = asyncio.run(
-                    _run_fuzz_campaign_owned(
-                        evidence=CaseWorkspace(session.profile.case_path).load(),
-                        prepared=prepared,
-                        state_file=state_file,
-                        store=store,
-                    )
-                )
-                stop = result.stop_reason
-        except (KeyboardInterrupt, asyncio.CancelledError):
-            stop = "user-interrupt"
-        except CalibrationInFlightError:
-            stop = "unresolved-calibration-dispatch"
-        except Exception:
-            stop = "execution-refused"
+                    stop = result.stop_reason
+            except (KeyboardInterrupt, asyncio.CancelledError):
+                stop = "user-interrupt"
+            except CalibrationInFlightError:
+                stop = "unresolved-calibration-dispatch"
+            except Exception:
+                stop = "execution-refused"
         report = _report(session, state_file, store, stop_reason=stop, dry_run=False)
         try:
             result_path = publish_fuzz_result(session, state_file, store, report)

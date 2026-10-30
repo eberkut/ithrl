@@ -53,6 +53,10 @@ class CalibrationInFlightError(RuntimeError):
     """A possibly dispatched attempt has no durable observation."""
 
 
+class CalibrationWallTimeBudgetError(RuntimeError):
+    """Command admission cannot fit the remaining calibration before its wall-time limit."""
+
+
 class _InFlightAttempt(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -114,12 +118,16 @@ def run_sampled_calibration(
                     eligibility_policy=eligibility_policy,
                 )
             )
-        except (KeyboardInterrupt, asyncio.CancelledError):
+        except (KeyboardInterrupt, asyncio.CancelledError, CalibrationWallTimeBudgetError) as error:
             observations = _compatible(
                 prepared, store, candidate.digest, experiment, eligibility_policy=eligibility_policy
             )
             classified = _classify(
-                observations, experiment, interrupted=True, eligibility_policy=eligibility_policy
+                observations,
+                experiment,
+                interrupted=not isinstance(error, CalibrationWallTimeBudgetError),
+                wall_time_stopped=isinstance(error, CalibrationWallTimeBudgetError),
+                eligibility_policy=eligibility_policy,
             )
             if classified is None:
                 raise RuntimeError(
@@ -164,7 +172,12 @@ def _save_sampled_calibration_result(
     current = _compatible(prepared, store, candidate.digest, experiment)
     if current != result.observations:
         raise ValueError("calibration observations changed before result persistence")
-    classified = _classify(current, experiment, interrupted=result.stop_reason == "user-interrupt")
+    classified = _classify(
+        current,
+        experiment,
+        interrupted=result.stop_reason == "user-interrupt",
+        wall_time_stopped=result.stop_reason == "wall-time-budget",
+    )
     if classified != result:
         raise ValueError("calibration outcome does not match its observations")
 
@@ -285,6 +298,7 @@ def _classify(
     experiment: SampledExperimentDefinition,
     *,
     interrupted: bool,
+    wall_time_stopped: bool = False,
     eligibility_policy: SamplingEligibilityPolicy | None = None,
 ) -> SampledCalibrationResult | None:
     phase = experiment.calibration
@@ -313,6 +327,8 @@ def _classify(
         return _stopped_for_error(observations, unsafe)
     if len(observations) >= phase.max_attempts:
         return SampledCalibrationResult("incomplete", "attempt-limit", observations)
+    if wall_time_stopped:
+        return SampledCalibrationResult("incomplete", "wall-time-budget", observations)
     return None
 
 

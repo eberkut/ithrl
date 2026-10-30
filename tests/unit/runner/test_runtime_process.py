@@ -94,6 +94,43 @@ async def _run(
     return store, result
 
 
+@pytest.mark.parametrize("oversized", ["source", "workspace"])
+def test_snapshot_refusal_prevents_process_preparation(tmp_path: Path, oversized: str) -> None:
+    sources, workspaces = _protected_paths(tmp_path)
+    protected = sources[0].path if oversized == "source" else workspaces[0].path / "tracked.txt"
+    protected.write_bytes(b"x" * 32)
+    store = ProtectedOutputStore.open(tmp_path / "outputs")
+
+    def prepare(_state: OwnedAttemptState) -> ProcessSpec:
+        pytest.fail("snapshot refusal must occur before process preparation")
+
+    with pytest.raises(ProcessRuntimeError, match=r"protected.*byte limit") as refused:
+        asyncio.run(
+            run_isolated_process(
+                attempt_id=ATTEMPT_ID,
+                state_parent=tmp_path / "state",
+                output_store=store,
+                prepare=prepare,
+                resource_limits=ResourceLimits(),
+                source_paths=sources,
+                workspace_paths=workspaces,
+                max_protected_entries=16,
+                max_protected_bytes=16,
+            )
+        )
+
+    error = refused.value
+    assert error.code is RunnerErrorCode.PREPARATION
+    assert error.reason_code == "protected-input-snapshot"
+    assert error.native_output is None
+    assert error.report.process_outcome == "not-started"
+    assert error.report.cleanup_outcome == "not-required"
+    assert error.report.native_output_bytes == error.report.disposable_state_bytes == 0
+    assert error.report.source_store_effect == error.report.original_workspace_effect == "unchanged"
+    assert protected.read_bytes() == b"x" * 32
+    assert not (tmp_path / "state").exists()
+
+
 def test_process_runs_with_direct_arguments_and_an_explicit_environment(tmp_path: Path) -> None:
     store, result = asyncio.run(
         _run(
@@ -125,6 +162,22 @@ def test_nonzero_exit_is_complete_process_output(tmp_path: Path) -> None:
     assert result.returncode == 7
     assert result.native_output is not None
     assert store.read(result.native_output).complete
+
+
+def test_complete_output_is_refused_when_process_group_termination_is_unverified(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    terminate = runtime_process._terminate_group
+
+    async def unverified(process: subprocess.Popen[bytes]) -> tuple[ProcessOutcome, bool]:
+        await terminate(process)
+        return "unknown", True
+
+    monkeypatch.setattr(runtime_process, "_terminate_group", unverified)
+    with pytest.raises(ProcessRuntimeError) as refused:
+        asyncio.run(_run(tmp_path, _prepare("describe")))
+    assert refused.value.code is RunnerErrorCode.SAFETY
+    assert refused.value.report.process_outcome == "unknown"
 
 
 def test_stdout_stop_terminates_after_the_matching_complete_line(tmp_path: Path) -> None:

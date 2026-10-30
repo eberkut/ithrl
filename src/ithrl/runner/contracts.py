@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Annotated, Literal, Protocol, runtime_checkable
@@ -287,6 +288,7 @@ class RunnerErrorCode(StrEnum):
     CANCELLED = "cancelled"
     PROTOCOL = "protocol"
     PROVIDER_OVERLOADED = "provider-overloaded"
+    PROVIDER_CALL_LIMIT = "provider-call-limit"
     OUTPUT_LIMIT = "output-limit"
     SAFETY = "safety"
     CONTRACT = "contract"
@@ -301,6 +303,7 @@ class RunnerError(RuntimeError):
         code: RunnerErrorCode,
         message: str,
         *,
+        reason_code: str | None = None,
         provider_acceptance_state: ProviderAcceptanceState | None = None,
         model_requested: str | None = None,
         model_returned: str | None = None,
@@ -313,8 +316,14 @@ class RunnerError(RuntimeError):
         effective_policy_digest: str | None = None,
         behavior_output_observed: bool = True,
     ) -> None:
+        if reason_code is not None and (
+            not isinstance(reason_code, str)
+            or re.fullmatch(r"[A-Za-z0-9._-]{1,80}", reason_code, flags=re.ASCII) is None
+        ):
+            raise ValueError("runner error reason_code must be a bounded machine code")
         super().__init__(message)
         self.code = code
+        self.reason_code = reason_code
         self.provider_acceptance_state = provider_acceptance_state or (
             ProviderAcceptanceState.NOT_STARTED
             if code in {RunnerErrorCode.PREPARATION, RunnerErrorCode.STARTUP}

@@ -240,6 +240,11 @@ def _validate_calibration_outcome(
         and summary.observations_recorded != phase.max_attempts
     ):
         raise ResultSnapshotError("attempt-limit stop reason requires max_attempts observations")
+    if (
+        summary.stop_reason == "wall-time-budget"
+        and summary.observations_recorded >= phase.max_attempts
+    ):
+        raise ResultSnapshotError("wall-time-budget stop reason requires remaining attempts")
     if summary.stop_reason == "safety-refusal" and summary.terminal_error_category not in {
         "safety",
         "contract",

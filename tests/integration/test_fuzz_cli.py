@@ -110,6 +110,12 @@ def test_fake_dry_run_has_no_execution_or_storage(
 
 def test_fake_campaign_saved_rates_and_terminal_resume(tmp_path: Path) -> None:
     args = inputs(tmp_path)
+    config = tmp_path / "fuzz.toml"
+    config.write_text(
+        config.read_text().replace(
+            "PRIVATE-STRESS-TEXT", "PRIVATE-STRESS-TEXT\\n\\nPRIVATE-SECOND-PARAGRAPH"
+        )
+    )
     result = CliRunner().invoke(app, args)
     assert result.exit_code == 0, result.output
     report = json.loads(result.stdout)
@@ -122,6 +128,17 @@ def test_fake_campaign_saved_rates_and_terminal_resume(tmp_path: Path) -> None:
     assert report["usage"]["charged_provider_calls"] == 0
     assert report["actions_executed"] == 0
     assert "PRIVATE-STRESS-TEXT" not in result.output
+    assert "PRIVATE-SECOND-PARAGRAPH" not in result.output
+    assert "Calibration: original 0/2 valid (0 attempts)" in result.stderr
+    assert "Calibration: original 1/2 valid (1 attempts)" in result.stderr
+    assert "Calibration: original 2/2 valid (2 attempts)" in result.stderr
+    assert "Exploratory trial 1: original 0/2 valid (0 attempts)" in result.stderr
+    assert "Simplification trial 2:" in result.stderr
+    assert "Confirmation: original 0/20 valid (0 attempts)" in result.stderr
+    assert (
+        "Confirmation: original 20/20 valid (20 attempts); mutant 20/20 valid (20 attempts)"
+        in result.stderr
+    )
     receipt = Path(report["result_path"])
     saved = json.loads((receipt / "summary.json").read_text())
     assert saved["confirmation_original"]["match_rate"] == 1.0
@@ -134,6 +151,9 @@ def test_fake_campaign_saved_rates_and_terminal_resume(tmp_path: Path) -> None:
     resumed = CliRunner().invoke(app, ["fuzz", str(receipt), "--resume", "--format", "json"])
     assert resumed.exit_code == 0, resumed.output
     assert json.loads(resumed.stdout)["status"] == "confirmed-change"
+    assert "Calibration:" not in resumed.stderr
+    assert "Exploratory trial" not in resumed.stderr
+    assert "Confirmation:" not in resumed.stderr
     with state.acquire_lock(store):
         assert state.snapshot(store, now=datetime.now(UTC)).state == before.state
 
@@ -396,10 +416,12 @@ def test_mock_native_terminal_outcomes_are_not_retried(
     assert len(runner.calls) == before
 
 
-@pytest.mark.parametrize("boundary", ["calibration", "trial", "confirmation"])
+@pytest.mark.parametrize("boundary", ["calibration", "trial", "confirmation", "progress"])
 def test_interruption_resumes_exact_campaign_without_repeating_observations(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary: str
 ) -> None:
+    import ithrl.cli.fuzz_run as fuzz_run
+    from ithrl.observations import SamplingBlockEvidence
     from ithrl.run_state import SampledRunState
 
     args, runner, _ = mock_native(tmp_path, monkeypatch)
@@ -433,6 +455,16 @@ def test_interruption_resumes_exact_campaign_without_repeating_observations(
             raise KeyboardInterrupt()
 
     monkeypatch.setattr(SampledRunStateFile, "_write", interrupt)
+    status = fuzz_run._sampling_status
+
+    def interrupt_progress(trial: int, block: SamplingBlockEvidence) -> str:
+        nonlocal interrupted
+        if boundary == "progress" and len(block.attempts) == 2 and not interrupted:
+            interrupted = True
+            raise KeyboardInterrupt()
+        return status(trial, block)
+
+    monkeypatch.setattr(fuzz_run, "_sampling_status", interrupt_progress)
     first = CliRunner().invoke(
         app, [*args, "--profile", str(profile), "--acknowledge-model-execution"]
     )
@@ -892,3 +924,59 @@ def test_failed_result_publication_retains_accounting_and_resumes_without_dispat
     assert final["status"] == "confirmed-change"
     assert Path(final["result_path"]).is_dir()
     assert len(runner.calls) == before
+
+
+@pytest.mark.parametrize("publication_failure", [False, True])
+def test_per_attempt_provider_call_limit_is_terminal_budget_exhaustion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, publication_failure: bool
+) -> None:
+    from ithrl.cli.fuzz_run import publish_fuzz_result
+    from ithrl.runner import RunnerError, RunnerErrorCode
+
+    args, runner, _ = mock_native(tmp_path, monkeypatch)
+
+    async def exhausted(attempt: PreparedAttempt) -> RunResult:
+        runner.calls.append(attempt)
+        raise RunnerError(RunnerErrorCode.PROVIDER_CALL_LIMIT, "provider-call-limit")
+
+    monkeypatch.setattr(runner, "run", exhausted)
+    profile = tmp_path / "profile.json"
+    detected = CliRunner().invoke(app, [*args, "--detect", "--profile", str(profile)])
+    assert detected.exit_code == 0, detected.output
+    if publication_failure:
+
+        def fail_publication(*_args: object) -> Path:
+            raise OSError("PRIVATE-PUBLICATION-FAILURE")
+
+        monkeypatch.setattr("ithrl.cli.fuzz_run.publish_fuzz_result", fail_publication)
+    result = CliRunner().invoke(
+        app, [*args, "--profile", str(profile), "--acknowledge-model-execution"]
+    )
+    assert result.exit_code == (ExitCode.INTERNAL if publication_failure else ExitCode.BUDGET), (
+        result.output
+    )
+    report = json.loads(result.stdout)
+    assert report["runner_error_category"] == "provider-call-limit"
+    assert report["calibration"]["runner_errors"] == 1
+    assert report["calibration"]["no_matches"] == 0
+    assert report["next_command"] is None
+    if publication_failure:
+        assert report["error_code"] == "result-publication-failed"
+        assert "PRIVATE-PUBLICATION-FAILURE" not in result.output
+    else:
+        assert "different limit requires a new run" in report["next_action"]
+    assert len(runner.calls) == 1
+    monkeypatch.setattr("ithrl.cli.fuzz_run.publish_fuzz_result", publish_fuzz_result)
+    resumed = CliRunner().invoke(
+        app,
+        [
+            "fuzz",
+            report["run_state_path"] if publication_failure else report["result_path"],
+            "--resume",
+            "--acknowledge-model-execution",
+            "--format",
+            "json",
+        ],
+    )
+    assert resumed.exit_code == ExitCode.BUDGET, resumed.output
+    assert len(runner.calls) == 1

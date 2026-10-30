@@ -407,10 +407,11 @@ def test_observation_rows_cannot_be_updated_or_deleted(tmp_path: Path) -> None:
 def test_store_uses_private_permissions(tmp_path: Path) -> None:
     directory = tmp_path / "private"
     directory.mkdir(mode=0o755)
+    parent_mode = directory.stat().st_mode & 0o777
     store = ObservationStore(directory / "observations.sqlite")
     store.initialize()
 
-    assert store.path.parent.stat().st_mode & 0o777 == 0o755
+    assert store.path.parent.stat().st_mode & 0o777 == parent_mode
     assert store.path.stat().st_mode & 0o777 == 0o600
 
 
@@ -615,6 +616,7 @@ def test_sampling_store_lock_refuses_unsafe_mode(tmp_path: Path) -> None:
     store.initialize()
     lock_path = store.path.with_name(f"{store.path.name}.sampling.lock")
     lock_path.touch(mode=0o644)
+    lock_path.chmod(0o644)
 
     with (
         pytest.raises(ObservationStoreError, match="sampling lock file is unsafe"),

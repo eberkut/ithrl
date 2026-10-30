@@ -695,11 +695,7 @@ def _shrink(
                 verbose=verbose,
             )
             return
-        if (
-            max_candidates is not None
-            or max_wall_time is not None
-            or inter_attempt_delay is not None
-        ):
+        if max_candidates is not None:
             fail_sampled(
                 error_code="sampled-search-unavailable",
                 code=ExitCode.USAGE,
@@ -718,6 +714,9 @@ def _shrink(
             original_workspace=original_workspace,
             observation_store=observation_store,
             output_format=output_format,
+            max_wall_time_seconds=max_wall_time,
+            inter_attempt_delay_seconds=inter_attempt_delay or 0,
+            experiment_path=experiment_path,
         )
         return
 

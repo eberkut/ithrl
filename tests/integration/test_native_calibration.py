@@ -278,6 +278,54 @@ def _assert_cleanup(scenario: Scenario, snapshot: CalibrationSnapshot) -> None:
         assert stat.S_IMODE(path.stat().st_mode) & 0o077 == 0
 
 
+@pytest.mark.parametrize("harness", ["codex", "copilot"])
+def test_snapshot_reason_reaches_saved_evidence_and_cli_without_dispatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, harness: Harness
+) -> None:
+    from ithrl.runner.runtime.protection import ProtectedPathError, ProtectionErrorCode
+
+    scenario = _scenario(tmp_path, monkeypatch, harness, "final-response")
+    protected = (
+        protected_tree(scenario.case.root, allow_case_results=True),
+        protected_tree(scenario.original),
+        scenario.source.read_bytes(),
+    )
+    capture = Mock(
+        side_effect=ProtectedPathError(
+            ProtectionErrorCode.LIMIT_EXCEEDED, "PRIVATE-SNAPSHOT-DETAIL"
+        )
+    )
+    start = Mock(side_effect=AssertionError("snapshot refusal must prevent process startup"))
+    monkeypatch.setattr(process_runtime.ProtectedPathSnapshot, "capture", capture)
+    monkeypatch.setattr(process_runtime, "_start_process", start)
+
+    result = CliRunner().invoke(app, scenario.arguments())
+    report = json.loads(result.stdout)
+    snapshot = _snapshot(report)
+
+    assert result.exit_code != ExitCode.SUCCESS
+    assert report["runner_error_category"] == "preparation"
+    assert report["runner_error_reason_code"] == "protected-input-snapshot"
+    assert report["provider_calls"] == report["actions_executed"] == 0
+    assert report["runner_errors"] == report["attempts_used"] > 0
+    observations = ObservationStore(scenario.database).list_for_experiment(
+        snapshot.experiment.digest
+    )
+    assert len(observations) == report["runner_errors"]
+    for observation in observations:
+        assert observation.attempt_evidence.reason_code == "protected-input-snapshot"
+        assert observation.attempt_evidence.native_output is None
+    assert "PRIVATE-SNAPSHOT-DETAIL" not in result.output
+    assert "PRIVATE-SNAPSHOT-DETAIL" not in snapshot.model_dump_json()
+    capture.assert_called()
+    start.assert_not_called()
+    assert (
+        protected_tree(scenario.case.root, allow_case_results=True),
+        protected_tree(scenario.original),
+        scenario.source.read_bytes(),
+    ) == protected
+
+
 @pytest.mark.parametrize(
     ("harness", "target"),
     [("codex", "final-response"), ("copilot", "final-response"), ("copilot", "shell-action")],

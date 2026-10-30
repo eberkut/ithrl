@@ -12,7 +12,7 @@ from contextlib import redirect_stdout
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 from uuid import uuid4
 
 import typer
@@ -23,11 +23,11 @@ from ithrl.cli.native import NativeSelection
 from ithrl.cli.output import (
     ExitCode,
     OutputFormat,
-    error_console,
     fail_sampled,
-    print_plain,
+    last_runner_error,
     shell_command,
 )
+from ithrl.cli.progress import calibration_status, progress_display, sampling_status
 from ithrl.cli.sampled import (
     _observation_store_path,
     _preflight_report,
@@ -350,15 +350,22 @@ def handle_sampled_reduction(
                     )
                     render_sampled_reduction(report, output_format, verbose=verbose)
                     raise typer.Exit(sampled_reduction_exit_code(report))
-        outcome = asyncio.run(
-            run_sampled_phases(
-                evidence=evidence,
-                prepared=prepared,
-                store=store,
-                state_file=state_file,
-                progress=lambda message: print_plain(error_console, message),
+        with progress_display() as progress:
+            outcome = asyncio.run(
+                run_sampled_phases(
+                    evidence=evidence,
+                    prepared=prepared,
+                    store=store,
+                    state_file=state_file,
+                    progress=progress,
+                    on_sampling_progress=lambda block: progress(
+                        sampling_status(
+                            block,
+                            phase="Confirmation" if block.plan.role == "confirmation" else "Search",
+                        )
+                    ),
+                )
             )
-        )
         asyncio.run(
             validate_sampled_result(
                 result=outcome.result,
@@ -559,6 +566,7 @@ def _reduction_preflight(
         phase="calibration",
         max_attempts=attempts,
         max_provider_calls=calls,
+        max_provider_calls_per_attempt=prepared.execution_plan.capability.provider_calls_per_attempt,
         max_runner_seconds=attempts * cost.runner_seconds,
         max_wall_time_seconds=seconds,
         inter_attempt_delay_seconds=delay,
@@ -620,6 +628,7 @@ def _calibrate_for_run(
     report: SampledReductionOutput,
 ) -> SampledCalibrationResult | Literal["provider-call-budget", "wall-time-budget"]:
     original = prepare_candidate(evidence, prepared.execution_plan)
+    phase = cast(SampledExperimentDefinition, prepared.experiment).calibration
 
     def refresh_calibration_prefix() -> SampledRunState:
         observed = store.list_compatible(
@@ -628,14 +637,20 @@ def _calibrate_for_run(
             role=ObservationRole.CALIBRATION,
             arm=ObservationArm.BASELINE,
         )
-        return state_file.record_calibration(store, tuple(o.observation_id for o in observed))
+        state = state_file.record_calibration(store, tuple(o.observation_id for o in observed))
+        progress_update(
+            calibration_status(
+                sum(observation.valid for observation in observed),
+                phase.required_valid,
+                len(observed),
+            )
+        )
+        return state
 
-    refresh_calibration_prefix()
     cost = sampling_attempt_cost(prepared.execution_plan.capability, prepared.resource_limits)
     experiment = prepared.experiment
     if not isinstance(experiment, SampledExperimentDefinition) or experiment.reduction is None:
         raise ValueError("complete sampled reduction required")
-    phase = experiment.calibration
     reduction = experiment.reduction
     search = reduction.search.original.max_attempts + reduction.search.candidate.max_attempts
 
@@ -668,16 +683,18 @@ def _calibrate_for_run(
         ):
             raise _CalibrationBudgetStop("wall-time-budget")
 
-    print_plain(error_console, "Calibrating the immutable original context")
     try:
-        result = run_sampled_calibration(
-            evidence=evidence, prepared=prepared, store=store, before_attempt=admit_attempt
-        )
+        with progress_display() as progress_update:
+            refresh_calibration_prefix()
+            try:
+                result = run_sampled_calibration(
+                    evidence=evidence, prepared=prepared, store=store, before_attempt=admit_attempt
+                )
+            finally:
+                # Charge every durable observation even when collection raises before returning.
+                refresh_calibration_prefix()
     except _CalibrationBudgetStop as stop:
         return stop.reason
-    finally:
-        # Charge every durable observation even when collection raises before returning.
-        refresh_calibration_prefix()
     return result
 
 
@@ -746,6 +763,7 @@ def _run_report(
         *calibration_observations,
         *(a.observation for b in blocks for a in b.attempts),
     ]
+    runner_error_category, runner_error_reason_code = last_runner_error(observations)
     unknown = bool(
         usage.unknown_provider_attempts
         or usage.possible_provider_calls
@@ -817,6 +835,9 @@ def _run_report(
         next_action = (
             "Inspect the private safety evidence and resolve the refusal before starting a new run."
         )
+    if runner_error_category == "provider-call-limit":
+        safe_resume = False
+        next_action = "The per-attempt provider call budget was exhausted. Inspect the saved evidence; a different limit requires a new run."
     if safe_resume:
         try:
             load_cli_session(state_file.path.parent)
@@ -895,6 +916,8 @@ def _run_report(
             o.outcome is ObservationOutcome.INVALID_OBSERVATION for o in observations
         ),
         runner_errors=sum(o.outcome is ObservationOutcome.RUNNER_ERROR for o in observations),
+        runner_error_category=runner_error_category,
+        runner_error_reason_code=runner_error_reason_code,
         stop_reason=stop_reason,
         run_state_path=_safe_result_path(state_file.path.parent),
         confirmation_capacity="consumed"

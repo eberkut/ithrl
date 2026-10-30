@@ -100,11 +100,13 @@ class ProcessRuntimeError(RuntimeError):
         *,
         report: RuntimeReport,
         native_output: NativeOutputReference | None = None,
+        reason_code: str | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
         self.report = report
         self.native_output = native_output
+        self.reason_code = reason_code
 
 
 class ProcessRuntimeCancelled(asyncio.CancelledError):

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import re
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ithrl.execution import MAX_PROVIDER_CALLS_PER_ATTEMPT
 from ithrl.runner.contracts import (
@@ -31,6 +32,9 @@ class AttemptEvidence(BaseModel):
     attempt_digest: Annotated[str, Field(pattern=_DIGEST_PATTERN)]
     termination_reason: TerminationReason
     provider_acceptance_state: ProviderAcceptanceState
+    reason_code: Annotated[
+        str | None, Field(pattern=r"^[A-Za-z0-9._-]{1,80}$", exclude_if=lambda value: value is None)
+    ] = None
     provider_calls_possible: Annotated[int, Field(ge=0, le=MAX_PROVIDER_CALLS_PER_ATTEMPT)] = 0
     effective_policy_digest: Annotated[str | None, Field(pattern=_DIGEST_PATTERN)] = None
     model_requested: Annotated[str | None, Field(min_length=1, max_length=256)] = None
@@ -43,6 +47,16 @@ class AttemptEvidence(BaseModel):
     native_output: NativeOutputReference | None = None
     retry_safe: bool = False
     overload_replacement_safe: bool = False
+
+    @field_validator("reason_code", mode="before")
+    @classmethod
+    def validate_reason_code(cls, value: object) -> object:
+        if value is not None and (
+            not isinstance(value, str)
+            or re.fullmatch(r"[A-Za-z0-9._-]{1,80}", value, flags=re.ASCII) is None
+        ):
+            raise ValueError("runner error reason_code must be a bounded machine code")
+        return value
 
     @model_validator(mode="after")
     def validate_completion(self) -> AttemptEvidence:
@@ -71,6 +85,8 @@ class AttemptEvidence(BaseModel):
     def _validate_completed_attempt(self) -> None:
         if self.termination_reason != "completed":
             return
+        if self.reason_code is not None:
+            raise ValueError("completed attempt evidence cannot have an error reason code")
         if self.accounting is None:
             raise ValueError("completed attempt evidence requires accounting")
         if self.effective_policy_digest is None:
@@ -113,6 +129,20 @@ class AttemptEvidence(BaseModel):
 
         return self.provider_acceptance_state is ProviderAcceptanceState.ACCEPTED
 
+    def provider_call_charge(self, per_attempt_limit: int) -> int:
+        """Retain the conservative attempt charge whenever provider work started."""
+
+        known = (
+            self.accounting.provider_calls_started
+            if self.accounting is not None
+            else int(self.provider_call_started)
+        )
+        return max(
+            known,
+            self.provider_calls_possible,
+            per_attempt_limit if self.provider_call_started else 0,
+        )
+
     @property
     def automatic_retry_safe(self) -> bool:
         """Return whether this evidence permits an automatic repeat attempt."""
@@ -153,6 +183,7 @@ class AttemptEvidence(BaseModel):
             attempt_digest=attempt.digest,
             termination_reason=_termination_reason(error.code),
             provider_acceptance_state=acceptance,
+            **({"reason_code": error.reason_code} if error.reason_code is not None else {}),
             provider_calls_possible=(
                 _possible_provider_calls(attempt, error)
                 if acceptance is ProviderAcceptanceState.UNKNOWN

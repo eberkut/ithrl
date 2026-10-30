@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from ithrl.case.contracts import CaseError
 from ithrl.case.filesystem import read_safe_bytes
 from ithrl.context import content_digest
+from ithrl.execution import MAX_PROVIDER_CALLS_PER_ATTEMPT
 from ithrl.fuzz.progress import FuzzCampaignProgress
 from ithrl.observations import (
     Observation,
@@ -285,7 +286,7 @@ class SamplingDispatchReservation(_SampledStateContract):
     attempt_id: Annotated[str, Field(pattern=r"^attempt-[0-9a-f]{32}$")]
     attempt_digest: _StateDigest
     reserved_at: datetime
-    provider_calls: Annotated[int, Field(ge=0, le=2)]
+    provider_calls: Annotated[int, Field(ge=0, le=MAX_PROVIDER_CALLS_PER_ATTEMPT)]
     runner_seconds: Annotated[int, Field(ge=1)]
 
     @field_validator("reserved_at")
@@ -358,7 +359,7 @@ class SampledRunState(_SampledStateContract):
     started_at: datetime
     original_identity: ObservationIdentity
     original_candidate_digest: _StateDigest
-    provider_calls_per_attempt: Annotated[int, Field(ge=0, le=2)]
+    provider_calls_per_attempt: Annotated[int, Field(ge=0, le=MAX_PROVIDER_CALLS_PER_ATTEMPT)]
     approvals: Annotated[tuple[SamplingBudgetApproval, ...], Field(min_length=1, max_length=10_000)]
     calibration_observation_ids: Annotated[tuple[str, ...], Field(max_length=16)] = ()
     blocks: Annotated[tuple[SamplingBlockProgress, ...], Field(max_length=20_001)] = ()
@@ -793,11 +794,7 @@ class SampledRunStateFile:
                 else int(evidence.provider_call_started)
             )
             actual += known
-            upper = max(
-                known,
-                evidence.provider_calls_possible,
-                state.provider_calls_per_attempt if evidence.provider_call_started else 0,
-            )
+            upper = evidence.provider_call_charge(state.provider_calls_per_attempt)
             possible += upper - known
             if (
                 accounting is None

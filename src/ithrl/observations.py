@@ -19,6 +19,7 @@ from filelock import Timeout
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from ithrl.context import content_digest
+from ithrl.execution import MAX_PROVIDER_CALLS_PER_ATTEMPT
 from ithrl.experiment import (
     MAX_SAMPLING_ATTEMPTS,
     SampledChangePlan,
@@ -250,7 +251,7 @@ class SamplingBlockPlan(_SamplingContract):
     selected_at: datetime | None = None
     schedule_seed: Annotated[int, Field(ge=0, le=2**64 - 1)]
     schedule: Annotated[tuple[SamplingArm, ...], Field(max_length=2 * MAX_SAMPLING_ATTEMPTS)]
-    provider_calls_per_attempt: Annotated[int, Field(ge=0, le=2)]
+    provider_calls_per_attempt: Annotated[int, Field(ge=0, le=MAX_PROVIDER_CALLS_PER_ATTEMPT)]
 
     @field_validator("frozen_at")
     @classmethod

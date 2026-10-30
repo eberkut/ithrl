@@ -91,6 +91,7 @@ async def collect_sampling_block(
     clock: Callable[[], datetime] = _now,
     verify_independence: Callable[[Observation], str | None] | None = None,
     mutation: TextMutation | None = None,
+    on_progress: Callable[[SamplingBlockEvidence], None] | None = None,
 ) -> SamplingCollectionResult:
     """Admit a complete bounded block, collect serially, or retain an auditable refusal.
 
@@ -106,6 +107,7 @@ async def collect_sampling_block(
     Local synchronous preparation/persistence has no hard completion bound; elapsed time is
     checked again before each dispatch. Finite token allowances require an estimator, which
     current shared execution contracts do not provide, and are explicitly refused here.
+    Progress is reported before reservation or after durable observation reconciliation.
     """
 
     with state_file.acquire_lock(store):
@@ -120,6 +122,7 @@ async def collect_sampling_block(
             clock=clock,
             verify_independence=verify_independence,
             mutation=mutation,
+            on_progress=on_progress,
         )
 
 
@@ -135,6 +138,7 @@ async def _collect_sampling_block_owned(
     clock: Callable[[], datetime] = _now,
     verify_independence: Callable[[Observation], str | None] | None = None,
     mutation: TextMutation | None = None,
+    on_progress: Callable[[SamplingBlockEvidence], None] | None = None,
 ) -> SamplingCollectionResult:
     """Collect while the caller owns run/store locks across the composed search."""
 
@@ -196,6 +200,8 @@ async def _collect_sampling_block_owned(
     ):
         return _result(state_file, store, plan, clock(), "unfinished-prior-block", block)
 
+    if on_progress is not None:
+        on_progress(block)
     while True:
         now = clock()
         if now.tzinfo is None or now.utcoffset() is None:
@@ -303,6 +309,8 @@ async def _collect_sampling_block_owned(
             store, independence_evidence_digest=_independence(observation, verify_independence)
         )
         block = state_file.evidence(store)[-1]
+        if on_progress is not None:
+            on_progress(block)
         if interrupted:
             return _result(state_file, store, plan, clock(), "user-interrupt")
 

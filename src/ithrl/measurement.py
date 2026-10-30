@@ -207,6 +207,7 @@ def _timeout_error(attempt: PreparedAttempt, evidence: RunnerError | None) -> Ru
     return RunnerError(
         RunnerErrorCode.TIMEOUT,
         "runner exceeded the attempt wall-time limit",
+        reason_code=evidence.reason_code,
         provider_acceptance_state=evidence.provider_acceptance_state,
         model_requested=evidence.model_requested,
         model_returned=evidence.model_returned,
@@ -241,6 +242,7 @@ def _normalize_runner_error(
     return RunnerError(
         code,
         "runner result failed validation",
+        reason_code=error.reason_code if isinstance(error, RunnerError) else None,
         provider_acceptance_state=_result_acceptance_state(attempt, result),
         model_requested=result.model_requested,
         model_returned=result.model_returned,

@@ -52,6 +52,7 @@ RUNTIME_MODULES = frozenset(
         PurePosixPath("ithrl/cli/extract.py"),
         PurePosixPath("ithrl/cli/native.py"),
         PurePosixPath("ithrl/cli/output.py"),
+        PurePosixPath("ithrl/cli/progress.py"),
         PurePosixPath("ithrl/cli/paths.py"),
         PurePosixPath("ithrl/cli/sampled.py"),
         PurePosixPath("ithrl/cli/sampled_output.py"),

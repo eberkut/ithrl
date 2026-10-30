@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -16,7 +17,7 @@ from typer._click import termui
 
 import ithrl.cli.sampled as sampled
 from ithrl.case import CaseEvidence, CaseWorkspace
-from ithrl.cli.output import ExitCode, OutputFormat
+from ithrl.cli.output import ExitCode, OutputFormat, SampledOutput, render_sampled
 from ithrl.execution import CapabilityProfile, ResourceLimits, SafetyPolicy
 from ithrl.experiment import (
     ExperimentDefinition,
@@ -24,6 +25,7 @@ from ithrl.experiment import (
     SampledCalibrationPhase,
     SampledExperimentDefinition,
 )
+from ithrl.observations import ObservationOutcome
 from ithrl.synthetic import extract_inference
 
 FIXTURE = Path(__file__).parents[1] / "fixtures/synthetic-trace.json"
@@ -33,6 +35,14 @@ FIXTURE = Path(__file__).parents[1] / "fixtures/synthetic-trace.json"
 def prepared_case(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> tuple[CaseWorkspace, CaseEvidence, Any, Path, Path]:
+    def fixture_candidate(*_args: object) -> SimpleNamespace:
+        return SimpleNamespace(digest="fixture-digest")
+
+    monkeypatch.setattr(
+        sampled,
+        "prepare_candidate",
+        fixture_candidate,
+    )
     workspace = extract_inference(
         FIXTURE, inference_call_id="synthetic-ac-001", case_path=tmp_path / "case"
     )
@@ -69,6 +79,7 @@ def prepared_case(
     # own contract tests, so no native runtime or model can be launched here.
     prepared = SimpleNamespace(
         experiment=experiment,
+        identity="fixture-identity",
         safety_policy=policy,
         resource_limits=limits,
         execution_plan=SimpleNamespace(
@@ -94,6 +105,9 @@ def _invoke(
     acknowledge_model_execution: bool = False,
     observation_store: Path | None = None,
     output_format: OutputFormat = OutputFormat.JSON,
+    max_wall_time_seconds: int | None = None,
+    inter_attempt_delay_seconds: int = 0,
+    experiment_path: Path | None = None,
 ) -> None:
     workspace, evidence, prepared, original, store = prepared_case
     sampled.handle_sampled_shrink(
@@ -106,12 +120,15 @@ def _invoke(
         original_workspace=original,
         observation_store=observation_store if observation_store is not None else store,
         output_format=output_format,
+        max_wall_time_seconds=max_wall_time_seconds,
+        inter_attempt_delay_seconds=inter_attempt_delay_seconds,
+        experiment_path=experiment_path,
     )
 
 
 @pytest.fixture
 def services(monkeypatch: pytest.MonkeyPatch) -> tuple[Mock, Mock, Mock]:
-    store = Mock(return_value=SimpleNamespace())
+    store = Mock(return_value=SimpleNamespace(list_compatible=Mock(return_value=())))
     run = Mock(side_effect=AssertionError("calibration must not dispatch"))
     save = Mock(side_effect=AssertionError("results must not be saved"))
     monkeypatch.setattr(sampled, "ObservationStore", store)
@@ -125,7 +142,15 @@ def test_dry_run_has_reproducible_bounds_without_store_or_calibration(
     services: tuple[Mock, Mock, Mock],
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    _invoke(prepared_case, dry_run=True, calibrate_only=False)
+    experiment_path = prepared_case[0].root / "experiments" / "explicit.toml"
+    _invoke(
+        prepared_case,
+        dry_run=True,
+        calibrate_only=False,
+        max_wall_time_seconds=200,
+        inter_attempt_delay_seconds=2,
+        experiment_path=experiment_path,
+    )
     output = capsys.readouterr()
     report = json.loads(output.out)
     assert output.err == ""
@@ -137,6 +162,8 @@ def test_dry_run_has_reproducible_bounds_without_store_or_calibration(
     assert report["minimum_matches"] == 1
     assert report["max_provider_calls"] == 6
     assert report["max_runner_seconds"] == 45
+    assert report["max_wall_time_seconds"] == 200
+    assert report["inter_attempt_delay_seconds"] == 2
     assert report["max_tokens"] is None
     assert report["harness_started"] is True
     assert report["provider_call_accounting"] == "not-started"
@@ -150,6 +177,9 @@ def test_dry_run_has_reproducible_bounds_without_store_or_calibration(
         ("--max-attempts", "3"),
         ("--attempt-timeout", "12"),
         ("--max-provider-calls", "6"),
+        ("--max-wall-time", "200"),
+        ("--inter-attempt-delay", "2"),
+        ("--experiment", str(experiment_path)),
     ):
         assert command[command.index(flag) + 1] == value
     assert "--acknowledge-model-execution" in command
@@ -226,6 +256,7 @@ def test_post_dispatch_failures_never_claim_zero_or_expose_exception_text(
         ("refused", "safety-refusal", False, True, ExitCode.UNSUPPORTED, False),
         ("incomplete", "unsafe-retry", False, True, ExitCode.PROVIDER, False),
         ("incomplete", "attempt-limit", True, False, ExitCode.BUDGET, False),
+        ("incomplete", "wall-time-budget", True, True, ExitCode.BUDGET, True),
         ("incomplete", "user-interrupt", True, True, ExitCode.CANCELLED, True),
     ],
 )
@@ -242,7 +273,14 @@ def test_outcomes_have_truthful_accounting_and_only_safe_continuations(
 ) -> None:
     observations = (
         SimpleNamespace(valid=True, allows_fresh_attempt=Mock(return_value=True)),
-        SimpleNamespace(valid=False, allows_fresh_attempt=Mock(return_value=retry_safe)),
+        SimpleNamespace(
+            valid=False,
+            allows_fresh_attempt=Mock(return_value=retry_safe),
+            outcome=ObservationOutcome.RUNNER_ERROR,
+            error_category="transport",
+            recorded_at=datetime.now(UTC),
+            attempt_evidence=SimpleNamespace(reason_code="child-timeout"),
+        ),
     )
     result = SimpleNamespace(observations=observations)
     summary = SimpleNamespace(
@@ -272,12 +310,21 @@ def test_outcomes_have_truthful_accounting_and_only_safe_continuations(
             _invoke(prepared_case, acknowledge_model_execution=True)
         assert raised.value.exit_code == expected_exit
     output = capsys.readouterr()
-    assert json.loads(output.err)["status"] == "ready"
+    assert json.loads(output.err.splitlines()[0])["status"] == "ready"
+    assert "Calibration: original 1/2 valid (2 attempts)" in output.err
     report = json.loads(output.out)
     assert report["status"] == ("interrupted" if stop_reason == "user-interrupt" else outcome)
     assert report["provider_call_accounting"] == "accounted"
     assert report["provider_calls"] == 2
     assert report["attempts_used"] == summary.observations_recorded
+    assert report["runner_error_category"] == "transport"
+    assert report["runner_error_reason_code"] == "child-timeout"
+    assert "private native error text" not in json.dumps(report)
+    human_report = SampledOutput.model_validate(report)
+    render_sampled(human_report, OutputFormat.HUMAN)
+    human = capsys.readouterr().out
+    assert "last runner error transport: child-timeout" in human
+    assert "private native error text" not in human
     assert bool(report["next_command"]) is continuation
     services[2].assert_called_once()
 

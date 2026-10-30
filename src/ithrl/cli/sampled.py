@@ -6,14 +6,17 @@ import os
 import re
 import stat
 import sys
+import time
 from contextlib import nullcontext, redirect_stdout
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal, Never
+from typing import Literal, Never, cast
 
 import typer
 from platformdirs import user_data_path
 
 from ithrl.calibration import (
+    CalibrationWallTimeBudgetError,
     SampledCalibrationResult,
     run_sampled_calibration,
     save_sampled_calibration_result,
@@ -25,13 +28,17 @@ from ithrl.cli.output import (
     OutputFormat,
     SampledOutput,
     fail_sampled,
+    last_runner_error,
     render_sampled,
     shell_command,
 )
+from ithrl.cli.progress import calibration_status, progress_display
 from ithrl.execution import calibration_budget_bounds
+from ithrl.execution.budget import sampling_attempt_cost
 from ithrl.experiment import SampledExperimentDefinition
-from ithrl.observations import ObservationStore
+from ithrl.observations import Observation, ObservationArm, ObservationRole, ObservationStore
 from ithrl.results import CalibrationSnapshot
+from ithrl.runner import prepare_candidate
 from ithrl.workflow import PreparedExperiment
 
 _SAFE_NAME = re.compile(r"[A-Za-z0-9._-]{1,80}\Z")
@@ -54,6 +61,9 @@ def handle_sampled_shrink(
     observation_store: Path | None,
     output_format: OutputFormat,
     harness_started: bool = True,
+    max_wall_time_seconds: int | None = None,
+    inter_attempt_delay_seconds: int = 0,
+    experiment_path: Path | None = None,
 ) -> None:
     """Present a sampled preflight, then run only an acknowledged calibration."""
 
@@ -104,6 +114,9 @@ def handle_sampled_shrink(
             original_workspace=original_workspace,
             observation_store=store_path,
             harness_started=harness_started,
+            max_wall_time_seconds=max_wall_time_seconds,
+            inter_attempt_delay_seconds=inter_attempt_delay_seconds,
+            experiment_path=experiment_path,
         )
     except KeyboardInterrupt:
         _interrupt_before_execution(output_format, harness_started)
@@ -137,6 +150,7 @@ def handle_sampled_shrink(
     if not acknowledge_model_execution:
         _require_model_acknowledgement(output_format, harness_started)
 
+    started = time.monotonic()
     try:
         # Recheck after acknowledgement before any SQLite or lock-file writes.
         store_path = _observation_store_path(workspace, original_workspace, store_path)
@@ -153,8 +167,46 @@ def handle_sampled_shrink(
             provider_call_accounting="not-started",
         )
 
+    def show_calibration(observations: tuple[Observation, ...]) -> None:
+        valid = sum(observation.valid for observation in observations)
+        required = cast(SampledExperimentDefinition, prepared.experiment).calibration.required_valid
+        progress_update(calibration_status(valid, required, len(observations)))
+
+    def admit() -> None:
+        candidate = prepare_candidate(evidence, prepared.execution_plan)
+        observations = store.list_compatible(
+            prepared.identity,
+            candidate_digest=candidate.digest,
+            role=ObservationRole.CALIBRATION,
+            arm=ObservationArm.BASELINE,
+        )
+        show_calibration(observations)
+        remaining = preflight.max_attempts - len(observations)
+        delay = 0.0
+        if observations:
+            elapsed = (datetime.now(UTC) - observations[-1].recorded_at).total_seconds()
+            if elapsed < 0:
+                raise ValueError("calibration clock precedes recorded progress")
+            delay = max(0.0, preflight.inter_attempt_delay_seconds - elapsed)
+        cost = sampling_attempt_cost(prepared.execution_plan.capability, prepared.resource_limits)
+        future = (
+            remaining * cost.runner_seconds
+            + max(0, remaining - 1) * preflight.inter_attempt_delay_seconds
+        )
+        limit = preflight.max_wall_time_seconds
+        if limit is not None and time.monotonic() - started + delay + future > limit:
+            raise CalibrationWallTimeBudgetError()
+        if delay:
+            time.sleep(delay)
+        if limit is not None and time.monotonic() - started + future > limit:
+            raise CalibrationWallTimeBudgetError()
+
     try:
-        result = run_sampled_calibration(evidence=evidence, prepared=prepared, store=store)
+        with progress_display() as progress_update:
+            result = run_sampled_calibration(
+                evidence=evidence, prepared=prepared, store=store, before_attempt=admit
+            )
+            show_calibration(result.observations)
         snapshot = save_sampled_calibration_result(
             workspace=workspace,
             evidence=evidence,
@@ -186,6 +238,7 @@ def handle_sampled_shrink(
     try:
         summary = snapshot.summary
         report = _calibration_report(preflight, result, snapshot)
+        report = report.model_copy(update={"wall_time_seconds": time.monotonic() - started})
         render_sampled(report, output_format)
     except KeyboardInterrupt:
         fail_sampled(
@@ -205,6 +258,8 @@ def handle_sampled_shrink(
             harness_started=harness_started,
             provider_call_accounting="started-unknown",
         )
+    if report.runner_error_category == "provider-call-limit":
+        raise typer.Exit(ExitCode.BUDGET)
     if report.status == "interrupted":
         raise typer.Exit(ExitCode.CANCELLED)
     if summary.outcome in {"inconclusive", "not-measurable"}:
@@ -213,7 +268,9 @@ def handle_sampled_shrink(
         raise typer.Exit(ExitCode.UNSUPPORTED)
     if summary.outcome == "incomplete":
         raise typer.Exit(
-            ExitCode.BUDGET if summary.stop_reason == "attempt-limit" else ExitCode.PROVIDER
+            ExitCode.BUDGET
+            if summary.stop_reason in {"attempt-limit", "wall-time-budget"}
+            else ExitCode.PROVIDER
         )
 
 
@@ -249,6 +306,7 @@ def _calibration_report(
     """Derive bounded accounting and safe continuation from saved calibration evidence."""
 
     summary = snapshot.summary
+    runner_error_category, runner_error_reason_code = last_runner_error(result.observations)
     accounting: Literal["accounted", "started-unknown"] = (
         "accounted"
         if summary.provider_calls_started is not None
@@ -274,6 +332,8 @@ def _calibration_report(
             "no_matches": summary.no_matches,
             "invalid_observations": summary.invalid_observations,
             "runner_errors": summary.runner_errors,
+            "runner_error_category": runner_error_category,
+            "runner_error_reason_code": runner_error_reason_code,
             "actions_executed": summary.actions_executed,
             "provider_call_accounting": accounting,
             "provider_calls": summary.provider_calls_started if accounting == "accounted" else None,
@@ -293,6 +353,12 @@ def _calibration_report(
             "next_command_shell": preflight.next_command_shell if continuation_safe else None,
         }
     )
+    if runner_error_category == "provider-call-limit":
+        report_data.update(
+            next_action="The per-attempt provider call budget was exhausted. Inspect the saved evidence; a different limit requires a new run.",
+            next_command=None,
+            next_command_shell=None,
+        )
     return SampledOutput.model_validate(report_data)
 
 
@@ -303,6 +369,9 @@ def _preflight_report(
     original_workspace: Path,
     observation_store: Path | None,
     harness_started: bool = True,
+    max_wall_time_seconds: int | None = None,
+    inter_attempt_delay_seconds: int = 0,
+    experiment_path: Path | None = None,
 ) -> SampledOutput:
     experiment = prepared.experiment
     if not isinstance(experiment, SampledExperimentDefinition):
@@ -343,6 +412,11 @@ def _preflight_report(
     ]
     if prepared.resource_limits.max_input_tokens is not None:
         arguments.extend(("--max-input-tokens", str(prepared.resource_limits.max_input_tokens)))
+    if max_wall_time_seconds is not None:
+        arguments.extend(("--max-wall-time", str(max_wall_time_seconds)))
+    arguments.extend(("--inter-attempt-delay", str(inter_attempt_delay_seconds)))
+    if experiment_path is not None:
+        arguments.extend(("--experiment", str(experiment_path.absolute())))
     if observation_store is None:
         from ithrl.cli.paths import private_data_root
 
@@ -389,7 +463,10 @@ def _preflight_report(
         required_valid=experiment.calibration.required_valid,
         minimum_matches=experiment.calibration.minimum_matches,
         max_provider_calls=bounds.provider_calls,
+        max_provider_calls_per_attempt=capability.provider_calls_per_attempt,
         max_runner_seconds=bounds.runner_seconds,
+        max_wall_time_seconds=max_wall_time_seconds,
+        inter_attempt_delay_seconds=inter_attempt_delay_seconds,
         max_tokens=bounds.input_tokens,
         attempt_timeout_seconds=prepared.resource_limits.max_wall_time_seconds,
         max_native_output_bytes=prepared.resource_limits.max_native_output_bytes,

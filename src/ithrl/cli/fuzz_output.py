@@ -90,6 +90,16 @@ class FuzzOutput(BaseModel):
         "unverified"
     )
     harness_started: bool | None = False
+    probe_stage: str | None = Field(default=None, max_length=40, pattern=r"^[a-z-]+$")
+    probe_exit_code: int | None = None
+    probe_reason: str | None = Field(default=None, max_length=240)
+    diagnostic_path: str | None = None
+    runner_error_category: str | None = Field(
+        default=None, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$"
+    )
+    runner_error_reason_code: str | None = Field(
+        default=None, max_length=80, pattern=r"^[A-Za-z0-9._-]{1,80}$"
+    )
     harness: _Name | None = None
     harness_version: _Name | None = None
     runner_version: _Name | None = None
@@ -125,6 +135,7 @@ class FuzzOutput(BaseModel):
     limits: FuzzCommandLimits | None = None
     max_attempts: int | None = None
     planned_provider_calls: int | None = None
+    max_provider_calls_per_attempt: int | None = Field(default=None, ge=0, le=16)
     confirmation_provider_calls: int | None = None
     minimum_wall_time_seconds: int | None = None
     max_native_output_bytes: int | None = None
@@ -197,6 +208,7 @@ def render_fuzz(
         ("trial limit", report.max_candidates),
         ("simplification limit", report.max_simplification_trials),
         ("attempt limit", report.max_attempts),
+        ("provider calls per attempt", report.max_provider_calls_per_attempt),
         ("freshness", report.freshness_seconds),
         ("effect direction", report.effect_direction),
         ("minimum decrease", report.minimum_decrease),
@@ -215,6 +227,18 @@ def render_fuzz(
         ("result", report.result_path),
         ("stop reason", report.stop_reason),
         ("error", report.error_code),
+        ("probe stage", report.probe_stage),
+        ("probe exit code", report.probe_exit_code),
+        ("probe reason", report.probe_reason),
+        ("private diagnostic", report.diagnostic_path),
+        (
+            "last runner error",
+            ": ".join(
+                value
+                for value in (report.runner_error_category, report.runner_error_reason_code)
+                if value
+            ),
+        ),
     )
     for label, value in rows:
         if value is not None and value != "":
@@ -272,6 +296,8 @@ def render_fuzz(
 def fuzz_exit_code(report: FuzzOutput) -> ExitCode:
     if report.error_code == "result-publication-failed":
         return ExitCode.INTERNAL
+    if report.runner_error_category == "provider-call-limit":
+        return ExitCode.BUDGET
     if report.status in (
         "ready",
         "detected",
