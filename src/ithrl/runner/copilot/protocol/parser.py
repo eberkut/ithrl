@@ -32,6 +32,10 @@ from ithrl.runner.copilot.protocol.state import (
 )
 
 
+def _is_exact_int(value: object, expected: int) -> bool:
+    return type(value) is int and value == expected
+
+
 def parse_output(
     output: bytes,
     *,
@@ -52,11 +56,13 @@ def parse_output(
         )
     receipt = events[0]
     request_digest = None
-    if receipt.get("schema_version") != 1 or receipt.get("new_user_messages") != 0:
+    if not _is_exact_int(receipt.get("schema_version"), 1) or not _is_exact_int(
+        receipt.get("new_user_messages"), 0
+    ):
         invalid_sequence()
     if native_session is not None and (
         receipt.get("native_session_sha256") != hashlib.sha256(native_session).hexdigest()
-        or receipt.get("native_session_bytes") != len(native_session)
+        or not _is_exact_int(receipt.get("native_session_bytes"), len(native_session))
         or receipt.get("system_message_sha256")
         != (None if system_message is None else hashlib.sha256(system_message.encode()).hexdigest())
     ):
@@ -75,8 +81,8 @@ def parse_output(
         if event_type == "ithrl.copilot.forward":
             if (
                 state.forwarded
-                or event.get("provider_calls_started") != 1
-                or event.get("schema_version") != 1
+                or not _is_exact_int(event.get("provider_calls_started"), 1)
+                or not _is_exact_int(event.get("schema_version"), 1)
             ):
                 invalid_sequence()
             request_digest = event.get("request_sha256")
@@ -132,15 +138,15 @@ def parse_output(
         raise CopilotProtocolError(failure_code, "Copilot worker refused native execution")
     rejected = complete.get("requests_rejected")
     if (
-        complete.get("schema_version") != 1
+        not _is_exact_int(complete.get("schema_version"), 1)
         or complete.get("success") is not True
-        or complete.get("provider_calls_started") != 1
+        or not _is_exact_int(complete.get("provider_calls_started"), 1)
         or not state.forwarded
         or type(rejected) is not int
         or rejected < 0
         or (rejected != 0 and not state.denial_seen)
         or complete.get("request_sha256") != request_digest
-        or complete.get("websockets_rejected") != 0
+        or not _is_exact_int(complete.get("websockets_rejected"), 0)
     ):
         raise CopilotProtocolError(
             "incomplete-dispatch", "Copilot output lacks one successful physical inference dispatch"
@@ -177,7 +183,9 @@ def physical_forward_count(output: bytes) -> int | None:
         return None
     try:
         first = decode_line(lines[0])
-        if first.get("type") != "ithrl.copilot.input" or first.get("schema_version") != 1:
+        if first.get("type") != "ithrl.copilot.input" or not _is_exact_int(
+            first.get("schema_version"), 1
+        ):
             return None
         forwards = []
         complete = None
@@ -192,15 +200,15 @@ def physical_forward_count(output: bytes) -> int | None:
                 complete = event
         if (
             len(forwards) == 1
-            and forwards[0].get("schema_version") == 1
-            and forwards[0].get("provider_calls_started") == 1
+            and _is_exact_int(forwards[0].get("schema_version"), 1)
+            and _is_exact_int(forwards[0].get("provider_calls_started"), 1)
         ):
             return 1
         if (
             not forwards
             and complete is not None
-            and complete.get("schema_version") == 1
-            and complete.get("provider_calls_started") == 0
+            and _is_exact_int(complete.get("schema_version"), 1)
+            and _is_exact_int(complete.get("provider_calls_started"), 0)
         ):
             return 0
     except CopilotProtocolError:

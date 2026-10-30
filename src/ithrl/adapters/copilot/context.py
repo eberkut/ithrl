@@ -81,6 +81,8 @@ def _fixed_input_line(records: tuple[JsonObject, ...], selector: DecisionSelecto
             "the selected Copilot decision has no matching assistant turn boundary",
         )
     for index in range(boundary - 2, -1, -1):
+        if records[index].get("type") == "assistant.turn_start":
+            break
         if records[index].get("type") in {"user.message", "tool.execution_complete"}:
             return index + 1
     raise AdapterError(

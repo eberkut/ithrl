@@ -244,6 +244,21 @@ def test_parallel_shell_actions_require_every_explicit_denial(missing_denial: bo
         (0, "system_message_sha256", "b" * 64),
         (0, "new_user_messages", 1),
         (0, "schema_version", 2),
+        (0, "schema_version", True),
+        (0, "schema_version", 1.0),
+        (0, "new_user_messages", False),
+        (0, "new_user_messages", 0.0),
+        (0, "native_session_bytes", float(len(NATIVE))),
+        (6, "schema_version", True),
+        (6, "schema_version", 1.0),
+        (6, "provider_calls_started", True),
+        (6, "provider_calls_started", 1.0),
+        (-1, "schema_version", True),
+        (-1, "schema_version", 1.0),
+        (-1, "provider_calls_started", True),
+        (-1, "provider_calls_started", 1.0),
+        (-1, "websockets_rejected", False),
+        (-1, "websockets_rejected", 0.0),
         (-1, "provider_calls_started", 2),
         (-1, "requests_rejected", 1),
         (-1, "websockets_rejected", 1),
@@ -312,6 +327,34 @@ def test_new_user_messages_and_unknown_essential_events_are_refused(
     events.insert(-1, {"type": kind, "data": data})
     with pytest.raises(CopilotProtocolError):
         _parse(events)
+
+
+@pytest.mark.parametrize("wrong_type", [bool, float])
+@pytest.mark.parametrize(
+    ("index", "field", "calls", "value"),
+    [
+        (0, "schema_version", 1, 1),
+        (1, "schema_version", 1, 1),
+        (1, "provider_calls_started", 1, 1),
+        (-1, "schema_version", 0, 1),
+        (-1, "provider_calls_started", 0, 0),
+    ],
+)
+def test_recovery_counters_require_exact_integers(
+    index: int, field: str, calls: int, value: int, wrong_type: type[bool] | type[float]
+) -> None:
+    events = [_input()]
+    if calls:
+        events.append(_receipt("forward", provider_calls_started=1, request_sha256="a" * 64))
+    events.append(_complete())
+    events[-1]["provider_calls_started"] = calls
+
+    def output() -> bytes:
+        return b"".join(json.dumps(event).encode() + b"\n" for event in events)
+
+    assert physical_forward_count(output()) == calls
+    events[index][field] = wrong_type(value)
+    assert physical_forward_count(output()) is None
 
 
 @pytest.mark.parametrize(

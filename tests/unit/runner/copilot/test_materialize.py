@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from ithrl.adapters import enumerate_decisions, parse_session
-from ithrl.case import CaseEvidence
+from ithrl.case import CaseEvidence, CaseFormatError
 from ithrl.context import content_digest
 from ithrl.execution import (
     CapabilityProfile,
@@ -274,6 +274,36 @@ def test_direct_decisions_preserve_the_existing_native_turn_boundary(
     assert result.session_id == "20000000-0000-4000-8000-000000000001"
     assert result.system_message is None
     assert _native_records(result.native_session)[-1]["type"] == "assistant.turn_start"
+
+
+@pytest.mark.parametrize("older_input", ["user", "tool"])
+def test_turn_without_new_native_input_cannot_borrow_an_earlier_turn(
+    tmp_path: Path, older_input: str
+) -> None:
+    records = (
+        _direct_records()
+        if older_input == "user"
+        else [
+            record
+            for record in _history_records()
+            if record["type"] != "user.message"
+            or record["data"]["content"] != "Private direct trigger."
+        ]
+    )
+    turn = 2 if older_input == "user" else 3
+    records.extend(
+        [
+            _turn_record(12, turn, start=True),
+            _assistant(13, turn, content="Fixture complete.", final=True),
+            _turn_record(14, turn, start=False),
+        ]
+    )
+    evidence = _evidence(tmp_path, records)
+    with pytest.raises(CaseFormatError, match="editable text cannot be derived safely"):
+        evidence.editable_text()
+    with pytest.raises(CopilotMaterializationError) as caught:
+        materialize_copilot_attempt(_attempt(evidence))
+    assert caught.value.code is CopilotMaterializationErrorCode.AMBIGUOUS_BOUNDARY
 
 
 def test_preserves_opaque_records_and_failed_historical_tools_without_normalization(

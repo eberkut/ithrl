@@ -176,6 +176,8 @@ def _trigger_node_id(
     ):
         _ambiguous("the selected Copilot decision has no supported native input boundary")
     for index in range(boundary - 2, -1, -1):
+        if records[index].get("type") == "assistant.turn_start":
+            break
         if records[index].get("type") in {"user.message", "tool.execution_complete"}:
             return nodes[index].id
     return _ambiguous("the selected Copilot decision has no supported native input boundary")
