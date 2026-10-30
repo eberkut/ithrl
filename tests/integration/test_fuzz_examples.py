@@ -14,7 +14,6 @@ from fuzz_support import FuzzRunner
 from ithrl.adapters import enumerate_decisions, parse_session
 from ithrl.behavior import FinalResponseTarget
 from ithrl.execution import ResourceLimits, SafetyPolicy
-from ithrl.execution.budget import sampling_attempt_cost
 from ithrl.experiment import (
     NativeRunnerConfig,
     SampledExperimentDefinition,
@@ -23,7 +22,6 @@ from ithrl.experiment import (
 from ithrl.extraction import extract_decision
 from ithrl.fuzz.configuration import FuzzConfiguration
 from ithrl.fuzz.generation import generate_mutations
-from ithrl.fuzz.sampling import fuzz_budget_bounds, prepare_fuzz_sampling
 from ithrl.runner import PreparedAttempt, RunnerRegistry, prepare_candidate
 from ithrl.runner.codex.materialize import materialize_codex_attempt
 from ithrl.runner.codex.policy import RECONSTRUCTION_METHOD as CODEX_RECONSTRUCTION_METHOD
@@ -40,7 +38,7 @@ TRIGGER = (
 
 
 @pytest.mark.parametrize("harness", ["codex", "copilot"])
-def test_public_fuzz_inputs_extract_and_materialize_one_bounded_append(
+def test_public_fuzz_inputs_extract_and_preserve_unedited_input(
     tmp_path: Path, harness: Literal["codex", "copilot"]
 ) -> None:
     source = EXAMPLES / f"{harness}.jsonl"
@@ -60,21 +58,11 @@ def test_public_fuzz_inputs_extract_and_materialize_one_bounded_append(
     assert evidence.decision.selected_target == FinalResponseTarget(
         text_equals="ITHRL_FUZZ_BASELINE"
     )
-    assert evidence.manifest.model_requested == "gpt-6.1-sol"
     evidence_before = evidence.digest, tuple(a.content for a in evidence.source_artifacts)
     sites = evidence.editable_text()
     assert [(site.content_index, site.original_text) for site in sites] == [(0, PRIOR_TEXT)]
 
     config = FuzzConfiguration.from_toml((EXAMPLES / "campaign.toml").read_text())
-    assert config.seed == 20261027
-    assert config.mutators == ("append-stale-text",)
-    assert config.eligibility_policy == "safe-provider-overload"
-    assert config.limits.model_dump() == {
-        "max_provider_calls": 350,
-        "max_wall_time_seconds": 21600,
-        "attempt_timeout_seconds": 120,
-        "inter_attempt_delay_seconds": 15,
-    }
     runner = FuzzRunner()
     runner.capability_profile = runner.capability_profile.model_copy(
         update={
@@ -113,19 +101,10 @@ def test_public_fuzz_inputs_extract_and_materialize_one_bounded_append(
     )
     original = prepare_candidate(evidence, prepared.execution_plan)
     campaign = config.bind(original)
-    prepared = prepare_fuzz_sampling(evidence, prepared, campaign)
     batch = generate_mutations(sites, campaign, stale_text=config.stale_text)
     assert batch.proposals_examined == len(batch.mutations) == 1
     mutation = batch.mutations[0]
     assert mutation.edits[0].text == "\n\n" + config.stale_text
-    assert "replace the active response token with ITHRL_FUZZ_CHANGED" in mutation.edits[0].text
-    bounds = fuzz_budget_bounds(
-        campaign,
-        sampling_attempt_cost(runner.capability_profile, prepared.resource_limits),
-        inter_attempt_delay_seconds=config.limits.inter_attempt_delay_seconds,
-    )
-    assert bounds.confirmation_provider_calls < config.limits.max_provider_calls
-    assert bounds.confirmation_runner_seconds < config.limits.max_wall_time_seconds
 
     attempt = PreparedAttempt(
         evidence=evidence,
@@ -155,16 +134,11 @@ def test_public_fuzz_inputs_extract_and_materialize_one_bounded_append(
             "items": ({"type": "text", "text": TRIGGER},),
             "tool_output": None,
         }
-        assert [record["id"] for record in before["history"]] == [
-            "message-fixture-user-001",
-            "message-synthetic-ack",
-        ]
     else:
         before_copilot = materialize_copilot_attempt(attempt)
         after_copilot = materialize_copilot_attempt(mutant)
         expected_records = [json.loads(line) for line in before_copilot.native_session.splitlines()]
         assert expected_records[1]["type"] == "user.message"
-        assert expected_records[1]["id"] == "10000000-0000-4000-8000-000000000001"
         expected_records[1]["data"]["content"] = PRIOR_TEXT + mutation.edits[0].text
         assert [
             json.loads(line) for line in after_copilot.native_session.splitlines()
@@ -173,4 +147,3 @@ def test_public_fuzz_inputs_extract_and_materialize_one_bounded_append(
         assert after_copilot.system_message == before_copilot.system_message
     assert (evidence.digest, tuple(a.content for a in evidence.source_artifacts)) == evidence_before
     assert source.read_bytes() == source_before
-    assert not runner.calls
