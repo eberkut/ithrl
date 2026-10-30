@@ -253,14 +253,16 @@ The failure-free position-0 cap-exhaustion probability was 14.8483%. A prospecti
 comparison of caps 14 and 20 selected **14**, the smallest tested pass: 91.5047%, 91.4589%,
 90.1717%. Twenty added about `.00013` percentage points at the worst position.
 
-That selected configuration reserves `7 + 14*(8+9) + 2*124 = 493` attempts: at most 493
-calls for final response or 986 for the two-call Copilot shell profile. The arithmetic protects
-fresh confirmation and is an admission ceiling, not expected consumption. The actual three
-successful native runs each used ten comparisons and 293 attempts. Their exact profiles,
-75% editable-byte removal, 100/100 matches per confirmation arm, runtime and conservative
-call charges are in [measurements](../measurements.md); those results are not a general native
-success-rate estimate. Original/retained mild degradation and noisy workloads remain outside
-the selected configuration's demonstrated useful envelope.
+That selected configuration reserves `7 + 14*(8+9) + 2*124 = 493` attempts. The measured profiles
+then reserved at most 493 calls for final response or 986 for Copilot shell. Current profile call
+bounds are documented in the
+[native-run procedure](../native-runs.md#3-inspect-the-complete-plan-and-budget). The arithmetic
+protects fresh confirmation and is an admission ceiling, not expected consumption. The actual three
+successful native runs each used ten comparisons and 293 attempts. Their exact profiles, 75%
+editable-byte removal, 100/100 matches per confirmation arm, runtime and conservative call charges
+are in [measurements](../measurements.md); those results are not a general native success-rate
+estimate. Original/retained mild degradation and noisy workloads remain outside the selected
+configuration's demonstrated useful envelope.
 
 The accepted scope on 2026-10-15 was Codex final response, Copilot final response and Copilot
 denied shell action at approximately 10k locally estimated input tokens. **100k qualification

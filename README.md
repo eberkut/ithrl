@@ -74,6 +74,8 @@ confirmation;
 [measurements](https://github.com/eberkut/ithrl/blob/main/docs/measurements.md#native-context-fuzzing)
 record its effect, costs and limits. Copilot text mutation remains unsupported. This evidence does
 not establish ordinary-session success rates or general sampling defaults.
+[Saved-session measurements](https://github.com/eberkut/ithrl/blob/main/docs/measurements.md#saved-session-experiments)
+record selected reduction and fuzzing outcomes, including inconclusive and incomplete runs.
 
 Native compatibility is checked against the installed harness's protocol, capabilities and safety
 controls.

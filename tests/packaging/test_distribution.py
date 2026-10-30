@@ -141,6 +141,10 @@ RUNTIME_MODULES = frozenset(
 )
 
 RUNTIME_ASSETS = frozenset({PurePosixPath("ithrl/examples/synthetic-trace.json")})
+PUBLIC_EXAMPLES = frozenset(
+    PurePosixPath("examples/fuzz", name)
+    for name in ("codex.jsonl", "copilot.jsonl", "campaign.toml")
+)
 PUBLIC_DOCS = frozenset(
     PurePosixPath("docs", name)
     for name in (
@@ -238,6 +242,9 @@ def test_sdist_contains_all_inputs_needed_to_rebuild_the_wheel(
         PurePosixPath("pyproject.toml"),
     } <= set(relative_members)
     assert {member for member in relative_members if member.parts[0] == "docs"} == PUBLIC_DOCS
+    assert {
+        member for member in relative_members if member.parts[0] == "examples"
+    } == PUBLIC_EXAMPLES
     packaged_sources = {
         member
         for member in relative_members
@@ -258,6 +265,7 @@ def test_sdist_contains_all_inputs_needed_to_rebuild_the_wheel(
         "pyproject.toml",
         "src",
         "docs",
+        "examples",
     }
     _assert_no_private_or_checkout_content(relative_members)
 

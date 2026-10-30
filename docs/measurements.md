@@ -1,10 +1,17 @@
 # Measurements
 
-These measurements describe completed synthetic native reductions and a Codex context-fuzzing
-campaign using `gpt-6.1-sol`. The reduction sections provide a reference for interpreting the
+Synthetic qualification uses `gpt-6.1-sol`; saved-session experiments retain the captured model and
+provider configuration. The synthetic reduction sections provide a reference for interpreting the
 [example experiment](native-runs.md#2-configure-the-experiment). The
-[native context-fuzzing section](#native-context-fuzzing) records the qualified append-text
-workflow and its limits.
+[native context-fuzzing section](#native-context-fuzzing) records completed append-text workflows
+and their measured policies.
+
+[Saved-session experiments](#saved-session-experiments) report useful reductions, unsuccessful
+searches and execution failures separately from synthetic qualification.
+
+Positive results apply to the reconstruction, safety policy and budgets recorded for those runs.
+They do not qualify a changed profile or guarantee that a selected administrative request cap
+will complete another native turn.
 
 ## Workload
 
@@ -91,12 +98,16 @@ the observed native workload, confirmation and cost aggregates.
 
 ## Native context fuzzing
 
-A synthetic Codex final-response case completed discovery, intervention simplification and one
-fresh confirmation. The measured harness was Codex CLI `0.164.0`, using `gpt-6.1-sol` through the
-`openai` provider's ChatGPT Responses endpoint. The editable surface was one eligible prior-user
-text field; the selected decision's triggering input remained fixed. These version and provider
-facts identify the measured configuration. Ongoing use still requires structural detection,
-plan review and calibration as described in the [native-run guide](native-runs.md#context-fuzzing).
+Synthetic Codex and Copilot final-response cases completed discovery, intervention simplification
+and one fresh confirmation each. Codex CLI `0.164.0` used the `openai` provider's ChatGPT Responses
+endpoint; Copilot CLI `1.0.104` used the `github-copilot` managed endpoint. Both used `gpt-6.1-sol`.
+The editable surface was one eligible prior-user text field; the selected decision's triggering
+input remained fixed. Ongoing use requires structural detection, plan review and calibration as
+described in the [native-run guide](native-runs.md#context-fuzzing).
+
+The Copilot campaign used `copilot-semantic-session-import-v1`, which imported semantic history
+and supplied a triggering message. It measures that reconstruction. Live qualification of the
+native-prefix SDK runner remains separate.
 
 A prior user message establishes a response token, and the fixed triggering input asks for the
 latest active token. The stress append contains four paragraphs: three irrelevant notes and one
@@ -105,14 +116,18 @@ deliberately introduces a competing instruction so the campaign can locate and s
 
 ### Controls and configuration
 
-An identical-text duplication control produced six matching observations: four original and two
-duplicated-input observations. Transcript checks verified the exact append and unchanged remaining
-history, triggering input and thread settings. This control checks reconstruction on the selected
-case; it does not establish that repetition preserves meaning for arbitrary inputs.
+Each harness passed an identical-text duplication control with six matching observations: four
+original and two duplicated-input observations. Codex transcript checks verified the exact append,
+unchanged remaining history, triggering input and thread settings. Copilot import receipts and
+native output verified the exact imported append and fixed triggering stdin. The measured Copilot
+import added a `<current_datetime>` element when transforming the native trigger on each attempt;
+the changing time was the only observed variation in that transformed trigger. These checks cover
+imported history and the supplied triggering input. Complete provider prompts may include further
+harness context. Repetition's effect on other inputs remains unmeasured.
 
-The main campaign used caller-supplied synthetic stale text, one generated candidate and at most
-ten simplification trials. It completed one discovery comparison and five simplification
-comparisons. Its sampling and resource limits were:
+Both main campaigns used the same caller-supplied synthetic stress text, one generated candidate
+and at most ten simplification trials. Each completed one discovery comparison and five
+simplification comparisons. Their sampling and resource limits were:
 
 | Setting | Measured configuration |
 | --- | --- |
@@ -125,30 +140,34 @@ comparisons. Its sampling and resource limits were:
 | Provider-call ceiling | 350 charged calls |
 | Command wall-time ceiling | 6 hours |
 | Per-attempt timeout | 120 seconds |
-| Inter-attempt pacing | 15 seconds |
+| Inter-attempt pacing | Codex: 15 seconds; Copilot: zero |
 | Freshness | 24 hours |
 | Eligibility | Opt-in `safe-provider-overload`; no overload replacement occurred |
 
-These are the executed campaign's settings. The
-[practical-settings issue](https://github.com/eberkut/ithrl/issues/10) owns evaluation of broader
-workloads and suitable defaults.
+The Copilot campaign used seed `20261027`. Public synthetic sources and the shared campaign
+configuration are available under
+[`examples/fuzz/`](https://github.com/eberkut/ithrl/tree/main/examples/fuzz).
+The [native-run guide](native-runs.md#run-the-synthetic-native-campaign) owns reproduction and the
+practical choice of limits and pacing.
 
 ### Confirmed result
 
-Calibration matched the original target in all three observations. Simplification reduced the
-appended intervention from **1,674 to 142 UTF-8 bytes**, a **91.5% decrease**. It changed only the
-append; it did not reduce the original history.
+For each harness, calibration matched the original target in all three observations. Simplification
+reduced the **1,676-byte initial append** (1,674 bytes of stress text and two separating newlines)
+to **142 UTF-8 bytes**, a **91.5% decrease**. It changed only the append; it did not reduce the
+original history.
 
 Fresh confirmation produced **20/20 original matches and 0/20 mutant matches**. The estimated
 original-minus-mutant difference was `1.0`; its exact one-sided lower bound was
 `0.6631330580338293`, exceeding the required `.10` decrease at `alpha=.05`. The campaign ended
-with `confirmed-change`.
+with `confirmed-change` for both harnesses.
 
 All exploratory observations preceded durable selection, and all 40 confirmation observations
 followed it in one confirmation block. The confirmation transcripts verified the exact selected
-142-byte append, unchanged remaining history, triggering input and thread settings, and distinct
-attempts. The selected payload was fixed before confirmation and no completed holdout was repeated.
-See [fuzz results](results.md#fuzz-results) and the
+142-byte append, unchanged remaining history and fixed triggering input, with distinct attempts.
+That Copilot native context included the per-attempt time transformation described above. The
+selected payload was fixed before confirmation and no completed holdout was repeated. See
+[fuzz results](results.md#fuzz-results) and the
 [research method](research/context-fuzzing.md#confirmation-method-and-assumptions) for
 interpretation and assumptions.
 
@@ -156,25 +175,104 @@ interpretation and assumptions.
 
 | Workflow | Actual / additional possible / charged calls | Known input + output tokens | Whole-command time |
 | --- | --- | --- | --- |
-| Duplication control | 6 / 0 / 6 | 30,820 | 104.15 seconds |
-| Complete fuzz campaign | 139 / 0 / 139 | 722,235 | 2,772.42 seconds (46 minutes 12 seconds) |
+| Codex duplication control | 6 / 0 / 6 | 30,820 | 104.15 seconds |
+| Codex complete fuzz campaign | 139 / 0 / 139 | 722,235 | 2,772.42 seconds (46 minutes 12 seconds) |
+| Copilot duplication control | 6 / 0 / 6 | Unavailable | 114.98 seconds |
+| Copilot complete fuzz campaign | 139 / 0 / 139 | Unavailable | 1,438.10 seconds (23 minutes 58 seconds) |
 
-The main campaign had 139 valid observations, zero runner errors, zero invalid observations and
-zero observations with unknown provider acceptance. No calls remained pending, and no token usage
-was unknown. Runner time totaled 654.263 seconds; CLI wall time was 2,768.789216 seconds. The
-whole-command measurement includes process startup and exit; the command includes the configured
-15-second inter-attempt pacing.
+Each main campaign had 139 valid observations, zero runner errors, zero invalid observations and
+zero observations with unknown provider acceptance. No calls remained pending. Codex reported all
+token usage; Copilot reported zero known tokens and 139 unknown-token attempts. The Copilot total
+therefore does not establish zero actual token use or monetary cost.
 
-Native output was at most 12,921 bytes per observation, with median 11,517 bytes. Peak disposable
-state was 3,817,339 bytes across 104 entries. All 139 attempts verified cleanup without residual
-state and unchanged source/workspace. No returned actions executed and no tool-side network
+Codex runner time totaled 654.263 seconds; CLI wall time was 2,768.789216 seconds. Copilot runner
+time totaled 1,395.322 seconds; CLI wall time was 1,429.50544 seconds. Whole-command measurements
+include process startup and exit. Codex command time includes 15-second inter-attempt pacing;
+Copilot used no pacing.
+
+For Codex, native output was at most 12,921 bytes per observation, with median 11,517 bytes.
+Peak disposable state was 3,817,339 bytes across 104 entries. Copilot native output was at most
+23,400 bytes per observation, with median 11,304 bytes; peak disposable state was 247,150,276
+bytes across 382 entries. Each campaign's 139 attempts verified cleanup without residual state and
+unchanged source/workspace. Copilot import receipts matched independently reconstructed history
+bytes, fixed triggering stdin and frozen policy settings in every attempt. The canonical sampled
+state, result snapshot and summary agreed. No returned actions executed and no tool-side network
 effects occurred.
 
-A separate interrupted campaign consumed 34 actual calls and remains incomplete. Including that
-work and the six control calls, qualification consumed **179 actual calls**; the completed result
-above uses only its own 139 observations. Interrupted work is not confirmation evidence.
+Separate Codex interrupted work consumed 34 actual calls. Including that work and six control
+calls, Codex qualification consumed **179 actual calls**. Copilot controls consumed nine calls,
+including three failed observations outside the successful six-observation control; together with
+the main campaign, they consumed **148 actual calls**. Main-campaign findings use only their own
+139 observations; control and failed work are excluded from confirmation.
 
-This single synthetic case demonstrates the complete qualified workflow and its measured cost.
-It does not estimate ordinary-session success rates, repeated-campaign costs or monetary cost.
-Intervention-byte reduction does not establish provider-token savings, causal explanation or a
-model defect. Copilot text mutation remains unsupported.
+One synthetic case per harness demonstrates a completed workflow under its recorded profile. These
+cases do not estimate ordinary-session success rates, repeated-campaign costs or monetary cost.
+Intervention-byte reduction does not establish provider-token savings, causal explanation or a model
+defect. Copilot shell-action fuzzing remains unsupported.
+
+## Saved-session experiments
+
+These experiments selected decisions from existing coding sessions, rather than planting a target
+instruction. Final-response predicates used prespecified literal alternatives instead of requiring
+the complete historical response verbatim. The shell predicate checked a native command request
+while execution remained denied. Cases, session content, tool arguments, identifiers and native
+diagnostics remain private; the aggregates below do not provide a public workload for replication.
+
+### Confirmed Copilot reductions
+
+Two Copilot CLI `1.0.104` cases completed separate fresh 20-observation original and candidate
+arms. Both used a 20-percentage-point preservation margin and nominal 95% one-sided Newcombe
+bounds for candidate-minus-original match probability.
+
+The retained summaries and run state do not name the reconstruction method. These results
+therefore do not qualify the native-prefix SDK runner.
+
+| Target | Context records before → after | Fresh original / candidate matches | Difference bounds | Actual calls | Command time |
+| --- | --- | --- | --- | --- | --- |
+| Final response | 181 → 111 | 20/20 / 20/20 | −.11916 to +.11916 | 74 | 4,357.85 seconds |
+| Denied shell request | 109 → 61 | 19/20 / 20/20 | −.07530 to +.19601 | 86 | 1,740.17 seconds |
+
+Both selected candidates were confirmed preserving within the declared margin among valid
+observations. The final-response search reached its eight-comparison cap; confirmation does not
+establish search completion or minimality. Neither result establishes that all retained records
+are necessary, or that the same margin and sample counts suit other decisions.
+
+Provider-reported input tokens were available for all 40 confirmation observations in each case. For
+the final response, mean input tokens per observation fell from 59,092 for the original to 31,991
+for the candidate (45.86% lower). For the shell request, they fell from 49,541 to 27,235 (45.04%
+lower). Each arm's median equaled its mean. These measured input-token changes do not establish
+monetary savings or equivalent historical behavior. No possible or pending calls remained.
+Source/workspace checks passed. The shell workflow observed 141 requested actions, denied all 141
+and executed zero.
+
+### Inconclusive and incomplete reductions
+
+A Codex final-response case selected 189 of 218 context records. Fresh confirmation matched
+19/20 original and 11/20 candidate observations, with candidate-minus-original bounds approximately
+−.58197 to −.17902. This did not establish preservation at the declared `.20` margin. The run used
+91 actual provider requests; the selected reduction must not be reported as confirmed.
+
+Another Codex run stopped during confirmation after an incomplete provider transport stream,
+with 151 actual requests and 152 conservatively charged calls. A subsequent run stopped when its
+four-request per-attempt cap was exhausted, with 85 actual and charged calls, no possible or
+pending calls, one runner error and 1,756.5 seconds elapsed. Source/workspace checks passed. The
+cap was a local administrative choice; native turn continuations can require more requests even
+when retries are disabled. These two incomplete runs consumed 236 actual calls plus one additional
+possible call, conservatively charged as 237 calls, without a preservation verdict.
+
+A separate Copilot run stopped after a structured quota refusal, with 74 actual calls and no
+preservation verdict. These failures remain part of execution cost; a provider quota refusal does
+not establish a compatibility failure.
+
+### Bounded fuzz campaigns
+
+One final-response campaign per harness screened two mutations on saved-session cases. Each
+collected 18 valid observations and used 18 actual provider calls, with zero runner errors and zero
+executed actions. Both ended `no-candidate-found`, without fresh confirmation. These negative
+results describe the tested mutations and bounded exploration; they do not establish robustness
+against other mutations or a general probability of finding a change.
+
+This small selected set demonstrates useful Copilot reductions and bounded native fuzz execution.
+It does not estimate ordinary-session success rates, expected costs across repeated campaigns or
+confirmed Codex reduction usefulness. The [result guide](results.md) defines the claims and their
+validity assumptions.
