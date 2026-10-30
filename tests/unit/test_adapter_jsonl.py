@@ -222,13 +222,58 @@ def test_reader_charges_bytes_when_source_disappears_after_read(
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX permission contract")
-def test_reader_rejects_a_store_directory_writable_by_other_users(tmp_path: Path) -> None:
+def test_reader_accepts_a_store_directory_writable_by_other_users(tmp_path: Path) -> None:
     shared = tmp_path / "shared"
     shared.mkdir(mode=0o777)
     shared.chmod(0o777)
     source = _write(shared / "session.jsonl", b"{}\n")
 
-    _assert_error(source, AdapterErrorCode.UNSAFE_SOURCE)
+    before = source.stat()
+
+    document = read_jsonl(source, limits=ParsingLimits())
+
+    assert document.raw == b"{}\n"
+    after = source.stat()
+    assert (after.st_mode, after.st_size, after.st_mtime_ns, after.st_ctime_ns) == (
+        before.st_mode,
+        before.st_size,
+        before.st_mtime_ns,
+        before.st_ctime_ns,
+    )
+    assert shared.stat().st_mode & 0o777 == 0o777
+
+
+def test_reader_refuses_a_symlink_in_the_source_directory_chain(tmp_path: Path) -> None:
+    store = tmp_path / "store"
+    store.mkdir()
+    _write(store / "session.jsonl", b"{}\n")
+    indirect = tmp_path / "indirect"
+    indirect.symlink_to(store, target_is_directory=True)
+
+    _assert_error(indirect / "session.jsonl", AdapterErrorCode.UNSAFE_SOURCE)
+
+
+def test_reader_refuses_a_parent_replaced_by_a_symlink_during_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = tmp_path / "store"
+    store.mkdir()
+    source = _write(store / "session.jsonl", b"{}\n")
+    moved = tmp_path / "moved"
+    original_open = jsonl_module._open_read_only
+
+    def replace_parent_after_open(path: Path) -> int:
+        descriptor = original_open(path)
+        store.rename(moved)
+        store.symlink_to(moved, target_is_directory=True)
+        return descriptor
+
+    monkeypatch.setattr(jsonl_module, "_open_read_only", replace_parent_after_open)
+
+    error = _assert_error(source, AdapterErrorCode.SOURCE_CHANGED)
+
+    assert error.bytes_read == len(b"{}\n")
 
 
 @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="FIFO replacement requires POSIX")

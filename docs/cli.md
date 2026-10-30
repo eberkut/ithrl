@@ -70,6 +70,9 @@ $ ithrl extract [OPTIONS] [SOURCE]
 * `--session <str>`: Native session ID.
 * `--decision <str>`: Completed decision ID.
 * `--target <str>`: Target ID or unique target type.
+* `--text-contains <str>`: Literal text required in a native final response.
+* `--text-contains-any <str>`: Alternative literal text for a native final response. Repeat for each alternative.
+* `--command-contains <str>`: Literal text required in a native shell command.
 * `-o, --output <path>`: Path for the new case. Existing paths are not overwritten.
 * `--format <human|json>`: Output format.  [default: human]
 * `--help`: Show this message and exit.

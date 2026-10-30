@@ -12,8 +12,10 @@ import pytest
 from typer.testing import CliRunner
 
 from ithrl.adapters import DecisionSummary, enumerate_decisions, parse_session
+from ithrl.behavior import FinalResponseTarget, ShellActionTarget
 from ithrl.case import CaseWorkspace
 from ithrl.cli import ExitCode, app
+from ithrl.experiment import ExperimentDefinition
 from ithrl.runner import FakeRunner
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
@@ -167,6 +169,95 @@ def test_explicit_native_source_creates_the_selected_case(
     assert evidence.decision is not None
     assert evidence.decision.decision_id == selection.decision.decision_id
     assert evidence.decision.selected_target_id == selection.decision.targets[0].target_id
+
+
+@pytest.mark.parametrize("harness", ["codex", "copilot"])
+@pytest.mark.parametrize("alternatives", [False, True])
+def test_native_extract_freezes_literal_final_response_predicate(
+    tmp_path: Path, harness: str, alternatives: bool
+) -> None:
+    selection = _fixture_selection(harness)
+    case = tmp_path / "case"
+    source_before = selection.source.read_bytes()
+
+    predicate_arguments = (
+        ["--text-contains-any", "Absent", "--text-contains-any", "Fixture"]
+        if alternatives
+        else ["--text-contains", "Fixture"]
+    )
+    result = CliRunner().invoke(
+        app,
+        [*_native_arguments(selection, case), *predicate_arguments, "--format", "json"],
+    )
+
+    assert result.exit_code == ExitCode.SUCCESS, result.output
+    evidence = CaseWorkspace.open(case).load()
+    assert evidence.decision is not None
+    experiment = ExperimentDefinition.from_toml(evidence.default_experiment)
+    assert isinstance(experiment.target, FinalResponseTarget)
+    assert isinstance(evidence.decision.selected_target, FinalResponseTarget)
+    assert experiment.target.text_contains == (None if alternatives else "Fixture")
+    assert experiment.target.text_contains_any == (("Absent", "Fixture") if alternatives else None)
+    assert experiment.target.text_equals is None
+    assert evidence.decision.selected_target.text_equals == "Fixture complete."
+    assert selection.source.read_bytes() == source_before
+    assert evidence.source_artifacts[0].content == source_before
+    assert "Fixture" not in result.output
+
+
+def test_native_extract_shell_predicate_keeps_tool_identity_and_count(tmp_path: Path) -> None:
+    selection = _copilot_shell_selection(tmp_path)
+    case = tmp_path / "case"
+
+    result = CliRunner().invoke(
+        app,
+        [
+            *_native_arguments(selection, case),
+            "--command-contains",
+            "fixture-command",
+            "--format",
+            "json",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.SUCCESS, result.output
+    evidence = CaseWorkspace.open(case).load()
+    assert evidence.decision is not None
+    native_target = evidence.decision.selected_target
+    target = ExperimentDefinition.from_toml(evidence.default_experiment).target
+    assert isinstance(native_target, ShellActionTarget)
+    assert isinstance(target, ShellActionTarget)
+    assert target.command_contains == "fixture-command"
+    assert target.command_equals is None
+    assert target.tool_name_equals == native_target.tool_name_equals == "bash"
+    assert target.count == native_target.count == 1
+    assert native_target.command_equals == "fixture-command-one"
+    assert "fixture-command" not in result.output
+
+
+@pytest.mark.parametrize(
+    ("options", "error_code"),
+    [
+        (["--text-contains", "absent-private-literal"], "invalid-case"),
+        (["--command-contains", "absent-private-literal"], "conflicting-options"),
+        (["--text-contains", "Fixture", "--command-contains", "fixture"], "conflicting-options"),
+        (["--text-contains", ""], "invalid-target"),
+    ],
+)
+def test_native_extract_refuses_invalid_predicates_without_writing_a_case(
+    tmp_path: Path, options: list[str], error_code: str
+) -> None:
+    selection = _fixture_selection("codex")
+    case = tmp_path / "case"
+
+    result = CliRunner().invoke(
+        app, [*_native_arguments(selection, case), *options, "--format", "json"]
+    )
+
+    assert result.exit_code == ExitCode.USAGE, result.output
+    assert json.loads(result.stdout)["error_code"] == error_code
+    assert "absent-private-literal" not in result.output
+    assert not case.exists()
 
 
 def test_explicit_native_detection_does_not_depend_on_the_file_suffix(tmp_path: Path) -> None:

@@ -10,6 +10,7 @@ from typing import Literal
 from uuid import uuid4
 
 import typer
+from pydantic import ValidationError
 
 from ithrl.adapters import (
     AdapterError,
@@ -18,7 +19,9 @@ from ithrl.adapters import (
     DiscoveredSession,
     HarnessName,
     NativeSession,
+    select_decision,
 )
+from ithrl.behavior import BehaviorTarget, FinalResponseTarget, ShellActionTarget
 from ithrl.case import CaseWorkspace
 from ithrl.cli.output import CommandOutput, OutputFormat, console, print_plain, shell_command
 from ithrl.cli.paths import private_data_root
@@ -55,11 +58,26 @@ def create_case_report(
     output: Path | None,
     output_format: OutputFormat,
     example: bool = False,
+    text_contains: str | None = None,
+    text_contains_any: tuple[str, ...] | None = None,
+    command_contains: str | None = None,
 ) -> CommandOutput:
     """Select evidence and create a case without exposing captured content in the output."""
 
+    if sum(value is not None for value in (text_contains, text_contains_any, command_contains)) > 1:
+        raise ExtractionSelectionError("conflicting-options", "choose only one behavior predicate")
     if example:
-        selectors = (source, inference, harness, session_id, decision_id, target)
+        selectors = (
+            source,
+            inference,
+            harness,
+            session_id,
+            decision_id,
+            target,
+            text_contains,
+            text_contains_any,
+            command_contains,
+        )
         if any(value is not None for value in selectors):
             raise ExtractionSelectionError(
                 "conflicting-options",
@@ -82,6 +100,11 @@ def create_case_report(
         target=target,
     )
     if mode == "synthetic":
+        if any(value is not None for value in (text_contains, text_contains_any, command_contains)):
+            raise ExtractionSelectionError(
+                "conflicting-options",
+                "behavior predicates require a native session",
+            )
         if source is None:
             raise ExtractionSelectionError(
                 "conflicting-options",
@@ -100,6 +123,9 @@ def create_case_report(
         session_id=session_id,
         decision_id=decision_id,
         target=target,
+        text_contains=text_contains,
+        text_contains_any=text_contains_any,
+        command_contains=command_contains,
         output=output,
         output_format=output_format,
     )
@@ -190,6 +216,9 @@ def _extract_native(
     session_id: str | None,
     decision_id: str | None,
     target: str | None,
+    text_contains: str | None,
+    text_contains_any: tuple[str, ...] | None,
+    command_contains: str | None,
     output: Path | None,
     output_format: OutputFormat,
 ) -> CommandOutput:
@@ -212,12 +241,38 @@ def _extract_native(
         )
     decision = _select_decision(summaries, decision_id, output_format)
     target_id = _select_target(decision, target, output_format)
+    experiment_target: BehaviorTarget | None = None
+    if any(value is not None for value in (text_contains, text_contains_any, command_contains)):
+        native_target = select_decision(
+            session, decision_id=decision.decision_id, target_id=target_id
+        ).evidence.selected_target
+        try:
+            if text_contains is not None and isinstance(native_target, FinalResponseTarget):
+                experiment_target = FinalResponseTarget(text_contains=text_contains)
+            elif text_contains_any is not None and isinstance(native_target, FinalResponseTarget):
+                experiment_target = FinalResponseTarget(text_contains_any=text_contains_any)
+            elif command_contains is not None and isinstance(native_target, ShellActionTarget):
+                experiment_target = ShellActionTarget(
+                    tool_name_equals=native_target.tool_name_equals,
+                    command_contains=command_contains,
+                    count=native_target.count,
+                )
+            else:
+                raise ExtractionSelectionError(
+                    "conflicting-options",
+                    "behavior predicate does not match the selected target category",
+                )
+        except ValidationError:
+            raise ExtractionSelectionError(
+                "invalid-target", "behavior predicate must be a nonempty, bounded literal"
+            ) from None
     destination = _case_destination(output, decision.decision_id)
     workspace = extract_decision(
         session,
         decision_id=decision.decision_id,
         target_id=target_id,
         case_path=destination,
+        experiment_target=experiment_target,
     )
     evidence = load_extracted_case(workspace)
     selected_target = next(item for item in decision.targets if item.target_id == target_id)

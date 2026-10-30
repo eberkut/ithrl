@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Literal
 
-from ithrl.case import CaseEvidence
+from ithrl.case import CaseEvidence, CaseFormatError
 from ithrl.context import content_digest
 from ithrl.execution import (
     PreflightIssue,
@@ -24,6 +24,7 @@ from ithrl.experiment import (
     SampledExperimentDefinition,
     parse_experiment_toml,
 )
+from ithrl.extraction import validate_experiment_target
 from ithrl.measurement import RunnerExecutionError, observe_once
 from ithrl.observations import (
     Observation,
@@ -129,19 +130,22 @@ def prepare_experiment(
     if experiment is None:
         experiment = parse_experiment_toml(evidence.default_experiment)
     decision = evidence.decision
-    if decision is not None and experiment.target != decision.selected_target:
-        raise PreflightRefusedError(
-            PreflightReport(
-                ready=False,
-                plan=None,
-                issues=(
-                    PreflightIssue(
-                        code="runner-evidence-mismatch",
-                        message="experiment target does not match the selected decision",
+    if decision is not None:
+        try:
+            validate_experiment_target(decision, experiment.target)
+        except CaseFormatError as error:
+            raise PreflightRefusedError(
+                PreflightReport(
+                    ready=False,
+                    plan=None,
+                    issues=(
+                        PreflightIssue(
+                            code="runner-evidence-mismatch",
+                            message=str(error),
+                        ),
                     ),
-                ),
-            )
-        )
+                )
+            ) from None
     _validate_oracle_prerequisites(evidence, experiment)
     registry = registry or built_in_runner_registry()
     resolution = registry.resolve(experiment.runner, evidence)

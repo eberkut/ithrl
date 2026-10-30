@@ -27,6 +27,26 @@ def test_final_response_target_uses_one_bounded_predicate() -> None:
         FinalResponseTarget(text_equals="one", text_contains="two")
 
 
+def test_final_response_alternatives_are_explicit_literal_or_matches() -> None:
+    target = FinalResponseTarget(text_contains_any=("No findings", "No actionable findings"))
+    for text in ("No findings.", "No actionable findings after review."):
+        assert evaluate_target(target, BehaviorObservation(final_response=text))
+    assert not evaluate_target(target, BehaviorObservation(final_response="Found an issue."))
+    assert not evaluate_target(target, BehaviorObservation(final_response="no findings"))
+    assert parse_behavior_target(target.model_dump(mode="json")) == target
+    assert "text_contains_any" not in FinalResponseTarget(text_contains="ready").model_dump()
+    with pytest.raises(ValidationError, match="only one text predicate"):
+        FinalResponseTarget(text_contains="one", text_contains_any=("two",))
+
+
+@pytest.mark.parametrize(
+    "alternatives", [(), ("",), ("same", "same"), ("x" * MAX_BEHAVIOR_TEXT_LENGTH, "extra")]
+)
+def test_text_alternatives_are_nonempty_unique_and_bounded(alternatives: tuple[str, ...]) -> None:
+    with pytest.raises(ValidationError):
+        FinalResponseTarget(text_contains_any=alternatives)
+
+
 def test_shell_action_target_matches_tool_command_and_exact_count() -> None:
     observation = BehaviorObservation(
         shell_actions=(

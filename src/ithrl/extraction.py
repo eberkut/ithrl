@@ -22,7 +22,7 @@ from ithrl.adapters import (
     select_decision,
 )
 from ithrl.adapters.registry import editable_session_text, parse_session_bytes
-from ithrl.behavior import BehaviorTarget
+from ithrl.behavior import BehaviorTarget, evaluate_target
 from ithrl.case import (
     CaptureFacts,
     CaseEvidence,
@@ -33,7 +33,7 @@ from ithrl.case import (
     ReplayFacts,
     SourceArtifact,
 )
-from ithrl.decisions import SelectedDecision
+from ithrl.decisions import DecisionEvidence, SelectedDecision
 from ithrl.experiment import (
     DeterministicPhase,
     ExperimentDefinition,
@@ -49,6 +49,7 @@ def extract_decision(
     decision_id: str,
     target_id: str,
     case_path: str | os.PathLike[str],
+    experiment_target: BehaviorTarget | None = None,
 ) -> CaseWorkspace:
     """Compile one selected native decision without running the source harness."""
 
@@ -58,8 +59,12 @@ def extract_decision(
         target_id=target_id,
     )
     selector = selected.evidence.selector
+    target = (
+        experiment_target if experiment_target is not None else selected.evidence.selected_target
+    )
+    validate_experiment_target(selected.evidence, target)
     manifest = _case_manifest(session, selected)
-    experiment = _default_experiment(selected.evidence.selected_target, selector.harness)
+    experiment = _default_experiment(target, selector.harness)
     source = SourceArtifact(
         path=selector.source,
         media_type=selected.case.source_media_type,
@@ -74,6 +79,15 @@ def extract_decision(
         source_artifacts=(source,),
         decision=selected.evidence,
     )
+
+
+def validate_experiment_target(decision: DecisionEvidence, target: BehaviorTarget) -> None:
+    """Require an experiment predicate to describe the selected observed behavior."""
+
+    if target.type != decision.selected_target.type:
+        raise CaseFormatError("experiment target category does not match the selected decision")
+    if not evaluate_target(target, decision.observation):
+        raise CaseFormatError("experiment target does not match the observed decision")
 
 
 def discover_native_sessions(
