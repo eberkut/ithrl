@@ -3,7 +3,9 @@ from __future__ import annotations
 import io
 import json
 import os
+import stat
 import subprocess
+import tomllib
 from dataclasses import replace
 from pathlib import Path
 from types import TracebackType
@@ -213,12 +215,24 @@ def test_worker_refuses_invalid_transport_before_native_start(
 )
 def test_native_child_bypasses_loopback_without_changing_parent_proxy_environment(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
     no_proxy: str | None,
     lower_no_proxy: str | None,
 ) -> None:
     commands: list[tuple[str, ...]] = []
     environments: list[dict[str, str]] = []
     request: dict[str, object] = {"provider": "ithrl", "model": "fixture-model"}
+    home = tmp_path / "codex-home"
+    home.mkdir(mode=0o700)
+    config = home / "config.toml"
+    original_config = (
+        'model_provider = "ithrl"\n'
+        '[model_providers.ithrl]\nbase_url = "https://fixture.invalid"\n'
+        "request_max_retries = 0\nstream_max_retries = 0\n"
+    )
+    config.write_text(original_config)
+    config.chmod(0o600)
+    monkeypatch.setattr(worker, "SANDBOX_ROOT", str(tmp_path))
     monkeypatch.setenv("HTTP_PROXY", "http://proxy.example:8080")
     monkeypatch.delenv("NO_PROXY", raising=False)
     monkeypatch.delenv("no_proxy", raising=False)
@@ -240,6 +254,12 @@ def test_native_child_bypasses_loopback_without_changing_parent_proxy_environmen
         commands.append(command)
         environments.append(kwargs["env"])
         assert kwargs["cwd"] == worker.SANDBOX_WORKSPACE
+        expected = tomllib.loads(original_config)
+        expected["model_providers"]["ithrl"]["base_url"] = (
+            "http://127.0.0.1:12345/private-fixture-nonce"
+        )
+        assert tomllib.loads(config.read_text()) == expected
+        assert stat.S_IMODE(config.stat().st_mode) == 0o600
         return Process()
 
     def session(
@@ -257,14 +277,7 @@ def test_native_child_bypasses_loopback_without_changing_parent_proxy_environmen
         audit=io.StringIO(),
     )
     assert outcome == _native_outcome()
-    assert commands == [
-        (
-            "/fixture/codex",
-            "-c",
-            'model_providers.ithrl.base_url="http://127.0.0.1:12345/private-fixture-nonce"',
-            "app-server",
-        )
-    ]
+    assert commands == [("/fixture/codex", "app-server")]
     [child_environment] = environments
     assert child_environment["HTTP_PROXY"] == "http://proxy.example:8080"
     effective_no_proxy = no_proxy if no_proxy is not None else lower_no_proxy
@@ -394,6 +407,9 @@ def test_inner_shutdown_timeout_preserves_receipts_for_outer_cleanup(
         relays[0].response()
         return _native_outcome()
 
+    def configure(_provider: object, _base_url: str) -> None:
+        pass
+
     process = Process()
 
     def popen(*_args: object, **_kwargs: object) -> Process:
@@ -402,6 +418,7 @@ def test_inner_shutdown_timeout_preserves_receipts_for_outer_cleanup(
     monkeypatch.setattr(worker.subprocess, "Popen", popen)
     monkeypatch.setattr(worker.threading, "Thread", ReaderThread)
     monkeypatch.setattr(worker, "run_session", session)
+    monkeypatch.setattr(worker, "_configure_relay", configure)
     monkeypatch.setattr(worker, "ResponsesRelay", relay_factory)
     audit = io.StringIO()
     outcome = worker._run_app_server(Path("/fixture/codex"), _request(), audit=audit)

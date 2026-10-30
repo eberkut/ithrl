@@ -19,6 +19,72 @@ from ithrl.runner.codex.policy import (
 from ithrl.runner.codex.protocol_contracts import MAX_INFERENCE_REQUESTS
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
+
+_FAKE_APP_SERVER = r"""#!/usr/bin/python3
+import json
+import os
+import stat
+import sys
+import tomllib
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+assert sys.argv[1:] == ["app-server"]
+config_path = Path(os.environ["CODEX_HOME"]) / "config.toml"
+assert stat.S_IMODE(config_path.stat().st_mode) == 0o600
+config = tomllib.loads(config_path.read_text())
+provider = config["model_providers"][config["model_provider"]]
+base_url = provider["base_url"]
+assert base_url.startswith("http://127.0.0.1:")
+
+def receive():
+    line = sys.stdin.readline()
+    if not line:
+        raise SystemExit(0)
+    return json.loads(line)
+
+def send(message):
+    print(json.dumps(message, separators=(",", ":")), flush=True)
+
+message = receive()
+assert message["method"] == "initialize"
+send({"id": message["id"], "result": {}})
+assert receive()["method"] == "initialized"
+message = receive()
+assert message["method"] == "thread/start"
+model = message["params"]["model"]
+send({"id": message["id"], "result": {"thread": {"id": "thread-1", "model": model, "serviceTier": "default"}}})
+message = receive()
+if message["method"] == "thread/inject_items":
+    send({"id": message["id"], "result": {}})
+    message = receive()
+assert message["method"] == "turn/start"
+send({"id": message["id"], "result": {"turn": {"id": "turn-1", "items": [], "status": "inProgress"}}})
+
+for ordinal in range(1, 4):
+    request = urllib.request.Request(
+        base_url + "/responses",
+        data=json.dumps({"ordinal": ordinal}).encode(),
+        headers={"Authorization": "Bearer " + os.environ[provider["env_key"]]},
+        method="POST",
+    )
+    try:
+        response = urllib.request.urlopen(request, timeout=2)
+    except urllib.error.HTTPError as error:
+        response = error
+    with response:
+        assert response.status in (200, 429)
+        response.read()
+
+item = {"type": "agentMessage", "id": "message-1", "text": "Fixture complete.", "phase": "final_answer"}
+send({"method": "item/completed", "params": {"threadId": "thread-1", "turnId": "turn-1", "item": item}})
+send({"method": "thread/tokenUsage/updated", "params": {"threadId": "thread-1", "turnId": "turn-1", "tokenUsage": {"last": {"inputTokens": 101, "outputTokens": 7, "cachedInputTokens": 50}, "total": {"inputTokens": 101, "outputTokens": 7, "cachedInputTokens": 50}}}})
+send({"method": "turn/completed", "params": {"threadId": "thread-1", "turn": {"id": "turn-1", "items": [item], "status": "completed"}}})
+for _ in sys.stdin:
+    pass
+"""
+
 # Runner fixtures replace only the ithrl worker boundary. They exercise real
 # Bubblewrap, private materialization, monitoring and transcript normalization;
 # their synthetic receipts do not establish native/provider compatibility.

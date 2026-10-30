@@ -2,12 +2,20 @@ from __future__ import annotations
 
 import asyncio
 import json
+import ssl
 import stat
+import subprocess
+import sys
+import threading
+from collections.abc import Generator
+from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import replace
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from importlib.metadata import version as distribution_version
 from pathlib import Path
-from typing import Any
+from types import MappingProxyType
+from typing import Any, override
 
 import pytest
 
@@ -41,7 +49,14 @@ from ithrl.runner.codex.transcript import physical_request_counts
 from ithrl.runner.contracts import CandidateInvalidError
 from ithrl.runner.evidence import AttemptEvidence
 from ithrl.runner.runtime import ProtectedOutputStore, ProtectedPath
-from native_support.codex import _FAKE_CODEX_WORKER, FIXTURES, _capability, _case, _configuration
+from native_support.codex import (
+    _FAKE_APP_SERVER,
+    _FAKE_CODEX_WORKER,
+    FIXTURES,
+    _capability,
+    _case,
+    _configuration,
+)
 
 
 def _runner(
@@ -162,7 +177,7 @@ def _attempt(
     policy = SafetyPolicy(
         provider_transport="allowed",
         allowed_provider="fixture-provider",
-        allowed_endpoint="https://example.invalid/responses",
+        allowed_endpoint=runner.capability_profile.endpoint,
     )
     limits = ResourceLimits(
         max_provider_calls=MAX_INFERENCE_REQUESTS,
@@ -200,6 +215,146 @@ def _attempt(
         phase="calibration",
         arm="baseline",
     )
+
+
+@contextmanager
+def _https_provider(
+    tmp_path: Path,
+) -> Generator[tuple[str, Path, list[tuple[str, bytes]]]]:
+    certificate = tmp_path / "provider.pem"
+    key = tmp_path / "provider.key"
+    subprocess.run(  # noqa: S603 - fixed tool and arguments create private temporary test certificates
+        [
+            "/usr/bin/openssl",
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-keyout",
+            str(key),
+            "-out",
+            str(certificate),
+            "-days",
+            "1",
+            "-subj",
+            "/CN=ithrl-fixture",
+            "-addext",
+            "subjectAltName=IP:127.0.0.1",
+            "-addext",
+            "basicConstraints=critical,CA:TRUE",
+            "-addext",
+            "keyUsage=critical,digitalSignature,keyEncipherment,keyCertSign",
+            "-addext",
+            "extendedKeyUsage=serverAuth",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    calls: list[tuple[str, bytes]] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        @override
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+        def do_POST(self) -> None:
+            calls.append((self.path, self.rfile.read(int(self.headers["Content-Length"]))))
+            payload = b"data: [DONE]\n\n"
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(certificate, key)
+    server.socket = context.wrap_socket(server.socket, server_side=True)
+    thread = threading.Thread(
+        target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
+    )
+    thread.start()
+    try:
+        yield f"https://127.0.0.1:{server.server_port}/responses", certificate, calls
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=1)
+
+
+@pytest.mark.parametrize("selected_limit", [2, 3])
+def test_production_worker_relay_enforces_the_profile_cap_end_to_end(
+    tmp_path: Path, selected_limit: int
+) -> None:
+    workspace, evidence = _case(tmp_path)
+    fake = tmp_path / "codex-app-server"
+    fake.write_text(_FAKE_APP_SERVER, encoding="utf-8")
+    fake.chmod(0o700)
+    original = tmp_path / "original-workspace"
+    original.mkdir()
+    marker = original / "marker.txt"
+    marker.write_text("unchanged\n")
+    runtime = CodexRuntime(
+        codex=fake, bubblewrap=Path("/usr/bin/bwrap"), python=Path(sys.executable)
+    )
+    with _https_provider(tmp_path) as (endpoint, certificate, calls):
+        template = _configuration()
+        environment = {
+            **template.environment,
+            "SSL_CERT_FILE": str(certificate),
+            "NO_PROXY": "127.0.0.1",
+        }
+        configuration = replace(
+            template,
+            endpoint=endpoint,
+            rendered_config=template.rendered_config.replace(
+                b"https://example.invalid", endpoint.removesuffix("/responses").encode()
+            ),
+            environment_names=tuple(sorted(environment)),
+            environment=MappingProxyType(environment),
+        )
+        capability = _capability(
+            configuration, runtime, max_provider_calls_per_attempt=selected_limit
+        ).model_copy(update={"endpoint": endpoint})
+        runner = CodexRunner(
+            capability_profile=capability,
+            runtime=runtime,
+            configuration=configuration,
+            state_parent=tmp_path / "attempts",
+            output_root=tmp_path / "output",
+            source_paths=(ProtectedPath("case", workspace.root),),
+            workspace_paths=(ProtectedPath("original-workspace", original),),
+        )
+        attempt = _attempt(evidence, runner)
+        if selected_limit == 2:
+            with pytest.raises(RunnerError) as refused:
+                asyncio.run(runner.run(attempt))
+            assert refused.value.code is RunnerErrorCode.PROVIDER_CALL_LIMIT
+            assert refused.value.reason_code == "provider-call-limit"
+            accounting = refused.value.accounting
+            native_output = refused.value.native_output
+        else:
+            result = asyncio.run(runner.run(attempt))
+            assert result.final_text == "Fixture complete."
+            accounting = result.accounting
+            native_output = result.native_output
+
+    assert len(calls) == selected_limit
+    assert [path for path, _ in calls] == ["/responses"] * selected_limit
+    assert [json.loads(body)["ordinal"] for _, body in calls] == list(range(1, selected_limit + 1))
+    assert accounting is not None
+    assert (
+        accounting.provider_calls_started == accounting.provider_calls_completed == selected_limit
+    )
+    assert accounting.actions_executed == accounting.tool_network_requests == 0
+    assert accounting.cleanup_outcome == "verified"
+    assert accounting.source_store_effect == accounting.original_workspace_effect == "unchanged"
+    assert native_output is not None
+    output = ProtectedOutputStore.open(tmp_path / "output").read(native_output)
+    assert physical_request_counts(output.stdout) == (selected_limit, selected_limit)
+    assert not tuple((tmp_path / "attempts").iterdir())
+    assert marker.read_text() == "unchanged\n"
+    workspace.load()
 
 
 @pytest.mark.parametrize("mode", ["overload", "overload-after-output"])

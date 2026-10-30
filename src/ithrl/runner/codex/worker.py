@@ -8,6 +8,7 @@ import stat
 import subprocess
 import sys
 import threading
+import tomllib
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, BinaryIO, TextIO, cast
@@ -220,6 +221,7 @@ def _exchange(
     *,
     audit: TextIO,
 ) -> ProtocolOutcome:
+    _configure_relay(request["provider"], base_url)
     child_env = dict(os.environ)
     existing_no_proxy = child_env.get("NO_PROXY", child_env.get("no_proxy", ""))
     loopback_no_proxy = f"{existing_no_proxy},127.0.0.1" if existing_no_proxy else "127.0.0.1"
@@ -227,12 +229,7 @@ def _exchange(
     child_env["no_proxy"] = loopback_no_proxy
     try:
         process = subprocess.Popen(  # noqa: S603 - validated direct executable; no shell
-            (
-                os.fspath(executable),
-                "-c",
-                f"model_providers.{request['provider']}.base_url={json.dumps(base_url)}",
-                "app-server",
-            ),
+            (os.fspath(executable), "app-server"),
             cwd=SANDBOX_WORKSPACE,
             env=child_env,
             stdin=subprocess.PIPE,
@@ -261,6 +258,34 @@ def _exchange(
         stderr_thread.join(timeout=_SHUTDOWN_SECONDS)
         if not stderr_thread.is_alive():
             _close(stderr)
+
+
+def _configure_relay(provider: object, base_url: str) -> None:
+    """Keep the relay capability in the existing private disposable configuration."""
+
+    path = Path(SANDBOX_ROOT) / "codex-home" / "config.toml"
+    try:
+        with path.open("r+b") as stream:
+            original = stream.read(MAX_WORKER_REQUEST_BYTES + 1)
+            if len(original) > MAX_WORKER_REQUEST_BYTES:
+                raise ValueError("configuration exceeds its byte limit")
+            text = original.decode("utf-8")
+            document = tomllib.loads(text)
+            if document["model_provider"] != provider or not isinstance(provider, str):
+                raise ValueError("configuration provider differs")
+            document["model_providers"][provider]["base_url"] = base_url
+            assignments = [line for line in text.splitlines() if line.startswith("base_url = ")]
+            if len(assignments) != 1:
+                raise ValueError("configuration has no unique provider URL")
+            # Edit our renderer's one URL assignment and verify all other TOML values.
+            updated = text.replace(assignments[0], f"base_url = {json.dumps(base_url)}", 1)
+            if tomllib.loads(updated) != document:
+                raise ValueError("configuration changed beyond the provider URL")
+            stream.seek(0)
+            stream.write(updated.encode("utf-8"))
+            stream.truncate()
+    except (OSError, UnicodeError, ValueError, KeyError, TypeError):
+        raise WorkerError("Codex relay configuration could not be prepared") from None
 
 
 def _stop(process: subprocess.Popen[bytes]) -> None:
