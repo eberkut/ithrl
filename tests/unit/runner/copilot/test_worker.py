@@ -69,6 +69,38 @@ def test_duplicate_request_fields_and_constants_are_refused(tmp_path: Path) -> N
             worker._parse_request(raw)
 
 
+def test_worker_entrypoint_uses_owned_paths_and_refuses_caller_selected_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    request = _request(tmp_path)
+    owned_request = tmp_path / "request.json"
+    owned_request.write_text(json.dumps(request))
+    owned_request.chmod(0o600)
+    executable = tmp_path / "runner" / "copilot"
+    executable.parent.mkdir()
+    executable.write_text("owned executable")
+    executable.chmod(0o500)
+    foreign = tmp_path / "foreign.json"
+    foreign.write_text("private foreign input")
+    foreign.chmod(0o600)
+    calls: list[tuple[Path, dict[str, Any]]] = []
+
+    async def observe(path: Path, settings: dict[str, Any]) -> int:
+        calls.append((path, settings))
+        return 0
+
+    monkeypatch.setattr(worker, "_SANDBOX_ROOT", str(tmp_path))
+    monkeypatch.setattr(worker, "_run_session", observe)
+    assert worker.main([str(foreign), str(foreign)]) == 64
+    assert foreign.read_text() == "private foreign input"
+    assert owned_request.exists()
+    assert not calls
+    assert worker.main([]) == 0
+    assert calls == [(executable, request)]
+    assert not owned_request.exists()
+    assert foreign.read_text() == "private foreign input"
+
+
 def test_private_file_is_bounded_and_unlinked_after_checked_read(tmp_path: Path) -> None:
     source = tmp_path / "request.json"
     source.write_bytes(b"private")

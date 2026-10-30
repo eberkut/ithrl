@@ -209,8 +209,6 @@ def _bubblewrap_argv(
         "-S",
         "-P",
         f"{SANDBOX_ROOT}/{worker}",
-        f"{SANDBOX_ROOT}/request.json",
-        f"{SANDBOX_ROOT}/runner/copilot",
     )
 
 

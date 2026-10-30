@@ -589,13 +589,15 @@ def _failure_reason(error: Exception) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     arguments = sys.argv[1:] if argv is None else argv
-    if len(arguments) != 2:
+    if arguments:
         return 64
     try:
         request = _parse_request(
-            _read_private_file(Path(arguments[0]), maximum=MAX_REQUEST_BYTES, unlink=True)
+            _read_private_file(
+                Path(_SANDBOX_ROOT) / "request.json", maximum=MAX_REQUEST_BYTES, unlink=True
+            )
         )
-        executable = Path(arguments[1]).resolve(strict=True)
+        executable = Path(_SANDBOX_ROOT) / "runner" / "copilot"
         if not executable.is_file() or executable.stat().st_mode & 0o111 == 0:
             raise WorkerError("Copilot executable is unavailable")
         return asyncio.run(_run_session(executable, request))

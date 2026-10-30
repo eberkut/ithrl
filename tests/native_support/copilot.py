@@ -51,9 +51,9 @@ def emit(event_type, data, **extra):
     sys.stdout.flush()
 
 
-with open(sys.argv[1], encoding="utf-8") as source:
+with open("/tmp/ithrl-state/request.json", encoding="utf-8") as source:
     settings = json.load(source)
-os.unlink(sys.argv[1])
+os.unlink("/tmp/ithrl-state/request.json")
 with open(settings["nativeSession"], "rb") as source:
     native = source.read()
 records = [json.loads(line) for line in native.splitlines() if line.strip()]

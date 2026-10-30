@@ -628,7 +628,7 @@ def test_sdk_protocol_probe_is_isolated_and_uses_public_client_lifecycle(
     _REAL_SDK_PROTOCOL_PROBE(_runtime(_fake_copilot(tmp_path)), {}, workspace, "final-response")
     assert len(observed) == 1
     source = observed[0]
-    assert "RuntimeConnection.for_stdio(path=sys.argv[2], args=[])" in source
+    assert "RuntimeConnection.for_stdio(path='/tmp/ithrl-state/runner/copilot', args=[])" in source
     assert "await client.start()" in source
     assert 'await client.ping("ithrl-credential-free-protocol")' in source
     assert "finally:\n        await client.stop()" in source

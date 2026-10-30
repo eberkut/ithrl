@@ -61,12 +61,11 @@ _ISOLATION_UNAVAILABLE = "Copilot isolation runtime is unavailable or incompatib
 _ISOLATION_PROBE_SOURCE = f"""\
 #!/usr/bin/python3
 import json
-import sys
 from pathlib import Path
 
-request = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+request = json.loads(Path({f"{SANDBOX_ROOT}/request.json"!r}).read_text(encoding="utf-8"))
 protected = Path(request["protected"])
-copilot = Path(sys.argv[2])
+copilot = Path({f"{SANDBOX_ROOT}/runner/copilot"!r})
 if not copilot.is_file() or copilot.stat().st_mode & 0o111 == 0:
     raise SystemExit(68)
 if (protected / "readable-marker").read_bytes() != {_ISOLATION_HOST_MARKER!r}:
@@ -367,7 +366,7 @@ sys.path.insert(0, {f"{SANDBOX_ROOT}/runner/sdk-packages"!r})
 from copilot import CopilotClient, RuntimeConnection
 async def main():
     client = CopilotClient(
-        connection=RuntimeConnection.for_stdio(path=sys.argv[2], args={list(target_policy(target).command_flags)!r}),
+        connection=RuntimeConnection.for_stdio(path={f"{SANDBOX_ROOT}/runner/copilot"!r}, args={list(target_policy(target).command_flags)!r}),
         mode="empty", base_directory={f"{SANDBOX_ROOT}/copilot-home"!r},
         working_directory={f"{SANDBOX_ROOT}/workspace"!r}, log_level="error")
     try:

@@ -95,6 +95,7 @@ def test_prepares_private_target_specific_worker_state(
         "--secret-env-vars=GH_TOKEN",
     ]
     assert spec.stop_after_stdout_line is None
+    assert spec.argv[-1] == "/tmp/ithrl-state/worker"  # noqa: S108
     assert spec.cwd == state.root / "workspace"
     assert spec.environment["GH_TOKEN"] == "private-token"
     assert spec.environment["COPILOT_HOME"] == "/tmp/ithrl-state/copilot-home"  # noqa: S108
