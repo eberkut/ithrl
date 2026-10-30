@@ -201,6 +201,9 @@ def mock_native(
         from ithrl.runner import RunAccounting
         from ithrl.runner.codex.materialize import materialize_codex_attempt
         from ithrl.runner.copilot.materialize import materialize_copilot_attempt
+        from ithrl.runner.copilot.policy import (
+            RECONSTRUCTION_METHOD as COPILOT_RECONSTRUCTION_METHOD,
+        )
 
         materialize = (
             materialize_codex_attempt if harness == "codex" else materialize_copilot_attempt
@@ -218,7 +221,7 @@ def mock_native(
                 "reconstruction_method": (
                     "codex-app-server-inject-items-v1"
                     if harness == "codex"
-                    else "copilot-semantic-session-import-v1"
+                    else COPILOT_RECONSTRUCTION_METHOD
                 ),
             }
         )

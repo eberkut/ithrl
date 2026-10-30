@@ -158,6 +158,10 @@ request, verifies effective policy and denies shell execution before a continuat
 The controlled prefix and policy define the experiment; uncaptured historical guidance and
 harness-added context remain reconstruction limits.
 
+Copilot fingerprints the Python executable, its shared library when present, and the installed SDK
+dependency files. It mounts the standard library read-only as a trusted host dependency and records
+its directory metadata. Standard-library file contents are outside the content fingerprint.
+
 The shared runtime in `runner/runtime/` owns fresh private state, bounded output, process-group
 termination, cancellation and cleanup. It is not a filesystem or network sandbox. Concrete
 runners supply preventive isolation and effective action denial; source/workspace snapshots
