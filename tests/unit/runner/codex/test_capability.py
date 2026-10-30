@@ -173,7 +173,10 @@ def _assert_closed(descriptor: int) -> None:
     assert closed.value.errno == errno.EBADF
 
 
-def test_detects_support_from_structure_without_version_allowlist(tmp_path: Path) -> None:
+@pytest.mark.parametrize("selected_limit", [None, 1, 5, 16])
+def test_detects_support_from_structure_without_version_allowlist(
+    tmp_path: Path, selected_limit: int | None
+) -> None:
     schema = tmp_path / "fixture-schema"
     shutil.copytree(SCHEMA_FIXTURE, schema)
     executable = _fake_codex(
@@ -183,7 +186,8 @@ def test_detects_support_from_structure_without_version_allowlist(tmp_path: Path
         disabled_features=_FEATURES - {"unified_exec"},
     )
 
-    capability = detect_codex_capability(_runtime(executable), _configuration())
+    options = {} if selected_limit is None else {"max_provider_calls_per_attempt": selected_limit}
+    capability = detect_codex_capability(_runtime(executable), _configuration(), **options)
 
     assert capability.runtime_harness_version == "123.456.789"
     assert capability.protocol_version is not None
@@ -193,6 +197,29 @@ def test_detects_support_from_structure_without_version_allowlist(tmp_path: Path
     assert capability.supported_targets == ("final-response",)
     assert capability.supported_context_operations == ("dependency-closed-removal", "append-text")
     assert capability.action_execution == "denied"
+    assert capability.provider_calls_per_attempt == (
+        16 if selected_limit is None else selected_limit
+    )
+    assert any(
+        f"limit of {capability.provider_calls_per_attempt} requests per attempt" in deviation
+        for deviation in capability.deviations
+    )
+
+
+@pytest.mark.parametrize("selected_limit", [0, 17, True, 1.0, "4", None])
+def test_refuses_invalid_selected_call_limit_before_probing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, selected_limit: object
+) -> None:
+    def forbidden(_runtime: CodexRuntime) -> None:
+        pytest.fail("runtime probe occurred before call-limit validation")
+
+    monkeypatch.setattr(capability, "_require_runtime_unchanged", forbidden)
+    with pytest.raises(ValueError, match="per-attempt provider-call limit"):
+        detect_codex_capability(
+            _runtime(Path("/bin/true")),
+            _configuration(),
+            max_provider_calls_per_attempt=selected_limit,  # type: ignore[arg-type]
+        )
 
 
 def test_isolation_probe_reads_host_view_and_cleans_owned_state(

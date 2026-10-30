@@ -552,6 +552,8 @@ def _reduction_preflight(
                 str(experiment.calibration.max_attempts),
                 "--attempt-timeout",
                 str(prepared.resource_limits.max_wall_time_seconds),
+                "--max-provider-calls-per-attempt",
+                str(prepared.execution_plan.capability.provider_calls_per_attempt),
             )
         )
         if prepared.resource_limits.max_input_tokens is not None:

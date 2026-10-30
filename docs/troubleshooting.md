@@ -41,6 +41,10 @@ Do not disable permission checks or edit internal state to bypass a refusal. A n
 can pass the same capability checks without a product update; unsupported protocol or safety
 behavior requires investigation.
 
+For custom Codex CA trust, configure `SSL_CERT_FILE` with a certificate bundle. The runner copies
+it into private disposable state and preserves certificate verification. A custom `SSL_CERT_DIR`
+under a path hidden by isolation is unavailable inside the runner.
+
 ## Sampling and budget refusals
 
 | Error code | Next action |
@@ -48,6 +52,8 @@ behavior requires investigation.
 | `calibration-settings-required` / `sampling-options-required` | Supply all three calibration settings: `--required-valid`, `--minimum-matches` and `--max-attempts`. |
 | `sampled-reduction-plan-required` | Supply a complete private experiment TOML with search and fresh-confirmation samples. |
 | `sampling-budget-required` / `sampling-budget-too-small` | Inspect the minimum call/time requirements. Budget calibration, a complete comparison, protected fresh confirmation and local overhead together. |
+| `unsupported-provider-call-limit` | Use the per-attempt bound reported by detection for the selected harness and target. |
+| `profile-provider-call-limit-mismatch` | Use the cap frozen in the saved profile. A different cap requires a new profile and run. |
 | `sampling-freshness-too-small` | Choose deadlines and a declared freshness window that admit a complete comparison, including cancellation time. |
 | `confirmation-unattainable` | Reconsider sample counts, confidence and the scientifically meaningful margin together. Even all matching observations cannot establish preservation under this plan. |
 | `acknowledgement-required` / `acknowledgement-declined` | Inspect the complete dry-run plan. Add `--acknowledge-model-execution` only when ready to authorize those model requests. |
@@ -73,6 +79,12 @@ Use `--dry-run --resume` to inspect a saved fuzz campaign without starting a har
 recovery.
 
 ## Provider errors and interruption
+
+`runner_error_category = "provider-call-limit"` means the local per-attempt cap stopped another
+request. The failed attempt retains its usage and conservative charge and remains outside
+behavioral match rates. Inspect the saved evidence before starting a new run with a different
+cap. Codex can make several successful Responses requests within one turn despite disabled
+retries. See [plan limits](native-runs.md#3-inspect-the-complete-plan-and-budget) for configuration.
 
 Sampled reduction and fuzz reports include `runner_error_category` and
 `runner_error_reason_code` when available. These contain machine codes; native error messages and

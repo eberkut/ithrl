@@ -409,6 +409,8 @@ def _preflight_report(
         str(prepared.resource_limits.max_wall_time_seconds),
         "--max-provider-calls",
         str(bounds.provider_calls),
+        "--max-provider-calls-per-attempt",
+        str(capability.provider_calls_per_attempt),
     ]
     if prepared.resource_limits.max_input_tokens is not None:
         arguments.extend(("--max-input-tokens", str(prepared.resource_limits.max_input_tokens)))

@@ -40,6 +40,7 @@ $ ithrl fuzz [OPTIONS] {CASE_OR_RUN}
 * `--config <path>`: Private TOML with explicit mutation, sampling and resource limits.
 * `--profile <path>`: Private structural profile; output path with --detect.
 * `--original-workspace <path>`: Protected original workspace for a native case.
+* `--max-provider-calls-per-attempt <int range>`: Hard provider-call limit per native attempt. Codex default: 16; Copilot uses its detected target limit. Resume preserves the saved limit. This budget does not guarantee turn completion.  [1&lt;=x&lt;=16]
 * `--observation-store <path>`: Private SQLite store outside protected state.
 * `--dry-run`: Inspect saved inputs and limits without starting a harness or provider.
 * `--detect`: Explicit credential-free structural harness detection; save a profile.
@@ -106,6 +107,7 @@ $ ithrl shrink [OPTIONS] {CASE_OR_RESULT}
 * `--minimum-matches <int range>`: Required matching baseline samples. Set with both other sample limits.  [1&lt;=x&lt;=16]
 * `--max-attempts <int range>`: Total calibration attempt limit, including operational failures.  [1&lt;=x&lt;=16]
 * `--max-provider-calls <int range>`: Maximum total provider calls allowed for the native run.  [x&gt;=1]
+* `--max-provider-calls-per-attempt <int range>`: Hard provider-call limit per native attempt. Codex default: 16; Copilot uses its detected target limit. Resume preserves the saved limit. This budget does not guarantee turn completion.  [1&lt;=x&lt;=16]
 * `--max-wall-time <int range>`: Total elapsed-time limit in seconds for a sampled run, including calibration.  [x&gt;=1]
 * `--inter-attempt-delay SECONDS`: Pause between attempts during sampled reduction. Default: 0; resume preserves the saved delay. Counts toward the overall wall-time limit.  [0&lt;=x&lt;=86400]
 * `--experiment TOML`: Private sampled experiment TOML, including search and fresh confirmation samples (0600 on POSIX).

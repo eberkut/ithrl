@@ -39,7 +39,8 @@ uv build --sdist --wheel --no-sources
 ITHRL_DIST_DIR=dist uv run pytest -o addopts= tests/packaging
 ```
 
-Non-packaging tests and the synthetic example need no provider credentials or network requests.
+Non-packaging tests and the synthetic example need no provider credentials or external network
+access. Native-runner tests need Linux, Bubblewrap and OpenSSL; their HTTPS fixture runs locally.
 Packaging checks may download build and runtime dependencies. Radon reports are review signals.
 
 CI runs tests, dependency audits and installed-package checks on Python 3.12–3.14. It builds one

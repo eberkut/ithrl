@@ -3,7 +3,7 @@ from __future__ import annotations
 import io
 import json
 from collections.abc import Iterable
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from typing import Any
 
 import pytest
@@ -18,7 +18,7 @@ from ithrl.runner.codex.protocol import (
     ProtocolUsage,
     run_session,
 )
-from ithrl.runner.codex.transcript import parse_transcript
+from ithrl.runner.codex.transcript import parse_transcript, physical_request_counts
 
 THREAD_ID = "thread-fixture-001"
 TURN_ID = "turn-fixture-001"
@@ -128,7 +128,7 @@ def _native_error(*, will_retry: bool = False, error_info: object = None) -> Mes
 @pytest.mark.parametrize("output", [False, True])
 def test_structured_overload_tracks_output_and_native_retry(will_retry: bool, output: bool) -> None:
     before = [_final_item()] if output else []
-    outcome, client, audit = _run(
+    outcome, client, _audit = _run(
         [
             *_prefix(),
             *before,
@@ -136,11 +136,11 @@ def test_structured_overload_tracks_output_and_native_retry(will_retry: bool, ou
         ]
     )
     assert outcome.error_code == ("native-error" if will_retry else "provider-overloaded")
+    assert outcome.provider_acceptance == "unknown"
     assert outcome.behavior_output_observed is output
-    assert outcome.provider_calls_started == 1
+    assert outcome.provider_calls_started == 0
     assert outcome.provider_calls_completed == 0
     assert len([m for m in client if m["method"] == "turn/start"]) == 1
-    assert parse_transcript(_server_bytes(audit)) == outcome
 
 
 def _turn_completed(*, items: list[Message] | None = None, status: str = "completed") -> Message:
@@ -194,8 +194,8 @@ def test_completed_exchange_captures_final_response_usage_and_identity() -> None
         service_tier="standard",
         usage=ProtocolUsage(input_tokens=100, output_tokens=25, cached_input_tokens=10),
         provider_acceptance="accepted",
-        provider_calls_started=1,
-        provider_calls_completed=1,
+        provider_calls_started=0,
+        provider_calls_completed=0,
         actions_requested=0,
         actions_denied=0,
     )
@@ -213,7 +213,7 @@ def test_completed_exchange_captures_final_response_usage_and_identity() -> None
     assert turn_start["params"]["sandboxPolicy"] == {"type": "readOnly", "networkAccess": False}
     assert turn_start["params"]["effort"] == "low"
     assert turn_start["params"]["personality"] == "none"
-    assert audit[-1]["kind"] == "summary"
+    assert all(record["kind"] != "summary" for record in audit)
 
 
 def test_initialization_uses_the_host_supplied_client_version() -> None:
@@ -300,7 +300,7 @@ def test_action_request_is_declined_and_final_response_loop_stops(
     response = next(message for message in client if message.get("id") == "server-action-001")
     assert response == {"id": "server-action-001", "result": expected_result}
     assert not any(message.get("method") == "turn/completed" for message in client)
-    assert audit[-1]["kind"] == "summary"
+    assert all(record["kind"] != "summary" for record in audit)
 
 
 @pytest.mark.parametrize("method", ["item/permissions/requestApproval", "unknown/request"])
@@ -413,8 +413,8 @@ def test_native_error_is_terminal_without_retry_or_metadata_disclosure(
         model_returned=MODEL,
         service_tier="standard",
         usage=ProtocolUsage(100, 25, 10) if reported_usage else None,
-        provider_acceptance="accepted",
-        provider_calls_started=1,
+        provider_acceptance="unknown",
+        provider_calls_started=0,
         provider_calls_completed=0,
         actions_requested=0,
         actions_denied=0,
@@ -425,14 +425,12 @@ def test_native_error_is_terminal_without_retry_or_metadata_disclosure(
         "thread/start",
         "turn/start",
     ]
-    assert audit[-2] == {"kind": "server", "value": notification}
-    assert parse_transcript(_server_bytes(audit)) == outcome
+    assert audit[-1] == {"kind": "server", "value": notification}
     for private_text in (
         "Synthetic private error message.",
         "Synthetic private error details.",
         FINAL_TEXT,
     ):
-        assert private_text not in json.dumps(audit[-1])
         assert private_text not in repr(outcome)
 
 
@@ -447,7 +445,6 @@ def test_native_error_raises_static_diagnostic_without_state_mutation(
         turn_id=TURN_ID,
         usage=ProtocolUsage(100, 25, 10),
         provider_acceptance=acceptance,
-        provider_calls_started=1,
         actions_requested=1,
         actions_denied=1,
         final_messages={"fixture-message": ("final_answer", FINAL_TEXT)},
@@ -526,10 +523,9 @@ def test_thread_warning_is_informational_and_preserved_only_in_the_audit() -> No
     outcome, _, audit = _run([*_prefix(), warning, _usage(), _final_item(), _turn_completed()])
 
     assert outcome.status == "completed"
-    assert outcome.provider_calls_started == outcome.provider_calls_completed == 1
+    assert outcome.provider_calls_started == outcome.provider_calls_completed == 0
     assert {"kind": "server", "value": warning} in audit
     assert message not in repr(outcome)
-    assert parse_transcript(_server_bytes(audit)) == outcome
 
 
 @pytest.mark.parametrize(
@@ -555,14 +551,13 @@ def test_warning_requires_the_selected_thread_and_nonempty_text(params: Message,
 )
 def test_account_updates_are_informational(params: Message) -> None:
     exchange = _successful_exchange()
-    outcome, _, audit = _run(
+    outcome, _, _audit = _run(
         [exchange[0], {"method": "account/updated", "params": params}, *exchange[1:]]
     )
 
     assert outcome.status == "completed"
     assert outcome.provider_acceptance == "accepted"
-    assert outcome.provider_calls_started == outcome.provider_calls_completed == 1
-    assert parse_transcript(_server_bytes(audit)) == outcome
+    assert outcome.provider_calls_started == outcome.provider_calls_completed == 0
 
 
 @pytest.mark.parametrize(
@@ -587,12 +582,11 @@ def test_account_updates_require_well_formed_optional_identity_fields(params: Me
 def test_disabled_remote_control_notification_preserves_the_exchange(position: int) -> None:
     exchange = _successful_exchange()
     notification = {"method": "remoteControl/status/changed", "params": {"status": "disabled"}}
-    outcome, _, audit = _run([*exchange[:position], notification, *exchange[position:]])
+    outcome, _, _audit = _run([*exchange[:position], notification, *exchange[position:]])
 
     assert outcome.status == "completed"
-    assert outcome.provider_calls_started == outcome.provider_calls_completed == 1
+    assert outcome.provider_calls_started == outcome.provider_calls_completed == 0
     assert outcome.actions_requested == outcome.actions_denied == 0
-    assert parse_transcript(_server_bytes(audit)) == outcome
 
 
 @pytest.mark.parametrize("status", [None, True, "enabled", "connected", "future-status"])
@@ -607,7 +601,7 @@ def test_non_disabled_remote_control_stops_without_continuing(
     assert outcome.status == "error"
     assert outcome.error_code == "remote-control-active"
     assert outcome.provider_calls_completed == 0
-    assert outcome.provider_calls_started == int(position != 1)
+    assert outcome.provider_calls_started == 0
     assert client[-1]["method"] == ("thread/start" if position == 1 else "turn/start")
 
 
@@ -652,15 +646,19 @@ def test_turn_scoped_notification_before_turn_identity_is_rejected() -> None:
     assert outcome.error_code == "identity-mismatch"
 
 
-def test_cumulative_usage_refuses_more_than_one_provider_call() -> None:
+def test_cumulative_usage_can_exceed_last_increment_without_inventing_requests() -> None:
     usage = _usage()
     usage["params"]["tokenUsage"]["total"]["inputTokens"] = 101
     exchange = _successful_exchange()
     usage_index = len(_prefix())
     outcome, _, _ = _run([*exchange[:usage_index], usage, *exchange[usage_index + 1 :]])
 
-    assert outcome.status == "error"
-    assert outcome.error_code == "multiple-provider-calls"
+    assert outcome.status == "completed"
+    assert outcome.provider_calls_started == outcome.provider_calls_completed == 0
+    assert outcome.usage == ProtocolUsage(
+        input_tokens=101, output_tokens=25, cached_input_tokens=10
+    )
+    assert outcome.behavior_output_observed
 
 
 def test_thread_lifecycle_and_global_notifications_preserve_the_exchange() -> None:
@@ -796,7 +794,7 @@ def test_missing_usage_is_not_reported_as_a_success() -> None:
 
     assert outcome.status == "error"
     assert outcome.error_code == "missing-usage"
-    assert outcome.provider_calls_completed == 1
+    assert outcome.provider_calls_completed == 0
 
 
 def test_failed_turn_is_not_reported_as_a_success() -> None:
@@ -808,7 +806,7 @@ def test_failed_turn_is_not_reported_as_a_success() -> None:
 
 
 def test_transcript_round_trip_duplicate_summary_and_tamper_rejection() -> None:
-    outcome, _, audit = _run(_successful_exchange())
+    outcome, _, audit = _physical_transcript()
     transcript = "".join(
         json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n" for record in audit
     )
@@ -840,12 +838,13 @@ def test_transcript_rejects_malformed_and_oversized_records() -> None:
 def test_transcript_limit_includes_client_records(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    outcome, _, audit = _run(_successful_exchange())
+    outcome, _, audit = _physical_transcript()
     monkeypatch.setattr(transcript, "MAX_PROTOCOL_MESSAGES", 2)
     monkeypatch.setattr(transcript, "MAX_CLIENT_PROTOCOL_MESSAGES", 3)
     records = [
         *({"kind": "server", "value": {"id": 1}} for _ in range(2)),
         *({"kind": "client", "value": {"id": 1}} for _ in range(3)),
+        *(record for record in audit if record["kind"] == "provider"),
         audit[-1],
     ]
 
@@ -855,7 +854,7 @@ def test_transcript_limit_includes_client_records(
 
 
 def test_captured_final_text_is_hidden_from_outcome_repr_but_round_trips() -> None:
-    outcome, _, audit = _run(_successful_exchange(text="private fixture response"))
+    outcome, _, audit = _physical_transcript(text="private fixture response")
 
     assert "private fixture response" not in repr(outcome)
     assert parse_transcript(_server_bytes(audit)).final_text == "private fixture response"
@@ -876,3 +875,167 @@ def test_protocol_value_objects_reject_inconsistent_outcomes() -> None:
             actions_requested=0,
             actions_denied=0,
         )
+
+
+def _receipt(kind: str, ordinal: int, count: int, status: int = 0) -> Message:
+    return {
+        "kind": "provider",
+        "value": {
+            "kind": kind,
+            "ordinal": ordinal,
+            "count": count,
+            "status": status,
+            "request_bytes": ordinal * 32,
+            "response_bytes": 64 if kind == "completed" else 0,
+        },
+    }
+
+
+def _physical_transcript(
+    *, text: str = FINAL_TEXT
+) -> tuple[ProtocolOutcome, list[Message], list[Message]]:
+    # Explicit receipts are a normalization fixture, independent of the RPC fixture.
+    native, client, audit = _run(_successful_exchange(text=text))
+    outcome = replace(native, provider_calls_started=1, provider_calls_completed=1)
+    audit.extend(
+        [
+            _receipt("reserved", 1, 0),
+            _receipt("started", 1, 1),
+            _receipt("completed", 1, 1, 200),
+            {
+                "kind": "provider",
+                "value": {
+                    **_receipt("completed", 1, 1, 200)["value"],
+                    "kind": "closed",
+                    "status": 0,
+                },
+            },
+            {"kind": "summary", "value": asdict(outcome)},
+        ]
+    )
+    return outcome, client, audit
+
+
+def test_native_exchange_does_not_establish_physical_counts_or_publish_summary() -> None:
+    outcome, _, audit = _run(_successful_exchange())
+    assert outcome.provider_calls_started == outcome.provider_calls_completed == 0
+    assert physical_request_counts(_server_bytes(audit)) is None
+    with pytest.raises(CodexProtocolError, match="unique summary"):
+        parse_transcript(_server_bytes(audit))
+    audit.append({"kind": "summary", "value": asdict(outcome)})
+    with pytest.raises(CodexProtocolError, match="provider receipts"):
+        parse_transcript(_server_bytes(audit))
+
+
+@pytest.mark.parametrize("field", ["inputTokens", "outputTokens", "cachedInputTokens"])
+def test_cumulative_usage_must_not_decrease(field: str) -> None:
+    earlier, later = _usage(), _usage()
+    later["params"]["tokenUsage"]["last"][field] -= 1
+    later["params"]["tokenUsage"]["total"][field] -= 1
+    outcome, _, _ = _run([*_prefix(), earlier, later])
+    assert outcome.error_code == "invalid-usage"
+    assert outcome.usage == ProtocolUsage(100, 25, 10)
+
+
+@pytest.mark.parametrize("field", ["inputTokens", "outputTokens", "cachedInputTokens"])
+def test_last_usage_cannot_exceed_total(field: str) -> None:
+    usage = _usage()
+    usage["params"]["tokenUsage"]["last"][field] += 1
+    outcome, _, _ = _run([*_prefix(), usage])
+    assert outcome.error_code == "invalid-usage"
+
+
+def test_multiple_usage_increments_preserve_complete_cumulative_usage() -> None:
+    first, second = _usage(), _usage()
+    second["params"]["tokenUsage"]["total"] = {
+        "inputTokens": 200,
+        "outputTokens": 50,
+        "cachedInputTokens": 20,
+    }
+    outcome, _, _ = _run([*_prefix(), first, second, _final_item(), _turn_completed()])
+    assert outcome.status == "completed"
+    assert outcome.usage == ProtocolUsage(200, 50, 20)
+    assert outcome.provider_calls_started == outcome.provider_calls_completed == 0
+
+
+@pytest.mark.parametrize(
+    "mutation", ["summary-count", "missing-start", "duplicate-start", "after-summary", "rejected"]
+)
+def test_transcript_requires_ordered_receipts_and_safe_transport(mutation: str) -> None:
+    _, _, audit = _physical_transcript()
+    provider_index = next(i for i, record in enumerate(audit) if record["kind"] == "provider")
+    if mutation == "summary-count":
+        audit[-1]["value"]["provider_calls_started"] = 2
+    elif mutation == "missing-start":
+        del audit[provider_index + 1]
+    elif mutation == "duplicate-start":
+        audit.insert(provider_index + 2, audit[provider_index + 1])
+    elif mutation == "after-summary":
+        audit.append({"kind": "client", "value": {}})
+    else:
+        rejected = _receipt("rejected", 0, 1, 429)
+        rejected["value"].update(request_bytes=32, response_bytes=64)
+        audit.insert(-2, rejected)
+    with pytest.raises(CodexProtocolError):
+        parse_transcript(_server_bytes(audit))
+
+
+def test_partial_failure_recovers_only_receipt_backed_physical_counts() -> None:
+    records = [_receipt("reserved", 1, 0), _receipt("started", 1, 1)]
+    data = _server_bytes(records)
+    assert physical_request_counts(data) == (1, 0)
+    assert physical_request_counts(data + b'{"kind":"prov') == (1, 0)
+    assert physical_request_counts(b'{"kind":"prov') is None
+    assert physical_request_counts(_server_bytes(records[:1])) is None
+    for tail in (
+        _server_bytes([_receipt("started", 1, 1)]),
+        b"invalid-json\n",
+        b'{"kind":"invalid","value":{}}\n',
+    ):
+        assert physical_request_counts(data + tail) == (1, 0)
+        completed = _server_bytes([*records, _receipt("completed", 1, 1, 200)])
+        assert physical_request_counts(completed + tail) == (1, 1)
+        # Corrupt output must not prove that no request started.
+        closed = _server_bytes([_receipt("closed", 0, 0)])
+        assert physical_request_counts(closed + tail) is None
+
+
+def test_transport_closure_proves_zero_without_native_summary() -> None:
+    receipt = _receipt("closed", 0, 0)
+    assert physical_request_counts(_server_bytes([receipt])) == (0, 0)
+    _, _, audit = _physical_transcript()
+    audit.insert(-1, _receipt("started", 2, 2))
+    with pytest.raises(CodexProtocolError, match="provider receipts"):
+        parse_transcript(_server_bytes(audit))
+
+
+@pytest.mark.parametrize("turn_started", [False, True])
+def test_rpc_turn_acceptance_does_not_establish_provider_acceptance(turn_started: bool) -> None:
+    notifications: list[Message] = (
+        [
+            {
+                "method": "turn/started",
+                "params": {
+                    "threadId": THREAD_ID,
+                    "turn": {"id": TURN_ID, "status": "inProgress", "items": []},
+                },
+            }
+        ]
+        if turn_started
+        else []
+    )
+    outcome, _, _ = _run(
+        [
+            *_prefix(),
+            *notifications,
+            _native_error(error_info="serverOverloaded"),
+        ]
+    )
+    assert outcome.error_code == "provider-overloaded"
+    assert outcome.provider_acceptance == "unknown"
+
+
+def test_successful_native_completion_establishes_provider_acceptance() -> None:
+    outcome, _, _ = _run(_successful_exchange())
+    assert outcome.status == "completed"
+    assert outcome.provider_acceptance == "accepted"

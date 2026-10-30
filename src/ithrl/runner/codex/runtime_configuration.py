@@ -22,6 +22,8 @@ PROXY_ENVIRONMENT_NAMES = frozenset(
         "no_proxy",
     }
 )
+TLS_ENVIRONMENT_NAMES = frozenset({"SSL_CERT_FILE", "SSL_CERT_DIR"})
+TRANSPORT_ENVIRONMENT_NAMES = PROXY_ENVIRONMENT_NAMES | TLS_ENVIRONMENT_NAMES
 
 _RUNTIME_SECRET_NAME = re.compile(r"^ITHRL_PROVIDER_SECRET_[0-9]+$")
 _RENDERED_ROOT_FIELDS = frozenset(
@@ -55,7 +57,7 @@ _RENDERED_PROVIDER_FIELDS = frozenset(
 def is_safe_runtime_environment_name(name: str) -> bool:
     """Return whether a name can enter the isolated Codex process."""
 
-    return name in PROXY_ENVIRONMENT_NAMES or _RUNTIME_SECRET_NAME.fullmatch(name) is not None
+    return name in TRANSPORT_ENVIRONMENT_NAMES or _RUNTIME_SECRET_NAME.fullmatch(name) is not None
 
 
 def normalize_base_url(value: str) -> str:
@@ -229,7 +231,7 @@ def _valid_rendered_environment(
         return False
     references.update(headers.values())
     references.discard(None)
-    secret_names = {name for name in environment_names if name not in PROXY_ENVIRONMENT_NAMES}
+    secret_names = {name for name in environment_names if name not in TRANSPORT_ENVIRONMENT_NAMES}
     return references == secret_names
 
 

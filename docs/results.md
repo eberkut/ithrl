@@ -108,7 +108,10 @@ unavailable, and denied shell actions can leave possible continuation calls; unk
 explicit.
 
 Actual calls record known starts; additional possible calls retain usage that the runner cannot
-exclude. Charged calls also include pending dispatch reservations. Reopening a run reconciles saved
+exclude. Charged calls retain the full per-attempt allowance whenever provider work started,
+including completed turns, and include pending dispatch reservations. Codex's relay records
+physical requests separately, so actual calls can be lower than the charged count. Reopening a
+run reconciles saved
 observations before deciding whether another complete sampling block fits; it never repeats an
 unresolved dispatch.
 

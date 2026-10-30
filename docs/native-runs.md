@@ -133,14 +133,26 @@ for assumptions and error handling.
 ```bash
 ithrl shrink CASE --experiment PRIVATE_EXPERIMENT \
   --original-workspace ORIGINAL --observation-store PRIVATE_STORE \
-  --max-candidates 14 --max-provider-calls 493 --max-wall-time 86400 \
+  --max-candidates 14 --max-provider-calls 7888 --max-wall-time 86400 \
+  --max-provider-calls-per-attempt 16 \
   --attempt-timeout 120 --inter-attempt-delay 15 --dry-run --format json
 ```
 
-For Copilot, omit `--inter-attempt-delay 15`; a shell-action run needs `--max-provider-calls 986`.
-The plan protects up to 248 confirmation attempts within 493 total attempt slots. Copilot shell
-allows for two provider calls per attempt because denial can trigger a continuation. These profiles
-cannot enforce a hard input-token limit and refuse a plan requiring one.
+The plan protects up to 248 confirmation attempts within 493 total attempt slots. Codex defaults
+to a cap of 16 physical provider requests per attempt, giving a total allowance of 7,888.
+`--max-provider-calls-per-attempt N` selects a cap from 1 to 16; recalculate the total-call budget
+when changing it. A native turn can require several successful Responses requests even with
+request and stream retries disabled. A lower cap can stop the turn before completion.
+
+For Copilot, omit both `--inter-attempt-delay 15` and `--max-provider-calls-per-attempt 16`. Use
+`--max-provider-calls 493` for a final-response run or `986` for a shell-action run. Detection
+determines its per-attempt bound; shell-action runs allow two calls because denial can trigger
+a continuation. These profiles cannot enforce a hard input-token limit and refuse a plan
+requiring one.
+
+The per-attempt cap is part of capability and saved-run identity. Use the same cap throughout
+preflight and execution; changing it requires a new plan. Increasing a sampled run's total
+allowance on resume leaves that cap unchanged.
 
 Check the provider, model, destination, safety policy and total limits. Subscription quota is not
 predictable from provider-call limits.
@@ -249,6 +261,11 @@ reports `detection-required`. To create the private structural profile for a nat
 ithrl fuzz CASE --config PRIVATE_CONFIG --detect --profile PRIVATE_PROFILE \
   --original-workspace ORIGINAL_WORKSPACE
 ```
+
+For Codex, detection defaults to 16 requests per attempt; add
+`--max-provider-calls-per-attempt N` to select a smaller cap. Size the total-call limit in
+`PRIVATE_CONFIG` for calibration, complete exploratory blocks and protected fresh confirmation
+at that cap. The saved profile retains it for execution and resume.
 
 Detection runs bounded, network-denied local harness probes without a provider request. Inspect
 the result, then use its profile in a harness-free plan review:

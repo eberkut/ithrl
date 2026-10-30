@@ -14,6 +14,10 @@ from typing import Literal, Protocol, overload
 _CHUNK_SIZE = 64 * 1024
 _MAX_LABEL_LENGTH = 128
 
+# Native runners share a finite, complete-tree read budget.
+DEFAULT_MAX_PROTECTED_ENTRIES = 250_000
+DEFAULT_MAX_PROTECTED_BYTES = 512 * 1024 * 1024
+
 type _ReadSignature = tuple[int, int, int, int, int, int]
 
 

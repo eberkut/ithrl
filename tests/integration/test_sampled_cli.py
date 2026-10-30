@@ -840,6 +840,8 @@ def test_operator_search_confirmation_result_and_exact_resume(operator_case: Ope
                 str(source),
                 "--resume",
                 "--acknowledge-model-execution",
+                "--max-provider-calls-per-attempt",
+                "1",
                 "--format",
                 "json",
             ]
@@ -1348,7 +1350,9 @@ def test_expired_wall_allowance_proposes_executable_extension_for_same_block(
     operator_case.assert_sources_unchanged()
 
 
-@pytest.mark.parametrize("override", ["workspace", "attempt", "experiment", "budget", "candidates"])
+@pytest.mark.parametrize(
+    "override", ["workspace", "attempt", "experiment", "budget", "candidates", "per-attempt"]
+)
 def test_resume_mismatch_refuses_without_dispatch(
     operator_case: OperatorCase, override: str
 ) -> None:
@@ -1362,6 +1366,7 @@ def test_resume_mismatch_refuses_without_dispatch(
         "experiment": ["--experiment", str(operator_case.experiment_path)],
         "budget": ["--max-provider-calls", "99"],
         "candidates": ["--max-candidates", "19"],
+        "per-attempt": ["--max-provider-calls-per-attempt", "2"],
     }[override]
     resumed = _invoke(
         [
