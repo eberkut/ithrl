@@ -5,50 +5,32 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+from ithrl.execution import ContextOperation
+
 type CopilotTarget = Literal["final-response", "shell-action"]
 
 RUNNER_VERSION = "1"
 CAPTURE_TYPE = "logical-session"
 CONTEXT_OPERATION = "dependency-closed-removal"
 MATERIALIZATION = "source-backed"
-RECONSTRUCTION_METHOD = "copilot-semantic-session-import-v1"
+RECONSTRUCTION_METHOD = "copilot-native-prefix-sdk-v1"
 SOURCE_SCHEMA = "copilot-events-jsonl"
-PROTOCOL_VERSION = "copilot-jsonl-v1"
+PROTOCOL_VERSION = "copilot-sdk-events-v1"
 PROVIDER = "github-copilot"
 ENDPOINT = "copilot://managed"
-POLICY_VERSION = "copilot-controlled-session-v1"
+POLICY_VERSION = "copilot-sdk-controlled-session-v1"
 DISCOVERY_POLICY_VERSION = "copilot-isolated-discovery-v1"
-
-# Copilot treats --available-tools as an allowlist. A name which cannot identify a
-# built-in or configured tool therefore gives the final-response profile an empty
-# tool surface. Capability detection verifies the allowlist option before this
-# profile is advertised.
-NO_TOOLS_SENTINEL = "ithrl-no-tools"
-
-_COMMON_FLAGS = (
-    "--no-auto-update",
-    "--no-custom-instructions",
-    "--disable-builtin-mcps",
-    "--no-remote",
-    "--no-remote-export",
-    "--no-experimental",
-    "--no-ask-user",
-    "--no-bash-env",
-    "--dynamic-retrieval=skills=off",
-    "--output-format=json",
-    "--stream=off",
-    "--log-level=none",
-)
 
 
 @dataclass(frozen=True, slots=True)
 class CopilotTargetPolicy:
-    """Target-specific command flags and advertised action guarantees."""
+    """Target-specific SDK session policy and advertised action guarantees."""
 
     target: CopilotTarget
     command_flags: tuple[str, ...]
     action_visibility: Literal["not-applicable", "visible"]
     action_denial: Literal["enforced"]
+    context_operations: tuple[ContextOperation, ...]
 
 
 def target_policy(target: CopilotTarget) -> CopilotTargetPolicy:
@@ -57,27 +39,18 @@ def target_policy(target: CopilotTarget) -> CopilotTargetPolicy:
     if target == "final-response":
         return CopilotTargetPolicy(
             target=target,
-            command_flags=(
-                *_COMMON_FLAGS,
-                f"--available-tools={NO_TOOLS_SENTINEL}",
-                "--allow-all-tools",
-                "--disallow-temp-dir",
-            ),
+            command_flags=(),
             action_visibility="not-applicable",
             action_denial="enforced",
+            context_operations=(CONTEXT_OPERATION, "append-text"),
         )
     if target == "shell-action":
         return CopilotTargetPolicy(
             target=target,
-            command_flags=(
-                *_COMMON_FLAGS,
-                "--available-tools=bash",
-                "--allow-all-tools",
-                "--deny-tool=shell",
-                "--disallow-temp-dir",
-            ),
+            command_flags=(),
             action_visibility="visible",
             action_denial="enforced",
+            context_operations=(CONTEXT_OPERATION,),
         )
     raise ValueError("unsupported Copilot target")
 
@@ -96,7 +69,6 @@ __all__ = [
     "DISCOVERY_POLICY_VERSION",
     "ENDPOINT",
     "MATERIALIZATION",
-    "NO_TOOLS_SENTINEL",
     "POLICY_VERSION",
     "PROTOCOL_VERSION",
     "PROVIDER",

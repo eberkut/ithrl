@@ -10,7 +10,7 @@ The
 [README supported-inputs table](https://github.com/eberkut/ithrl/blob/main/README.md#supported-inputs)
 defines the public capability claim. The public commands are `extract`, `shrink` and `fuzz`. Fuzzing
 has a credential-free local walkthrough and a qualified Codex append-text profile for eligible
-prior user input. Copilot remains removal-only. See [native runs](native-runs.md) for the operator
+prior user input. See [native runs](native-runs.md) for the operator
 procedure, [measurements](measurements.md#native-context-fuzzing) for qualification evidence and
 [results](results.md) for interpreting output.
 
@@ -124,7 +124,9 @@ and immutable sampling receipts. Fuzz dry-run reads saved inputs without a harne
 structural detection saves a private profile, and acknowledged execution rechecks its identity.
 The fake runner uses the same collector with zero provider calls and truthful deterministic
 capabilities. Native text mutation requires detected support for the exact editable seam and a
-separately qualified execution profile.
+separately qualified execution profile. Codex overlays eligible prior user `input_text` fields;
+Copilot overlays eligible prior `user.message` content in the copied native session prefix. Both
+keep the selected decision's input outside the editable surface.
 
 ## Execution and privacy boundary
 
@@ -147,6 +149,14 @@ Responses requests. The caller selects a per-attempt cap from 1 to 16 (default 1
 plan and saved-run identities retain this administrative limit. The relay rejects requests beyond
 the cap and records a `provider-call-limit` error. A completed HTTP response alone does not
 establish model acceptance or a completed native turn.
+
+Copilot's Python SDK drives the installed CLI over stdio. It resumes the copied native prefix at
+the selected model-turn boundary without injecting a user message, including decisions after tool
+results. Captured system guidance is restored when present and verified before inference; current
+custom-instruction and skill retrieval are disabled. A managed-request gate permits one inference
+request, verifies effective policy and denies shell execution before a continuation can dispatch.
+The controlled prefix and policy define the experiment; uncaptured historical guidance and
+harness-added context remain reconstruction limits.
 
 The shared runtime in `runner/runtime/` owns fresh private state, bounded output, process-group
 termination, cancellation and cleanup. It is not a filesystem or network sandbox. Concrete

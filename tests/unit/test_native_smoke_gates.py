@@ -108,9 +108,7 @@ def test_copilot_cannot_use_an_inferred_or_custom_destination(tmp_path: Path) ->
 def test_budget_is_fixed_not_derived_from_user_options(tmp_path: Path) -> None:
     for profile in PROFILES:
         options = SmokeOptions("preflight", profile, "fixture-model", "fixture-provider", tmp_path)
-        assert options.provider_call_bound == (
-            32 if profile == "codex-final" else (4 if profile == "copilot-shell" else 2)
-        )
+        assert options.provider_call_bound == (32 if profile == "codex-final" else 2)
 
 
 @pytest.mark.parametrize("nested", [False, True])

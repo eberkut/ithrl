@@ -130,7 +130,7 @@ class AttemptEvidence(BaseModel):
         return self.provider_acceptance_state is ProviderAcceptanceState.ACCEPTED
 
     def provider_call_charge(self, per_attempt_limit: int) -> int:
-        """Retain the conservative attempt charge whenever provider work started."""
+        """Charge completed usage exactly and retain uncertainty after failed attempts."""
 
         known = (
             self.accounting.provider_calls_started
@@ -140,7 +140,9 @@ class AttemptEvidence(BaseModel):
         return max(
             known,
             self.provider_calls_possible,
-            per_attempt_limit if self.provider_call_started else 0,
+            per_attempt_limit
+            if self.provider_call_started and self.termination_reason != "completed"
+            else 0,
         )
 
     @property

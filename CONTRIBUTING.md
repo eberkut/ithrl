@@ -237,9 +237,9 @@ uv run pytest -o addopts= tests/live -m native_smoke -s \
 ```
 
 Every invocation creates fresh private state, harmless session content and an empty original
-workspace. Calibration requires two matching attempts and permits at most two, each bounded at
-120 seconds plus cancellation grace. Final-response profiles allow up to two provider calls;
-Copilot shell allows up to four, with `pwd` visible but denied.
+workspace. Calibration requires two matching attempts and permits at most two, each bounded at 120
+seconds plus cancellation grace. Codex allows up to 32 provider calls across the two attempts;
+either Copilot profile allows up to two. In the shell profile, `pwd` is visible but denied.
 
 Returned actions never execute. Hosted tools, MCP and tool-side network effects remain forbidden. An
 input-token cap cannot be enforced. Private evidence records known counts and unknown acceptance

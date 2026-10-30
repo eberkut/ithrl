@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Literal
 
 import pytest
 from typer.testing import CliRunner
@@ -53,11 +54,21 @@ attempt_timeout_seconds = 1
 """
 
 
-def inputs(tmp_path: Path, *, source_backed: bool = False) -> list[str]:
+def inputs(
+    tmp_path: Path,
+    *,
+    source_backed: bool = False,
+    harness: Literal["codex", "copilot"] = "codex",
+) -> list[str]:
     if source_backed:
-        from native_support.codex import _case
+        if harness == "copilot":
+            from native_support.copilot import _case as copilot_case
 
-        _case(tmp_path)
+            copilot_case(tmp_path, "final-response", context_sensitive=True)
+        else:
+            from native_support.codex import _case
+
+            _case(tmp_path)
     else:
         extract_inference(
             Path(__file__).parents[1] / "fixtures/synthetic-trace.json",
@@ -170,6 +181,7 @@ def mock_native(
     *,
     source_backed: bool = False,
     fresh: bool = False,
+    harness: Literal["codex", "copilot"] = "codex",
 ):
     from fuzz_support import FuzzRunner
     from ithrl.behavior import FinalResponseTarget
@@ -183,24 +195,36 @@ def mock_native(
     from ithrl.fuzz.configuration import FuzzConfiguration
     from ithrl.runner import RunnerRegistry
 
-    args = inputs(tmp_path, source_backed=source_backed)
+    args = inputs(tmp_path, source_backed=source_backed, harness=harness)
     runner = FuzzRunner()
     if source_backed:
         from ithrl.runner import RunAccounting
         from ithrl.runner.codex.materialize import materialize_codex_attempt
+        from ithrl.runner.copilot.materialize import materialize_copilot_attempt
+
+        materialize = (
+            materialize_codex_attempt if harness == "codex" else materialize_copilot_attempt
+        )
 
         runner.capability_profile = runner.capability_profile.model_copy(
             update={
-                "harness": "codex",
-                "source_schema": "codex-rollout-jsonl",
+                "runner_type": harness,
+                "harness": harness,
+                "source_schema": (
+                    "codex-rollout-jsonl" if harness == "codex" else "copilot-events-jsonl"
+                ),
                 "supported_capture_types": ("logical-session",),
                 "supported_materializations": ("source-backed",),
-                "reconstruction_method": "codex-app-server-inject-items-v1",
+                "reconstruction_method": (
+                    "codex-app-server-inject-items-v1"
+                    if harness == "codex"
+                    else "copilot-semantic-session-import-v1"
+                ),
             }
         )
 
         async def native_run(attempt: PreparedAttempt) -> RunResult:
-            materialize_codex_attempt(attempt)
+            materialize(attempt)
             runner.calls.append(attempt)
             return RunResult(
                 attempt_id=attempt.attempt_id,
@@ -226,14 +250,14 @@ def mock_native(
         target=FinalResponseTarget(text_equals="Fixture complete." if source_backed else "BLUE"),
         oracle=StructuralOracleConfig(),
         runner=NativeRunnerConfig(
-            type="codex", required_capability_digest=runner.capability_profile.digest
+            type=harness, required_capability_digest=runner.capability_profile.digest
         ),
         calibration=config.calibration,
     )
     if not fresh:
         (tmp_path / "case/experiments/default.toml").write_text(experiment.to_toml())
     selection = NativeSelection(
-        registry=RunnerRegistry({"codex": lambda _c, _e: runner}),
+        registry=RunnerRegistry({harness: lambda _c, _e: runner}),
         safety_policy=SafetyPolicy(
             provider_transport="allowed",
             allowed_provider="synthetic-provider",
@@ -266,7 +290,7 @@ def mock_native(
             experiment=requested.model_copy(
                 update={
                     "runner": NativeRunnerConfig(
-                        type="codex", required_capability_digest=runner.capability_profile.digest
+                        type=harness, required_capability_digest=runner.capability_profile.digest
                     )
                 }
             ),
@@ -279,19 +303,32 @@ def mock_native(
     return [*args, "--original-workspace", str(original)], runner, detections
 
 
-@pytest.mark.parametrize(("source_backed", "fresh"), [(False, False), (True, False), (True, True)])
+@pytest.mark.parametrize(
+    ("source_backed", "fresh", "harness"),
+    [
+        (False, False, "codex"),
+        (True, False, "codex"),
+        (True, True, "codex"),
+        (True, False, "copilot"),
+        (True, True, "copilot"),
+    ],
+)
 def test_native_detection_consent_and_saved_profile_dry_run(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source_backed: bool, fresh: bool
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    source_backed: bool,
+    fresh: bool,
+    harness: Literal["codex", "copilot"],
 ) -> None:
     args, runner, detections = mock_native(
-        tmp_path, monkeypatch, source_backed=source_backed, fresh=fresh
+        tmp_path, monkeypatch, source_backed=source_backed, fresh=fresh, harness=harness
     )
     experiment_before = (tmp_path / "case/experiments/default.toml").read_bytes()
     protected = _protected_inputs(tmp_path)
     preflight = CliRunner().invoke(app, [*args, "--dry-run"])
     assert preflight.exit_code == 0, preflight.output
     assert json.loads(preflight.stdout)["status"] == "detection-required"
-    assert json.loads(preflight.stdout)["harness"] == "codex"
+    assert json.loads(preflight.stdout)["harness"] == harness
     assert not detections
     assert not runner.calls
     profile = tmp_path / "profile.json"
@@ -301,7 +338,8 @@ def test_native_detection_consent_and_saved_profile_dry_run(
     assert not runner.calls
     report = json.loads(detected.stdout)
     assert report["provider"] == "synthetic-provider"
-    assert report["editable_text_sites"] == (1 if source_backed else 6)
+    expected_sites = (2 if harness == "copilot" else 1) if source_backed else 6
+    assert report["editable_text_sites"] == expected_sites
     assert profile.stat().st_mode & 0o777 == 0o600
     args += ["--profile", str(profile)]
     dry = CliRunner().invoke(app, [*args, "--dry-run"])

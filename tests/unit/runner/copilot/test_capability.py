@@ -25,10 +25,10 @@ from ithrl.runner.copilot.configuration import (
     resolve_copilot_configuration,
 )
 from ithrl.runner.copilot.isolation import CopilotRuntime
-from ithrl.runner.copilot.policy import CopilotTarget, target_policy
+from ithrl.runner.copilot.policy import CopilotTarget
 
-_IMPORT_OPTIONS = frozenset({"--dry-run", "--output", "--working-directory"})
 _REAL_ISOLATION_PROBE = capability._probe_isolation_boundary
+_REAL_SDK_PROTOCOL_PROBE = capability._probe_sdk_protocol
 
 
 @pytest.fixture(autouse=True)
@@ -38,25 +38,10 @@ def _stub_isolation_gate_for_structural_tests(monkeypatch: pytest.MonkeyPatch) -
 
     monkeypatch.setattr(capability, "_probe_isolation_boundary", already_verified)
 
+    def protocol_already_verified(*_arguments: object) -> None:
+        return None
 
-def _required_root_options(
-    target: CopilotTarget,
-    configuration: CopilotConfiguration,
-) -> frozenset[str]:
-    required = {argument.partition("=")[0] for argument in target_policy(target).command_flags}
-    required.update({"--model", "--resume"})
-    if configuration.environment_names:
-        required.add("--secret-env-vars")
-    return frozenset(required)
-
-
-def _all_root_options() -> frozenset[str]:
-    options = {"--model", "--resume", "--secret-env-vars"}
-    for target in ("final-response", "shell-action"):
-        options.update(
-            argument.partition("=")[0] for argument in target_policy(target).command_flags
-        )
-    return frozenset(options)
+    monkeypatch.setattr(capability, "_probe_sdk_protocol", protocol_already_verified)
 
 
 def _fake_copilot(
@@ -65,21 +50,11 @@ def _fake_copilot(
     version: str = "99.42.7",
     version_trailer: str = "",
     version_notice: bool = False,
-    root_options: frozenset[str] | None = None,
-    import_options: frozenset[str] = _IMPORT_OPTIONS,
-    permission_contract: bool = True,
-    import_ok: bool = True,
     fail_with: str | None = None,
     protected: Path | None = None,
     network_port: int | None = None,
 ) -> Path:
     executable = tmp_path / "copilot"
-    permission_help = (
-        "--available-tools disables all other tools. Denial rules always take precedence."
-        if permission_contract
-        else "private unsupported permission behavior"
-    )
-    advertised_root_options = root_options or _all_root_options()
     source = f"""#!/usr/bin/python3
 import json
 import os
@@ -91,7 +66,7 @@ if any(name in os.environ for name in ("COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITH
     print("credential leaked to structural probe", file=sys.stderr)
     raise SystemExit(91)
 settings = json.loads((Path(os.environ["COPILOT_HOME"]) / "settings.json").read_text())
-if settings != {{"askUser": False, "autoUpdate": False, "remote": "off", "remoteExport": False}}:
+if settings != {{"askUser": False, "autoUpdate": False, "remoteSessions": False, "remoteExport": False}}:
     raise SystemExit(92)
 arguments = sys.argv[1:]
 if {protected is not None!r}:
@@ -123,25 +98,6 @@ if arguments == ["--version"]:
     if {version_notice!r}:
         print("Run 'copilot update' to check for updates.")
     raise SystemExit(0)
-if arguments == ["--help"]:
-    print({" ".join(sorted(advertised_root_options))!r})
-    raise SystemExit(0)
-if arguments == ["help", "permissions"]:
-    print({permission_help!r})
-    raise SystemExit(0)
-if arguments == ["sessions", "import", "--help"]:
-    print({" ".join(sorted(import_options))!r})
-    raise SystemExit(0)
-if arguments[:2] == ["sessions", "import"]:
-    required = {{"--dry-run", "--output", "--working-directory"}}
-    if not required <= set(arguments):
-        raise SystemExit(94)
-    transcript = Path(arguments[-1]).read_text()
-    if '"type":"session"' not in transcript:
-        raise SystemExit(95)
-    Path(arguments[arguments.index("--working-directory") + 1], "import-proof").write_text("owned import")
-    print(json.dumps({{"ok": {import_ok!r}}}))
-    raise SystemExit(0)
 raise SystemExit(64)
 """
     executable.write_text(source, encoding="utf-8")
@@ -171,7 +127,7 @@ def _managed_configuration(tmp_path: Path) -> CopilotConfiguration:
     ("target", "provider_calls", "visibility"),
     [
         ("final-response", 1, "not-applicable"),
-        ("shell-action", 2, "visible"),
+        ("shell-action", 1, "visible"),
     ],
 )
 def test_detects_target_specific_capability_from_structural_contracts(
@@ -191,12 +147,16 @@ def test_detects_target_specific_capability_from_structural_contracts(
     profile = detected.profile
     assert profile.runner_type == "copilot"
     assert profile.runtime_harness_version == "123.456.789"
-    assert profile.protocol_version == "copilot-jsonl-v1"
+    assert profile.protocol_version == "copilot-sdk-events-v1"
     assert profile.supported_targets == (target,)
     assert profile.supported_capture_types == ("logical-session",)
     assert profile.supported_materializations == ("source-backed",)
-    assert profile.supported_context_operations == ("dependency-closed-removal",)
-    assert profile.reconstruction_method == "copilot-semantic-session-import-v1"
+    assert profile.supported_context_operations == (
+        ("dependency-closed-removal", "append-text")
+        if target == "final-response"
+        else ("dependency-closed-removal",)
+    )
+    assert profile.reconstruction_method == "copilot-native-prefix-sdk-v1"
     assert profile.provider_transport == "required"
     assert profile.provider_calls_per_attempt == provider_calls
     assert profile.provider == "github-copilot"
@@ -212,7 +172,7 @@ def test_detects_target_specific_capability_from_structural_contracts(
     assert profile.disposable_state_limit_enforcement == "enforced"
     assert profile.process_containment == "process-group"
     assert any(
-        "captured assignment context is not imported" in deviation
+        "captured system guidance is restored exactly" in deviation
         for deviation in profile.deviations
     )
 
@@ -296,7 +256,7 @@ def test_every_structural_command_has_a_preventive_boundary(
 
     assert protected.read_bytes() == b"unchanged"
     assert executable.read_bytes() == original
-    assert len(commands) == 5
+    assert len(commands) == 1
     assert not any(root.exists() for root in roots)
     assert any(
         "copilot-isolated-discovery-v1" in deviation for deviation in detected.profile.deviations
@@ -490,78 +450,12 @@ def test_capability_and_detection_do_not_serialize_credentials(tmp_path: Path) -
     assert "private-credential" not in detected.profile.digest
 
 
-def test_managed_config_does_not_require_secret_environment_flag(tmp_path: Path) -> None:
+def test_managed_config_remains_bound_to_detected_capability(tmp_path: Path) -> None:
     configuration = _managed_configuration(tmp_path)
-    root_options = _required_root_options("final-response", configuration)
-    assert "--secret-env-vars" not in root_options
-
     detected = detect_copilot_capability(
-        _runtime(_fake_copilot(tmp_path, root_options=root_options)),
-        configuration,
-        target="final-response",
+        _runtime(_fake_copilot(tmp_path)), configuration, target="final-response"
     )
-
     assert detected.configuration is configuration
-
-
-@pytest.mark.parametrize(
-    ("target", "missing"),
-    [
-        ("final-response", "--model"),
-        ("final-response", "--resume"),
-        ("final-response", "--secret-env-vars"),
-        ("final-response", "--no-remote"),
-        ("shell-action", "--deny-tool"),
-    ],
-)
-def test_refuses_missing_target_worker_or_authentication_option(
-    tmp_path: Path,
-    target: CopilotTarget,
-    missing: str,
-) -> None:
-    configuration = _configuration()
-    required = _required_root_options(target, configuration)
-    assert missing in required
-
-    with pytest.raises(CopilotCapabilityError) as refused:
-        detect_copilot_capability(
-            _runtime(_fake_copilot(tmp_path, root_options=required - {missing})),
-            configuration,
-            target=target,
-        )
-
-    assert refused.value.code is CopilotCapabilityErrorCode.UNSAFE_POLICY
-
-
-@pytest.mark.parametrize(
-    ("case", "expected_code"),
-    [
-        ("missing-import-option", CopilotCapabilityErrorCode.UNSUPPORTED_PROTOCOL),
-        ("missing-permission-contract", CopilotCapabilityErrorCode.UNSAFE_POLICY),
-        ("failed-import", CopilotCapabilityErrorCode.UNSUPPORTED_PROTOCOL),
-    ],
-)
-def test_refuses_missing_noninteractive_contracts(
-    tmp_path: Path,
-    case: str,
-    expected_code: CopilotCapabilityErrorCode,
-) -> None:
-    if case == "missing-import-option":
-        fake = _fake_copilot(tmp_path, import_options=_IMPORT_OPTIONS - {"--dry-run"})
-    elif case == "missing-permission-contract":
-        fake = _fake_copilot(tmp_path, permission_contract=False)
-    else:
-        fake = _fake_copilot(tmp_path, import_ok=False)
-
-    with pytest.raises(CopilotCapabilityError) as refused:
-        detect_copilot_capability(
-            _runtime(fake),
-            _configuration(),
-            target="final-response",
-        )
-
-    assert refused.value.code is expected_code
-    assert "private unsupported" not in str(refused.value)
 
 
 def test_probe_failures_do_not_expose_process_output(tmp_path: Path) -> None:
@@ -583,39 +477,15 @@ def test_probe_failures_do_not_expose_process_output(tmp_path: Path) -> None:
     assert len(refused.value.stderr) <= capability._MAX_PROBE_OUTPUT_BYTES
 
 
-@pytest.mark.parametrize(
-    ("case", "stage"),
-    [
-        ("version", "version"),
-        ("root", "root-help"),
-        ("permissions", "permissions-help"),
-        ("import-options", "import-help"),
-        ("import-result", "semantic-import"),
-    ],
-)
-def test_contract_refusals_preserve_bounded_successful_probe_output(
-    tmp_path: Path, case: str, stage: str
-) -> None:
-    if case == "version":
-        executable = _fake_copilot(tmp_path, version="private invalid-version")
-    elif case == "root":
-        executable = _fake_copilot(tmp_path, root_options=_all_root_options() - {"--model"})
-    elif case == "permissions":
-        executable = _fake_copilot(tmp_path, permission_contract=False)
-    elif case == "import-options":
-        executable = _fake_copilot(tmp_path, import_options=_IMPORT_OPTIONS - {"--dry-run"})
-    else:
-        executable = _fake_copilot(tmp_path, import_ok=False)
-
+def test_invalid_version_preserves_bounded_successful_probe_output(tmp_path: Path) -> None:
+    executable = _fake_copilot(tmp_path, version="private invalid-version")
     with pytest.raises(CopilotCapabilityError) as refused:
         detect_copilot_capability(_runtime(executable), _configuration(), target="final-response")
-
-    assert refused.value.probe_stage == stage
+    assert refused.value.probe_stage == "version"
     assert refused.value.probe_exit_code == 0
     assert refused.value.stdout
     assert len(refused.value.stdout) <= capability._MAX_PROBE_OUTPUT_BYTES
     assert "private invalid-version" not in str(refused.value)
-    assert "private unsupported permission" not in repr(refused.value)
 
 
 def test_timeout_retains_private_partial_output_after_stopping_probe(
@@ -653,10 +523,10 @@ def test_output_limit_retains_only_bounded_private_bytes(
             ("/usr/bin/python3", "-c", "import os; os.write(1,b'x'*4096); os.write(2,b'y'*4096)"),
             {},
             tmp_path,
-            probe_stage="root-help",
+            probe_stage="sdk-protocol",
         )
 
-    assert refused.value.probe_stage == "root-help"
+    assert refused.value.probe_stage == "sdk-protocol"
     assert refused.value.probe_exit_code is not None
     assert refused.value.stdout == b"x" * 32
     assert len(refused.value.stderr) <= 32
@@ -666,11 +536,11 @@ def test_output_limit_retains_only_bounded_private_bytes(
 def test_unavailable_process_has_stage_without_synthetic_exit_code(tmp_path: Path) -> None:
     with pytest.raises(CopilotCapabilityError) as refused:
         capability._run_probe(
-            (str(tmp_path / "missing"),), {}, tmp_path, probe_stage="permissions-help"
+            (str(tmp_path / "missing"),), {}, tmp_path, probe_stage="sdk-protocol"
         )
 
     assert refused.value.code is CopilotCapabilityErrorCode.UNAVAILABLE
-    assert refused.value.probe_stage == "permissions-help"
+    assert refused.value.probe_stage == "sdk-protocol"
     assert refused.value.probe_exit_code is None
     assert refused.value.stdout == refused.value.stderr == b""
 
@@ -697,3 +567,68 @@ def test_successful_probe_result_repr_does_not_expose_private_bytes() -> None:
     result = capability._CommandResult(stdout=b"private stdout", stderr=b"private stderr")
 
     assert "private" not in repr(result)
+
+
+@pytest.mark.parametrize("target", ["final-response", "shell-action"])
+def test_all_targets_require_successful_sdk_protocol_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: CopilotTarget
+) -> None:
+    observed: list[CopilotTarget] = []
+
+    def record(
+        runtime: CopilotRuntime, environment: dict[str, str], cwd: Path, target: CopilotTarget
+    ) -> None:
+        assert not {"GH_TOKEN", "GITHUB_TOKEN", "COPILOT_GITHUB_TOKEN"} & environment.keys()
+        observed.append(target)
+
+    monkeypatch.setattr(capability, "_probe_sdk_protocol", record)
+    runtime = _runtime(_fake_copilot(tmp_path))
+    detect_copilot_capability(runtime, _configuration(), target=target)
+    assert observed == [target]
+
+    def refuse(*arguments: object) -> None:
+        raise CopilotCapabilityError(
+            CopilotCapabilityErrorCode.UNSUPPORTED_PROTOCOL, "native protocol unavailable"
+        )
+
+    monkeypatch.setattr(capability, "_probe_sdk_protocol", refuse)
+    with pytest.raises(CopilotCapabilityError, match="native protocol unavailable"):
+        detect_copilot_capability(runtime, _configuration(), target=target)
+
+
+def test_sdk_protocol_probe_is_isolated_and_uses_public_client_lifecycle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "state"
+    workspace = root / "workspace"
+    workspace.mkdir(parents=True)
+    observed: list[str] = []
+
+    def record(
+        argv: tuple[str, ...],
+        environment: dict[str, str],
+        cwd: Path,
+        *,
+        state_root: Path,
+        probe_stage: str,
+        failure_code: CopilotCapabilityErrorCode,
+    ) -> capability._CommandResult:
+        assert "--unshare-net" in argv
+        assert "--unshare-pid" in argv
+        assert state_root == root
+        assert cwd == workspace
+        assert probe_stage == "sdk-protocol"
+        assert failure_code is CopilotCapabilityErrorCode.UNSUPPORTED_PROTOCOL
+        assert not {"GH_TOKEN", "GITHUB_TOKEN", "COPILOT_GITHUB_TOKEN"} & environment.keys()
+        observed.append((root / "protocol-worker.py").read_text())
+        return capability._CommandResult(stdout=b"ithrl-copilot-sdk-protocol-ok\n", stderr=b"")
+
+    monkeypatch.setattr(capability, "_run_probe", record)
+    # The autouse fixture stubs this boundary for unrelated structural tests.
+    _REAL_SDK_PROTOCOL_PROBE(_runtime(_fake_copilot(tmp_path)), {}, workspace, "final-response")
+    assert len(observed) == 1
+    source = observed[0]
+    assert "RuntimeConnection.for_stdio(path=sys.argv[2], args=[])" in source
+    assert "await client.start()" in source
+    assert 'await client.ping("ithrl-credential-free-protocol")' in source
+    assert "finally:\n        await client.stop()" in source

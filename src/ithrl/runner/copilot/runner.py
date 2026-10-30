@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from contextlib import suppress
 from pathlib import Path
 
 from ithrl.context import content_digest
@@ -31,7 +32,6 @@ from ithrl.runner.copilot.materialize import (
 )
 from ithrl.runner.copilot.policy import (
     CAPTURE_TYPE,
-    CONTEXT_OPERATION,
     ENDPOINT,
     MATERIALIZATION,
     POLICY_VERSION,
@@ -41,8 +41,10 @@ from ithrl.runner.copilot.policy import (
     RUNNER_VERSION,
     SOURCE_SCHEMA,
     CopilotTarget,
+    target_policy,
 )
 from ithrl.runner.copilot.protocol import CopilotProtocolError, CopilotProtocolOutcome, parse_output
+from ithrl.runner.copilot.protocol.parser import physical_forward_count
 from ithrl.runner.runtime import (
     PROCESS_CANCELLATION_GRACE_SECONDS,
     NativeOutputStoreError,
@@ -53,10 +55,11 @@ from ithrl.runner.runtime import (
     RuntimeReport,
     run_isolated_process,
 )
+from ithrl.runner.runtime.protection import (
+    DEFAULT_MAX_PROTECTED_BYTES,
+    DEFAULT_MAX_PROTECTED_ENTRIES,
+)
 from ithrl.runner.validation import validate_run_result
-
-_MAX_PROTECTED_ENTRIES = 250_000
-_MAX_PROTECTED_BYTES = 256 * 1024 * 1024
 
 
 class CopilotRunner:
@@ -127,7 +130,10 @@ class CopilotRunner:
         try:
             materialize_copilot_attempt(attempt)
         except CopilotMaterializationError as error:
-            if attempt.candidate.removed_context_ids and error.code in {
+            changed = (
+                attempt.candidate.removed_context_ids or not attempt.candidate.mutation.is_empty
+            )
+            if changed and error.code in {
                 CopilotMaterializationErrorCode.MISSING_TRIGGER,
                 CopilotMaterializationErrorCode.UNSUPPORTED_CONTEXT,
             }:
@@ -158,8 +164,9 @@ class CopilotRunner:
                     state,
                     runtime=self._runtime,
                     configuration=self._configuration,
-                    semantic_session=materialized.semantic_session,
-                    trigger=materialized.trigger,
+                    native_session=materialized.native_session,
+                    session_id=materialized.session_id,
+                    system_message=materialized.system_message,
                     model=model,
                     target=self._target,
                     worker_source=self._worker_source,
@@ -168,8 +175,8 @@ class CopilotRunner:
                 resource_limits=attempt.resource_limits,
                 source_paths=self._source_paths,
                 workspace_paths=self._workspace_paths,
-                max_protected_entries=_MAX_PROTECTED_ENTRIES,
-                max_protected_bytes=_MAX_PROTECTED_BYTES,
+                max_protected_entries=DEFAULT_MAX_PROTECTED_ENTRIES,
+                max_protected_bytes=DEFAULT_MAX_PROTECTED_BYTES,
             )
         except ProcessRuntimeCancelled as cancelled:
             error = _runtime_error(
@@ -178,6 +185,7 @@ class CopilotRunner:
                 "Copilot attempt was cancelled",
                 cancelled.report,
                 cancelled.native_output,
+                output_store=self._output_store,
             )
             raise RunnerCancelled(error) from None
         except ProcessRuntimeError as error:
@@ -187,6 +195,7 @@ class CopilotRunner:
                 str(error),
                 error.report,
                 error.native_output,
+                output_store=self._output_store,
                 reason_code=error.reason_code,
             ) from error
         except CopilotIsolationError as error:
@@ -202,7 +211,12 @@ class CopilotRunner:
             )
         try:
             protected = self._output_store.read(execution.native_output)
-            outcome = parse_output(protected.stdout, expected=self._target)
+            outcome = parse_output(
+                protected.stdout,
+                expected=self._target,
+                native_session=materialized.native_session,
+                system_message=materialized.system_message,
+            )
         except (CopilotProtocolError, NativeOutputStoreError) as error:
             raise _runtime_error(
                 attempt,
@@ -210,6 +224,10 @@ class CopilotRunner:
                 "Copilot runner output could not be validated",
                 execution.report,
                 execution.native_output,
+                output_store=self._output_store,
+                reason_code=error.code
+                if isinstance(error, CopilotProtocolError)
+                else "native-output-unavailable",
             ) from error
 
         _validate_completion(attempt, self._target, execution.returncode, execution.report, outcome)
@@ -260,7 +278,7 @@ def _validate_capability(capability: CapabilityProfile) -> CopilotTarget:
     }:
         raise ValueError("Copilot capability must select one supported target")
     target = capability.supported_targets[0]
-    calls = 2 if target == "shell-action" else 1
+    calls = 1
     visibility = "visible" if target == "shell-action" else "not-applicable"
     expected = {
         "runner_type": "copilot",
@@ -271,7 +289,7 @@ def _validate_capability(capability: CapabilityProfile) -> CopilotTarget:
         "deterministic": False,
         "supported_capture_types": (CAPTURE_TYPE,),
         "supported_materializations": (MATERIALIZATION,),
-        "supported_context_operations": (CONTEXT_OPERATION,),
+        "supported_context_operations": target_policy(target).context_operations,
         "reconstruction_method": RECONSTRUCTION_METHOD,
         "provider_transport": "required",
         "provider_calls_per_attempt": calls,
@@ -306,14 +324,7 @@ def _validate_completion(
     report: RuntimeReport,
     outcome: CopilotProtocolOutcome,
 ) -> None:
-    if outcome.type == "final-response":
-        valid = returncode == 0 and not report.stdout_stop_matched
-    else:
-        valid = (
-            target == "shell-action"
-            and report.stdout_stop_matched
-            and report.process_outcome in {"exited", "terminated"}
-        )
+    valid = returncode == 0 and not report.stdout_stop_matched
     if valid:
         return
     raise RunnerError(
@@ -336,11 +347,10 @@ def _run_result(
     report: RuntimeReport,
     native_output: NativeOutputReference,
 ) -> RunResult:
-    tool_calls = (outcome.tool_call,) if outcome.tool_call is not None else ()
     return RunResult(
         attempt_id=attempt.attempt_id,
         effective_policy_digest=attempt.safety_policy.digest,
-        tool_calls=tool_calls,
+        tool_calls=outcome.tool_calls,
         final_text=outcome.final_text,
         model_requested=attempt.execution_plan.model_requested,
         model_returned=outcome.model_returned,
@@ -375,9 +385,16 @@ def _runtime_error(
     report: RuntimeReport,
     native_output: NativeOutputReference | None,
     *,
+    output_store: ProtectedOutputStore | None = None,
     reason_code: str | None = None,
 ) -> RunnerError:
-    started = report.process_outcome != "not-started"
+    physical_calls = None
+    if output_store is not None and native_output is not None:
+        with suppress(NativeOutputStoreError):
+            physical_calls = physical_forward_count(output_store.read(native_output).stdout)
+    started = (
+        report.process_outcome != "not-started" if physical_calls is None else bool(physical_calls)
+    )
     return RunnerError(
         code,
         message,
@@ -388,7 +405,7 @@ def _runtime_error(
         model_requested=attempt.execution_plan.model_requested,
         provider=attempt.execution_plan.capability.provider,
         endpoint=attempt.execution_plan.capability.endpoint,
-        accounting=_accounting(report, provider_call_may_have_started=started),
+        accounting=_accounting(report, provider_calls_started=physical_calls or 0),
         native_output=native_output,
         effective_policy_digest=attempt.safety_policy.digest,
     )
@@ -398,12 +415,10 @@ def _accounting(
     report: RuntimeReport,
     outcome: CopilotProtocolOutcome | None = None,
     *,
-    provider_call_may_have_started: bool = False,
+    provider_calls_started: int = 0,
 ) -> RunAccounting:
     calls_started = (
-        outcome.provider_calls_started
-        if outcome is not None
-        else int(provider_call_may_have_started)
+        outcome.provider_calls_started if outcome is not None else provider_calls_started
     )
     return RunAccounting(
         provider_calls_started=calls_started,

@@ -339,7 +339,7 @@ def fuzz(
             max=MAX_PROVIDER_CALLS_PER_ATTEMPT,
             help=(
                 "Hard provider-call limit per native attempt. Codex default: 16; "
-                "Copilot uses its detected target limit. Resume preserves the saved limit. "
+                "Copilot requires 1. Resume preserves the saved limit. "
                 "This budget does not guarantee turn completion."
             ),
         ),

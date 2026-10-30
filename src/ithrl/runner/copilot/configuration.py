@@ -46,7 +46,9 @@ _AUTHENTICATION_BY_ENVIRONMENT: dict[str, CopilotAuthentication] = {
     "GITHUB_TOKEN": "github-token",
 }
 
-_ISOLATED_SETTINGS = b'{"askUser":false,"autoUpdate":false,"remote":"off","remoteExport":false}'
+_ISOLATED_SETTINGS = (
+    b'{"askUser":false,"autoUpdate":false,"remoteSessions":false,"remoteExport":false}'
+)
 
 
 class CopilotConfigurationErrorCode(StrEnum):

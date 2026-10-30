@@ -152,6 +152,11 @@ def native_selection(
         )
     if harness not in ("codex", "copilot"):
         raise NativeSelectionError("unsupported-harness", "native harness is unsupported")
+    if harness == "copilot" and max_provider_calls_per_attempt not in (None, 1):
+        raise NativeSelectionError(
+            "unsupported-provider-call-limit",
+            "Copilot requires a per-attempt provider call limit of 1",
+        )
     native_type: Literal["codex", "copilot"] = "codex" if harness == "codex" else "copilot"
     if evidence.manifest.harness != harness:
         raise NativeSelectionError(
@@ -189,15 +194,6 @@ def native_selection(
         )
 
     capability = runner.capability_profile
-    if (
-        max_provider_calls_per_attempt is not None
-        and max_provider_calls_per_attempt != capability.provider_calls_per_attempt
-    ):
-        raise NativeSelectionError(
-            "unsupported-provider-call-limit",
-            "per-attempt provider call limit does not match the detected target profile",
-            harness_started=True,
-        )
     config = NativeRunnerConfig(
         type=native_type,
         required_capability_digest=capability.digest,

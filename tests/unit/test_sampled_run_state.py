@@ -204,7 +204,8 @@ def test_private_state_roundtrip_hydrates_sqlite_and_preserves_pending_charge(
         assert evidence.attempts[0].observation == store.get("observation-0")
         usage = reopened.usage(store, now=_TIME + timedelta(seconds=3))
         assert usage.actual_provider_calls == 1
-        assert usage.charged_provider_calls == 2
+        assert usage.possible_provider_calls == 0
+        assert usage.charged_provider_calls == 1
         assert usage.known_tokens == 12
         assert usage.runner_milliseconds == 12
         assert usage.unknown_runner_attempts == usage.unknown_token_attempts == 0
@@ -761,8 +762,8 @@ def test_recorded_calibration_consumption_stays_in_same_run_usage(tmp_path: Path
         assert file.evidence(store) == ()
         usage = file.usage(store, now=_TIME + timedelta(seconds=2))
         assert usage.actual_provider_calls == 1
-        assert usage.possible_provider_calls == 1
-        assert usage.charged_provider_calls == 2
+        assert usage.possible_provider_calls == 0
+        assert usage.charged_provider_calls == 1
         assert usage.known_tokens == 12
         assert usage.runner_milliseconds == 12
         assert usage.wall_time_seconds == 2
@@ -806,8 +807,8 @@ def test_prior_calibration_charges_known_and_unknown_consumption_without_arm_evi
         assert reopened.evidence(store) == ()
         usage = reopened.usage(store, now=_TIME + timedelta(seconds=2))
         assert usage.actual_provider_calls == 1
-        assert usage.possible_provider_calls == 3
-        assert usage.charged_provider_calls == 4
+        assert usage.possible_provider_calls == 2
+        assert usage.charged_provider_calls == 3
         assert usage.known_tokens == 12
         assert usage.runner_milliseconds == 12
         assert usage.unknown_provider_attempts == 1
@@ -863,7 +864,7 @@ def test_calibration_continuation_appends_exact_prefix_and_refuses_replacement(
         ids = (first.observation_id, second.observation_id)
         state = file.record_calibration(store, ids)
         assert state.calibration_observation_ids == ids
-        assert file.usage(store, now=_TIME).charged_provider_calls == 4
+        assert file.usage(store, now=_TIME).charged_provider_calls == 2
         before = file.path.read_bytes()
         assert file.record_calibration(store, ids) == state
         for replacement in ((), (first.observation_id,), ids[::-1], (second.observation_id,)):
@@ -1058,7 +1059,7 @@ def test_fresh_snapshot_matches_existing_reads_and_preserves_pending_accounting(
         assert snapshot.usage == file.usage(store, now=now)
         assert snapshot.usage.pending_provider_calls == pending.provider_calls == 2
         assert snapshot.usage.pending_runner_seconds == pending.runner_seconds
-        assert snapshot.usage.charged_provider_calls == 4
+        assert snapshot.usage.charged_provider_calls == (4 if unknown else 3)
         assert snapshot.usage.unknown_provider_attempts == int(unknown)
         assert snapshot.usage.unknown_runner_attempts == int(unknown)
         assert snapshot.usage.unknown_token_attempts == int(unknown)

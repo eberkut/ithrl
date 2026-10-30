@@ -8,6 +8,7 @@ import pytest
 
 from ithrl.adapters import enumerate_decisions, parse_session
 from ithrl.case import CaseEvidence
+from ithrl.context import content_digest
 from ithrl.execution import (
     CapabilityProfile,
     ResolvedExecutionPlan,
@@ -16,6 +17,7 @@ from ithrl.execution import (
 )
 from ithrl.experiment import ExperimentDefinition
 from ithrl.extraction import extract_decision
+from ithrl.mutation import TextAppend, TextMutation
 from ithrl.runner import PreparedAttempt, prepare_candidate
 from ithrl.runner.copilot.materialize import (
     CopilotMaterializationError,
@@ -182,7 +184,9 @@ def _evidence(
     ).load()
 
 
-def _attempt(evidence: CaseEvidence, *remove_ids: str) -> PreparedAttempt:
+def _attempt(
+    evidence: CaseEvidence, *remove_ids: str, mutation: TextMutation | None = None
+) -> PreparedAttempt:
     experiment = ExperimentDefinition.from_toml(evidence.default_experiment)
     capability = CapabilityProfile(
         runner_type="copilot",
@@ -194,8 +198,8 @@ def _attempt(evidence: CaseEvidence, *remove_ids: str) -> PreparedAttempt:
         deterministic=False,
         supported_capture_types=("logical-session",),
         supported_materializations=("source-backed",),
-        supported_context_operations=("dependency-closed-removal",),
-        reconstruction_method="copilot-semantic-session-import-v1",
+        supported_context_operations=("dependency-closed-removal", "append-text"),
+        reconstruction_method="copilot-native-prefix-sdk-v1",
         supported_targets=("final-response", "shell-action"),
         provider_transport="required",
         provider_calls_per_attempt=1,
@@ -243,7 +247,7 @@ def _attempt(evidence: CaseEvidence, *remove_ids: str) -> PreparedAttempt:
     )
     return PreparedAttempt(
         evidence=evidence,
-        candidate=prepare_candidate(evidence, plan, remove_ids),
+        candidate=prepare_candidate(evidence, plan, remove_ids, mutation=mutation),
         target=experiment.target,
         execution_plan=plan,
         safety_policy=policy,
@@ -253,136 +257,96 @@ def _attempt(evidence: CaseEvidence, *remove_ids: str) -> PreparedAttempt:
     )
 
 
-def _semantic_records(result: bytes) -> list[dict[str, Any]]:
+def _native_records(result: bytes) -> list[dict[str, Any]]:
     return [json.loads(line) for line in result.splitlines()]
 
 
-def test_materializes_direct_final_response_with_separate_trigger(tmp_path: Path) -> None:
-    result = materialize_copilot_attempt(_attempt(_evidence(tmp_path, _direct_records())))
+@pytest.mark.parametrize("shell_action", [False, True])
+def test_direct_decisions_preserve_the_existing_native_turn_boundary(
+    tmp_path: Path, shell_action: bool
+) -> None:
+    evidence = _evidence(tmp_path, _direct_records(shell_action=shell_action))
+    result = materialize_copilot_attempt(_attempt(evidence))
 
-    assert result.trigger == "Private direct trigger."
-    assert _semantic_records(result.semantic_session) == [
-        {
-            "type": "session",
-            "version": 1,
-            "externalId": "20000000-0000-4000-8000-000000000001",
-            "createdAt": "2026-01-01T00:00:00.000Z",
-        }
-    ]
+    assert result.native_session == b"".join(
+        evidence.source_artifacts[0].content.splitlines(keepends=True)[:3]
+    )
+    assert result.session_id == "20000000-0000-4000-8000-000000000001"
+    assert result.system_message is None
+    assert _native_records(result.native_session)[-1]["type"] == "assistant.turn_start"
 
 
-def test_materializes_shell_action_decision(tmp_path: Path) -> None:
-    evidence = _evidence(tmp_path, _direct_records(shell_action=True))
+def test_preserves_opaque_records_and_failed_historical_tools_without_normalization(
+    tmp_path: Path,
+) -> None:
+    records = _history_records()
+    records[5]["data"].update(success=False, error={"kind": "fixture-failure"})
+    records.insert(8, _record(12, "fixture.unknown_event", {"opaque": [1, {"keep": True}]}))
+    records.insert(
+        8,
+        _record(
+            13,
+            "system.message",
+            {"role": "system", "content": "Captured fixture guidance.\r\nKeep exact."},
+        ),
+    )
+    evidence = _evidence(tmp_path, records)
 
     result = materialize_copilot_attempt(_attempt(evidence))
 
-    assert result.trigger == "Private direct trigger."
-    assert len(_semantic_records(result.semantic_session)) == 1
-
-
-def test_preserves_historical_messages_and_complete_tool_work_in_order(tmp_path: Path) -> None:
-    native_records = _history_records()
-    native_records[1]["data"]["transformedContent"] = "Model-visible historical prompt."
-    native_records[8]["data"]["transformedContent"] = "Model-visible direct trigger."
-    result = materialize_copilot_attempt(_attempt(_evidence(tmp_path, native_records)))
-
-    records = _semantic_records(result.semantic_session)
-    assert [record["type"] for record in records] == [
-        "session",
-        "message",
-        "message",
-        "tool-call",
-        "tool-result",
-    ]
-    assert records[1]["role"] == "user"
-    assert records[1]["content"][0]["text"] == "Model-visible historical prompt."
-    assert records[2]["role"] == "assistant"
-    assert records[3]["id"] == "80000000-0000-4000-8000-000000000001"
-    assert records[3]["arguments"] == {"private": "argument"}
-    assert records[4]["toolCallId"] == records[3]["id"]
-    assert result.trigger == "Private direct trigger."
-
-
-def test_omits_only_recognized_operational_records(tmp_path: Path) -> None:
-    result = materialize_copilot_attempt(_attempt(_evidence(tmp_path, _history_records())))
-
-    assert all(
-        record["type"] != "model.turn_started"
-        for record in _semantic_records(result.semantic_session)
+    assert evidence.decision is not None
+    boundary = evidence.decision.selector.context_before_line
+    assert result.native_session == b"".join(
+        evidence.source_artifacts[0].content.splitlines(keepends=True)[:boundary]
     )
+    assert result.system_message == "Captured fixture guidance.\r\nKeep exact."
+    assert b"Fixture complete." not in result.native_session
 
 
-@pytest.mark.parametrize("record_type", ["skill.invoked", "fixture.unknown_event"])
-def test_refuses_retained_unsupported_records(tmp_path: Path, record_type: str) -> None:
+@pytest.mark.parametrize("transformed", [False, True])
+def test_append_changes_only_effective_prior_user_native_record_and_preserves_source(
+    tmp_path: Path, transformed: bool
+) -> None:
     records = _history_records()
-    records.insert(8, _record(12, record_type, {"content": "Private unsupported content."}))
+    if transformed:
+        records[1]["data"]["transformedContent"] = "Effective historical text."
+    records[1]["data"]["opaqueMetadata"] = {"keep": True}
     evidence = _evidence(tmp_path, records)
-
-    with pytest.raises(CopilotMaterializationError) as refused:
-        materialize_copilot_attempt(_attempt(evidence))
-
-    assert refused.value.code is CopilotMaterializationErrorCode.UNSUPPORTED_CONTEXT
-    assert "Private" not in str(refused.value)
-
-
-def test_refuses_incomplete_retained_tool_sequence(tmp_path: Path) -> None:
-    evidence = _evidence(tmp_path, _history_records())
-    completion = next(
-        node for node in evidence.context.nodes if node.kind == "tool.execution_complete"
+    source = tmp_path / "events.jsonl"
+    before = evidence.digest, source.read_bytes(), evidence.source_artifacts
+    site = evidence.editable_text()[0]
+    mutation = TextMutation(
+        edits=(
+            TextAppend(
+                context_id=site.context_id,
+                content_index=0,
+                original_text_digest=content_digest(site.original_text),
+                text="\r\n\nExact appended text. Ω",
+            ),
+        )
     )
+    baseline = materialize_copilot_attempt(_attempt(evidence))
 
-    with pytest.raises(CopilotMaterializationError) as refused:
-        materialize_copilot_attempt(_attempt(evidence, completion.id))
+    result = materialize_copilot_attempt(_attempt(evidence, mutation=mutation))
 
-    assert refused.value.code is CopilotMaterializationErrorCode.UNSUPPORTED_CONTEXT
-
-
-def test_refuses_tool_start_that_changes_the_requested_action(tmp_path: Path) -> None:
-    records = _history_records()
-    records[4]["data"]["arguments"] = {"private": "changed"}
-    evidence = _evidence(tmp_path, records)
-
-    with pytest.raises(CopilotMaterializationError) as refused:
-        materialize_copilot_attempt(_attempt(evidence))
-
-    assert refused.value.code is CopilotMaterializationErrorCode.UNSUPPORTED_CONTEXT
-    assert "changed" not in str(refused.value)
-
-
-def test_refuses_historical_assistant_message_without_its_user(tmp_path: Path) -> None:
-    evidence = _evidence(tmp_path, _history_records())
-    historical_user = next(node for node in evidence.context.nodes if node.kind == "user.message")
-
-    with pytest.raises(CopilotMaterializationError) as refused:
-        materialize_copilot_attempt(_attempt(evidence, historical_user.id))
-
-    assert refused.value.code is CopilotMaterializationErrorCode.UNSUPPORTED_CONTEXT
+    expected = _native_records(baseline.native_session)
+    field = "transformedContent" if transformed else "content"
+    expected[1]["data"][field] = site.original_text + mutation.edits[0].text
+    assert _native_records(result.native_session) == expected
+    old_lines, new_lines = (
+        baseline.native_session.splitlines(keepends=True),
+        result.native_session.splitlines(keepends=True),
+    )
+    # The appended value is JSON escaped; exactly one native record changes.
+    assert [
+        i for i, (old, new) in enumerate(zip(old_lines, new_lines, strict=True)) if old != new
+    ] == [1]
+    assert (evidence.digest, source.read_bytes(), evidence.source_artifacts) == before
 
 
-def test_refuses_invalid_transformed_historical_content_without_echoing_it(tmp_path: Path) -> None:
-    records = _history_records()
-    records[1]["data"]["transformedContent"] = {"private": "unsupported"}
-    evidence = _evidence(tmp_path, records)
-
-    with pytest.raises(CopilotMaterializationError) as refused:
-        materialize_copilot_attempt(_attempt(evidence))
-
-    assert refused.value.code is CopilotMaterializationErrorCode.UNSUPPORTED_CONTEXT
-    assert "private" not in str(refused.value)
-
-
-def test_refuses_candidate_without_direct_trigger(tmp_path: Path) -> None:
-    evidence = _evidence(tmp_path, _direct_records())
-    trigger = next(node for node in evidence.context.nodes if node.kind == "user.message")
-
-    with pytest.raises(CopilotMaterializationError) as refused:
-        materialize_copilot_attempt(_attempt(evidence, trigger.id))
-
-    assert refused.value.code is CopilotMaterializationErrorCode.MISSING_TRIGGER
-    assert "Private" not in str(refused.value)
-
-
-def test_refuses_tool_continuation_boundary_from_saved_fixture(tmp_path: Path) -> None:
+def test_post_tool_decision_uses_the_same_native_prefix_and_exposes_prior_user_text(
+    tmp_path: Path,
+) -> None:
     session = parse_session(FIXTURES / "copilot-session" / "events.jsonl")
     decision = enumerate_decisions(session)[0]
     evidence = extract_decision(
@@ -391,17 +355,204 @@ def test_refuses_tool_continuation_boundary_from_saved_fixture(tmp_path: Path) -
         target_id=decision.targets[0].target_id,
         case_path=tmp_path / "case",
     ).load()
+    sites = evidence.editable_text()
+    assert [site.original_text for site in sites] == ["Inspect the fixture context."]
+    edit = TextAppend(
+        context_id=sites[0].context_id,
+        content_index=0,
+        original_text_digest=content_digest(sites[0].original_text),
+        text="\nAdditional fixture context.",
+    )
+
+    result = materialize_copilot_attempt(_attempt(evidence, mutation=TextMutation(edits=(edit,))))
+
+    records = _native_records(result.native_session)
+    assert records[-1]["type"] == "assistant.turn_start"
+    assert records[1]["data"]["transformedContent"] == sites[0].original_text + edit.text
+    assert records[1]["data"]["content"] == sites[0].original_text
+    assert any(record["type"] == "tool.execution_complete" for record in records)
+    assert b'"phase":"final_answer"' not in result.native_session
+
+
+@pytest.mark.parametrize(
+    ("site_kind", "index", "digest", "expected"),
+    [
+        ("user.message", 1, None, CopilotMaterializationErrorCode.UNSUPPORTED_CONTEXT),
+        ("user.message", 0, "0" * 64, CopilotMaterializationErrorCode.UNSUPPORTED_CONTEXT),
+        ("assistant.message", 0, None, CopilotMaterializationErrorCode.UNSUPPORTED_CONTEXT),
+        ("trigger", 0, None, CopilotMaterializationErrorCode.MISSING_TRIGGER),
+    ],
+)
+def test_append_refuses_stale_or_ineligible_native_sites(
+    tmp_path: Path,
+    site_kind: str,
+    index: int,
+    digest: str | None,
+    expected: CopilotMaterializationErrorCode,
+) -> None:
+    evidence = _evidence(tmp_path, _history_records())
+    node = (
+        evidence.context.nodes[-1]
+        if site_kind == "trigger"
+        else next(node for node in evidence.context.nodes if node.kind == site_kind)
+    )
+    mutation = TextMutation(
+        edits=(
+            TextAppend(
+                context_id=node.id,
+                content_index=index,
+                original_text_digest=digest or content_digest("Private historical prompt."),
+                text="Private append.",
+            ),
+        )
+    )
 
     with pytest.raises(CopilotMaterializationError) as refused:
-        materialize_copilot_attempt(_attempt(evidence))
+        materialize_copilot_attempt(_attempt(evidence, mutation=mutation))
 
-    assert refused.value.code is CopilotMaterializationErrorCode.MISSING_TRIGGER
+    assert refused.value.code is expected
+    assert "Private" not in str(refused.value)
+    assert refused.value.__suppress_context__ or refused.value.__context__ is None
 
 
-def test_materialization_repr_hides_session_and_trigger_content(tmp_path: Path) -> None:
-    result = materialize_copilot_attempt(_attempt(_evidence(tmp_path, _history_records())))
+def test_revalidates_candidate_identity_and_excludes_combined_mutation_removal(
+    tmp_path: Path,
+) -> None:
+    evidence = _evidence(tmp_path, _history_records())
+    site = evidence.editable_text()[0]
+    mutation = TextMutation(
+        edits=(
+            TextAppend(
+                context_id=site.context_id,
+                content_index=0,
+                original_text_digest=content_digest(site.original_text),
+                text="Private append.",
+            ),
+        )
+    )
+    attempt = _attempt(evidence, mutation=mutation)
+    object.__setattr__(
+        attempt,
+        "candidate",
+        attempt.candidate.model_copy(update={"removed_context_ids": (site.context_id,)}),
+    )
+    with pytest.raises(CopilotMaterializationError, match="unchanged original"):
+        materialize_copilot_attempt(attempt)
+    attempt = _attempt(evidence)
+    object.__setattr__(
+        attempt,
+        "candidate",
+        attempt.candidate.model_copy(update={"source_artifact_digests": ("0" * 64,)}),
+    )
+    with pytest.raises(CopilotMaterializationError, match="does not match"):
+        materialize_copilot_attempt(attempt)
+
+
+@pytest.mark.parametrize("kind", ["user.message", "assistant.message"])
+def test_removal_omits_only_selected_records_and_keeps_native_ids_and_parent_metadata(
+    tmp_path: Path, kind: str
+) -> None:
+    records = _history_records()
+    records[2]["parentId"] = records[1]["id"]
+    evidence = _evidence(tmp_path, records)
+    node = next(node for node in evidence.context.nodes if node.kind == kind)
+    attempt = _attempt(evidence, node.id)
+
+    result = materialize_copilot_attempt(attempt)
+
+    removed = set(attempt.candidate.removed_context_ids)
+    expected = b"".join(
+        line
+        for node, line in zip(
+            evidence.context.nodes,
+            evidence.source_artifacts[0].content.splitlines(keepends=True),
+            strict=False,
+        )
+        if node.id not in removed
+    )
+    assert evidence.decision is not None
+    expected += evidence.source_artifacts[0].content.splitlines(keepends=True)[
+        evidence.decision.selector.context_before_line - 1
+    ]
+    assert result.native_session == expected
+    assert _native_records(result.native_session)[-1]["id"] == records[9]["id"]
+
+
+@pytest.mark.parametrize(
+    "remove_kind", ["tool.execution_start", "tool.execution_complete", "trigger"]
+)
+def test_refuses_partial_tool_work_or_removed_current_input(
+    tmp_path: Path, remove_kind: str
+) -> None:
+    evidence = _evidence(tmp_path, _history_records())
+    node = (
+        evidence.context.nodes[-1]
+        if remove_kind == "trigger"
+        else next(node for node in evidence.context.nodes if node.kind == remove_kind)
+    )
+
+    with pytest.raises(CopilotMaterializationError) as refused:
+        materialize_copilot_attempt(_attempt(evidence, node.id))
+
+    expected = (
+        CopilotMaterializationErrorCode.MISSING_TRIGGER
+        if remove_kind == "trigger"
+        else CopilotMaterializationErrorCode.UNSUPPORTED_CONTEXT
+    )
+    assert refused.value.code is expected
+
+
+def test_source_content_references_prevent_dangling_frozen_skill_deliveries(tmp_path: Path) -> None:
+    import hashlib
+
+    records = _history_records()
+    body = "Fixture skill body."
+    records.insert(8, _record(12, "skill.invoked", {"content": body, "name": "fixture-skill"}))
+    records.insert(
+        9,
+        _record(
+            13,
+            "skill.context_delivered_ref",
+            {
+                "contentId": "sha256:" + hashlib.sha256(body.encode()).hexdigest(),
+                "prefix": "Fixture prefix.",
+                "suffix": "",
+            },
+        ),
+    )
+    evidence = _evidence(tmp_path, records)
+    body_node = next(node for node in evidence.context.nodes if node.kind == "skill.invoked")
+    delivery = next(
+        node for node in evidence.context.nodes if node.kind == "skill.context_delivered_ref"
+    )
+    assert body_node.id in delivery.depends_on
+
+    with pytest.raises(ValueError, match="protected or frozen"):
+        _attempt(evidence, body_node.id)
+
+
+def test_unknown_source_record_references_are_not_silently_orphaned(tmp_path: Path) -> None:
+    records = _history_records()
+    records.insert(
+        8, _record(12, "fixture.unknown_event", {"sourceRecord": records[1]["id"], "opaque": True})
+    )
+    evidence = _evidence(tmp_path, records)
+    user = next(node for node in evidence.context.nodes if node.kind == "user.message")
+
+    with pytest.raises(ValueError, match="protected or frozen"):
+        _attempt(evidence, user.id)
+
+
+def test_materialization_repr_hides_native_session_and_captured_system_content(
+    tmp_path: Path,
+) -> None:
+    records = _history_records()
+    records.insert(
+        8, _record(12, "system.message", {"role": "system", "content": "Private system guidance."})
+    )
+    result = materialize_copilot_attempt(_attempt(_evidence(tmp_path, records)))
 
     rendered = repr(result)
     assert "Private historical prompt" not in rendered
     assert "Private tool result" not in rendered
-    assert "Private direct trigger" not in rendered
+    assert "Private system guidance" not in rendered

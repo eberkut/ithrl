@@ -488,16 +488,27 @@ def test_calibration_ambiguous_provider_acceptance_does_not_double_count_known_s
     assert summary.provider_calls_may_have_started == 1
 
 
-def test_calibration_accepted_call_keeps_possible_continuation_in_upper_bound() -> None:
+@pytest.mark.parametrize(
+    ("outcome", "upper_bound"),
+    [(ObservationOutcome.MATCH, 1), (ObservationOutcome.RUNNER_ERROR, 2)],
+)
+def test_calibration_separates_completed_accounting_from_possible_error_continuations(
+    outcome: ObservationOutcome, upper_bound: int
+) -> None:
     completed = _calibration_observation(
         1,
-        ObservationOutcome.MATCH,
+        outcome,
         accounting=RunAccounting(provider_calls_started=1, provider_calls_completed=1),
         acceptance=ProviderAcceptanceState.ACCEPTED,
     )
 
     summary = calibration_summary_from_observations(
-        base=_calibration_base(),
+        base=_calibration_base(
+            outcome="measurable" if outcome is ObservationOutcome.MATCH else "incomplete",
+            stop_reason="valid-sample-limit"
+            if outcome is ObservationOutcome.MATCH
+            else "unsafe-retry",
+        ),
         observations=(completed,),
         expected_policy_digest=_sampled_plan().safety_policy.digest,
         max_provider_calls_per_attempt=2,
@@ -505,7 +516,7 @@ def test_calibration_accepted_call_keeps_possible_continuation_in_upper_bound() 
 
     assert summary.provider_calls_started == 1
     assert summary.provider_calls_possible == 0
-    assert summary.provider_calls_may_have_started == 2
+    assert summary.provider_calls_may_have_started == upper_bound
 
 
 def test_calibration_snapshot_rejects_nonrefused_provider_bound_over_plan(tmp_path: Path) -> None:

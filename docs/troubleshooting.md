@@ -45,6 +45,19 @@ For custom Codex CA trust, configure `SSL_CERT_FILE` with a certificate bundle. 
 it into private disposable state and preserves certificate verification. A custom `SSL_CERT_DIR`
 under a path hidden by isolation is unavailable inside the runner.
 
+Copilot token environment variables take precedence over its saved credentials, in the order
+`COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`. To use saved credentials, prefix each detection,
+execution or resume command with
+`env -u COPILOT_GITHUB_TOKEN -u GH_TOKEN -u GITHUB_TOKEN`. This changes only that command's
+environment. Authenticate through Copilot itself; a token from another CLI may lack Copilot access.
+
+Copilot preserves supported proxy settings. Configured `SSL_CERT_FILE` and `NODE_EXTRA_CA_CERTS`
+bundles are bounded, copied into private disposable state and referenced there. If certificate
+setup is refused, check the configured files and permissions; keep certificate verification enabled.
+Recognized startup warnings before the selected turn are accepted as metadata. Warnings do not
+establish successful authentication or provider acceptance; inspect the resulting refusal and
+private diagnostic if execution fails.
+
 ## Sampling and budget refusals
 
 | Error code | Next action |
@@ -52,7 +65,7 @@ under a path hidden by isolation is unavailable inside the runner.
 | `calibration-settings-required` / `sampling-options-required` | Supply all three calibration settings: `--required-valid`, `--minimum-matches` and `--max-attempts`. |
 | `sampled-reduction-plan-required` | Supply a complete private experiment TOML with search and fresh-confirmation samples. |
 | `sampling-budget-required` / `sampling-budget-too-small` | Inspect the minimum call/time requirements. Budget calibration, a complete comparison, protected fresh confirmation and local overhead together. |
-| `unsupported-provider-call-limit` | Use the per-attempt bound reported by detection for the selected harness and target. |
+| `unsupported-provider-call-limit` | Copilot requires a per-attempt provider-call cap of 1. Use that cap when creating the plan. |
 | `profile-provider-call-limit-mismatch` | Use the cap frozen in the saved profile. A different cap requires a new profile and run. |
 | `sampling-freshness-too-small` | Choose deadlines and a declared freshness window that admit a complete comparison, including cancellation time. |
 | `confirmation-unattainable` | Reconsider sample counts, confidence and the scientifically meaningful margin together. Even all matching observations cannot establish preservation under this plan. |
@@ -69,7 +82,7 @@ harness.
 | --- | --- |
 | `fuzz-configuration-required` | Supply the private TOML with `--config`; see the walkthrough for a complete example. |
 | `detection-required` | Create a private structural profile with `--detect` and the original workspace, then review it with `--profile ... --dry-run`. Detection uses bounded local harness probes without provider requests. |
-| `unsupported-context-operation` | The detected runner does not support the requested mutation. Codex supports append-text for eligible prior user input; Copilot does not. |
+| `unsupported-context-operation` | The detected runner does not implement the requested mutation. Check the [supported inputs](https://github.com/eberkut/ithrl/blob/main/README.md#supported-inputs) before choosing a profile; structural detection alone does not qualify a mutation workflow. |
 | `profile-input-mismatch` | Use the case, configuration and original workspace bound to the saved profile. Changed inputs require a new profile. |
 | `model-execution-not-acknowledged` | Inspect the complete plan and set an explicit provider-call budget before authorizing model requests with `--acknowledge-model-execution`. Acknowledgement cannot enable an unsupported operation. |
 | `resume-input-conflict` | Use `ithrl fuzz RUN_OR_RESULT --resume` without overriding configuration, profile, workspace or observation store. Resume preserves the original limits. |
@@ -81,19 +94,34 @@ recovery.
 ## Provider errors and interruption
 
 `runner_error_category = "provider-call-limit"` means the local per-attempt cap stopped another
-request. The failed attempt retains its usage and conservative charge and remains outside
-behavioral match rates. Inspect the saved evidence before starting a new run with a different
-cap. Codex can make several successful Responses requests within one turn despite disabled
-retries. See [plan limits](native-runs.md#3-inspect-the-complete-plan-and-budget) for configuration.
-
-Sampled reduction and fuzz reports include `runner_error_category` and
-`runner_error_reason_code` when available. These contain machine codes; native error messages and
-response bodies stay in private evidence. Structural fuzz detection refusals also report the probe
-stage, exit code and private diagnostic path when available.
+request. It is a budget stop, not provider throttling, transport failure or a behavioral nonmatch.
+No retry or continuation command is offered. Inspect the retained usage and private evidence before
+starting a new run with a different cap. Codex can make several successful Responses requests
+within one turn despite disabled retries; a lower cap does not guarantee completion. See
+[plan limits](native-runs.md#3-inspect-the-complete-plan-and-budget) for configuration.
 
 For authentication or quota failures, inspect the selected harness's account status privately.
 Provider-call limits do not predict subscription allowance. Repeated full-run attempts can spend
 calls without completing confirmation; preserve every failed run and its charge.
+
+Sampled reduction and fuzz reports expose `runner_error_category` and
+`runner_error_reason_code` when a runner error is available. These fields describe the failure
+without copying native messages, response bodies or request identifiers into normal output.
+Structured Copilot provider failures have the following reason codes:
+
+| Reason code | Next action |
+| --- | --- |
+| `provider-quota-exceeded` | Check the account's remaining quota and reset date. Continue only after capacity is available and the saved run remains eligible for resume. |
+| `provider-authentication-required` | Authenticate through Copilot and check the credential selection described above. |
+| `provider-payment-required` | Check billing and plan entitlement before making another request. |
+| `provider-access-denied` | Check account, organization and model access through Copilot. |
+| `provider-rate-limited` | Wait for the provider's rate limit to clear; inspect the saved run before continuing. |
+| `provider-unavailable` | Check provider service status and retain the failed observation. |
+| `provider-failure` | Inspect the private native diagnostic for an unclassified failure; share only sanitized evidence. |
+
+These codes classify structured provider evidence. They do not retry an attempt, establish
+provider acceptance or change its charge. An account quota refusal is an execution prerequisite;
+it does not by itself establish a harness compatibility failure.
 
 Errors remain outside behavioral denominators. `started-unknown` accounting means execution
 started but the available evidence cannot establish the complete provider-call count. Inspect

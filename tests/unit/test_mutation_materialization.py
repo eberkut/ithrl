@@ -22,6 +22,7 @@ from ithrl.mutation import (
 from ithrl.runner import prepare_candidate
 from ithrl.synthetic import extract_inference
 from ithrl.workflow import prepare_experiment
+from native_support.copilot import _source_records
 
 
 def _evidence(tmp_path: Path) -> CaseEvidence:
@@ -161,6 +162,60 @@ def test_unadvertised_operation_and_foreign_plan_fail_before_materialization(
     other = prepared.execution_plan.model_copy(update={"case_digest": "f" * 64})
     with pytest.raises(ValueError, match="does not belong"):
         prepare_candidate(evidence, other, mutation=_mutation(evidence))
+
+
+@pytest.mark.parametrize(
+    ("content", "transformed", "expected"),
+    [
+        ("Raw historical text.", None, ["Raw historical text."]),
+        ("Raw historical text.", "Effective historical text.", ["Effective historical text."]),
+        ("Raw historical text.", {"unsupported": True}, []),
+        ([{"type": "text", "text": "Unsupported block."}], None, []),
+    ],
+)
+def test_copilot_discovery_is_pure_and_matches_effective_prior_user_text(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    content: object,
+    transformed: object,
+    expected: list[str],
+) -> None:
+    records = _source_records("final-response", context_sensitive=True)
+    records[1]["data"]["content"] = content
+    if transformed is not None:
+        records[1]["data"]["transformedContent"] = transformed
+    # Keep a single prior-user site so the immediate trigger cannot be confused
+    # with the last discovered editable field.
+    del records[2]
+    session = parse_session_bytes("\n".join(json.dumps(record) for record in records).encode())
+    decision = enumerate_decisions(session)[0]
+    evidence = extract_decision(
+        session,
+        decision_id=decision.decision_id,
+        target_id=decision.targets[0].target_id,
+        case_path=tmp_path / "case",
+    ).load()
+    before = evidence.digest, tuple(artifact.content for artifact in evidence.source_artifacts)
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("Copilot text discovery must not invoke runner reconstruction")
+
+    monkeypatch.setattr("ithrl.runner.copilot.materialize.materialize_copilot_attempt", forbidden)
+    sites = evidence.editable_text()
+    assert [site.original_text for site in sites] == expected
+    assert all(site.content_index == 0 for site in sites)
+    assert all(site.context_id != evidence.context.nodes[-1].id for site in sites)
+    assert (evidence.digest, tuple(a.content for a in evidence.source_artifacts)) == before
+    changed = CaseEvidence(
+        manifest=evidence.manifest,
+        request=None,
+        context=ContextGraph(nodes=evidence.context.nodes[:-1]),
+        default_experiment=evidence.default_experiment,
+        source_artifacts=evidence.source_artifacts,
+        decision=evidence.decision,
+    )
+    with pytest.raises(CaseFormatError, match="does not match preserved source"):
+        changed.editable_text()
 
 
 def test_append_supports_only_input_text_and_preserves_other_blocks() -> None:

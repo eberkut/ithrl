@@ -155,13 +155,21 @@ def test_interrupted_block_reopens_extends_and_publishes_without_reexecution(
     reopened = SampledRunStateFile.open(file.path.parent)
     with reopened.acquire_lock(store):
         before_reconciliation = reopened.usage(store, now=now + timedelta(seconds=5))
-        assert before_reconciliation.charged_provider_calls == 2
+        assert before_reconciliation.actual_provider_calls == int(published_before_failure)
+        assert before_reconciliation.possible_provider_calls == 0
+        assert before_reconciliation.pending_provider_calls == (
+            0 if published_before_failure else 2
+        )
+        assert before_reconciliation.charged_provider_calls == (
+            1 if published_before_failure else 2
+        )
         recovered = reopened.reconcile(store)
         assert recovered.pending is None
         assert len(recovered.blocks[0].observations) == 1
         usage = reopened.usage(store, now=now + timedelta(seconds=5))
         assert usage.actual_provider_calls == 1
-        assert usage.charged_provider_calls == 2
+        assert usage.possible_provider_calls == 0
+        assert usage.charged_provider_calls == 1
         assert usage.known_tokens == 12
         with pytest.raises(RunStateError, match="persisted dispatch reservation"):
             reopened.append_observation(store, first_observation)
@@ -195,8 +203,9 @@ def test_interrupted_block_reopens_extends_and_publishes_without_reexecution(
         state = reopened.archive_block(store)
         usage = reopened.usage(store, now=now + timedelta(seconds=6))
         assert usage.actual_provider_calls == 2
+        assert usage.possible_provider_calls == 0
         assert usage.pending_provider_calls == 0
-        assert usage.possible_provider_calls == 2
+        assert usage.charged_provider_calls == 2
         assert usage.runner_milliseconds == 50
         assert usage.known_tokens == 24
         destination = case / "results" / "sampling-progress"

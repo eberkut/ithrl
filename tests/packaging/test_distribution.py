@@ -120,6 +120,7 @@ RUNTIME_MODULES = frozenset(
         PurePosixPath("ithrl/runner/copilot/protocol/parser.py"),
         PurePosixPath("ithrl/runner/copilot/protocol/state.py"),
         PurePosixPath("ithrl/runner/copilot/runner.py"),
+        PurePosixPath("ithrl/runner/copilot/sdk_runtime.py"),
         PurePosixPath("ithrl/runner/copilot/worker.py"),
         PurePosixPath("ithrl/runner/evidence.py"),
         PurePosixPath("ithrl/runner/fake.py"),

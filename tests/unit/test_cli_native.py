@@ -552,46 +552,26 @@ def test_cli_per_attempt_limit_bounds_refuse_before_detection(
     mocked_runtime[0].assert_not_called()
 
 
-@pytest.mark.parametrize("limit", [1, 2])
-def test_detected_copilot_per_attempt_limit_is_preserved(
-    native_case: tuple[CaseWorkspace, CaseEvidence, Path],
-    profile: CapabilityProfile,
-    monkeypatch: pytest.MonkeyPatch,
-    limit: int,
+def test_copilot_explicit_limit_above_one_refuses_before_detection(
+    native_case: tuple[CaseWorkspace, CaseEvidence, Path], mocked_runtime: tuple[Mock, Mock]
 ) -> None:
     workspace, evidence, original = native_case
-    copilot_evidence = Mock(
-        manifest=SimpleNamespace(harness="copilot"),
-        source_artifacts=evidence.source_artifacts,
-        default_experiment=evidence.default_experiment,
-    )
-    detected = profile.model_copy(
-        update={"runner_type": "copilot", "harness": "copilot", "provider_calls_per_attempt": limit}
-    )
-    monkeypatch.setattr(
-        native, "_copilot_runner", Mock(return_value=SimpleNamespace(capability_profile=detected))
-    )
-    experiment = SampledExperimentDefinition(
+    persisted = ExperimentDefinition.from_toml(evidence.default_experiment)
+    copilot = SampledExperimentDefinition(
         schema_version=1,
-        target=ExperimentDefinition.from_toml(evidence.default_experiment).target,
-        oracle=ExperimentDefinition.from_toml(evidence.default_experiment).oracle,
-        runner=NativeRunnerConfig(type="copilot", required_capability_digest=detected.digest),
+        target=persisted.target,
+        oracle=persisted.oracle,
+        runner=NativeRunnerConfig(type="copilot", required_capability_digest="0" * 64),
         calibration=PHASE,
     )
-    selection = native.native_selection(
-        workspace,
-        copilot_evidence,
-        experiment=experiment,
-        original_workspace=original,
-        max_provider_calls_per_attempt=limit,
-    )
-    assert selection.resource_limits.max_provider_calls == limit
     with pytest.raises(native.NativeSelectionError) as refused:
         native.native_selection(
             workspace,
-            copilot_evidence,
-            experiment=experiment,
+            evidence,
+            experiment=copilot,
             original_workspace=original,
-            max_provider_calls_per_attempt=3 - limit,
+            calibration=PHASE,
+            max_provider_calls_per_attempt=2,
         )
     assert refused.value.code == "unsupported-provider-call-limit"
+    mocked_runtime[0].assert_not_called()
