@@ -647,3 +647,34 @@ def test_fake_runner_rejects_invalid_direct_configuration(
 ) -> None:
     with pytest.raises(ValueError, match=r"must not be empty|exactly one behavior family"):
         FakeRunner(**arguments)  # type: ignore[arg-type]
+
+
+def test_runner_error_reason_code_round_trips_without_absent_null_field(tmp_path: Path) -> None:
+    _, attempt = _attempt(_synthetic_evidence(tmp_path))
+    evidence = AttemptEvidence.from_error(
+        attempt,
+        RunnerError(RunnerErrorCode.PROTOCOL, "safe summary", reason_code="worker.protocol.v2"),
+    )
+
+    assert evidence.reason_code == "worker.protocol.v2"
+    assert AttemptEvidence.model_validate_json(evidence.model_dump_json()) == evidence
+    assert "reason_code" not in AttemptEvidence.from_error(
+        attempt, RunnerError(RunnerErrorCode.PROTOCOL, "safe summary")
+    ).model_dump(mode="json")
+
+
+@pytest.mark.parametrize("reason_code", ["secret-value\nother", "credential=secret-token-value"])
+def test_runner_error_rejects_unsafe_reason_code(tmp_path: Path, reason_code: str) -> None:
+    with pytest.raises(ValueError, match="bounded machine code"):
+        RunnerError(RunnerErrorCode.PROTOCOL, "safe summary", reason_code=reason_code)
+
+    _, attempt = _attempt(_synthetic_evidence(tmp_path))
+    with pytest.raises(ValueError, match="bounded machine code"):
+        AttemptEvidence(
+            attempt_id=attempt.attempt_id,
+            attempt_digest=attempt.digest,
+            termination_reason="failed",
+            provider_acceptance_state=ProviderAcceptanceState.UNKNOWN,
+            provider_calls_possible=1,
+            reason_code=reason_code,
+        )

@@ -94,6 +94,7 @@ class SampledReductionOutput(BaseModel):
     )
     max_attempts: int = Field(ge=0)
     max_provider_calls: int = Field(ge=0)
+    max_provider_calls_per_attempt: int = Field(default=1, ge=0, le=16)
     max_runner_seconds: float = Field(ge=0, allow_inf_nan=False)
     max_wall_time_seconds: float = Field(ge=0, allow_inf_nan=False)
     inter_attempt_delay_seconds: int = Field(default=0, ge=0, le=86_400)
@@ -160,6 +161,12 @@ class SampledReductionOutput(BaseModel):
     no_matches: int = Field(default=0, ge=0)
     invalid_observations: int = Field(default=0, ge=0)
     runner_errors: int = Field(default=0, ge=0)
+    runner_error_category: str | None = Field(
+        default=None, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$"
+    )
+    runner_error_reason_code: str | None = Field(
+        default=None, max_length=80, pattern=r"^[A-Za-z0-9._-]{1,80}$"
+    )
     actions_executed: Literal[0] = 0
     stop_reason: Annotated[str | None, Field(max_length=80, pattern=r"^[a-z][a-z0-9-]*$")] = None
     result_path: str | None = Field(default=None, max_length=240)
@@ -239,6 +246,8 @@ class SampledReductionOutput(BaseModel):
 
 def sampled_reduction_exit_code(report: SampledReductionOutput) -> ExitCode:
     """Map operational and statistical outcomes without treating errors as losses."""
+    if report.runner_error_category == "provider-call-limit":
+        return ExitCode.BUDGET
     if report.status in {"ready", "confirmed"}:
         return ExitCode.SUCCESS
     if report.status == "interrupted":
@@ -267,6 +276,7 @@ def render_sampled_reduction(
         return
     print_plain(console, f"Sampled shrink: {report.status}")
     calls = report.provider_calls if report.provider_calls is not None else "unknown"
+    print_plain(console, f"  provider calls per attempt: {report.max_provider_calls_per_attempt}")
     core: tuple[tuple[str, object], ...] = (
         ("phase", report.phase),
         ("calibration", report.calibration_result),
@@ -342,6 +352,13 @@ def render_sampled_reduction(
         print_plain(
             console, f"  {label}: {value if value is not None else 'unknown'}", soft_wrap=True
         )
+    if report.runner_error_category is not None or report.runner_error_reason_code is not None:
+        diagnostic = ": ".join(
+            value
+            for value in (report.runner_error_category, report.runner_error_reason_code)
+            if value is not None
+        )
+        print_plain(console, f"  last runner error: {diagnostic}")
     for label, counts in (
         ("fresh confirmation original", report.confirmation_original),
         ("fresh confirmation candidate", report.confirmation_candidate),
@@ -405,6 +422,7 @@ def render_sampled_reduction(
             ("comparison limit", report.max_candidate_comparisons),
             ("attempt limit", report.max_attempts),
             ("maximum provider calls", report.max_provider_calls),
+            ("provider calls per attempt", report.max_provider_calls_per_attempt),
             ("maximum runner seconds", report.max_runner_seconds),
             ("maximum wall seconds", report.max_wall_time_seconds),
             ("inter-attempt delay seconds", report.inter_attempt_delay_seconds),

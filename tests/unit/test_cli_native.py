@@ -95,7 +95,11 @@ def mocked_runtime(
 
     monkeypatch.setattr(native, "_executable", executable)
     monkeypatch.setattr(native, "CodexRuntime", Mock(return_value=SimpleNamespace()))
-    monkeypatch.setattr(native, "resolve_codex_configuration", Mock(return_value=SimpleNamespace()))
+    monkeypatch.setattr(
+        native,
+        "resolve_codex_configuration",
+        Mock(return_value=SimpleNamespace(authentication="openai-chatgpt-file")),
+    )
     detector = Mock(return_value=profile)
     constructor = Mock(
         return_value=SimpleNamespace(capability_profile=profile, fingerprint="fixture-native-v1")
@@ -396,6 +400,7 @@ def test_native_dry_run_resolves_bounds_without_dispatch_or_case_results(
     assert report["kind"] == "sampled"
     assert report["status"] == "ready"
     assert report["max_provider_calls"] == 6
+    assert report["max_provider_calls_per_attempt"] == 2
     assert report["max_runner_seconds"] == 45
     assert report["provider_calls"] == report["attempts_used"] == report["actions_executed"] == 0
     assert report["provider_call_accounting"] == "not-started"
@@ -460,7 +465,9 @@ def test_copilot_selector_passes_exact_target_and_detected_profile(
     monkeypatch.setattr(native, "_executable", executable)
     monkeypatch.setattr(native, "CopilotRuntime", Mock(return_value=SimpleNamespace()))
     monkeypatch.setattr(
-        native, "resolve_copilot_configuration", Mock(return_value=SimpleNamespace())
+        native,
+        "resolve_copilot_configuration",
+        Mock(return_value=SimpleNamespace(authentication="managed-config")),
     )
     monkeypatch.setattr(native, "detect_copilot_capability", detector)
     monkeypatch.setattr(native, "CopilotRunner", constructor)

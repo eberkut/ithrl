@@ -166,6 +166,7 @@ def validate_calibration_summary(summary: CalibrationSummary) -> None:
         "attempt-limit",
         "unsafe-retry",
         "user-interrupt",
+        "wall-time-budget",
     }:
         raise ValueError("incomplete calibration requires an incomplete stop reason")
     original = summary.original_context_ids
@@ -335,16 +336,8 @@ def calibration_summary_from_observations(
     known = tuple(value for value in accounting if value is not None)
     started_known = sum(value.provider_calls_started for value in known)
     possible = sum(item.attempt_evidence.provider_calls_possible for item in observations)
-    # Possible calls include known starts; accepted calls may also have an unseen
-    # continuation up to the runner profile's per-attempt maximum.
     may_have_started = sum(
-        max(
-            item.attempt_evidence.accounting.provider_calls_started
-            if item.attempt_evidence.accounting is not None
-            else 0,
-            item.attempt_evidence.provider_calls_possible,
-            max_provider_calls_per_attempt if item.attempt_evidence.provider_call_started else 0,
-        )
+        item.attempt_evidence.provider_call_charge(max_provider_calls_per_attempt)
         for item in observations
     )
     usage = _aggregate_usage(observations)

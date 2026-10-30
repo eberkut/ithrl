@@ -135,6 +135,11 @@ qualification. A version string, fixture or working parser alone does not establ
 Reconstruction deviations remain visible in the plan, and calibration measures the controlled
 surface rather than proving historical equivalence.
 
+Runners may expose a pure candidate-admission check. Preflight applies it to the unchanged original
+before sampling resources are committed. An original reconstruction refusal is terminal; a
+candidate-local refusal during search consumes no provider calls. Admission starts no process or
+provider request; execution still validates the reconstructed candidate.
+
 The shared runtime in `runner/runtime/` owns fresh private state, bounded output, process-group
 termination, cancellation and cleanup. It is not a filesystem or network sandbox. Concrete
 runners supply preventive isolation and effective action denial; source/workspace snapshots

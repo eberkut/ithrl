@@ -10,8 +10,9 @@ import shlex
 import stat
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta, tzinfo
+from datetime import UTC, datetime, timedelta, tzinfo
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Self, override
 
 import pytest
@@ -19,6 +20,7 @@ from typer.testing import CliRunner, Result
 
 import ithrl.calibration as calibration
 import ithrl.cli as cli
+import ithrl.cli.sampled as sampled
 import ithrl.cli.sampled_reduction as sampled_reduction
 import ithrl.cli.sampled_session as sampled_session
 import ithrl.observations as observations
@@ -282,12 +284,16 @@ def _assert_no_dispatch(case: OperatorCase) -> None:
 def _install_wall_clock(monkeypatch: pytest.MonkeyPatch) -> Callable[[int], None]:
     """Advance command time and recorded observations together without sleeping."""
     offset = timedelta()
+    origin = datetime.now(UTC).timestamp()
+    ticks = 0
 
     class AdvancedDateTime(datetime):
         @classmethod
         @override
         def now(cls, tz: tzinfo | None = None) -> Self:
-            return cls.fromtimestamp(datetime.now(tz).timestamp() + offset.total_seconds(), tz)
+            nonlocal ticks
+            ticks += 1
+            return cls.fromtimestamp(origin + offset.total_seconds() + ticks / 1_000_000, tz)
 
     def advance(seconds: int) -> None:
         nonlocal offset
@@ -515,6 +521,113 @@ def test_interrupted_calibration_pause_has_no_inflight_reservation(
     operator_case.assert_sources_unchanged()
 
 
+def _standalone_calibration_command(case: OperatorCase) -> list[str]:
+    _write_operator_experiment(
+        case,
+        case.selection.experiment.model_copy(
+            update={
+                "reduction": None,
+                "calibration": SampledCalibrationPhase(
+                    required_valid=3, minimum_matches=3, max_attempts=3
+                ),
+            }
+        ),
+    )
+    command = case.command("--inter-attempt-delay", "2")
+    candidates = command.index("--max-candidates")
+    del command[candidates : candidates + 2]
+    return command
+
+
+def test_standalone_calibration_keeps_pacing_across_compatible_continuation(
+    operator_case: OperatorCase, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    command = _standalone_calibration_command(operator_case)
+    advance = _install_wall_clock(monkeypatch)
+    monkeypatch.setattr(sampled, "datetime", observations.datetime)
+    elapsed = 0.0
+    waits: list[float] = []
+
+    def wait(seconds: float) -> None:
+        nonlocal elapsed
+        assert not calibration._inflight_path(ObservationStore(operator_case.store_path)).exists()
+        waits.append(seconds)
+        if len(waits) == 1:
+            raise KeyboardInterrupt
+        elapsed += math.ceil(seconds)
+        advance(math.ceil(seconds))
+
+    monkeypatch.setattr(sampled, "time", SimpleNamespace(monotonic=lambda: elapsed, sleep=wait))
+    dry_run = _invoke([*command, "--dry-run"])
+    preflight = _json(dry_run)
+    assert dry_run.exit_code == ExitCode.SUCCESS, dry_run.output
+    assert preflight["max_wall_time_seconds"] == 200
+    assert preflight["inter_attempt_delay_seconds"] == 2
+    _assert_no_dispatch(operator_case)
+    interrupted = _invoke([*command, "--calibrate-only"])
+    partial = _json(interrupted)
+    assert interrupted.exit_code == ExitCode.CANCELLED, interrupted.output
+    assert partial["stop_reason"] == "user-interrupt"
+    assert partial["attempts_used"] == partial["matches"] == partial["provider_calls"] == 1
+    assert partial["runner_errors"] == 0
+    continuation = shlex.split(partial["next_command"])
+    assert continuation[continuation.index("--experiment") + 1] == str(
+        operator_case.experiment_path
+    )
+    assert continuation[continuation.index("--max-wall-time") + 1] == "200"
+    assert continuation[continuation.index("--inter-attempt-delay") + 1] == "2"
+    assert "--resume" not in continuation
+    ids = [call.attempt_id for call in operator_case.runner.calls]
+    elapsed += 1
+    advance(1)
+    completed = _invoke([*command, "--calibrate-only"])
+    report = _json(completed)
+    assert completed.exit_code == ExitCode.SUCCESS, completed.output
+    assert report["status"] == "measurable"
+    assert report["attempts_used"] == report["matches"] == report["provider_calls"] == 3
+    assert report["provider_call_accounting"] == "accounted"
+    assert 0 < waits[1] <= 1
+    assert 0 < waits[2] <= 2
+    assert len(operator_case.runner.calls) == 3
+    assert [call.attempt_id for call in operator_case.runner.calls[:1]] == ids
+    operator_case.assert_sources_unchanged()
+
+
+@pytest.mark.parametrize("stop_after_wait", [False, True])
+def test_standalone_calibration_admits_future_pauses_and_rechecks_wall_budget_after_wait(
+    operator_case: OperatorCase, monkeypatch: pytest.MonkeyPatch, stop_after_wait: bool
+) -> None:
+    command = _standalone_calibration_command(operator_case)
+    cost = 1 + operator_case.runner.capability_profile.cancellation_grace_seconds
+    command[command.index("--max-wall-time") + 1] = str(200 if stop_after_wait else 3 * cost + 1)
+    advance = _install_wall_clock(monkeypatch)
+    monkeypatch.setattr(sampled, "datetime", observations.datetime)
+    elapsed = 0.0
+    waits: list[float] = []
+
+    def wait(seconds: float) -> None:
+        nonlocal elapsed
+        assert not calibration._inflight_path(ObservationStore(operator_case.store_path)).exists()
+        waits.append(seconds)
+        elapsed += 200
+        advance(200)
+
+    monkeypatch.setattr(sampled, "time", SimpleNamespace(monotonic=lambda: elapsed, sleep=wait))
+    result = _invoke([*command, "--calibrate-only"])
+    report = _json(result)
+    attempts = int(stop_after_wait)
+    assert result.exit_code == ExitCode.BUDGET, result.output
+    assert report["status"] == "incomplete"
+    assert report["stop_reason"] == "wall-time-budget"
+    assert report["provider_call_accounting"] == "accounted"
+    assert report["attempts_used"] == report["matches"] == report["provider_calls"] == attempts
+    assert report["no_matches"] == report["runner_errors"] == 0
+    assert len(operator_case.runner.calls) == len(waits) == attempts
+    assert report["wall_time_seconds"] == elapsed
+    assert not calibration._inflight_path(ObservationStore(operator_case.store_path)).exists()
+    operator_case.assert_sources_unchanged()
+
+
 def test_operator_dry_run_exposes_complete_plan_without_creating_run(
     operator_case: OperatorCase,
 ) -> None:
@@ -579,6 +692,8 @@ def test_full_plan_calibration_only_preserves_existing_workflow(
     report = _json(result)
     assert report["status"] == "measurable"
     assert report["provider_calls"] == 1
+    assert "Calibration: original 0/1 valid (0 attempts)" in result.stderr
+    assert "Calibration: original 1/1 valid (1 attempts)" in result.stderr
     assert [a.phase for a in operator_case.runner.calls] == ["calibration"]
     assert not (operator_case.workspace.root / ".runs").exists()
     operator_case.assert_sources_unchanged()
@@ -678,6 +793,8 @@ def test_operator_search_confirmation_result_and_exact_resume(operator_case: Ope
     assert preflight["status"] == "ready"
     assert preflight["provider_calls"] == 0
     assert preflight["confirmation_capacity"] == "protected"
+    assert "Calibration: original 0/1 valid (0 attempts)" in result.stderr
+    assert "Calibration: original 1/1 valid (1 attempts)" in result.stderr
     assert report["status"] == "confirmed"
     assert report["calibration_result"] == "measurable"
     assert report["search_result"] == "search-reduced"
@@ -705,12 +822,20 @@ def test_operator_search_confirmation_result_and_exact_resume(operator_case: Ope
     calls_before = len(operator_case.runner.calls)
     for source in (Path(report["run_state_path"]), destination):
         resumed = _invoke(
-            ["shrink", str(source), "--resume", "--acknowledge-model-execution", "--format", "json"]
+            [
+                "shrink",
+                str(source),
+                "--resume",
+                "--acknowledge-model-execution",
+                "--format",
+                "json",
+            ]
         )
         assert resumed.exit_code == ExitCode.SUCCESS, resumed.output
         resumed_report = _json(resumed)
         assert resumed_report["confirmation_result"] == "confirmed-preserving"
         assert resumed_report["max_provider_calls"] == 100
+        assert resumed_report["max_provider_calls_per_attempt"] == 1
         assert resumed_report["max_wall_time_seconds"] == 200
         assert resumed_report["max_candidate_comparisons"] == 20
         assert len(operator_case.runner.calls) == calls_before
@@ -1240,3 +1365,34 @@ def test_resume_mismatch_refuses_without_dispatch(
     assert _json(resumed)["provider_calls"] == 0
     assert len(operator_case.runner.calls) == calls
     operator_case.assert_sources_unchanged()
+
+
+def test_per_attempt_provider_call_limit_is_terminal_budget_exhaustion(
+    operator_case: OperatorCase, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def exhausted(attempt: PreparedAttempt) -> RunResult:
+        operator_case.runner.calls.append(attempt)
+        raise RunnerError(RunnerErrorCode.PROVIDER_CALL_LIMIT, "provider-call-limit")
+
+    monkeypatch.setattr(operator_case.runner, "run", exhausted)
+    result = _invoke(operator_case.command())
+    assert result.exit_code == ExitCode.BUDGET, result.output
+    report = _json(result)
+    assert report["runner_error_category"] == "provider-call-limit"
+    assert report["runner_errors"] == 1
+    assert report["no_matches"] == 0
+    assert report["next_command"] is None
+    assert "different limit requires a new run" in report["next_action"]
+    assert len(operator_case.runner.calls) == 1
+    resumed = _invoke(
+        [
+            "shrink",
+            report["run_state_path"],
+            "--resume",
+            "--acknowledge-model-execution",
+            "--format",
+            "json",
+        ]
+    )
+    assert resumed.exit_code == ExitCode.BUDGET, resumed.output
+    assert len(operator_case.runner.calls) == 1

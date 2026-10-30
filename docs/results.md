@@ -107,6 +107,11 @@ Actual, possible, pending and charged provider calls are separate counts. Copilo
 unavailable, and denied shell actions can leave possible continuation calls; unknown usage stays
 explicit.
 
+Actual calls record known starts; additional possible calls retain usage that the runner cannot
+exclude. Charged calls also include pending dispatch reservations. Reopening a run reconciles saved
+observations before deciding whether another complete sampling block fits; it never repeats an
+unresolved dispatch.
+
 When a search stops at a budget, follow its printed continuation command. Deterministic searches
 can resume from a saved result or active run. Sampled resume preserves the experiment and completed
 work. For sampled `shrink`, supported administrative limits may increase; fuzz resume keeps its

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from typing import Literal
 
 from ithrl.case import CaseEvidence
@@ -336,6 +337,7 @@ async def run_fuzz_campaign(
     store: ObservationStore,
     clock: Callable[[], datetime] = _now,
     verify_independence: Callable[[Observation], str | None] | None = None,
+    on_progress: Callable[[int, SamplingBlockEvidence], None] | None = None,
 ) -> FuzzCampaignResult:
     """Finish or recover the same campaign; complete terminal evidence is never redrawn."""
 
@@ -347,6 +349,7 @@ async def run_fuzz_campaign(
             store=store,
             clock=clock,
             verify_independence=verify_independence,
+            on_progress=on_progress,
         )
 
 
@@ -358,6 +361,7 @@ async def _run_fuzz_campaign_owned(
     store: ObservationStore,
     clock: Callable[[], datetime] = _now,
     verify_independence: Callable[[Observation], str | None] | None = None,
+    on_progress: Callable[[int, SamplingBlockEvidence], None] | None = None,
 ) -> FuzzCampaignResult:
     """Caller owns the shared run/store locks throughout composition."""
 
@@ -455,6 +459,7 @@ async def _run_fuzz_campaign_owned(
             clock=clock,
             verify_independence=verify_independence,
             mutation=mutation,
+            on_progress=partial(on_progress, len(progress.trials)) if on_progress else None,
         )
         if collected.stop_reason == "unresolved-dispatch":
             return _result(state_file, store, clock(), "unresolved-dispatch")

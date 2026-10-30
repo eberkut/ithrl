@@ -20,6 +20,22 @@ from typer._click.core import Exit
 from typer.core import TyperGroup
 
 from ithrl.experiment import SamplingEligibilityPolicy
+from ithrl.observations import Observation, ObservationOutcome
+
+
+def last_runner_error(
+    observations: Sequence[Observation],
+) -> tuple[str | None, str | None]:
+    """Return only fixed diagnostics from the latest runner-error observation."""
+    errors = (
+        item
+        for item in observations
+        if getattr(item, "outcome", None) is ObservationOutcome.RUNNER_ERROR
+    )
+    latest = max(errors, key=lambda item: item.recorded_at, default=None)
+    if latest is None:
+        return None, None
+    return latest.error_category, latest.attempt_evidence.reason_code
 
 
 class ExitCode(IntEnum):
@@ -172,7 +188,10 @@ class SampledOutput(_OutputEnvelope):
     required_valid: int | None = Field(default=None, ge=1)
     minimum_matches: int | None = Field(default=None, ge=1)
     max_provider_calls: int = Field(ge=0)
+    max_provider_calls_per_attempt: int = Field(default=1, ge=0, le=16)
     max_runner_seconds: float = Field(ge=0)
+    max_wall_time_seconds: int | None = Field(default=None, ge=1)
+    inter_attempt_delay_seconds: int = Field(default=0, ge=0, le=86_400)
     max_tokens: int | None = Field(default=None, ge=0)
     attempt_timeout_seconds: int | None = Field(default=None, ge=1)
     max_native_output_bytes: int | None = Field(default=None, ge=1)
@@ -182,6 +201,7 @@ class SampledOutput(_OutputEnvelope):
     provider_calls: int | None = Field(default=None, ge=0)
     attempts_used: int | None = Field(default=None, ge=0)
     runner_seconds: float | None = Field(default=None, ge=0)
+    wall_time_seconds: float | None = Field(default=None, ge=0)
     stop_reason: (
         Literal[
             "valid-sample-limit",
@@ -189,6 +209,7 @@ class SampledOutput(_OutputEnvelope):
             "unsafe-retry",
             "safety-refusal",
             "user-interrupt",
+            "wall-time-budget",
         ]
         | None
     ) = None
@@ -196,6 +217,12 @@ class SampledOutput(_OutputEnvelope):
     no_matches: int | None = Field(default=None, ge=0)
     invalid_observations: int | None = Field(default=None, ge=0)
     runner_errors: int | None = Field(default=None, ge=0)
+    runner_error_category: str | None = Field(
+        default=None, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$"
+    )
+    runner_error_reason_code: str | None = Field(
+        default=None, max_length=80, pattern=r"^[A-Za-z0-9._-]{1,80}$"
+    )
     actions_executed: int | None = Field(default=None, ge=0)
     result_path: str | None = Field(default=None, max_length=240)
     next_action: str | None = Field(default=None, max_length=240)
@@ -456,7 +483,11 @@ def render_sampled(report: SampledOutput, output_format: OutputFormat) -> None:
     if report.minimum_matches is not None:
         print_plain(console, f"  match threshold {report.minimum_matches}")
     print_plain(console, f"  call bound      {report.max_provider_calls}")
+    print_plain(console, f"  calls / attempt {report.max_provider_calls_per_attempt}")
     print_plain(console, f"  runner bound    {report.max_runner_seconds:g}s")
+    if report.max_wall_time_seconds is not None:
+        print_plain(console, f"  command limit   {report.max_wall_time_seconds}s")
+    print_plain(console, f"  attempt delay   {report.inter_attempt_delay_seconds}s")
     print_plain(
         console,
         f"  token bound     {report.max_tokens if report.max_tokens is not None else 'unknown'}",
@@ -480,12 +511,21 @@ def render_sampled(report: SampledOutput, output_format: OutputFormat) -> None:
         print_plain(console, f"  invalid samples {report.invalid_observations}")
     if report.runner_errors is not None:
         print_plain(console, f"  runner errors   {report.runner_errors}")
+    if report.runner_error_category is not None or report.runner_error_reason_code is not None:
+        diagnostic = ": ".join(
+            value
+            for value in (report.runner_error_category, report.runner_error_reason_code)
+            if value is not None
+        )
+        print_plain(console, f"  last runner error {diagnostic}")
     if report.actions_executed is not None:
         print_plain(console, f"  actions executed {report.actions_executed}")
     if report.attempts_used is not None:
         print_plain(console, f"  attempts used   {report.attempts_used}")
     if report.runner_seconds is not None:
         print_plain(console, f"  runner time     {report.runner_seconds:g}s")
+    if report.wall_time_seconds is not None:
+        print_plain(console, f"  command time    {report.wall_time_seconds:g}s")
     if report.provider_call_accounting == "not-started":
         print_plain(console, "  provider calls  0 (execution did not start)")
     elif report.provider_call_accounting == "accounted":

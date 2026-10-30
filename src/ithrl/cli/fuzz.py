@@ -391,6 +391,10 @@ def fuzz(
             status="refused",
             error_code=error.code,
             harness_started=error.harness_started,
+            probe_stage=error.probe_stage,
+            probe_exit_code=error.probe_exit_code,
+            probe_reason=error.probe_reason,
+            diagnostic_path=str(error.diagnostic_path) if error.diagnostic_path else None,
             next_action="Resolve the structural detection refusal before execution.",
         )
     except (KeyboardInterrupt, typer.Abort):

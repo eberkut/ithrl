@@ -107,16 +107,37 @@ async def run_isolated_process(
     require_safe_attempt_state_support()
     started = time.monotonic_ns()
     deadline = time.monotonic() + resource_limits.max_wall_time_seconds
-    source_snapshot = ProtectedPathSnapshot.capture(
-        source_paths,
-        max_entries=max_protected_entries,
-        max_bytes=max_protected_bytes,
-    )
-    workspace_snapshot = ProtectedPathSnapshot.capture(
-        workspace_paths,
-        max_entries=max_protected_entries,
-        max_bytes=max_protected_bytes,
-    )
+    try:
+        source_snapshot = ProtectedPathSnapshot.capture(
+            source_paths,
+            max_entries=max_protected_entries,
+            max_bytes=max_protected_bytes,
+        )
+        workspace_snapshot = ProtectedPathSnapshot.capture(
+            workspace_paths,
+            max_entries=max_protected_entries,
+            max_bytes=max_protected_bytes,
+        )
+    except ProtectedPathError as error:
+        raise ProcessRuntimeError(
+            RunnerErrorCode.PREPARATION,
+            f"cannot snapshot protected inputs before execution: {error}",
+            reason_code="protected-input-snapshot",
+            report=RuntimeReport(
+                elapsed_milliseconds=(time.monotonic_ns() - started) // 1_000_000,
+                native_output_bytes=0,
+                disposable_state_bytes=0,
+                residual_disposable_state_bytes=0,
+                disposable_state_entries=0,
+                residual_disposable_state_entries=0,
+                process_outcome="not-started",
+                forced_termination=False,
+                stdout_stop_matched=False,
+                cleanup_outcome="not-required",
+                source_store_effect="unchanged",
+                original_workspace_effect="unchanged",
+            ),
+        ) from error
     usage = _Usage()
     state, child = await _create_and_run(
         attempt_id=attempt_id,

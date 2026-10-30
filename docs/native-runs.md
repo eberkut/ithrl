@@ -152,6 +152,15 @@ This makes real model requests. Calibration, search and fresh confirmation run w
 limits. Keep the printed result directory and inspect `summary.json`; see [results and
 resume](results.md) for its interpretation and continuation rules.
 
+Progress shows valid samples and dispatched attempts for the original and candidate in each phase.
+Terminals use a live display; redirected stderr receives progress lines. With `--format json`,
+stdout remains one JSON report. Progress never prints captured responses or candidate text.
+
+For calibration without a reduction plan, `--max-wall-time` and `--inter-attempt-delay` also apply.
+Admission includes the remaining attempt deadlines and pauses. A `wall-time-budget` stop retains
+partial counts and does not create a failed observation. A printed continuation command preserves
+the experiment and pacing and reuses compatible saved calibration observations.
+
 ## Context fuzzing
 
 `ithrl fuzz` explores bounded text appends and confirms at most one decrease in the selected

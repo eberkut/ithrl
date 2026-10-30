@@ -50,6 +50,7 @@ from ithrl.runner import (
     built_in_runner_registry,
     prepare_candidate,
 )
+from ithrl.runner.contracts import CandidateAdmission
 
 if TYPE_CHECKING:
     from ithrl.results import SampledReductionEvidence
@@ -168,6 +169,34 @@ def prepare_experiment(
     )
     if not report.ready or report.plan is None:
         raise PreflightRefusedError(report)
+    if isinstance(runner, CandidateAdmission):
+        attempt = PreparedAttempt(
+            evidence=evidence,
+            candidate=prepare_candidate(evidence, report.plan),
+            target=experiment.target,
+            execution_plan=report.plan,
+            safety_policy=safety_policy,
+            resource_limits=resource_limits,
+            phase="calibration",
+            arm="baseline",
+        )
+        try:
+            runner.validate_candidate(attempt)
+        except Exception:
+            # Admission is pure and optional; original refusals remain terminal.
+            # Native reconstruction diagnostics may contain private evidence.
+            raise PreflightRefusedError(
+                PreflightReport(
+                    ready=False,
+                    plan=None,
+                    issues=(
+                        PreflightIssue(
+                            code="unsupported-materialization",
+                            message="the runner cannot reconstruct the unchanged original case",
+                        ),
+                    ),
+                )
+            ) from None
     identity = ObservationIdentity(
         case_digest=evidence.digest,
         experiment_digest=experiment.digest,
@@ -428,6 +457,7 @@ async def run_sampled_phases(
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     verify_independence: Callable[[Observation], str | None] | None = None,
     progress: Callable[[str], None] | None = None,
+    on_sampling_progress: Callable[[SamplingBlockEvidence], None] | None = None,
 ) -> SampledPhaseOutcome:
     """Search after successful stored calibration, then confirm one durably selected artifact.
 
@@ -445,6 +475,7 @@ async def run_sampled_phases(
         observation_store=store,
         clock=clock,
         verify_independence=verify_independence,
+        on_progress=on_sampling_progress,
     )
     with state_file.acquire_lock(store):
         state = state_file.load(store)
@@ -518,6 +549,7 @@ async def run_sampled_phases(
                 store=store,
                 clock=clock,
                 verify_independence=verify_independence,
+                on_progress=on_sampling_progress,
             )
             block, stop_reason = collection.evidence, collection.stop_reason
         result = _sampled_result(

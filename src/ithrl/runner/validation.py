@@ -363,6 +363,7 @@ def _copy_runner_error(
     return RunnerError(
         code,
         message,
+        reason_code=error.reason_code,
         provider_acceptance_state=error.provider_acceptance_state,
         model_requested=error.model_requested,
         model_returned=error.model_returned,

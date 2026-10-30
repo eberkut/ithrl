@@ -116,7 +116,12 @@ type CalibrationOutcome = Literal[
     "measurable", "not-measurable", "inconclusive", "incomplete", "refused"
 ]
 type CalibrationStopReason = Literal[
-    "valid-sample-limit", "attempt-limit", "unsafe-retry", "safety-refusal", "user-interrupt"
+    "valid-sample-limit",
+    "attempt-limit",
+    "unsafe-retry",
+    "safety-refusal",
+    "user-interrupt",
+    "wall-time-budget",
 ]
 type CalibrationProtectedEffect = Literal["unchanged", "may-change", "unknown"]
 

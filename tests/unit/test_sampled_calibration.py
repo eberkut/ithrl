@@ -15,6 +15,7 @@ import ithrl.calibration as calibration_module
 from ithrl.calibration import (
     CalibrationBusyError,
     CalibrationInFlightError,
+    CalibrationWallTimeBudgetError,
     SampledCalibrationResult,
     run_sampled_calibration,
     save_sampled_calibration_result,
@@ -218,6 +219,41 @@ def test_command_admission_refusal_preserves_exact_calibration_prefix(
     result = run_sampled_calibration(evidence=case, prepared=prepared, store=store)
     assert result.outcome == "measurable"
     assert result.observations[:allowed] == observations
+    assert runner.calls == 2
+
+
+@pytest.mark.parametrize("allowed", [0, 1])
+def test_wall_time_admission_stop_saves_partial_counts_and_allows_compatible_continuation(
+    tmp_path: Path, allowed: int
+) -> None:
+    case, prepared, runner = _prepared(
+        tmp_path, outcomes=(True, True), required_valid=2, minimum_matches=2, max_attempts=2
+    )
+    store = ObservationStore(tmp_path / "observations.sqlite")
+
+    def admit() -> None:
+        if runner.calls == allowed:
+            raise CalibrationWallTimeBudgetError()
+
+    result = run_sampled_calibration(
+        evidence=case, prepared=prepared, store=store, before_attempt=admit
+    )
+    snapshot = save_sampled_calibration_result(
+        workspace=CaseWorkspace(tmp_path / "case"),
+        evidence=case,
+        prepared=prepared,
+        store=store,
+        result=result,
+    )
+    assert result.outcome == snapshot.summary.outcome == "incomplete"
+    assert result.stop_reason == snapshot.summary.stop_reason == "wall-time-budget"
+    assert runner.calls == len(result.observations) == allowed
+    assert snapshot.summary.matches == allowed
+    assert snapshot.summary.no_matches == snapshot.summary.runner_errors == 0
+    assert not calibration_module._inflight_path(store).exists()
+    completed = run_sampled_calibration(evidence=case, prepared=prepared, store=store)
+    assert completed.outcome == "measurable"
+    assert completed.observations[:allowed] == result.observations
     assert runner.calls == 2
 
 

@@ -483,6 +483,7 @@ class SampledReducer:
         observation_store: ObservationStore,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         verify_independence: Callable[[Observation], str | None] | None = None,
+        on_progress: Callable[[SamplingBlockEvidence], None] | None = None,
     ) -> None:
         experiment = prepared.experiment
         if not isinstance(experiment, SampledExperimentDefinition) or experiment.reduction is None:
@@ -496,6 +497,7 @@ class SampledReducer:
         self._store = observation_store
         self._clock = clock
         self._verify_independence = verify_independence
+        self._on_progress = on_progress
         self._state: SampledRunState | None = None
         self._resume: SampledReductionCheckpoint | None = None
         self._unclassified: SamplingBlockEvidence | None = None
@@ -739,6 +741,7 @@ class SampledReducer:
             store=self._store,
             clock=self._clock,
             verify_independence=self._verify_independence,
+            on_progress=self._on_progress,
         )
         self._stop_reason = result.stop_reason
         self._unclassified = None

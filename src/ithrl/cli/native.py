@@ -26,6 +26,7 @@ from ithrl.case.filesystem import (
     prepare_private_directory,
     reject_symlink_components,
 )
+from ithrl.cli.output import error_console, print_plain
 from ithrl.cli.paths import private_data_root
 from ithrl.execution import PreflightIssue, ResourceLimits, SafetyPolicy, calibration_budget_bounds
 from ithrl.experiment import (
@@ -283,6 +284,8 @@ def _codex_runner(
             "runtime-unavailable", "local Codex runtime is unavailable"
         ) from error
 
+    print_plain(error_console, f"Codex authentication source: {configuration.authentication}.")
+
     try:
         profile = detect_codex_capability(runtime, configuration)
     except CodexCapabilityError as error:
@@ -350,6 +353,14 @@ def _copilot_runner(
         raise NativeSelectionError(
             "runtime-unavailable", "local Copilot runtime is unavailable"
         ) from error
+
+    authentication_source = {
+        "managed-config": "saved Copilot credentials",
+        "copilot-github-token": "environment variable COPILOT_GITHUB_TOKEN",
+        "gh-token": "environment variable GH_TOKEN",
+        "github-token": "environment variable GITHUB_TOKEN",
+    }[configuration.authentication]
+    print_plain(error_console, f"Copilot authentication source: {authentication_source}.")
 
     try:
         detected = detect_copilot_capability(runtime, configuration, target=copilot_target)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from functools import partial
 from pathlib import Path
 
 import pytest
@@ -12,7 +13,12 @@ from ithrl.execution import (
     SafetyPolicy,
     resolve_execution_plan,
 )
-from ithrl.experiment import ExperimentDefinition
+from ithrl.experiment import (
+    ExperimentDefinition,
+    NativeRunnerConfig,
+    SampledCalibrationPhase,
+    SampledExperimentDefinition,
+)
 from ithrl.measurement import RunnerExecutionError, observe_once
 from ithrl.observations import (
     Observation,
@@ -26,11 +32,18 @@ from ithrl.runner import (
     RunnerCancelled,
     RunnerError,
     RunnerErrorCode,
+    RunnerRegistry,
     RunResult,
     prepare_candidate,
 )
 from ithrl.synthetic import extract_inference
-from ithrl.workflow import OraclePrerequisiteError, calibrate, confirm, prepare_experiment
+from ithrl.workflow import (
+    OraclePrerequisiteError,
+    PreflightRefusedError,
+    calibrate,
+    confirm,
+    prepare_experiment,
+)
 
 FIXTURE = Path(__file__).parents[1] / "fixtures/synthetic-trace.json"
 INFERENCE_ID = "synthetic-ac-001"
@@ -67,6 +80,90 @@ def test_prepare_calibrate_and_confirm_use_separate_observation_roles(tmp_path: 
     assert prepared.execution_plan.capability.provider_transport == "forbidden"
     assert prepared.execution_plan.capability.provider_calls_per_attempt == 0
     assert prepared.execution_plan.capability.action_execution == "denied"
+
+
+@pytest.mark.parametrize("reconstructible", [False, True])
+def test_prepare_checks_original_reconstruction_without_executing_a_runner(
+    tmp_path: Path, reconstructible: bool
+) -> None:
+    from ithrl.runner.copilot.materialize import (
+        CopilotMaterializationError,
+        CopilotMaterializationErrorCode,
+        materialize_copilot_attempt,
+    )
+    from native_support.copilot import _capability, _case
+
+    _, _, evidence = _case(tmp_path, "final-response")
+    profile = _capability("final-response")
+    extracted = ExperimentDefinition.from_toml(evidence.default_experiment)
+    experiment = SampledExperimentDefinition(
+        target=extracted.target,
+        oracle=extracted.oracle,
+        runner=NativeRunnerConfig(type="copilot", required_capability_digest=profile.digest),
+        calibration=SampledCalibrationPhase(required_valid=1, minimum_matches=1, max_attempts=1),
+    )
+    attempts: list[PreparedAttempt] = []
+    refusals: list[str] = []
+
+    class AdmissionRunner:
+        fingerprint = "pure-original-admission:1"
+        capability_profile = profile
+
+        def validate_candidate(self, attempt: PreparedAttempt) -> None:
+            attempts.append(attempt)
+            if not reconstructible:
+                error = CopilotMaterializationError(
+                    CopilotMaterializationErrorCode.UNSUPPORTED_CONTEXT,
+                    "private-native-diagnostic",
+                )
+                refusals.append(error.code.value)
+                raise error
+            try:
+                materialize_copilot_attempt(attempt)
+            except CopilotMaterializationError as error:
+                refusals.append(error.code.value)
+                raise CopilotMaterializationError(error.code, "private-native-diagnostic") from None
+
+        async def run(self, attempt: PreparedAttempt) -> RunResult:
+            pytest.fail("preparation must not execute a runner")
+
+    runner = AdmissionRunner()
+    prepare = partial(
+        prepare_experiment,
+        evidence,
+        registry=RunnerRegistry({"copilot": lambda _config, _evidence: runner}),
+        experiment=experiment,
+        safety_policy=SafetyPolicy(
+            provider_transport="allowed",
+            allowed_provider=profile.provider,
+            allowed_endpoint=profile.endpoint,
+        ),
+        resource_limits=ResourceLimits(max_provider_calls=1),
+    )
+    if reconstructible:
+        prepared = prepare()
+        assert prepared.runner is runner
+        assert prepared.execution_plan.capability == profile
+    else:
+        with pytest.raises(PreflightRefusedError) as refused:
+            prepare()
+        assert not refused.value.report.ready
+        assert refused.value.report.plan is None
+        assert [issue.code for issue in refused.value.report.issues] == [
+            "unsupported-materialization"
+        ]
+        assert "private-native-diagnostic" not in str(refused.value)
+        assert refused.value.report.provider_calls_started == 0
+        assert refused.value.report.network_calls_started == 0
+    assert len(attempts) == 1
+    attempt = attempts[0]
+    assert attempt.phase == "calibration"
+    assert attempt.arm == "baseline"
+    assert not attempt.candidate.removed_context_ids
+    assert attempt.candidate.mutation.is_empty
+    assert attempt.target == experiment.target
+    assert attempt.evidence is evidence
+    assert refusals == ([] if reconstructible else ["unsupported-context"])
 
 
 def test_calibration_records_when_the_target_is_absent(tmp_path: Path) -> None:
