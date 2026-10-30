@@ -40,6 +40,7 @@ from ithrl.runner.codex.policy import (
     runtime_deviation,
 )
 from ithrl.runner.codex.protocol import SANDBOX_ROOT
+from ithrl.runner.codex.protocol_contracts import MAX_INFERENCE_REQUESTS
 from ithrl.runner.codex.runtime_configuration import validate_runner_configuration
 from ithrl.runner.codex.schema import CodexSchemaError, verify_schema_bundle
 from ithrl.runner.runtime import PROCESS_CANCELLATION_GRACE_SECONDS
@@ -129,9 +130,16 @@ class CodexCapabilityError(RuntimeError):
 def detect_codex_capability(
     runtime: CodexRuntime,
     configuration: CodexConfigurationContract,
+    *,
+    max_provider_calls_per_attempt: int = MAX_INFERENCE_REQUESTS,
 ) -> CapabilityProfile:
     """Probe local Codex structure and return one immutable supported profile."""
 
+    if (
+        type(max_provider_calls_per_attempt) is not int
+        or not 1 <= max_provider_calls_per_attempt <= MAX_INFERENCE_REQUESTS
+    ):
+        raise ValueError("Codex per-attempt provider-call limit must be an integer from 1 to 16")
     _require_runtime_unchanged(runtime)
     try:
         validate_runner_configuration(
@@ -193,7 +201,7 @@ def detect_codex_capability(
         reconstruction_method=RECONSTRUCTION_METHOD,
         supported_targets=(TARGET_TYPE,),
         provider_transport="required",
-        provider_calls_per_attempt=1,
+        provider_calls_per_attempt=max_provider_calls_per_attempt,
         tool_network_access="forbidden",
         action_visibility="not-applicable",
         action_denial="enforced",
@@ -214,6 +222,8 @@ def detect_codex_capability(
         deviations=(
             "context is reconstructed through an ephemeral app-server thread",
             "provider request and stream retries are disabled",
+            "a fixed-destination Responses relay enforces the selected administrative "
+            f"limit of {max_provider_calls_per_attempt} requests per attempt",
             "all model-returned actions are rejected",
             "structural discovery is host-write isolated and network denied",
             f"runner policy {POLICY_VERSION}",

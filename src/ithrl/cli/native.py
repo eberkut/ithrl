@@ -28,7 +28,13 @@ from ithrl.case.filesystem import (
 )
 from ithrl.cli.output import error_console, print_plain
 from ithrl.cli.paths import private_data_root
-from ithrl.execution import PreflightIssue, ResourceLimits, SafetyPolicy, calibration_budget_bounds
+from ithrl.execution import (
+    MAX_PROVIDER_CALLS_PER_ATTEMPT,
+    PreflightIssue,
+    ResourceLimits,
+    SafetyPolicy,
+    calibration_budget_bounds,
+)
 from ithrl.experiment import (
     NativeRunnerConfig,
     SampledCalibrationPhase,
@@ -109,11 +115,20 @@ def native_selection(
     experiment: SampledExperimentDefinition | None = None,
     calibration: SampledCalibrationPhase | None = None,
     max_provider_calls: int | None = None,
+    max_provider_calls_per_attempt: int | None = None,
     attempt_timeout_seconds: int | None = None,
     max_input_tokens: int | None = None,
 ) -> NativeSelection:
     """Resolve explicit samples against an exact current or persisted profile."""
 
+    if max_provider_calls_per_attempt is not None and (
+        type(max_provider_calls_per_attempt) is not int
+        or not 1 <= max_provider_calls_per_attempt <= MAX_PROVIDER_CALLS_PER_ATTEMPT
+    ):
+        raise NativeSelectionError(
+            "invalid-provider-call-limit",
+            "per-attempt provider call limit must be between 1 and 16",
+        )
     persisted = (
         experiment if experiment is not None else parse_experiment_toml(evidence.default_experiment)
     )
@@ -157,6 +172,7 @@ def native_selection(
             required_digest,
             evidence,
             persisted.target.type,
+            max_provider_calls_per_attempt=max_provider_calls_per_attempt,
             state_parent=state_parent,
             output_root=output_root,
             sources=sources,
@@ -173,6 +189,15 @@ def native_selection(
         )
 
     capability = runner.capability_profile
+    if (
+        max_provider_calls_per_attempt is not None
+        and max_provider_calls_per_attempt != capability.provider_calls_per_attempt
+    ):
+        raise NativeSelectionError(
+            "unsupported-provider-call-limit",
+            "per-attempt provider call limit does not match the detected target profile",
+            harness_started=True,
+        )
     config = NativeRunnerConfig(
         type=native_type,
         required_capability_digest=capability.digest,
@@ -247,6 +272,7 @@ def _codex_runner(
     evidence: CaseEvidence,
     target_type: str,
     *,
+    max_provider_calls_per_attempt: int | None = None,
     state_parent: Path,
     output_root: Path,
     sources: tuple[ProtectedPath, ...],
@@ -287,7 +313,15 @@ def _codex_runner(
     print_plain(error_console, f"Codex authentication source: {configuration.authentication}.")
 
     try:
-        profile = detect_codex_capability(runtime, configuration)
+        profile = detect_codex_capability(
+            runtime,
+            configuration,
+            max_provider_calls_per_attempt=(
+                MAX_PROVIDER_CALLS_PER_ATTEMPT
+                if max_provider_calls_per_attempt is None
+                else max_provider_calls_per_attempt
+            ),
+        )
     except CodexCapabilityError as error:
         raise NativeSelectionError(
             f"codex-{error.code.value}",

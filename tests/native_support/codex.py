@@ -16,80 +16,84 @@ from ithrl.runner.codex.policy import (
     configuration_deviation,
     runtime_deviation,
 )
+from ithrl.runner.codex.protocol_contracts import MAX_INFERENCE_REQUESTS
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
-_FAKE_APP_SERVER = r"""#!/usr/bin/python3
+# Runner fixtures replace only the ithrl worker boundary. They exercise real
+# Bubblewrap, private materialization, monitoring and transcript normalization;
+# their synthetic receipts do not establish native/provider compatibility.
+_FAKE_CODEX_WORKER = r"""#!/usr/bin/python3
 import json
+import os
 import sys
 import time
 
 mode = "__FIXTURE_MODE__"
+with open(sys.argv[1], encoding="utf-8") as source:
+    request = json.load(source)
+os.unlink(sys.argv[1])
 
+def emit(kind, value):
+    print(json.dumps({"kind": kind, "value": value}, separators=(",", ":")), flush=True)
+
+def receipt(kind, *, count=1, status=0, ordinal=1, request_bytes=100):
+    emit("provider", {
+        "kind": kind, "ordinal": ordinal, "count": count, "status": status,
+        "request_bytes": request_bytes, "response_bytes": 0,
+    })
+
+if mode == "malformed":
+    print("not-json", flush=True)
+    raise SystemExit(0)
+
+receipt("reserved", count=0)
+receipt("started")
 if mode == "sleep":
     time.sleep(60)
-if mode == "malformed":
-    sys.stdout.write("not-json\n")
-    sys.stdout.flush()
-    raise SystemExit(0)
-
-def receive():
-    line = sys.stdin.readline()
-    if not line:
-        raise SystemExit(0)
-    return json.loads(line)
-
-def send(message):
-    sys.stdout.write(json.dumps(message, separators=(",", ":")) + "\n")
-    sys.stdout.flush()
-
-message = receive()
-send({"id": message["id"], "result": {"serverInfo": {"name": "fixture", "version": "1"}}})
-receive()
-message = receive()
-model = message["params"]["model"]
-returned_model = "private-model-" * 30 if mode == "action-long-metadata" else model
-if message["params"]["modelProvider"] != "ithrl":
-    raise SystemExit(4)
-send({"id": message["id"], "result": {"thread": {"id": "thread-1", "model": returned_model, "serviceTier": "default"}}})
-send({"method": "thread/started", "params": {"thread": {"id": "thread-1"}}})
-message = receive()
-required_context = False
-if message["method"] == "thread/inject_items":
-    required_context = "ITHRL_REQUIRED_CONTEXT" in json.dumps(message["params"])
-    send({"id": message["id"], "result": {}})
-    message = receive()
-send({"id": message["id"], "result": {"turn": {"id": "turn-1", "items": [], "status": "inProgress"}}})
-send({"method": "item/started", "params": {"threadId": "thread-1", "turnId": "turn-1", "item": {"type": "userMessage", "id": "user-message-1", "content": []}}})
-if mode in {"overload", "overload-after-output"}:
-    if mode == "overload-after-output":
-        send({"method": "item/agentMessage/delta", "params": {"threadId": "thread-1", "turnId": "turn-1", "itemId": "message-1", "delta": "Fixture partial output."}})
-    send({"method": "error", "params": {"threadId": "thread-1", "turnId": "turn-1", "willRetry": False, "error": {"message": "Fixture overload.", "codexErrorInfo": "serverOverloaded"}}})
-    for _ in sys.stdin:
-        pass
-    raise SystemExit(0)
 if mode == "after-dispatch-malformed":
-    sys.stdout.write("not-json\n")
-    sys.stdout.flush()
+    print("not-json", flush=True)
     raise SystemExit(0)
 if mode == "output":
-    for _ in range(3_000):
-        send({"method": "item/agentMessage/delta", "params": {"threadId": "thread-1", "turnId": "turn-1", "itemId": "message-1", "delta": "x" * 1024}})
-if mode in {"action", "action-long-metadata"}:
-    send({"id": 99, "method": "item/commandExecution/requestApproval", "params": {"threadId": "thread-1", "turnId": "turn-1", "command": "private-command"}})
-    denial = receive()
-    if denial.get("result") != {"decision": "decline"}:
-        raise SystemExit(3)
+    for _ in range(3000):
+        emit("server", {"fixture_output": "x" * 1024})
     raise SystemExit(0)
-send({"method": "item/agentMessage/delta", "params": {"threadId": "thread-1", "turnId": "turn-1", "itemId": "message-1", "delta": "Fixture complete."}})
-send({"method": "thread/tokenUsage/updated", "params": {"threadId": "thread-1", "turnId": "turn-1", "tokenUsage": {"last": {"inputTokens": 101, "outputTokens": 7, "cachedInputTokens": 50, "reasoningOutputTokens": 2, "totalTokens": 108}, "total": {"inputTokens": 101, "outputTokens": 7, "cachedInputTokens": 50, "reasoningOutputTokens": 2, "totalTokens": 108}, "modelContextWindow": 128000}}})
-final_text = "private-response-" * 5_000 if mode == "long-final" else "Fixture complete."
-if mode == "context-sensitive" and not required_context:
+if mode == "state":
+    with open(os.path.join(os.environ["CODEX_HOME"], "oversized.bin"), "wb") as output:
+        output.write(b"x" * (512 * 1024))
+
+# Persist the owned input directly, without pretending to exercise native RPC.
+emit("client", {"method": "fixture/request", "params": request})
+overloaded = mode in {"overload", "overload-after-output"}
+limited = mode == "call-limit"
+action = mode in {"action", "action-long-metadata"}
+receipt("completed", status=503 if overloaded else 200)
+request_count = request["transport"]["max_requests"] if limited else 1
+if limited:
+    for ordinal in range(2, request_count + 1):
+        receipt("reserved", count=ordinal - 1, ordinal=ordinal, request_bytes=100 * ordinal)
+        receipt("started", count=ordinal, ordinal=ordinal, request_bytes=100 * ordinal)
+        receipt("completed", count=ordinal, ordinal=ordinal, request_bytes=100 * ordinal, status=200)
+    receipt("rejected", count=request_count, ordinal=0, request_bytes=100 * request_count, status=429)
+receipt("closed", count=request_count, ordinal=request_count, request_bytes=100 * request_count)
+final_text = "Fixture complete."
+if mode == "long-final":
+    final_text = "private-response-" * 5000
+if mode == "context-sensitive" and "ITHRL_REQUIRED_CONTEXT" not in json.dumps(request["history"]):
     final_text = "Fixture does not match."
-item = {"type": "agentMessage", "id": "message-1", "text": final_text, "phase": "final_answer"}
-send({"method": "item/completed", "params": {"threadId": "thread-1", "turnId": "turn-1", "item": item}})
-send({"method": "turn/completed", "params": {"threadId": "thread-1", "turn": {"id": "turn-1", "items": [item], "status": "completed"}}})
-for _ in sys.stdin:
-    pass
+emit("summary", {
+    "status": "error" if overloaded or limited or action else "completed",
+    "error_code": "provider-call-limit" if limited else "provider-overloaded" if overloaded else "action-requested" if action else None,
+    "final_text": None if overloaded or limited or action else final_text,
+    "model_returned": "private-model-" * 30 if mode == "action-long-metadata" else request["model"],
+    "service_tier": "default",
+    "usage": None if overloaded else {"input_tokens": 101, "output_tokens": 7, "cached_input_tokens": 50},
+    "provider_acceptance": "unknown" if overloaded or limited else "accepted",
+    "provider_calls_started": request_count,
+    "provider_calls_completed": request_count,
+    "actions_requested": int(action),
+    "actions_denied": int(action),
+    "behavior_output_observed": not overloaded or mode == "overload-after-output",
+})
 """
 
 
@@ -168,6 +172,8 @@ supports_standalone_web_search = false
 def _capability(
     configuration: CodexProviderConfiguration,
     runtime: CodexRuntime,
+    *,
+    max_provider_calls_per_attempt: int = MAX_INFERENCE_REQUESTS,
 ) -> CapabilityProfile:
     return CapabilityProfile(
         runner_type="codex",
@@ -183,7 +189,7 @@ def _capability(
         reconstruction_method="codex-app-server-inject-items-v1",
         supported_targets=("final-response",),
         provider_transport="required",
-        provider_calls_per_attempt=1,
+        provider_calls_per_attempt=max_provider_calls_per_attempt,
         tool_network_access="forbidden",
         action_visibility="not-applicable",
         action_denial="enforced",

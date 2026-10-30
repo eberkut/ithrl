@@ -48,7 +48,7 @@ from ithrl.cli.sampled_reduction import (
 )
 from ithrl.cli.sampled_session import SampledCliSession
 from ithrl.cli.shrink import prepare_shrink, save_outcome, validate_phase_observations
-from ithrl.execution.contracts import MAX_WALL_TIME_SECONDS
+from ithrl.execution.contracts import MAX_PROVIDER_CALLS_PER_ATTEMPT, MAX_WALL_TIME_SECONDS
 from ithrl.experiment import (
     MAX_CALIBRATION_ATTEMPTS,
     ExperimentFormatError,
@@ -333,6 +333,19 @@ def shrink(
             help="Maximum total provider calls allowed for the native run.",
         ),
     ] = None,
+    max_provider_calls_per_attempt: Annotated[
+        int | None,
+        typer.Option(
+            "--max-provider-calls-per-attempt",
+            min=1,
+            max=MAX_PROVIDER_CALLS_PER_ATTEMPT,
+            help=(
+                "Hard provider-call limit per native attempt. Codex default: 16; "
+                "Copilot uses its detected target limit. Resume preserves the saved limit. "
+                "This budget does not guarantee turn completion."
+            ),
+        ),
+    ] = None,
     max_wall_time: Annotated[
         int | None,
         typer.Option(
@@ -423,6 +436,7 @@ def shrink(
                 minimum_matches=minimum_matches,
                 max_attempts=max_attempts,
                 max_provider_calls=max_provider_calls,
+                max_provider_calls_per_attempt=max_provider_calls_per_attempt,
                 attempt_timeout=attempt_timeout,
                 max_input_tokens=max_input_tokens,
                 max_wall_time=max_wall_time,
@@ -452,6 +466,7 @@ def _shrink(
     minimum_matches: int | None = None,
     max_attempts: int | None = None,
     max_provider_calls: int | None = None,
+    max_provider_calls_per_attempt: int | None = None,
     attempt_timeout: int | None = None,
     max_input_tokens: int | None = None,
     max_wall_time: int | None = None,
@@ -492,11 +507,17 @@ def _shrink(
             evidence: CaseEvidence,
             session: SampledCliSession,
         ) -> NativeSelection:
+            if (
+                max_provider_calls_per_attempt is not None
+                and max_provider_calls_per_attempt != session.resource_limits.max_provider_calls
+            ):
+                raise ValueError("saved per-attempt provider call limit cannot change")
             return native_selection(
                 workspace,
                 evidence,
                 original_workspace=session.original_workspace,
                 experiment=session.experiment,
+                max_provider_calls_per_attempt=session.resource_limits.max_provider_calls,
                 attempt_timeout_seconds=session.resource_limits.max_wall_time_seconds,
                 max_input_tokens=session.resource_limits.max_input_tokens,
             )
@@ -587,6 +608,7 @@ def _shrink(
             experiment=selected_experiment,
             calibration=calibration,
             max_provider_calls=max_provider_calls,
+            max_provider_calls_per_attempt=max_provider_calls_per_attempt,
             attempt_timeout_seconds=attempt_timeout,
             max_input_tokens=max_input_tokens,
         )
@@ -725,6 +747,7 @@ def _shrink(
         or original_workspace is not None
         or calibration is not None
         or max_provider_calls is not None
+        or max_provider_calls_per_attempt is not None
         or attempt_timeout is not None
         or max_input_tokens is not None
         or max_wall_time is not None

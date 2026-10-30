@@ -16,8 +16,8 @@ from ithrl.case import CaseError
 from ithrl.case.filesystem import read_safe_bytes
 from ithrl.context import content_digest
 from ithrl.runner.codex.runtime_configuration import (
-    PROXY_ENVIRONMENT_NAMES,
     RUNTIME_PROVIDER_ID,
+    TRANSPORT_ENVIRONMENT_NAMES,
     is_safe_runtime_environment_name,
     normalize_base_url,
     render_runner_configuration,
@@ -43,7 +43,7 @@ _PROTECTED_ENVIRONMENT_NAMES = (
             "PYTHONDONTWRITEBYTECODE",
         }
     )
-    | PROXY_ENVIRONMENT_NAMES
+    | TRANSPORT_ENVIRONMENT_NAMES
 )
 _CUSTOM_PROVIDER_FIELDS = frozenset(
     {
@@ -234,7 +234,7 @@ def _resolve_openai(
         requires_openai_auth=requires_openai_auth,
         stream_idle_timeout_ms=None,
     )
-    selected_environment.update(_proxy_environment(environment))
+    selected_environment.update(_transport_environment(environment))
     names = tuple(sorted(selected_environment))
     return CodexProviderConfiguration(
         source_provider_id="openai",
@@ -328,7 +328,7 @@ def _resolve_custom(
         requires_openai_auth=False,
         stream_idle_timeout_ms=stream_idle_timeout_ms,
     )
-    selected_environment.update(_proxy_environment(environment))
+    selected_environment.update(_transport_environment(environment))
     names = tuple(sorted(selected_environment))
     return CodexProviderConfiguration(
         source_provider_id=provider_id,
@@ -482,10 +482,10 @@ def _select_environment(
     return selected
 
 
-def _proxy_environment(environment: Mapping[str, str]) -> dict[str, str]:
+def _transport_environment(environment: Mapping[str, str]) -> dict[str, str]:
     return {
         name: value
-        for name in sorted(PROXY_ENVIRONMENT_NAMES)
+        for name in sorted(TRANSPORT_ENVIRONMENT_NAMES)
         if isinstance((value := environment.get(name)), str) and value
     }
 

@@ -242,6 +242,11 @@ def mock_native(
         from dataclasses import replace
 
         detections.append(True)
+        requested_limit = _kwargs.get("max_provider_calls_per_attempt")
+        assert (
+            requested_limit is None
+            or requested_limit == runner.capability_profile.provider_calls_per_attempt
+        )
         requested = _kwargs.get("experiment")
         if fresh:
             assert requested is None
@@ -980,3 +985,43 @@ def test_per_attempt_provider_call_limit_is_terminal_budget_exhaustion(
     )
     assert resumed.exit_code == ExitCode.BUDGET, resumed.output
     assert len(runner.calls) == 1
+
+
+def test_saved_native_per_attempt_limit_is_reused_and_conflicting_override_never_dispatches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    args, runner, detections = mock_native(tmp_path, monkeypatch, source_backed=True)
+    profile = tmp_path / "profile.json"
+    detected = CliRunner().invoke(
+        app, [*args, "--detect", "--profile", str(profile), "--max-provider-calls-per-attempt", "1"]
+    )
+    assert detected.exit_code == 0, detected.output
+    assert json.loads(detected.stdout)["max_provider_calls_per_attempt"] == 1
+    profile_args = [*args, "--profile", str(profile)]
+    conflict = CliRunner().invoke(
+        app, [*profile_args, "--dry-run", "--max-provider-calls-per-attempt", "2"]
+    )
+    assert json.loads(conflict.stdout)["error_code"] == "profile-provider-call-limit-mismatch"
+    assert len(detections) == 1
+    assert not runner.calls
+    completed = CliRunner().invoke(app, [*profile_args, "--acknowledge-model-execution"])
+    assert completed.exit_code == 0, completed.output
+    report = json.loads(completed.stdout)
+    before = len(runner.calls)
+    assert report["max_provider_calls_per_attempt"] == 1
+    for limit, expected in (("1", 0), ("2", ExitCode.UNSUPPORTED)):
+        resumed = CliRunner().invoke(
+            app,
+            [
+                "fuzz",
+                report["result_path"],
+                "--resume",
+                "--acknowledge-model-execution",
+                "--max-provider-calls-per-attempt",
+                limit,
+                "--format",
+                "json",
+            ],
+        )
+        assert resumed.exit_code == expected, resumed.output
+        assert len(runner.calls) == before

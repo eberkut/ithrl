@@ -30,15 +30,18 @@ from ithrl.runner import (
     prepare_candidate,
 )
 from ithrl.runner.codex import CodexProviderConfiguration, CodexRunner, CodexRuntime
+from ithrl.runner.codex.isolation import program_digest
 from ithrl.runner.codex.materialize import (
     CodexMaterializationError,
     CodexMaterializationErrorCode,
     editable_codex_text,
 )
+from ithrl.runner.codex.protocol_contracts import MAX_INFERENCE_REQUESTS
+from ithrl.runner.codex.transcript import physical_request_counts
 from ithrl.runner.contracts import CandidateInvalidError
 from ithrl.runner.evidence import AttemptEvidence
 from ithrl.runner.runtime import ProtectedOutputStore, ProtectedPath
-from native_support.codex import _FAKE_APP_SERVER, FIXTURES, _capability, _case, _configuration
+from native_support.codex import _FAKE_CODEX_WORKER, FIXTURES, _capability, _case, _configuration
 
 
 def _runner(
@@ -51,9 +54,10 @@ def _runner(
     capability_configuration: CodexProviderConfiguration | None = None,
     state_parent: Path | None = None,
     output_root: Path | None = None,
+    max_provider_calls_per_attempt: int = MAX_INFERENCE_REQUESTS,
 ) -> CodexRunner:
     fake = tmp_path / f"codex-{mode}"
-    fake.write_text(_FAKE_APP_SERVER.replace("__FIXTURE_MODE__", mode), encoding="utf-8")
+    fake.write_text("#!/usr/bin/python3\nraise SystemExit(0)\n", encoding="utf-8")
     fake.chmod(0o700)
     original_workspace = tmp_path / "original-workspace"
     original_workspace.mkdir(exist_ok=True)
@@ -67,9 +71,13 @@ def _runner(
         bubblewrap=Path("/usr/bin/bwrap"),
         python=Path("/usr/bin/python3"),
     )
-    return CodexRunner(
+    runner = CodexRunner(
         capability_profile=capability
-        or _capability(capability_configuration or configuration, runtime),
+        or _capability(
+            capability_configuration or configuration,
+            runtime,
+            max_provider_calls_per_attempt=max_provider_calls_per_attempt,
+        ),
         runtime=runtime,
         configuration=configuration,
         state_parent=state_parent or tmp_path / "attempts",
@@ -80,6 +88,11 @@ def _runner(
         ),
         workspace_paths=(ProtectedPath("original-workspace", original_workspace),),
     )
+    worker_source = tmp_path / f"worker-{mode}.py"
+    worker_source.write_text(_FAKE_CODEX_WORKER.replace("__FIXTURE_MODE__", mode), encoding="utf-8")
+    runner._worker_source = worker_source
+    runner._worker_digest = program_digest(worker_source)
+    return runner
 
 
 @pytest.mark.parametrize("storage", ["state", "output"])
@@ -152,7 +165,7 @@ def _attempt(
         allowed_endpoint="https://example.invalid/responses",
     )
     limits = ResourceLimits(
-        max_provider_calls=1,
+        max_provider_calls=MAX_INFERENCE_REQUESTS,
         max_wall_time_seconds=max_wall_time_seconds,
         max_native_output_bytes=max_native_output_bytes,
         max_disposable_state_bytes=4 * 1024 * 1024,
@@ -202,7 +215,7 @@ def test_structured_overload_requires_no_output_for_fresh_sample(tmp_path: Path,
     assert evidence.overload_replacement_safe is (mode == "overload")
     assert not evidence.retry_safe
     assert evidence.acceptance_unknown
-    assert evidence.provider_calls_possible == 1
+    assert evidence.provider_calls_possible == MAX_INFERENCE_REQUESTS
     assert evidence.accounting is not None
     assert evidence.accounting.provider_calls_started == 1
     assert evidence.accounting.cleanup_outcome == "verified"
@@ -253,8 +266,7 @@ def test_overload_proof_rejects_missing_or_inconsistent_facts(
         {"actions_requested": 1, "actions_executed": 1},
         {"tool_network_requests": 1},
         {"residual_disposable_state_bytes": 1, "cleanup_outcome": "failed"},
-        {"provider_calls_started": 2},
-        {"provider_calls_completed": 1},
+        {"provider_calls_started": 2, "provider_calls_completed": 2},
         {"elapsed_milliseconds": 5001},
         {"disposable_state_bytes": 4 * 1024 * 1024 + 1},
         {"disposable_state_entries": 1001},
@@ -352,13 +364,62 @@ def test_runs_one_final_response_inside_shared_isolation(tmp_path: Path) -> None
     assert result.accounting.original_workspace_effect == "unchanged"
     assert result.native_output is not None
     output = ProtectedOutputStore.open(tmp_path / "output").read(result.native_output)
-    initialize = json.loads(output.stdout.splitlines()[0])
-    assert initialize["kind"] == "client"
-    assert initialize["value"]["method"] == "initialize"
-    assert initialize["value"]["params"]["clientInfo"]["version"] == distribution_version("ithrl")
+    records = [json.loads(line) for line in output.stdout.splitlines()]
+    owned_input = next(record["value"] for record in records if record["kind"] == "client")
+    assert owned_input["method"] == "fixture/request"
+    assert owned_input["params"]["client_version"] == distribution_version("ithrl")
     assert not (tmp_path / "attempts" / result.attempt_id).exists()
     assert stat.S_IMODE((tmp_path / "output").stat().st_mode) == 0o700
     assert (tmp_path / "original-workspace" / "marker.txt").read_text() == "unchanged\n"
+
+
+def test_relay_uses_profile_bound_when_resource_allowance_is_larger(tmp_path: Path) -> None:
+    workspace, evidence = _case(tmp_path)
+    runner = _runner(tmp_path, workspace, max_provider_calls_per_attempt=4)
+    attempt = _attempt(evidence, runner)
+    assert attempt.resource_limits.max_provider_calls == 16
+    result = asyncio.run(runner.run(attempt))
+    assert result.native_output is not None
+    output = ProtectedOutputStore.open(tmp_path / "output").read(result.native_output)
+    records = [json.loads(line) for line in output.stdout.splitlines()]
+    request = next(record["value"] for record in records if record["kind"] == "client")
+    assert request["params"]["transport"]["max_requests"] == 4
+
+
+def test_selected_call_limit_is_distinct_failure_with_full_conservative_charge(
+    tmp_path: Path,
+) -> None:
+    workspace, case = _case(tmp_path)
+    runner = _runner(tmp_path, workspace, mode="call-limit", max_provider_calls_per_attempt=4)
+    attempt = _attempt(case, runner)
+    with pytest.raises(RunnerError) as caught:
+        asyncio.run(runner.run(attempt))
+    error = caught.value
+    assert error.code is RunnerErrorCode.PROVIDER_CALL_LIMIT
+    assert error.reason_code == "provider-call-limit"
+    assert error.provider_acceptance_state.value == "unknown"
+    assert error.accounting is not None
+    assert error.accounting.provider_calls_started == error.accounting.provider_calls_completed == 4
+    evidence = AttemptEvidence.from_error(attempt, error)
+    assert evidence.provider_calls_possible == 4
+    assert evidence.provider_call_charge(4) == 4
+    assert evidence.acceptance_unknown
+    assert not evidence.retry_safe
+    assert not evidence.overload_replacement_safe
+    assert evidence.accounting is not None
+    assert evidence.accounting.cleanup_outcome == "verified"
+    assert AttemptEvidence.model_validate_json(evidence.model_dump_json()) == evidence
+
+
+@pytest.mark.parametrize("selected_limit", [0, 17, True, 1.0])
+def test_rejects_invalid_profile_call_bound(tmp_path: Path, selected_limit: object) -> None:
+    workspace, _ = _case(tmp_path)
+    runner = _runner(tmp_path, workspace)
+    invalid = runner.capability_profile.model_copy(
+        update={"provider_calls_per_attempt": selected_limit}
+    )
+    with pytest.raises(ValueError, match="does not satisfy"):
+        _runner(tmp_path, workspace, capability=invalid)
 
 
 def test_registered_runner_delivers_exact_append_without_changing_trigger_or_policy(
@@ -401,8 +462,7 @@ def test_registered_runner_delivers_exact_append_without_changing_trigger_or_pol
         assert result.accounting.actions_executed == 0
 
     expected = deepcopy(requests[0])
-    inject = next(request for request in expected if request.get("method") == "thread/inject_items")
-    message = inject["params"]["items"][0]
+    message = expected[0]["params"]["history"][0]
     assert message["role"] == "user"
     assert message["content"][site.content_index]["text"] == site.original_text
     message["content"][site.content_index]["text"] = site.original_text + appended
@@ -556,7 +616,28 @@ def test_cancellation_waits_for_runner_cleanup(tmp_path: Path) -> None:
 
     async def cancel() -> RunnerCancelled:
         task = asyncio.create_task(runner.run(attempt))
-        await asyncio.sleep(0.1)
+        stdout_path = tmp_path / "attempts" / attempt.attempt_id / "stdout.bin"
+        deadline = asyncio.get_running_loop().time() + 3
+        physical_counts = None
+        try:
+            while asyncio.get_running_loop().time() < deadline:
+                try:
+                    physical_counts = physical_request_counts(stdout_path.read_bytes())
+                except OSError:
+                    physical_counts = None
+                if physical_counts == (1, 0):
+                    break
+                await asyncio.sleep(0.01)
+        except asyncio.CancelledError:
+            task.cancel()
+            with pytest.raises(RunnerCancelled):
+                await task
+            raise
+        if physical_counts != (1, 0):
+            task.cancel()
+            with pytest.raises(RunnerCancelled):
+                await task
+            pytest.fail(f"worker start receipt was not captured: {physical_counts}")
         task.cancel()
         with pytest.raises(RunnerCancelled) as refused:
             await task
@@ -569,4 +650,7 @@ def test_cancellation_waits_for_runner_cleanup(tmp_path: Path) -> None:
     assert cancelled.error.accounting.cleanup_outcome == "verified"
     assert cancelled.error.accounting.provider_calls_started == 1
     assert cancelled.error.accounting.provider_calls_completed == 0
+    assert cancelled.error.provider_acceptance_state.value == "unknown"
+    evidence = AttemptEvidence.from_error(attempt, cancelled.error)
+    assert evidence.provider_calls_possible == MAX_INFERENCE_REQUESTS
     assert not (tmp_path / "attempts" / attempt.attempt_id).exists()

@@ -6,6 +6,9 @@ import math
 from dataclasses import dataclass, field
 from typing import Literal
 
+# Administrative platform ceiling, aligned with execution.MAX_PROVIDER_CALLS_PER_ATTEMPT.
+# Each attempt's immutable capability selects its own lower or equal relay limit.
+MAX_INFERENCE_REQUESTS = 16
 MAX_PROTOCOL_LINE_BYTES = 8 * 1024 * 1024
 MAX_PROTOCOL_MESSAGES = 100_000
 MAX_CLIENT_PROTOCOL_MESSAGES = 6
@@ -109,7 +112,11 @@ class ProtocolUsage:
 
 @dataclass(frozen=True, slots=True)
 class ProtocolOutcome:
-    """Content-safe control facts plus protected final response content."""
+    """Control facts plus protected final response content.
+
+    ``run_session`` leaves physical counts at zero until the worker attaches
+    relay evidence. Such native-only outcomes are not production transcripts.
+    """
 
     status: ProtocolStatus
     error_code: str | None

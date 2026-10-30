@@ -13,6 +13,7 @@ from ithrl.adapters import enumerate_decisions, parse_session
 from ithrl.case import CaseWorkspace
 from ithrl.case.filesystem import reject_symlink_components
 from ithrl.extraction import extract_decision
+from ithrl.runner.codex.protocol_contracts import MAX_INFERENCE_REQUESTS
 from native_support import codex, copilot
 
 type Profile = Literal["codex-final", "copilot-final", "copilot-shell"]
@@ -76,7 +77,11 @@ class SmokeOptions:
 
     @property
     def provider_call_bound(self) -> int:
-        return 4 if self.profile == "copilot-shell" else 2
+        return (
+            2 * MAX_INFERENCE_REQUESTS
+            if self.profile == "codex-final"
+            else (4 if self.profile == "copilot-shell" else 2)
+        )
 
 
 def synthetic_case(root: Path, options: SmokeOptions) -> tuple[Path, CaseWorkspace, Path]:

@@ -8,6 +8,7 @@ import stat
 import subprocess
 import sys
 import threading
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, BinaryIO, TextIO, cast
 
@@ -16,10 +17,23 @@ if TYPE_CHECKING or __package__:
         MAX_WORKER_REQUEST_BYTES,
         SANDBOX_WORKSPACE,
         ProtocolOutcome,
+        audit_record,
         run_session,
+        write_summary,
     )
+    from ithrl.runner.codex.protocol_contracts import MAX_INFERENCE_REQUESTS
+    from ithrl.runner.codex.relay import ResponsesRelay
 else:
-    from protocol import MAX_WORKER_REQUEST_BYTES, SANDBOX_WORKSPACE, ProtocolOutcome, run_session
+    from protocol import (
+        MAX_WORKER_REQUEST_BYTES,
+        SANDBOX_WORKSPACE,
+        ProtocolOutcome,
+        audit_record,
+        run_session,
+        write_summary,
+    )
+    from protocol_contracts import MAX_INFERENCE_REQUESTS
+    from relay import ResponsesRelay
 
 _SHUTDOWN_SECONDS = 2.0
 
@@ -41,6 +55,10 @@ def main(argv: list[str] | None = None) -> int:
         outcome = _run_app_server(executable, request, audit=sys.stdout)
     except WorkerError as error:
         _safe_error(str(error))
+        return 70
+    except Exception:
+        # Unexpected native/transport failures must never print private values.
+        _safe_error("Codex worker failed")
         return 70
     return 0 if outcome.status == "completed" else 20
 
@@ -99,11 +117,122 @@ def _run_app_server(
     *,
     audit: TextIO,
 ) -> ProtocolOutcome:
+    native_request = dict(request)
+    transport = native_request.pop("transport", None)
+    expected = {"endpoint", "max_requests", "timeout_seconds", "max_response_bytes"}
+    if (
+        not isinstance(transport, dict)
+        or set(transport) != expected
+        or not isinstance(transport.get("endpoint"), str)
+        or type(transport.get("max_requests")) is not int
+        or not 1 <= transport["max_requests"] <= MAX_INFERENCE_REQUESTS
+        or type(transport.get("timeout_seconds")) is not int
+        or not 1 <= transport["timeout_seconds"] <= 86400
+        or type(transport.get("max_response_bytes")) is not int
+        or not 1 <= transport["max_response_bytes"] <= MAX_WORKER_REQUEST_BYTES
+    ):
+        raise WorkerError("Codex worker transport is invalid")
+    provider = native_request.get("provider")
+    if (
+        not isinstance(provider, str)
+        or not provider
+        or any(
+            character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+            for character in provider
+        )
+    ):
+        raise WorkerError("Codex worker provider is invalid")
+    callback_lock = threading.Lock()
+    callbacks_open = True
+
+    def on_event(event: dict[str, object]) -> None:
+        with callback_lock:
+            if callbacks_open:
+                audit_record(audit, "provider", event)
+
+    try:
+        relay = ResponsesRelay(
+            endpoint=transport["endpoint"],
+            max_requests=transport["max_requests"],
+            timeout_seconds=transport["timeout_seconds"],
+            max_request_bytes=MAX_WORKER_REQUEST_BYTES,
+            max_response_bytes=transport["max_response_bytes"],
+            on_event=on_event,
+        )
+        with relay:
+            outcome = _exchange(executable, native_request, relay.base_url, audit=audit)
+    except (OSError, ValueError) as error:
+        raise WorkerError("Codex worker transport is unavailable") from error
+    with callback_lock:
+        callbacks_open = False
+        outcome = replace(
+            outcome,
+            provider_calls_started=relay.requests_started,
+            provider_calls_completed=relay.responses_completed,
+            provider_acceptance=(
+                outcome.provider_acceptance if relay.requests_started else "not-started"
+            ),
+        )
+        if (
+            relay.failed
+            or relay.requests_rejected
+            or (
+                outcome.status == "completed"
+                and (
+                    not relay.requests_started
+                    or relay.requests_started != relay.responses_completed
+                )
+            )
+        ):
+            outcome = replace(
+                outcome,
+                status="error",
+                error_code=(
+                    "provider-call-limit"
+                    if relay.selected_request_limit_hit
+                    else "provider-transport"
+                ),
+                final_text=None,
+                provider_acceptance="unknown" if relay.requests_started else "not-started",
+            )
+        audit_record(
+            audit,
+            "provider",
+            {
+                "kind": "closed",
+                "ordinal": relay.requests_reserved,
+                "count": relay.requests_started,
+                "status": 0,
+                "request_bytes": relay.request_bytes,
+                "response_bytes": relay.response_bytes,
+            },
+        )
+        write_summary(audit, outcome)
+    return outcome
+
+
+def _exchange(
+    executable: Path,
+    request: dict[str, object],
+    base_url: str,
+    *,
+    audit: TextIO,
+) -> ProtocolOutcome:
+    child_env = dict(os.environ)
+    existing_no_proxy = child_env.get("NO_PROXY", child_env.get("no_proxy", ""))
+    loopback_no_proxy = f"{existing_no_proxy},127.0.0.1" if existing_no_proxy else "127.0.0.1"
+    child_env["NO_PROXY"] = loopback_no_proxy
+    child_env["no_proxy"] = loopback_no_proxy
     try:
         process = subprocess.Popen(  # noqa: S603 - validated direct executable; no shell
-            (os.fspath(executable), "app-server"),
+            (
+                os.fspath(executable),
+                "-c",
+                f"model_providers.{request['provider']}.base_url={json.dumps(base_url)}",
+                "app-server",
+            ),
             cwd=SANDBOX_WORKSPACE,
-            env=dict(os.environ),
+            env=child_env,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -127,8 +256,9 @@ def _run_app_server(
         _close(stdin)
         _stop(process)
         _close(stdout)
-        _close(stderr)
         stderr_thread.join(timeout=_SHUTDOWN_SECONDS)
+        if not stderr_thread.is_alive():
+            _close(stderr)
 
 
 def _stop(process: subprocess.Popen[bytes]) -> None:
@@ -141,8 +271,10 @@ def _stop(process: subprocess.Popen[bytes]) -> None:
         process.kill()
         try:
             process.wait(timeout=_SHUTDOWN_SECONDS)
-        except subprocess.TimeoutExpired as error:
-            raise WorkerError("Codex app-server did not stop") from error
+        except subprocess.TimeoutExpired:
+            # The owning runtime settles the whole process group and refuses
+            # unverified cleanup. Preserve native and relay evidence for it.
+            return
 
 
 def _pipe(value: BinaryIO | None) -> BinaryIO:

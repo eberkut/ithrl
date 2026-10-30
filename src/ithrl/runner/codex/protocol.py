@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, BinaryIO, TextIO, cast
 
@@ -80,8 +81,7 @@ class _SessionState:
     service_tier: str | None = None
     usage: ProtocolUsage | None = None
     provider_acceptance: ProviderAcceptance = "not-started"
-    provider_calls_started: int = 0
-    provider_calls_completed: int = 0
+    turn_completed: bool = False
     actions_requested: int = 0
     actions_denied: int = 0
     final_messages: dict[str, tuple[str | None, str]] = field(default_factory=dict)
@@ -152,20 +152,32 @@ class _Transport:
         self._audit("server", message)
         return message
 
-    def summary(self, outcome: ProtocolOutcome) -> None:
-        self._audit("summary", _outcome_document(outcome))
-
     def _audit(self, kind: str, value: object) -> None:
-        self.audit.write(
-            json.dumps(
-                {"kind": kind, "value": value},
-                allow_nan=False,
-                ensure_ascii=False,
-                separators=(",", ":"),
-            )
-            + "\n"
+        audit_record(self.audit, kind, value)
+
+
+_AUDIT_LOCK = threading.Lock()
+
+
+def audit_record(audit: TextIO, kind: str, value: object) -> None:
+    """Serialize one protected record across native and relay callback threads."""
+    line = (
+        json.dumps(
+            {"kind": kind, "value": value},
+            allow_nan=False,
+            ensure_ascii=False,
+            separators=(",", ":"),
         )
-        self.audit.flush()
+        + "\n"
+    )
+    with _AUDIT_LOCK:
+        audit.write(line)
+        audit.flush()
+
+
+def write_summary(audit: TextIO, outcome: ProtocolOutcome) -> None:
+    """Write the worker's terminal outcome after transport and native cleanup."""
+    audit_record(audit, "summary", _outcome_document(outcome))
 
 
 def run_session(
@@ -174,7 +186,11 @@ def run_session(
     audit: TextIO,
     request: dict[str, object],
 ) -> ProtocolOutcome:
-    """Run one app-server turn and write a complete protected audit transcript."""
+    """Return native facts and audit RPC; the worker attaches physical counts.
+
+    The returned counts are zero because native events cannot establish HTTP
+    requests. Only the worker may attach relay counters and publish a summary.
+    """
 
     state = _SessionState()
     transport = _Transport(reader, writer, audit)
@@ -183,7 +199,6 @@ def run_session(
         outcome = _completed_outcome(state)
     except CodexProtocolError as error:
         outcome = _failed_outcome(state, error.code)
-    transport.summary(outcome)
     return outcome
 
 
@@ -253,7 +268,6 @@ def _run_session(
             turn_params[field_name] = request[field_name]
     if request.get("toolOutput") is not None:
         turn_params["toolOutput"] = request["toolOutput"]
-    state.provider_calls_started = 1
     state.provider_acceptance = "unknown"
     turn_result = _require_object(
         transport.request("turn/start", turn_params, state),
@@ -265,9 +279,8 @@ def _run_session(
         raise CodexProtocolError("identity-mismatch", "Codex turn identity changed")
     state.turn_id = turn_id
     _record_turn_output(turn, state)
-    state.provider_acceptance = "accepted"
 
-    while state.provider_calls_completed == 0:
+    while not state.turn_completed:
         _handle_server_message(transport, transport.receive(), state)
 
 
@@ -387,25 +400,44 @@ def _record_token_usage(params: dict[str, object], state: _SessionState) -> None
     token_usage = _require_object(params.get("tokenUsage"), "token usage notification")
     last = _usage_counts(token_usage.get("last"))
     total = _usage_counts(token_usage.get("total"))
-    if total != last:
-        raise CodexProtocolError(
-            "multiple-provider-calls",
-            "Codex reported more than one provider call for the turn",
+    previous = state.usage
+    if any(
+        current < increment
+        for current, increment in zip(
+            (total.input_tokens, total.output_tokens, total.cached_input_tokens),
+            (last.input_tokens, last.output_tokens, last.cached_input_tokens),
+            strict=True,
         )
-    state.usage = last
-    if last.output_tokens:
+    ) or (
+        previous is not None
+        and any(
+            current < prior
+            for current, prior in zip(
+                (total.input_tokens, total.output_tokens, total.cached_input_tokens),
+                (previous.input_tokens, previous.output_tokens, previous.cached_input_tokens),
+                strict=True,
+            )
+        )
+    ):
+        raise CodexProtocolError("invalid-usage", "Codex cumulative token usage decreased")
+    state.usage = total
+    if total.output_tokens:
         state.behavior_output_observed = True
 
 
 def _usage_counts(value: object) -> ProtocolUsage:
     counts = _require_object(value, "token usage notification")
-    return ProtocolUsage(
+    usage = ProtocolUsage(
         input_tokens=_require_count(counts.get("inputTokens"), "input token count"),
         output_tokens=_require_count(counts.get("outputTokens"), "output token count"),
         cached_input_tokens=_require_count(
             counts.get("cachedInputTokens"), "cached input token count"
         ),
     )
+
+    if usage.cached_input_tokens > usage.input_tokens:
+        raise CodexProtocolError("invalid-usage", "Codex cached token usage exceeds input usage")
+    return usage
 
 
 def _record_item(
@@ -432,7 +464,6 @@ def _record_turn_started(params: dict[str, object], state: _SessionState) -> Non
         raise CodexProtocolError("identity-mismatch", "Codex turn identity changed")
     state.turn_id = turn_id
     _record_turn_output(turn, state)
-    state.provider_acceptance = "accepted"
 
 
 def _record_turn_output(turn: dict[str, object], state: _SessionState) -> None:
@@ -465,7 +496,8 @@ def _record_turn_completed(params: dict[str, object], state: _SessionState) -> N
         _require_passive_item_type(item_type)
         if item_type == "agentMessage":
             _record_agent_message(item, state)
-    state.provider_calls_completed = 1
+    state.turn_completed = True
+    state.provider_acceptance = "accepted"
     state.behavior_output_observed = True
 
 
@@ -520,7 +552,7 @@ def _require_passive_item_type(item_type: str) -> None:
 
 
 def _completed_outcome(state: _SessionState) -> ProtocolOutcome:
-    if state.provider_calls_completed != 1:
+    if not state.turn_completed:
         raise CodexProtocolError("missing-completion", "Codex turn has no terminal completion")
     final = [text for phase, text in state.final_messages.values() if phase == "final_answer"]
     if not final:
@@ -539,8 +571,8 @@ def _completed_outcome(state: _SessionState) -> ProtocolOutcome:
         service_tier=state.service_tier,
         usage=state.usage,
         provider_acceptance=state.provider_acceptance,
-        provider_calls_started=state.provider_calls_started,
-        provider_calls_completed=state.provider_calls_completed,
+        provider_calls_started=0,
+        provider_calls_completed=0,
         actions_requested=state.actions_requested,
         actions_denied=state.actions_denied,
         behavior_output_observed=state.behavior_output_observed,
@@ -556,8 +588,8 @@ def _failed_outcome(state: _SessionState, code: str) -> ProtocolOutcome:
         service_tier=state.service_tier,
         usage=state.usage,
         provider_acceptance=state.provider_acceptance,
-        provider_calls_started=state.provider_calls_started,
-        provider_calls_completed=state.provider_calls_completed,
+        provider_calls_started=0,
+        provider_calls_completed=0,
         actions_requested=state.actions_requested,
         actions_denied=state.actions_denied,
         behavior_output_observed=state.behavior_output_observed,
@@ -629,7 +661,7 @@ def _optional_string(value: object) -> str | None:
 
 
 def _require_count(value: object, label: str) -> int:
-    if type(value) is not int or value < 0:
+    if type(value) is not int or not 0 <= value <= (1 << 63) - 1:
         raise CodexProtocolError("invalid-message", f"Codex {label} is invalid")
     return value
 

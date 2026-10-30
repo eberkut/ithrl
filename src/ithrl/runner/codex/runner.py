@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from contextlib import suppress
 from importlib.metadata import version as distribution_version
 from pathlib import Path
 from typing import cast
@@ -36,8 +37,9 @@ from ithrl.runner.codex.policy import (
     runtime_deviation,
 )
 from ithrl.runner.codex.protocol import CodexProtocolError, ProtocolOutcome
+from ithrl.runner.codex.protocol_contracts import MAX_INFERENCE_REQUESTS
 from ithrl.runner.codex.runtime_configuration import validate_runner_configuration
-from ithrl.runner.codex.transcript import parse_transcript
+from ithrl.runner.codex.transcript import parse_transcript, physical_request_counts
 from ithrl.runner.contracts import (
     MAX_MODEL_NAME_LENGTH,
     MAX_SERVICE_TIER_LENGTH,
@@ -62,10 +64,11 @@ from ithrl.runner.runtime import (
     RuntimeReport,
     run_isolated_process,
 )
+from ithrl.runner.runtime.protection import (
+    DEFAULT_MAX_PROTECTED_BYTES,
+    DEFAULT_MAX_PROTECTED_ENTRIES,
+)
 from ithrl.runner.validation import validate_run_result
-
-_MAX_PROTECTED_ENTRIES = 250_000
-_MAX_PROTECTED_BYTES = 256 * 1024 * 1024
 
 
 class CodexRunner:
@@ -107,7 +110,8 @@ class CodexRunner:
         self._worker_source = Path(__file__).with_name("worker.py")
         self._worker_digest = program_digest(self._worker_source)
         support_sources = tuple(
-            Path(__file__).with_name(name) for name in ("protocol.py", "protocol_contracts.py")
+            Path(__file__).with_name(name)
+            for name in ("protocol.py", "protocol_contracts.py", "relay.py")
         )
         self._support_programs = tuple(
             (source, program_digest(source)) for source in support_sources
@@ -173,7 +177,13 @@ class CodexRunner:
             ) from error
 
         worker_request = _worker_request(
-            materialized, self._configuration.provider_id, self._client_version
+            materialized,
+            self._configuration.provider_id,
+            self._client_version,
+            endpoint=self._configuration.endpoint,
+            max_requests=attempt.execution_plan.capability.provider_calls_per_attempt,
+            timeout_seconds=attempt.resource_limits.max_wall_time_seconds,
+            max_response_bytes=attempt.resource_limits.max_native_output_bytes,
         )
         try:
             execution = await run_isolated_process(
@@ -192,8 +202,8 @@ class CodexRunner:
                 resource_limits=attempt.resource_limits,
                 source_paths=self._source_paths,
                 workspace_paths=self._workspace_paths,
-                max_protected_entries=_MAX_PROTECTED_ENTRIES,
-                max_protected_bytes=_MAX_PROTECTED_BYTES,
+                max_protected_entries=DEFAULT_MAX_PROTECTED_ENTRIES,
+                max_protected_bytes=DEFAULT_MAX_PROTECTED_BYTES,
             )
         except ProcessRuntimeCancelled as cancelled:
             error = _runtime_error(
@@ -202,6 +212,7 @@ class CodexRunner:
                 "Codex attempt was cancelled",
                 cancelled.report,
                 cancelled.native_output,
+                output_store=self._output_store,
             )
             raise RunnerCancelled(error) from None
         except ProcessRuntimeError as error:
@@ -211,6 +222,7 @@ class CodexRunner:
                 str(error),
                 error.report,
                 error.native_output,
+                output_store=self._output_store,
                 reason_code=error.reason_code,
             ) from error
         except CodexIsolationError as error:
@@ -231,6 +243,7 @@ class CodexRunner:
                 "Codex runner produced no protected native output",
                 execution.report,
                 None,
+                output_store=self._output_store,
             )
         try:
             protected = self._output_store.read(execution.native_output)
@@ -242,6 +255,10 @@ class CodexRunner:
                 "Codex runner output could not be validated",
                 execution.report,
                 execution.native_output,
+                output_store=self._output_store,
+                reason_code=error.code
+                if isinstance(error, CodexProtocolError)
+                else "native-output-unavailable",
             ) from error
         _require_normalized_outcome(attempt, outcome, execution.report, execution.native_output)
         if execution.returncode != 0 or outcome.status != "completed":
@@ -297,7 +314,6 @@ def _validate_capability(capability: CapabilityProfile) -> None:
         "reconstruction_method": RECONSTRUCTION_METHOD,
         "supported_targets": (TARGET_TYPE,),
         "provider_transport": "required",
-        "provider_calls_per_attempt": 1,
         "tool_network_access": "forbidden",
         "action_visibility": "not-applicable",
         "action_denial": "enforced",
@@ -314,6 +330,11 @@ def _validate_capability(capability: CapabilityProfile) -> None:
         "reports_usage": True,
         "input_token_limit_enforcement": "unavailable",
     }
+    if (
+        type(capability.provider_calls_per_attempt) is not int
+        or not 1 <= capability.provider_calls_per_attempt <= MAX_INFERENCE_REQUESTS
+    ):
+        raise ValueError("Codex capability does not satisfy the final-response runner contract")
     document = capability.model_dump(mode="python")
     if any(document[name] != value for name, value in expected.items()):
         raise ValueError("Codex capability does not satisfy the final-response runner contract")
@@ -358,7 +379,14 @@ def _validate_materialized_identity(
 
 
 def _worker_request(
-    materialized: CodexMaterialization, runtime_provider_id: str, client_version: str
+    materialized: CodexMaterialization,
+    runtime_provider_id: str,
+    client_version: str,
+    *,
+    endpoint: str,
+    max_requests: int,
+    timeout_seconds: int,
+    max_response_bytes: int,
 ) -> JsonObject:
     return {
         "schema_version": 1,
@@ -372,6 +400,12 @@ def _worker_request(
         "history": cast(JsonValue, list(materialized.history)),
         "input": cast(JsonValue, list(materialized.turn_input.items)),
         "toolOutput": materialized.turn_input.tool_output,
+        "transport": {
+            "endpoint": endpoint,
+            "max_requests": max_requests,
+            "timeout_seconds": timeout_seconds,
+            "max_response_bytes": max_response_bytes,
+        },
     }
 
 
@@ -454,6 +488,8 @@ def _outcome_error(
 ) -> RunnerError:
     if outcome.error_code == "provider-overloaded":
         code = RunnerErrorCode.PROVIDER_OVERLOADED
+    elif outcome.error_code == "provider-call-limit":
+        code = RunnerErrorCode.PROVIDER_CALL_LIMIT
     elif outcome.error_code in {
         "action-requested",
         "remote-control-active",
@@ -478,6 +514,7 @@ def _outcome_error(
         native_output=native_output,
         effective_policy_digest=attempt.safety_policy.digest,
         behavior_output_observed=outcome.behavior_output_observed,
+        reason_code=outcome.error_code,
     )
 
 
@@ -488,11 +525,16 @@ def _runtime_error(
     report: RuntimeReport,
     native_output: NativeOutputReference | None,
     *,
+    output_store: ProtectedOutputStore | None = None,
     reason_code: str | None = None,
 ) -> RunnerError:
+    physical_counts = (0, 0) if report.process_outcome == "not-started" else None
+    if output_store is not None and native_output is not None:
+        with suppress(NativeOutputStoreError):
+            physical_counts = physical_request_counts(output_store.read(native_output).stdout)
     acceptance = (
         ProviderAcceptanceState.NOT_STARTED
-        if report.process_outcome == "not-started"
+        if physical_counts == (0, 0)
         else ProviderAcceptanceState.UNKNOWN
     )
     return RunnerError(
@@ -503,7 +545,7 @@ def _runtime_error(
         model_requested=attempt.execution_plan.model_requested,
         provider=attempt.execution_plan.capability.provider,
         endpoint=attempt.execution_plan.capability.endpoint,
-        accounting=_accounting(report, provider_call_may_have_started=True),
+        accounting=_accounting(report, physical_counts=physical_counts),
         native_output=native_output,
         effective_policy_digest=attempt.safety_policy.digest,
     )
@@ -513,16 +555,20 @@ def _accounting(
     report: RuntimeReport,
     outcome: ProtocolOutcome | None = None,
     *,
-    provider_call_may_have_started: bool = False,
+    physical_counts: tuple[int, int] | None = None,
 ) -> RunAccounting:
     provider_calls_started = (
         outcome.provider_calls_started
         if outcome is not None
-        else int(provider_call_may_have_started and report.process_outcome != "not-started")
+        else (physical_counts[0] if physical_counts is not None else 0)
     )
     return RunAccounting(
         provider_calls_started=provider_calls_started,
-        provider_calls_completed=outcome.provider_calls_completed if outcome is not None else 0,
+        provider_calls_completed=(
+            outcome.provider_calls_completed
+            if outcome is not None
+            else (physical_counts[1] if physical_counts is not None else 0)
+        ),
         provider_connections_started=provider_calls_started,
         actions_requested=outcome.actions_requested if outcome is not None else 0,
         actions_denied=outcome.actions_denied if outcome is not None else 0,

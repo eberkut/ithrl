@@ -18,6 +18,7 @@ from ithrl.context import JsonObject, content_digest, validate_json_limits
 from ithrl.runner.codex.configuration import MAX_AUTH_BYTES, CodexProviderConfiguration
 from ithrl.runner.codex.protocol import MAX_WORKER_REQUEST_BYTES, SANDBOX_ROOT
 from ithrl.runner.runtime import OwnedAttemptState, ProcessSpec
+from ithrl.runner.runtime.certificates import snapshot_certificate_files
 
 _MAX_WORKER_BYTES = 1024 * 1024
 
@@ -108,7 +109,14 @@ def prepare_codex_process(
     except CaseError as error:
         raise CodexIsolationError("cannot prepare private Codex attempt state") from error
 
-    environment = _worker_environment(configuration.environment)
+    try:
+        environment = _worker_environment(
+            snapshot_certificate_files(
+                state.root, configuration.environment, sandbox_root=SANDBOX_ROOT
+            )
+        )
+    except ValueError as error:
+        raise CodexIsolationError("cannot snapshot a configured Codex CA bundle") from error
     auth_descriptor = _memory_file(configuration.auth_data)
     try:
         argv = _bubblewrap_argv(

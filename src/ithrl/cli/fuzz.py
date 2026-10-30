@@ -22,7 +22,7 @@ from ithrl.cli.fuzz_session import (
 from ithrl.cli.native import NativeSelectionError, native_selection
 from ithrl.cli.output import OutputFormat, shell_command
 from ithrl.cli.sampled import _observation_store_path
-from ithrl.execution import ResourceLimits
+from ithrl.execution import MAX_PROVIDER_CALLS_PER_ATTEMPT, ResourceLimits
 from ithrl.experiment import (
     FakeRunnerConfig,
     NativeRunnerConfig,
@@ -51,6 +51,7 @@ def prepare_fuzz_profile(
     original_workspace: Path | None,
     *,
     detect: bool,
+    max_provider_calls_per_attempt: int | None = None,
 ) -> tuple[FuzzProfile, PreparedExperiment]:
     evidence = workspace.load()
     persisted = parse_experiment_toml(evidence.default_experiment)
@@ -86,6 +87,7 @@ def prepare_fuzz_profile(
             original_workspace=original_workspace,
             experiment=experiment,
             calibration=config.calibration,
+            max_provider_calls_per_attempt=max_provider_calls_per_attempt,
             attempt_timeout_seconds=config.limits.attempt_timeout_seconds,
         )
         prepared = prepare_experiment(
@@ -133,6 +135,7 @@ def _handle(
     detect: bool,
     resume: bool,
     acknowledge: bool,
+    max_provider_calls_per_attempt: int | None = None,
 ) -> FuzzOutput:
     if detect and (dry_run or resume):
         raise FuzzInputRefusal("conflicting-modes")
@@ -155,6 +158,14 @@ def _handle(
         config = load_fuzz_configuration(config_path)
         workspace = CaseWorkspace(source.absolute())
         profile = load_fuzz_profile(profile_path) if profile_path and not detect else None
+    if profile is not None:
+        saved_limit = profile.execution_plan.capability.provider_calls_per_attempt
+        if (
+            max_provider_calls_per_attempt is not None
+            and max_provider_calls_per_attempt != saved_limit
+        ):
+            raise FuzzInputRefusal("profile-provider-call-limit-mismatch")
+        max_provider_calls_per_attempt = saved_limit
     evidence = workspace.load()
     persisted = parse_experiment_toml(evidence.default_experiment)
     native = isinstance(persisted.runner, (NativeRunnerConfig, UnavailableRunnerConfig))
@@ -175,18 +186,19 @@ def _handle(
     if native and profile is None and not detect:
         if not dry_run:
             raise FuzzInputRefusal("detection-required")
-        next_step = _next(
-            (
-                "ithrl",
-                "fuzz",
-                str(workspace.root),
-                "--config",
-                str(config_path),
-                "--detect",
-                "--original-workspace",
-                str(original_workspace),
-            )
+        arguments = (
+            "ithrl",
+            "fuzz",
+            str(workspace.root),
+            "--config",
+            str(config_path),
+            "--detect",
+            "--original-workspace",
+            str(original_workspace),
         )
+        if max_provider_calls_per_attempt is not None:
+            arguments += ("--max-provider-calls-per-attempt", str(max_provider_calls_per_attempt))
+        next_step = _next(arguments)
         return FuzzOutput(
             status="detection-required",
             case_path=str(workspace.root),
@@ -225,7 +237,11 @@ def _handle(
     prepared = None
     if not native or detect or not dry_run:
         current, prepared = prepare_fuzz_profile(
-            workspace, config, original_workspace, detect=native
+            workspace,
+            config,
+            original_workspace,
+            detect=native,
+            max_provider_calls_per_attempt=max_provider_calls_per_attempt,
         )
         if profile is not None and current != profile:
             raise FuzzInputRefusal("capability-profile-mismatch")
@@ -313,6 +329,19 @@ def fuzz(
             "--original-workspace", help="Protected original workspace for a native case."
         ),
     ] = None,
+    max_provider_calls_per_attempt: Annotated[
+        int | None,
+        typer.Option(
+            "--max-provider-calls-per-attempt",
+            min=1,
+            max=MAX_PROVIDER_CALLS_PER_ATTEMPT,
+            help=(
+                "Hard provider-call limit per native attempt. Codex default: 16; "
+                "Copilot uses its detected target limit. Resume preserves the saved limit. "
+                "This budget does not guarantee turn completion."
+            ),
+        ),
+    ] = None,
     observation_store: Annotated[
         Path | None,
         typer.Option("--observation-store", help="Private SQLite store outside protected state."),
@@ -361,6 +390,7 @@ def fuzz(
             detect,
             resume,
             acknowledge_model_execution,
+            max_provider_calls_per_attempt,
         )
     except ImportError:
         report = FuzzOutput(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import FrozenInstanceError, replace
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -20,10 +21,19 @@ from ithrl.execution import (
 )
 from ithrl.experiment import ExperimentDefinition, FakeRunnerConfig
 from ithrl.extraction import extract_decision
+from ithrl.observations import (
+    Observation,
+    ObservationArm,
+    ObservationOutcome,
+    ObservationRole,
+    ObservationStore,
+)
+from ithrl.run_state import SampledRunState, SampledRunStateFile
 from ithrl.runner import (
     AttemptEvidence,
     Candidate,
     FakeRunner,
+    NativeOutputReference,
     PreparedAttempt,
     ProviderAcceptanceState,
     RunAccounting,
@@ -611,7 +621,7 @@ def test_attempt_evidence_rejects_provider_state_accounting_conflicts(
             accounting=accepted_result.accounting,
         ),
     )
-    assert reconciled.provider_acceptance_state is ProviderAcceptanceState.ACCEPTED
+    assert reconciled.provider_acceptance_state is ProviderAcceptanceState.UNKNOWN
     assert not reconciled.automatic_retry_safe
 
 
@@ -649,6 +659,51 @@ def test_fake_runner_rejects_invalid_direct_configuration(
         FakeRunner(**arguments)  # type: ignore[arg-type]
 
 
+@pytest.mark.parametrize("completed", [0, 1])
+@pytest.mark.parametrize(
+    ("acceptance", "started", "expected"),
+    [
+        (ProviderAcceptanceState.UNKNOWN, 1, ProviderAcceptanceState.UNKNOWN),
+        (ProviderAcceptanceState.ACCEPTED, 1, ProviderAcceptanceState.ACCEPTED),
+        (ProviderAcceptanceState.NOT_STARTED, 1, ProviderAcceptanceState.UNKNOWN),
+    ],
+)
+def test_error_acceptance_requires_explicit_model_acceptance(
+    tmp_path: Path,
+    completed: int,
+    acceptance: ProviderAcceptanceState,
+    started: int,
+    expected: ProviderAcceptanceState,
+) -> None:
+    _, attempt = _attempt(_synthetic_evidence(tmp_path))
+    error = RunnerError(
+        RunnerErrorCode.TRANSPORT,
+        "provider request did not produce a usable result",
+        provider_acceptance_state=acceptance,
+        accounting=RunAccounting(
+            provider_calls_started=started,
+            provider_calls_completed=completed,
+        ),
+    )
+
+    evidence = AttemptEvidence.from_error(attempt, error)
+
+    assert evidence.provider_acceptance_state is expected
+    assert not evidence.automatic_retry_safe
+
+
+def test_error_acceptance_without_a_started_request_remains_unknown(tmp_path: Path) -> None:
+    _, attempt = _attempt(_synthetic_evidence(tmp_path))
+    error = RunnerError(
+        RunnerErrorCode.TRANSPORT,
+        "contradictory model acceptance",
+        provider_acceptance_state=ProviderAcceptanceState.ACCEPTED,
+        accounting=RunAccounting(),
+    )
+
+    assert AttemptEvidence.from_error(attempt, error).acceptance_unknown
+
+
 def test_runner_error_reason_code_round_trips_without_absent_null_field(tmp_path: Path) -> None:
     _, attempt = _attempt(_synthetic_evidence(tmp_path))
     evidence = AttemptEvidence.from_error(
@@ -678,3 +733,153 @@ def test_runner_error_rejects_unsafe_reason_code(tmp_path: Path, reason_code: st
             provider_calls_possible=1,
             reason_code=reason_code,
         )
+
+
+def _overloaded_provider_attempt(
+    tmp_path: Path,
+    *,
+    provider_calls_per_attempt: int,
+    started: int = 1,
+    completed: int = 1,
+    acceptance: ProviderAcceptanceState = ProviderAcceptanceState.UNKNOWN,
+) -> tuple[PreparedAttempt, RunnerError]:
+    _, original = _attempt(_synthetic_evidence(tmp_path))
+    policy = SafetyPolicy(
+        provider_transport="allowed",
+        allowed_provider="fixture-provider",
+        allowed_endpoint="https://provider.invalid/responses",
+    )
+    limits = ResourceLimits(max_provider_calls=provider_calls_per_attempt)
+    capability = original.execution_plan.capability.model_copy(
+        update={
+            "provider_transport": "required",
+            "provider": policy.allowed_provider,
+            "endpoint": policy.allowed_endpoint,
+            "provider_calls_per_attempt": provider_calls_per_attempt,
+            "protected_state_enforcement": "preventive",
+        }
+    )
+    plan = original.execution_plan.model_copy(
+        update={"capability": capability, "safety_policy": policy, "resource_limits": limits}
+    )
+    attempt = replace(
+        original,
+        candidate=prepare_candidate(original.evidence, plan),
+        execution_plan=plan,
+        safety_policy=policy,
+        resource_limits=limits,
+    )
+    error = RunnerError(
+        RunnerErrorCode.PROVIDER_OVERLOADED,
+        "structured provider overload response",
+        provider_acceptance_state=acceptance,
+        model_requested=plan.model_requested,
+        provider=capability.provider,
+        endpoint=capability.endpoint,
+        effective_policy_digest=policy.digest,
+        behavior_output_observed=False,
+        accounting=RunAccounting(
+            provider_calls_started=started,
+            provider_calls_completed=completed,
+            provider_connections_started=1,
+            process_outcome="exited",
+            cleanup_outcome="verified",
+            native_output_bytes=100,
+        ),
+        native_output=NativeOutputReference(
+            artifact_id="synthetic-overload",
+            sha256="a" * 64,
+            media_type="application/json",
+            size_bytes=100,
+        ),
+    )
+    return attempt, error
+
+
+@pytest.mark.parametrize("provider_calls_per_attempt", [1, 4])
+@pytest.mark.parametrize("completed", [0, 1])
+def test_one_physical_overload_request_can_allow_a_fresh_sample(
+    tmp_path: Path, provider_calls_per_attempt: int, completed: int
+) -> None:
+    attempt, error = _overloaded_provider_attempt(
+        tmp_path,
+        provider_calls_per_attempt=provider_calls_per_attempt,
+        completed=completed,
+    )
+    evidence = AttemptEvidence.from_error(attempt, validate_runner_error(attempt, error))
+
+    assert evidence.overload_replacement_safe
+    assert evidence.acceptance_unknown
+    assert evidence.provider_calls_possible == provider_calls_per_attempt
+    assert not evidence.automatic_retry_safe
+    assert AttemptEvidence.model_validate_json(evidence.model_dump_json()) == evidence
+
+
+@pytest.mark.parametrize(
+    ("started", "completed", "acceptance"),
+    [
+        (2, 0, ProviderAcceptanceState.UNKNOWN),
+        (2, 1, ProviderAcceptanceState.UNKNOWN),
+        (2, 2, ProviderAcceptanceState.UNKNOWN),
+        (1, 1, ProviderAcceptanceState.ACCEPTED),
+    ],
+)
+def test_overload_with_multiple_requests_or_known_acceptance_refuses_replacement(
+    tmp_path: Path, started: int, completed: int, acceptance: ProviderAcceptanceState
+) -> None:
+    attempt, error = _overloaded_provider_attempt(
+        tmp_path,
+        provider_calls_per_attempt=4,
+        started=started,
+        completed=completed,
+        acceptance=acceptance,
+    )
+
+    evidence = AttemptEvidence.from_error(attempt, validate_runner_error(attempt, error))
+
+    assert evidence.provider_acceptance_state is acceptance
+    assert not evidence.overload_replacement_safe
+    assert not evidence.automatic_retry_safe
+
+
+def test_completed_http_overload_preserves_full_charge_without_a_behavior_verdict(
+    tmp_path: Path,
+) -> None:
+    attempt, error = _overloaded_provider_attempt(tmp_path, provider_calls_per_attempt=4)
+    evidence = AttemptEvidence.from_error(attempt, validate_runner_error(attempt, error))
+    observation = Observation(
+        case_digest=attempt.evidence.digest,
+        candidate_digest=attempt.candidate.digest,
+        experiment_digest=attempt.execution_plan.experiment_digest,
+        runner_fingerprint=attempt.execution_plan.runner_fingerprint,
+        execution_plan_digest=attempt.execution_plan.digest,
+        target_digest=attempt.target.digest,
+        algorithm_digest="a" * 64,
+        role=ObservationRole.CALIBRATION,
+        arm=ObservationArm.BASELINE,
+        attempt=1,
+        outcome=ObservationOutcome.RUNNER_ERROR,
+        error_category=error.code.value,
+        attempt_evidence=evidence,
+    )
+    state = SampledRunState.model_construct(
+        started_at=datetime.now(UTC), provider_calls_per_attempt=4, pending=None
+    )
+    usage = SampledRunStateFile._usage(state, (observation,), (), now=state.started_at)
+    store = ObservationStore(tmp_path / "observations.sqlite")
+    store.append(observation)
+    counts = store.attempt_counts(
+        observation.identity,
+        candidate_digest=observation.candidate_digest,
+        role=observation.role,
+        arm=observation.arm,
+    )
+
+    assert observation.allows_fresh_attempt("safe-provider-overload")
+    assert not observation.allows_fresh_attempt("independent-safe-preaccept-only")
+    assert observation.target_observed is None
+    assert counts.attempts == counts.runner_errors == 1
+    assert counts.valid_samples == counts.matches == counts.no_matches == 0
+    assert usage.actual_provider_calls == 1
+    assert usage.possible_provider_calls == 3
+    assert usage.charged_provider_calls == 4

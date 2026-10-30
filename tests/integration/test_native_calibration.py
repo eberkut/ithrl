@@ -16,6 +16,7 @@ import pytest
 from typer.testing import CliRunner
 
 import ithrl.cli.native as native
+import ithrl.runner.codex.runner as codex_runner_module
 import ithrl.runner.runtime.process as process_runtime
 from ithrl.case import CaseWorkspace
 from ithrl.cli import ExitCode, app
@@ -38,6 +39,8 @@ from ithrl.results import (
     load_sampling_snapshot,
 )
 from ithrl.runner.codex import CodexProviderConfiguration, CodexRuntime
+from ithrl.runner.codex.isolation import program_digest
+from ithrl.runner.codex.protocol_contracts import MAX_INFERENCE_REQUESTS
 from ithrl.runner.copilot import CopilotRuntime, DetectedCopilotCapability
 from ithrl.runner.copilot.capability import CopilotCapabilityError, CopilotCapabilityErrorCode
 from ithrl.runner.runtime import ProcessSpec
@@ -106,16 +109,38 @@ def _scenario(
             if mode == "context-sensitive"
             else codex.FIXTURES / "codex-session/rollout.jsonl"
         )
-        script = codex._FAKE_APP_SERVER.replace("__FIXTURE_MODE__", mode)
-        executable.write_text(script.replace("Fixture complete.", response))
+        executable.write_text("#!/usr/bin/python3\nraise SystemExit(0)\n")
+        worker = root / "fixture-codex-worker.py"
+        worker.write_text(
+            codex._FAKE_CODEX_WORKER.replace("__FIXTURE_MODE__", mode).replace(
+                "Fixture complete.", response
+            )
+        )
+        prepare_process = codex_runner_module.prepare_codex_process
+
+        def prepare_codex_fixture_process(*args: Any, **kwargs: Any) -> ProcessSpec:
+            kwargs["worker_source"] = worker
+            kwargs["worker_digest"] = program_digest(worker)
+            return prepare_process(*args, **kwargs)
+
+        monkeypatch.setattr(
+            codex_runner_module, "prepare_codex_process", prepare_codex_fixture_process
+        )
         monkeypatch.setattr(
             native, "resolve_codex_configuration", Mock(return_value=codex._configuration())
         )
 
         def detect(
-            runtime: CodexRuntime, configuration: CodexProviderConfiguration
+            runtime: CodexRuntime,
+            configuration: CodexProviderConfiguration,
+            *,
+            max_provider_calls_per_attempt: int = MAX_INFERENCE_REQUESTS,
         ) -> CapabilityProfile:
-            return codex._capability(configuration, runtime)
+            return codex._capability(
+                configuration,
+                runtime,
+                max_provider_calls_per_attempt=max_provider_calls_per_attempt,
+            )
 
         monkeypatch.setattr(native, "detect_codex_capability", detect)
     else:
@@ -152,7 +177,7 @@ def _scenario(
         root / "data",
         marker,
         root / "observations.sqlite",
-        2 if target == "shell-action" else 1,
+        MAX_INFERENCE_REQUESTS if harness == "codex" else (2 if target == "shell-action" else 1),
     )
 
 
@@ -349,9 +374,9 @@ def test_native_cli_calibrates_and_reuses_independent_clean_attempts(
     assert report["status"] == "measurable"
     assert report["attempts_used"] == report["matches"] == 2
     assert report["actions_executed"] == 0
-    assert report["provider_calls"] == (None if target == "shell-action" else 2)
+    assert report["provider_calls"] == (None if scenario.calls_per_attempt > 1 else 2)
     assert report["provider_call_accounting"] == (
-        "started-unknown" if target == "shell-action" else "accounted"
+        "started-unknown" if scenario.calls_per_attempt > 1 else "accounted"
     )
     assert snapshot.summary.provider_calls_completed == 2
     assert snapshot.summary.actions_requested == (2 if target == "shell-action" else 0)
@@ -406,7 +431,7 @@ def _sampled_arguments(
     for flag in ("--required-valid", "--minimum-matches", "--max-attempts"):
         index = args.index(flag)
         del args[index : index + 2]
-    args[args.index("--max-provider-calls") + 1] = "100"
+    args[args.index("--max-provider-calls") + 1] = str(100 * scenario.calls_per_attempt)
     args.extend(
         ["--experiment", str(experiment_path), "--max-wall-time", "600", "--max-candidates", "20"]
     )
@@ -522,9 +547,7 @@ def test_native_sampled_shrink_reduces_only_irrelevant_context_and_freshly_confi
     assert all(child.poll() is not None for child in children)
     assert all(not path.exists() for path in workspaces)
     assert report["actual_provider_calls"] == len(observations)
-    assert report["possible_provider_calls"] == (
-        len(observations) if target == "shell-action" else 0
-    )
+    assert report["possible_provider_calls"] == len(observations) * (scenario.calls_per_attempt - 1)
     assert report["charged_provider_calls"] == len(observations) * scenario.calls_per_attempt
     assert report["charged_provider_calls"] <= report["max_provider_calls"]
     assert report["runner_seconds"] == runner_milliseconds / 1000
@@ -537,9 +560,11 @@ def test_native_sampled_shrink_reduces_only_irrelevant_context_and_freshly_confi
     )
     assert report["actions_executed"] == 0
     assert report["provider_call_accounting"] == (
-        "started-unknown" if target == "shell-action" else "accounted"
+        "started-unknown" if scenario.calls_per_attempt > 1 else "accounted"
     )
-    assert report["provider_calls"] == (None if target == "shell-action" else len(observations))
+    assert report["provider_calls"] == (
+        None if scenario.calls_per_attempt > 1 else len(observations)
+    )
     assert report["known_tokens"] == (108 * len(observations) if harness == "codex" else 0)
     assert report["unknown_token_attempts"] == (0 if harness == "codex" else len(observations))
     assert report["action_visibility"] == (

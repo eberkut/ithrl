@@ -140,6 +140,14 @@ before sampling resources are committed. An original reconstruction refusal is t
 candidate-local refusal during search consumes no provider calls. Admission starts no process or
 provider request; execution still validates the reconstructed candidate.
 
+Codex reconstructs copied history through the installed CLI's app-server protocol. A bounded
+Responses relay forwards to the fixed configured destination and records physical request counts.
+Native request and stream retries are disabled; a completed turn can still require several
+Responses requests. The caller selects a per-attempt cap from 1 to 16 (default 16). Capability,
+plan and saved-run identities retain this administrative limit. The relay rejects requests beyond
+the cap and records a `provider-call-limit` error. A completed HTTP response alone does not
+establish model acceptance or a completed native turn.
+
 The shared runtime in `runner/runtime/` owns fresh private state, bounded output, process-group
 termination, cancellation and cleanup. It is not a filesystem or network sandbox. Concrete
 runners supply preventive isolation and effective action denial; source/workspace snapshots

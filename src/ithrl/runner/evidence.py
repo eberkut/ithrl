@@ -72,7 +72,7 @@ class AttemptEvidence(BaseModel):
                 or self.effective_policy_digest is None
                 or accounting is None
                 or not _safe_overload_accounting(accounting)
-                or self.provider_calls_possible != 1
+                or self.provider_calls_possible < accounting.provider_calls_started
                 or (self.usage is not None and self.usage.output_tokens != 0)
                 or self.provider_acceptance_state is not ProviderAcceptanceState.UNKNOWN
                 or self.native_output is None
@@ -199,7 +199,7 @@ class AttemptEvidence(BaseModel):
             accounting=error.accounting,
             native_output=error.native_output,
             retry_safe=_error_retry_safe(attempt, error, acceptance),
-            overload_replacement_safe=_error_overload_replacement_safe(attempt, error),
+            overload_replacement_safe=_error_overload_replacement_safe(attempt, error, acceptance),
         )
 
 
@@ -217,11 +217,15 @@ def _error_acceptance_state(
 ) -> ProviderAcceptanceState:
     accounting = error.accounting
     if accounting is not None:
-        if accounting.provider_calls_completed > 0:
-            return ProviderAcceptanceState.ACCEPTED
-        if accounting.provider_calls_started > 0:
+        if (
+            accounting.provider_calls_started > 0
+            and error.provider_acceptance_state is ProviderAcceptanceState.NOT_STARTED
+        ):
             return ProviderAcceptanceState.UNKNOWN
-        if error.provider_acceptance_state is ProviderAcceptanceState.ACCEPTED:
+        if (
+            accounting.provider_calls_started == 0
+            and error.provider_acceptance_state is ProviderAcceptanceState.ACCEPTED
+        ):
             return ProviderAcceptanceState.UNKNOWN
     return error.provider_acceptance_state
 
@@ -238,18 +242,23 @@ _RETRYABLE_ERROR_CODES = {
 }
 
 
-def _error_overload_replacement_safe(attempt: PreparedAttempt, error: RunnerError) -> bool:
+def _error_overload_replacement_safe(
+    attempt: PreparedAttempt,
+    error: RunnerError,
+    acceptance: ProviderAcceptanceState,
+) -> bool:
     """Qualify a fresh sample without asserting unobserved provider work did not occur."""
 
     accounting = error.accounting
     capability = attempt.execution_plan.capability
     return (
         error.code is RunnerErrorCode.PROVIDER_OVERLOADED
+        and acceptance is ProviderAcceptanceState.UNKNOWN
         and error.behavior_output_observed is False
         and accounting is not None
         and _safe_overload_accounting(accounting)
         and (error.usage is None or error.usage.output_tokens == 0)
-        and capability.provider_calls_per_attempt == 1
+        and capability.provider_calls_per_attempt >= 1
         and capability.action_denial == "enforced"
         and capability.protected_state_enforcement == "preventive"
         and error.effective_policy_digest == attempt.safety_policy.digest
@@ -271,7 +280,7 @@ def _safe_overload_accounting(accounting: RunAccounting) -> bool:
         and accounting.process_outcome in {"exited", "terminated"}
         and accounting.actions_requested == 0
         and accounting.provider_calls_started == 1
-        and accounting.provider_calls_completed == 0
+        and accounting.provider_calls_completed in {0, 1}
         and accounting.provider_connections_started <= 1
     )
 
