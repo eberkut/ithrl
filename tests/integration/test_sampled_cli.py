@@ -539,14 +539,20 @@ def _standalone_calibration_command(case: OperatorCase) -> list[str]:
     return command
 
 
+@pytest.mark.parametrize("acknowledgement_delay", [0, 300])
 def test_standalone_calibration_keeps_pacing_across_compatible_continuation(
-    operator_case: OperatorCase, monkeypatch: pytest.MonkeyPatch
+    operator_case: OperatorCase, monkeypatch: pytest.MonkeyPatch, acknowledgement_delay: int
 ) -> None:
     command = _standalone_calibration_command(operator_case)
     advance = _install_wall_clock(monkeypatch)
     monkeypatch.setattr(sampled, "datetime", observations.datetime)
     elapsed = 0.0
     waits: list[float] = []
+
+    def acknowledge(*_args: object) -> None:
+        nonlocal elapsed
+        elapsed += acknowledgement_delay
+        advance(acknowledgement_delay)
 
     def wait(seconds: float) -> None:
         nonlocal elapsed
@@ -564,12 +570,17 @@ def test_standalone_calibration_keeps_pacing_across_compatible_continuation(
     assert preflight["max_wall_time_seconds"] == 200
     assert preflight["inter_attempt_delay_seconds"] == 2
     _assert_no_dispatch(operator_case)
-    interrupted = _invoke([*command, "--calibrate-only"])
+    interrupted_command = command.copy()
+    if acknowledgement_delay:
+        interrupted_command.remove("--acknowledge-model-execution")
+        monkeypatch.setattr(sampled, "_require_model_acknowledgement", acknowledge)
+    interrupted = _invoke([*interrupted_command, "--calibrate-only"])
     partial = _json(interrupted)
     assert interrupted.exit_code == ExitCode.CANCELLED, interrupted.output
     assert partial["stop_reason"] == "user-interrupt"
     assert partial["attempts_used"] == partial["matches"] == partial["provider_calls"] == 1
     assert partial["runner_errors"] == 0
+    assert partial["wall_time_seconds"] == 0
     continuation = shlex.split(partial["next_command"])
     assert continuation[continuation.index("--experiment") + 1] == str(
         operator_case.experiment_path
@@ -580,12 +591,14 @@ def test_standalone_calibration_keeps_pacing_across_compatible_continuation(
     ids = [call.attempt_id for call in operator_case.runner.calls]
     elapsed += 1
     advance(1)
+    continued_at = elapsed
     completed = _invoke([*command, "--calibrate-only"])
     report = _json(completed)
     assert completed.exit_code == ExitCode.SUCCESS, completed.output
     assert report["status"] == "measurable"
     assert report["attempts_used"] == report["matches"] == report["provider_calls"] == 3
     assert report["provider_call_accounting"] == "accounted"
+    assert report["wall_time_seconds"] == elapsed - continued_at
     assert 0 < waits[1] <= 1
     assert 0 < waits[2] <= 2
     assert len(operator_case.runner.calls) == 3

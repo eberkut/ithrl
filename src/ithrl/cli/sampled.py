@@ -67,7 +67,6 @@ def handle_sampled_shrink(
 ) -> None:
     """Present a sampled preflight, then run only an acknowledged calibration."""
 
-    started = time.monotonic()
     if not isinstance(prepared.experiment, SampledExperimentDefinition):
         fail_sampled(
             error_code="sampled-experiment-required",
@@ -151,6 +150,7 @@ def handle_sampled_shrink(
     if not acknowledge_model_execution:
         _require_model_acknowledgement(output_format, harness_started)
 
+    started = time.monotonic()
     try:
         # Recheck after acknowledgement before any SQLite or lock-file writes.
         store_path = _observation_store_path(workspace, original_workspace, store_path)
