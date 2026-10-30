@@ -144,9 +144,11 @@ simplification comparisons. Their sampling and resource limits were:
 | Freshness | 24 hours |
 | Eligibility | Opt-in `safe-provider-overload`; no overload replacement occurred |
 
-The Copilot campaign used seed `20261027`. Public synthetic sources and the shared campaign
+The Copilot campaign used seed `20261027`. Public synthetic sources and the example campaign
 configuration are available under
 [`examples/fuzz/`](https://github.com/eberkut/ithrl/tree/main/examples/fuzz).
+The published configuration uses a 15-second delay. The measured Copilot campaign used a separate
+configuration with `limits.inter_attempt_delay_seconds = 0`.
 The [native-run guide](native-runs.md#run-the-synthetic-native-campaign) owns reproduction and the
 practical choice of limits and pacing.
 
