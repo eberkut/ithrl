@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, BinaryIO, TextIO, cast
 if TYPE_CHECKING or __package__:
     from ithrl.runner.codex.protocol import (
         MAX_WORKER_REQUEST_BYTES,
+        SANDBOX_ROOT,
         SANDBOX_WORKSPACE,
         ProtocolOutcome,
         audit_record,
@@ -26,6 +27,7 @@ if TYPE_CHECKING or __package__:
 else:
     from protocol import (
         MAX_WORKER_REQUEST_BYTES,
+        SANDBOX_ROOT,
         SANDBOX_WORKSPACE,
         ProtocolOutcome,
         audit_record,
@@ -46,12 +48,12 @@ def main(argv: list[str] | None = None) -> int:
     """Run one request and return a stable process status."""
 
     arguments = sys.argv[1:] if argv is None else argv
-    if len(arguments) != 2:
-        _safe_error("Codex worker requires a request and executable")
+    if len(arguments) != 1:
+        _safe_error("Codex worker requires a request")
         return 64
     try:
         request = _read_private_request(Path(arguments[0]))
-        executable = _require_executable(Path(arguments[1]))
+        executable = _require_executable(Path(SANDBOX_ROOT) / "runner" / "codex")
         outcome = _run_app_server(executable, request, audit=sys.stdout)
     except WorkerError as error:
         _safe_error(str(error))

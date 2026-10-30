@@ -90,6 +90,10 @@ def test_prepares_private_worker_state_and_minimal_environment(tmp_path: Path) -
     assert "--tmpfs" in spec.argv
     assert "/home" in spec.argv
     assert "/tmp/ithrl-state/runner/codex" in spec.argv  # noqa: S108
+    assert spec.argv[-2:] == (
+        f"{isolation.SANDBOX_ROOT}/worker.py",
+        f"{isolation.SANDBOX_ROOT}/request.json",
+    )
     assert stat.S_IMODE((state.root / "request.json").stat().st_mode) == 0o600
     assert (state.root / "codex-home" / "config.toml").read_bytes() == (
         b'model_provider = "ithrl"\n'

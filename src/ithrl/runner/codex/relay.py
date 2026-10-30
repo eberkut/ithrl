@@ -45,12 +45,11 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 class _Server(HTTPServer):
-    relay: ResponsesRelay
-
     @override
     def handle_error(self, request: object, client_address: object) -> None:
-        # BaseServer's default prints tracebacks, which can contain private data.
-        self.relay._failed = True
+        # Admitted transport failures are recorded by _forward. Listener errors
+        # can come from unrelated local peers; suppress private tracebacks.
+        pass
 
 
 class ResponsesRelay:
@@ -256,7 +255,6 @@ class ResponsesRelay:
 
         server = _Server(("127.0.0.1", 0), Handler)
         self._server = server
-        server.relay = self
         server.timeout = 0.05
 
         def serve() -> None:
@@ -290,13 +288,15 @@ class ResponsesRelay:
             handler.send_error(status)
 
     def _forward(self, handler: BaseHTTPRequestHandler) -> None:
+        if handler.path != self._path + "/responses":
+            handler.close_connection = True
+            with suppress(OSError):
+                handler.send_error(404)
+            return
         ordinal = 0
         response_started = False
         try:
             lengths = handler.headers.get_all("Content-Length") or ()
-            if handler.path != self._path + "/responses":
-                self._reject(handler, 404)
-                return
             if (
                 handler.headers.get("Transfer-Encoding") is not None
                 or handler.headers.get("Upgrade") is not None

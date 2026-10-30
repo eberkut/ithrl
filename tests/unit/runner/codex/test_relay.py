@@ -174,6 +174,7 @@ def test_worker_receipts_five_requests_or_reports_selected_limit_without_forward
         for ordinal in range(1, 6):
             status, _, _ = _request(relays[0])
             assert status == (200 if ordinal <= selected_limit else 429)
+        assert _request(relays[0], path="/unrelated/responses")[0] == 404
         return ProtocolOutcome(
             status="completed",
             error_code=None,
@@ -212,6 +213,7 @@ def test_worker_receipts_five_requests_or_reports_selected_limit_without_forward
     assert outcome.error_code == ("provider-call-limit" if selected_limit == 4 else None)
     assert outcome.provider_acceptance == ("unknown" if selected_limit == 4 else "accepted")
     assert relays[0].selected_request_limit_hit is (selected_limit == 4)
+    assert relays[0].requests_rejected == int(selected_limit == 4)
     assert not relays[0].failed
     assert parse_transcript(audit.getvalue().encode()) == outcome
     assert physical_request_counts(audit.getvalue().encode()) == (count, count)
@@ -219,10 +221,14 @@ def test_worker_receipts_five_requests_or_reports_selected_limit_without_forward
 
 @pytest.mark.parametrize("path", ["/responses", "/wrong/responses", "http://127.0.0.1/responses"])
 def test_unknown_paths_cannot_select_upstream_destination(path: str) -> None:
-    with _upstream() as (endpoint, calls), _relay(endpoint, []) as relay:
+    events: list[dict[str, object]] = []
+    with _upstream() as (endpoint, calls), _relay(endpoint, events) as relay:
         assert _request(relay, path=path)[0] == 404
     assert calls == []
     assert relay.requests_reserved == 0
+    assert relay.requests_rejected == 0
+    assert events == []
+    assert not relay.failed
     assert not relay.selected_request_limit_hit
 
 

@@ -179,7 +179,6 @@ def _bubblewrap_argv(
         os.fspath(python),
         f"{SANDBOX_ROOT}/{worker}",
         f"{SANDBOX_ROOT}/{request}",
-        f"{SANDBOX_ROOT}/runner/codex",
     )
 
 

@@ -314,10 +314,38 @@ def test_unexpected_worker_error_is_content_safe(
         raise ValueError("Synthetic private transport details.")
 
     monkeypatch.setattr(worker, "_read_private_request", private_failure)
-    assert worker.main(["/fixture/request", "/fixture/codex"]) == 70
+    assert worker.main(["/fixture/request"]) == 70
     captured = capsys.readouterr()
     assert captured.err == "Codex worker failed\n"
     assert captured.out == ""
+
+
+def test_worker_entrypoint_uses_only_the_mounted_codex_executable(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    validated: list[Path] = []
+    invoked: list[Path] = []
+    mounted = Path(worker.SANDBOX_ROOT) / "runner" / "codex"
+
+    def require_executable(path: Path) -> Path:
+        validated.append(path)
+        return path
+
+    def run(executable: Path, _request: object, *, audit: object) -> ProtocolOutcome:
+        invoked.append(executable)
+        return _native_outcome()
+
+    def read_request(_path: Path) -> dict[str, Any]:
+        return _request()
+
+    monkeypatch.setattr(worker, "_read_private_request", read_request)
+    monkeypatch.setattr(worker, "_require_executable", require_executable)
+    monkeypatch.setattr(worker, "_run_app_server", run)
+
+    assert worker.main(["/fixture/request"]) == 0
+    assert worker.main(["/fixture/request", "/fixture/other-executable"]) == 64
+    assert validated == invoked == [mounted]
+    assert capsys.readouterr().err == "Codex worker requires a request\n"
 
 
 def test_inner_shutdown_timeout_preserves_receipts_for_outer_cleanup(
