@@ -101,6 +101,8 @@ mask_initial_release = false
 
 [tool.hatch.build.targets.sdist]
 include = [
+  "/examples/fuzz/*.jsonl",
+  "/examples/fuzz/*.toml",
   "/LICENSE",
   "/CHANGELOG.md",
   "/README.md",

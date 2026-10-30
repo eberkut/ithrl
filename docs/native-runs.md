@@ -1,7 +1,8 @@
 # Native runs
 
-`extract` reads saved session evidence. `shrink` tests a selected behavior using a local harness
-and its configured model provider. Extraction does not start a harness or make model requests.
+`extract` reads saved session evidence. `shrink` and `fuzz` test a selected behavior using a local
+harness and its configured model provider. Extraction does not start a harness or make model
+requests.
 
 ## Select a saved decision
 
@@ -176,10 +177,10 @@ the experiment and pacing and reuses compatible saved calibration observations.
 
 `ithrl fuzz` explores bounded text appends and confirms at most one decrease in the selected
 behavior's match rate. Fuzzing requires the optional `fuzz` extra (`ithrl[fuzz]`).
-Codex supports appends to eligible prior
-user input while preserving the selected decision's triggering input. A synthetic native campaign
-completed qualification; its [settings, result and costs](measurements.md#native-context-fuzzing)
-provide a measured example. Copilot text mutation remains unsupported.
+Codex supports appends to eligible prior user input while preserving the selected decision's
+triggering input. The [measurements](measurements.md#native-context-fuzzing) record the completed
+synthetic campaign and its limits. Copilot native-prefix appends have reconstruction coverage but
+have not completed live qualification. Copilot shell-action profiles support context removal only.
 
 To exercise the complete workflow locally, create a fresh example case:
 
@@ -253,35 +254,103 @@ fixed original/mutant samples and fresh confirmation. See [fuzz results](results
 for saved evidence and resume behavior. Use `--format json` for one JSON report on stdout; execution
 progress and the inspected plan go to stderr.
 
-Fuzz `--dry-run` starts no harness or provider. A native case without a saved capability profile
-reports `detection-required`. To create the private structural profile for a native case, run:
+### Run the synthetic native campaign
+
+Use a source checkout with the locked development environment, including the `fuzz` extra; see
+[contributor setup](https://github.com/eberkut/ithrl/blob/main/CONTRIBUTING.md#development-setup).
+You also need Linux, usable Bubblewrap, an installed native harness and its local authentication.
+The public inputs below contain only the synthetic response-token exercise. The execution steps
+below use Codex. The Copilot source is available for extraction and reconstruction checks; it does
+not qualify Copilot native-prefix execution. A new native run makes real provider requests and can
+produce different observations.
+
+| Harness | Public source | Decision | Target |
+| --- | --- | --- | --- |
+| Codex | `examples/fuzz/codex.jsonl` | `decision-f5eaba307afd19db` | `final-response` |
+| Copilot | `examples/fuzz/copilot.jsonl` | `decision-cf9cce503bc9fc40` | `final-response` |
+
+From the checkout root, create private state outside the workspace and copy the public
+configuration:
 
 ```bash
-ithrl fuzz CASE --config PRIVATE_CONFIG --detect --profile PRIVATE_PROFILE \
-  --original-workspace ORIGINAL_WORKSPACE
+FUZZ_RUN=$(mktemp -d /tmp/ithrl-fuzz.XXXXXXXX)
+mkdir -m 700 "$FUZZ_RUN/original"
+install -m 600 examples/fuzz/campaign.toml "$FUZZ_RUN/campaign.toml"
 ```
 
-For Codex, detection defaults to 16 requests per attempt; add
-`--max-provider-calls-per-attempt N` to select a smaller cap. Size the total-call limit in
-`PRIVATE_CONFIG` for calibration, complete exploratory blocks and protected fresh confirmation
-at that cap. The saved profile retains it for execution and resume.
+The configuration uses the measured statistical settings: 3 calibration samples, 8 samples per
+exploratory arm, 20 fresh samples per confirmation arm, `.40` screening decrease and a final
+required decrease greater than `.10` at `alpha=.05`. It permits one candidate and ten simplification
+trials, with a 350-call ceiling, six-hour wall-time ceiling, 120-second attempt timeout and 24-hour
+freshness. It uses the opt-in `safe-provider-overload` eligibility policy. These settings measured a
+large planted effect; 20 confirmation samples have weak power for moderate effects. See the
+[effect-size limits](research/context-fuzzing.md#alternatives-and-effect-size-limits) before
+adapting the experiment to another workload.
 
-Detection runs bounded, network-denied local harness probes without a provider request. Inspect
-the result, then use its profile in a harness-free plan review:
+For Codex's default per-attempt cap of 16, set `max_provider_calls = 5600` in the private copy
+before detection. This reserves 1,152 calls for confirmation and 576 for one exploratory block;
+the supplied 350-call limit cannot admit both. The adjustment retains comparable budget headroom
+under the conservative attempt bound. It does not predict actual call use or guarantee completion.
+
+To select a different Codex cap, pass `--max-provider-calls-per-attempt N` during detection and
+recalculate the total-call allowance before reviewing the plan. The saved profile and campaign
+retain that cap; changing it requires a new profile and run.
+
+Choose pacing in the private copy before detection. Keep `inter_attempt_delay_seconds = 15` for
+Codex, matching its completed campaign. Pacing is administrative, consumes wall time and does not
+change the statistical sample targets. These settings apply to this synthetic exercise; provider
+throttling and ordinary-session costs remain workload-dependent. The call ceiling can stop
+exploration early while preserving the 72-attempt fresh-confirmation reserve. The six-hour ceiling
+is an administrative limit; [measurements](measurements.md#calls-duration-and-resource-use) record
+the completed durations.
+
+Extract the Codex case:
 
 ```bash
-ithrl fuzz CASE --config PRIVATE_CONFIG --profile PRIVATE_PROFILE \
-  --original-workspace ORIGINAL_WORKSPACE --observation-store PRIVATE_STORE --dry-run
+uv run ithrl extract examples/fuzz/codex.jsonl --harness codex \
+  --decision decision-f5eaba307afd19db --target final-response \
+  --output "$FUZZ_RUN/case" --format json
 ```
 
-The profile binds the case, configuration and original workspace. Freshly extracted Codex cases
-can use detection directly without editing the case's experiment. Choose native sampling and
-resource limits explicitly in `PRIVATE_CONFIG`; the fake-runner example above uses demonstration
-settings. The [measured native campaign](measurements.md#native-context-fuzzing) records one
-complete configuration without establishing general defaults. Review the provider, model,
-destination, isolation, action-denial policy and complete budget before using the returned command
-with `--acknowledge-model-execution`.
-See the [CLI reference](cli.md#ithrl-fuzz) for options and
+The case retains captured routing and model evidence; there is no model override.
+
+1. Detect structural capabilities without provider requests:
+
+    ```bash
+    uv run ithrl fuzz "$FUZZ_RUN/case" --config "$FUZZ_RUN/campaign.toml" \
+      --detect --profile "$FUZZ_RUN/profile.json" \
+      --original-workspace "$FUZZ_RUN/original" --format json
+    ```
+
+    Detection uses bounded, network-denied local harness probes. Inspect the detected append-text
+    support, reconstruction deviations and effective safety policy.
+
+2. Review the complete plan without starting a harness:
+
+    ```bash
+    uv run ithrl fuzz "$FUZZ_RUN/case" --config "$FUZZ_RUN/campaign.toml" \
+      --profile "$FUZZ_RUN/profile.json" --original-workspace "$FUZZ_RUN/original" \
+      --observation-store "$FUZZ_RUN/observations.sqlite" --dry-run --format json
+    ```
+
+    Check the provider, model, destination, isolation, action-denial policy and complete budget.
+    The profile binds the case, configuration and original workspace. Changed inputs need a new
+    profile. The native profile cannot enforce a hard input-token cap.
+
+3. Authorize execution of the reviewed plan:
+
+    ```bash
+    uv run ithrl fuzz "$FUZZ_RUN/case" --config "$FUZZ_RUN/campaign.toml" \
+      --profile "$FUZZ_RUN/profile.json" --original-workspace "$FUZZ_RUN/original" \
+      --observation-store "$FUZZ_RUN/observations.sqlite" \
+      --acknowledge-model-execution --format json
+    ```
+
+The same procedure accepts an eligible final-response case extracted from your own saved session.
+Pass that session's original workspace instead of the empty example workspace, and keep its case and
+configuration private. Fuzz `--dry-run` starts no harness or provider; a native case without a
+profile reports `detection-required`. Resume from the printed run/result path as described in
+[fuzz results](results.md#fuzz-results). See the [CLI reference](cli.md#ithrl-fuzz) for options and
 [troubleshooting](troubleshooting.md#fuzz-setup-and-resume) for refusals.
 
 ## Compatibility and measurements

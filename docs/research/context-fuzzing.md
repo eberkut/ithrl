@@ -4,8 +4,9 @@ The 2026-10-23 credential-free study selected a useful synthetic discovery, muta
 and fresh-confirmation procedure for a planted target-rate decrease from `.90` to `.10`. The minimum
 complete-workflow success rate was 90.25%, with a simultaneous 99% lower bound of 88.86896%,
 exceeding the prospective 80% gate. These results support the design for the specified synthetic
-workload. A later [native Codex campaign](../measurements.md#native-context-fuzzing) measured one
-complete append-text workflow. Ordinary-session success rates remain unmeasured.
+workload. Later [native campaigns](../measurements.md#native-context-fuzzing) measured completed
+Codex and Copilot append-text workflows. The Copilot campaign used semantic import; it does not
+qualify the native-prefix SDK runner. Ordinary-session success rates remain unmeasured.
 
 The implementation provides deterministic mutation generation and simplification, sampled
 comparisons and durable campaign recovery through the shared observation store. The
@@ -346,15 +347,19 @@ The synthetic study selected the procedure and tested its assumptions before nat
 Its rates and modeled costs remain specific to that study.
 
 A completed Codex final-response campaign qualified appending text to eligible prior user input.
-It preserved the fixed triggering input, passed a duplication control and original calibration,
-simplified a stress append and independently confirmed the selected intervention with fresh samples.
-Protected-state and cleanup checks passed, and no returned actions executed. The
-[measurements](../measurements.md#native-context-fuzzing) own the native workload, exact result,
-configuration, usage and resource costs; the [native-run guide](../native-runs.md#context-fuzzing)
-owns the execution procedure.
+A Copilot campaign completed the same synthetic exercise under its earlier semantic-import
+reconstruction. Each passed duplication control and calibration, simplified a stress append and
+confirmed the selected intervention with fresh samples. Protected-state and cleanup checks passed,
+and no returned actions executed.
 
-This is evidence for one synthetic case and the qualified append-text profile. It does not qualify
-Copilot mutation, establish ordinary-session success rates or supply a universal preset. The
-[native qualification issue](https://github.com/eberkut/ithrl/issues/9) defines the acceptance
-boundary; the [practical-settings issue](https://github.com/eberkut/ithrl/issues/10) owns further
-work on supported workloads and limits.
+The Copilot semantic import transformed the triggering input, including a per-attempt
+`<current_datetime>` element. Native-prefix reconstruction instead resumes captured records without
+adding a user message; its live qualification remains separate. Neither reconstruction establishes
+identical complete provider input. The independent, stationary sampling assumptions apply to the
+controlled harness surface.
+
+The [measurements](../measurements.md#native-context-fuzzing) own native workloads, exact results,
+configuration, usage and resource costs; the [native-run guide](../native-runs.md#context-fuzzing)
+owns the execution procedure. One synthetic case per measured profile supplies no ordinary-session
+success-rate estimate or universal preset. Changed reconstruction or request policies require
+separate qualification. Copilot shell-action fuzzing remains outside this qualification.

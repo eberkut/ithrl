@@ -108,8 +108,11 @@ Passive analysis should work without provider calls; implementing agent handoffs
 These candidates have no assigned release.
 [Broader native workloads and costs](https://github.com/eberkut/ithrl/issues/16) and
 [baseline-sharing strategies](https://github.com/eberkut/ithrl/issues/17) remain research
-opportunities. The qualified reduction measurements cover a planted approximately 10k workload; 100k
-qualification is an optional expansion with a separate cost proposal.
+opportunities. Synthetic qualification covers a planted approximately 10k workload;
+[saved-session experiments](docs/measurements.md#saved-session-experiments) add selected larger
+contexts, including incomplete and inconclusive outcomes. Neither establishes a general 100k
+workload envelope. Qualification at that scale remains an optional expansion with a separate
+cost proposal.
 
 ## Planning and release policy
 
