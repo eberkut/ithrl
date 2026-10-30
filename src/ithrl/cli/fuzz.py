@@ -71,6 +71,8 @@ def prepare_fuzz_profile(
         )
     )
     if experiment is not None and isinstance(experiment.runner, FakeRunnerConfig):
+        if max_provider_calls_per_attempt not in (None, 0):
+            raise FuzzInputRefusal("provider-call-limit-native-only")
         prepared = prepare_experiment(
             evidence,
             experiment=experiment,

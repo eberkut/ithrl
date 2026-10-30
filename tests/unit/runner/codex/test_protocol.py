@@ -987,8 +987,17 @@ def test_partial_failure_recovers_only_receipt_backed_physical_counts() -> None:
     assert physical_request_counts(data + b'{"kind":"prov') == (1, 0)
     assert physical_request_counts(b'{"kind":"prov') is None
     assert physical_request_counts(_server_bytes(records[:1])) is None
-    records.append(_receipt("started", 1, 1))
-    assert physical_request_counts(_server_bytes(records)) is None
+    for tail in (
+        _server_bytes([_receipt("started", 1, 1)]),
+        b"invalid-json\n",
+        b'{"kind":"invalid","value":{}}\n',
+    ):
+        assert physical_request_counts(data + tail) == (1, 0)
+        completed = _server_bytes([*records, _receipt("completed", 1, 1, 200)])
+        assert physical_request_counts(completed + tail) == (1, 1)
+        # Corrupt output must not prove that no request started.
+        closed = _server_bytes([_receipt("closed", 0, 0)])
+        assert physical_request_counts(closed + tail) is None
 
 
 def test_transport_closure_proves_zero_without_native_summary() -> None:

@@ -107,6 +107,12 @@ def test_fake_dry_run_has_no_execution_or_storage(
     assert not (tmp_path / "private").exists()
     assert not (tmp_path / "case/.runs").exists()
 
+    refused = CliRunner().invoke(app, [*args, "--dry-run", "--max-provider-calls-per-attempt", "1"])
+    assert refused.exit_code == ExitCode.UNSUPPORTED, refused.output
+    assert json.loads(refused.stdout)["error_code"] == "provider-call-limit-native-only"
+    assert not (tmp_path / "private").exists()
+    assert not (tmp_path / "case/.runs").exists()
+
 
 def test_fake_campaign_saved_rates_and_terminal_resume(tmp_path: Path) -> None:
     args = inputs(tmp_path)

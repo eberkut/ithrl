@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import cast
 
@@ -116,7 +117,7 @@ class _ProviderReceipts:
         self.response_bytes = response_bytes
 
 
-def _records(data: bytes, *, partial: bool = False) -> list[dict[str, object]]:
+def _records(data: bytes, *, partial: bool = False) -> Iterator[dict[str, object]]:
     if len(data) > MAX_NATIVE_OUTPUT_BYTES:
         raise CodexProtocolError("transcript-limit", "Codex transcript exceeds the byte limit")
     lines = data.splitlines()
@@ -127,7 +128,6 @@ def _records(data: bytes, *, partial: bool = False) -> list[dict[str, object]]:
     )
     if not lines or len(lines) > max_records:
         raise CodexProtocolError("transcript-format", "Codex transcript has an invalid shape")
-    records: list[dict[str, object]] = []
     native_counts = {"client": 0, "server": 0}
     for line in lines:
         if len(line) > MAX_PROTOCOL_LINE_BYTES:
@@ -149,18 +149,17 @@ def _records(data: bytes, *, partial: bool = False) -> list[dict[str, object]]:
         kind = record["kind"]
         if kind in native_counts:
             native_counts[kind] += 1
-        records.append(record)
-    if (
-        native_counts["client"] > MAX_CLIENT_PROTOCOL_MESSAGES
-        or native_counts["server"] > MAX_PROTOCOL_MESSAGES
-    ):
-        raise CodexProtocolError("transcript-format", "Codex transcript has an invalid shape")
-    return records
+        if (
+            native_counts["client"] > MAX_CLIENT_PROTOCOL_MESSAGES
+            or native_counts["server"] > MAX_PROTOCOL_MESSAGES
+        ):
+            raise CodexProtocolError("transcript-format", "Codex transcript has an invalid shape")
+        yield record
 
 
 def parse_transcript(data: bytes) -> ProtocolOutcome:
     """Require a terminal summary corroborated by ordered physical receipts."""
-    records = _records(data)
+    records = list(_records(data))
     summaries = [record["value"] for record in records if record["kind"] == "summary"]
     if len(summaries) != 1 or not isinstance(summaries[0], dict):
         raise CodexProtocolError("transcript-summary", "Codex transcript has no unique summary")
@@ -199,18 +198,19 @@ def physical_request_counts(data: bytes) -> tuple[int, int] | None:
 
     Without a closure receipt these are lower bounds. A lost/truncated
     tail can hide further dispatches and must still be conservatively charged
-    by the runtime. Missing or invalid receipts never establish zero requests.
+    by the runtime. An invalid tail cannot erase positive counts or establish
+    zero requests.
     """
+    receipts = _ProviderReceipts()
     try:
-        receipts = _ProviderReceipts()
         for record in _records(data, partial=True):
             if record["kind"] == "provider":
                 receipts.add(record["value"])
-        if receipts.started:
-            return receipts.started, receipts.completed
-        if receipts.closed:
+        if receipts.started or receipts.closed:
             return receipts.started, receipts.completed
     except (CodexProtocolError, KeyError, TypeError, ValueError):
+        if receipts.started:
+            return receipts.started, receipts.completed
         return None
     return None
 
