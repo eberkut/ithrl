@@ -358,6 +358,8 @@ def _render_experiment(experiment: AnyExperimentDefinition) -> str:
     if isinstance(target, FinalResponseTarget):
         _append_optional_string(lines, "text_equals", target.text_equals)
         _append_optional_string(lines, "text_contains", target.text_contains)
+        if target.text_contains_any is not None:
+            lines.append(f"text_contains_any = {_toml_value(target.text_contains_any)}")
     else:
         _append_optional_string(lines, "tool_name_equals", target.tool_name_equals)
         _append_optional_string(lines, "command_equals", target.command_equals)

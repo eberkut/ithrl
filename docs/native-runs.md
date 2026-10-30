@@ -30,6 +30,22 @@ output exclude prompts, responses, commands, tool arguments and source paths. Th
 contains the exact session bytes, decision metadata and a dependency index of context records.
 Keep it private; see [data and privacy](results.md#data-and-privacy).
 
+By default, a final-response target matches the captured response exactly. For variable prose,
+choose a literal behavior predicate before collecting observations. Use `--text-contains TEXT`
+for one required substring, or repeat `--text-contains-any TEXT` for acceptable alternatives:
+
+```bash
+ithrl extract path/to/session.jsonl --decision DECISION_ID --target final-response \
+  --text-contains-any 'expected phrase' --text-contains-any 'accepted alternative' \
+  --output .ithrl/case
+```
+
+These comparisons are case-sensitive literal matches, not semantic judgments. For a shell target,
+`--command-contains TEXT` retains the selected tool identity and action count while matching a
+command substring. Choose one predicate option per extraction. The predicate must match the saved
+decision, and becomes part of the experiment identity. A broad phrase can establish only the
+behavior it actually checks; changing the predicate after seeing outcomes requires a new experiment.
+
 ## Prepare native reduction
 
 You need:

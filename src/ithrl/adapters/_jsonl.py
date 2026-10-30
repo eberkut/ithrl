@@ -13,7 +13,6 @@ from typing import Any
 from ithrl.adapters.contracts import ParsingLimits, SourceFacts
 from ithrl.adapters.errors import AdapterError, AdapterErrorCode
 from ithrl.context import JsonObject, validate_json_limits
-from ithrl.path_safety import UnsafePathError, validate_directory_chain
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,13 +33,7 @@ def read_jsonl(path: str | os.PathLike[str], *, limits: ParsingLimits) -> JsonlD
     """Read one regular JSONL file and reject links or concurrent source replacement."""
 
     source_path = Path(path)
-    try:
-        validate_directory_chain(source_path.parent)
-    except UnsafePathError:
-        raise AdapterError(
-            AdapterErrorCode.UNSAFE_SOURCE,
-            "session source has an unsafe controlling directory",
-        ) from None
+    _validate_source_parents(source_path.parent)
     initial = _lstat(source_path)
     if stat.S_ISLNK(initial.st_mode) or not stat.S_ISREG(initial.st_mode):
         raise AdapterError(AdapterErrorCode.UNSAFE_SOURCE, "session source must be a regular file")
@@ -80,6 +73,7 @@ def read_jsonl(path: str | os.PathLike[str], *, limits: ParsingLimits) -> JsonlD
             bytes_read=len(raw),
         )
     try:
+        _validate_source_parents(source_path.parent, changed=True)
         current = _lstat(source_path, changed=True)
     except AdapterError as error:
         error.bytes_read = len(raw)
@@ -96,6 +90,29 @@ def read_jsonl(path: str | os.PathLike[str], *, limits: ParsingLimits) -> JsonlD
     except AdapterError as error:
         error.bytes_read = len(raw)
         raise
+
+
+def _validate_source_parents(path: Path, *, changed: bool = False) -> None:
+    """Refuse indirect paths without imposing controlled-write directory policy.
+
+    Native stores may contain shared-writable directories. Their bytes are untrusted
+    evidence; only the bounded regular-file snapshot is consumed, never executed.
+    """
+
+    code = AdapterErrorCode.SOURCE_CHANGED if changed else AdapterErrorCode.UNSAFE_SOURCE
+    if ".." in path.parts:
+        raise AdapterError(code, "session source has an unsafe parent path")
+    absolute = path.absolute()
+    for directory in reversed((absolute, *absolute.parents)):
+        try:
+            metadata = directory.lstat()
+        except OSError:
+            raise AdapterError(
+                AdapterErrorCode.SOURCE_CHANGED if changed else AdapterErrorCode.SOURCE_UNAVAILABLE,
+                "session source parent is unavailable",
+            ) from None
+        if not stat.S_ISDIR(metadata.st_mode):
+            raise AdapterError(code, "session source parent must be a directory without links")
 
 
 def read_jsonl_bytes(raw: bytes, *, limits: ParsingLimits) -> JsonlDocument:

@@ -18,7 +18,7 @@ from ithrl.adapters import (
 )
 from ithrl.adapters.codex import context as codex_context
 from ithrl.adapters.codex import decisions as codex_decisions
-from ithrl.behavior import FinalResponseTarget
+from ithrl.behavior import FinalResponseTarget, ShellActionTarget
 from ithrl.case import CaseEvidence, CaseFormatError
 from ithrl.experiment import (
     ExperimentDefinition,
@@ -115,6 +115,81 @@ def test_extract_decision_is_deterministic(tmp_path: Path, source: str) -> None:
     ).load()
 
     assert first.digest == second.digest
+
+
+@pytest.mark.parametrize("harness", ["codex", "copilot"])
+def test_experiment_predicate_preserves_adapter_evidence_and_source(
+    tmp_path: Path, harness: str
+) -> None:
+    source = (
+        FIXTURES
+        / f"{harness}-session"
+        / ("rollout.jsonl" if harness == "codex" else "events.jsonl")
+    )
+    before = source.read_bytes()
+    session = parse_session(source)
+    summary = next(
+        item for item in enumerate_decisions(session) if item.targets[0].type == "final-response"
+    )
+    selected = select_decision(
+        session, decision_id=summary.decision_id, target_id=summary.targets[0].target_id
+    )
+    target = FinalResponseTarget(text_contains="Fixture")
+
+    workspace = extract_decision(
+        session,
+        decision_id=summary.decision_id,
+        target_id=summary.targets[0].target_id,
+        case_path=tmp_path / "case",
+        experiment_target=target,
+    )
+    evidence = load_extracted_case(workspace)
+
+    assert evidence.decision == selected.evidence
+    assert evidence.source_artifacts[0].content == before
+    assert source.read_bytes() == before
+    assert ExperimentDefinition.from_toml(evidence.default_experiment).target == target
+    with pytest.raises(PreflightRefusedError) as refused:
+        prepare_experiment(evidence)
+    assert [issue.code for issue in refused.value.report.issues] == ["runner-unavailable"]
+
+
+@pytest.mark.parametrize(
+    "target",
+    [FinalResponseTarget(text_contains="absent literal"), ShellActionTarget()],
+)
+def test_invalid_experiment_predicate_fails_before_case_creation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    target: FinalResponseTarget | ShellActionTarget,
+) -> None:
+    session = parse_session(FIXTURES / "codex-session/rollout.jsonl")
+    summary = enumerate_decisions(session)[0]
+    case = tmp_path / "case"
+
+    with pytest.raises(CaseFormatError, match="experiment target"):
+        extract_decision(
+            session,
+            decision_id=summary.decision_id,
+            target_id=summary.targets[0].target_id,
+            case_path=case,
+            experiment_target=target,
+        )
+
+    assert not case.exists()
+
+    evidence = _native_case_evidence(tmp_path)
+    experiment = ExperimentDefinition.from_toml(evidence.default_experiment).model_copy(
+        update={"target": target}
+    )
+
+    def forbidden_registry() -> None:
+        raise AssertionError("invalid behavior predicate reached runner resolution")
+
+    monkeypatch.setattr("ithrl.workflow.built_in_runner_registry", forbidden_registry)
+    with pytest.raises(PreflightRefusedError) as refused:
+        prepare_experiment(evidence, experiment=experiment)
+    assert [issue.code for issue in refused.value.report.issues] == ["runner-evidence-mismatch"]
 
 
 def test_decision_selection_refuses_unknown_stable_ids() -> None:
@@ -353,6 +428,7 @@ def test_native_case_refuses_experiment_target_or_harness_mismatch(
         experiment.model_copy(
             update={"target": FinalResponseTarget(text_equals="another response")}
         ),
+        experiment.model_copy(update={"target": ShellActionTarget()}),
         experiment.model_copy(
             update={"runner": UnavailableRunnerConfig(harness="another-harness")}
         ),

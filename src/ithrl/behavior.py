@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
 
 from ithrl.context import content_digest
 
@@ -30,11 +30,34 @@ class FinalResponseTarget(_ImmutableContract):
     text_contains: Annotated[
         str | None, Field(min_length=1, max_length=MAX_BEHAVIOR_TEXT_LENGTH)
     ] = None
+    text_contains_any: (
+        Annotated[
+            tuple[Annotated[str, Field(min_length=1, max_length=MAX_BEHAVIOR_TEXT_LENGTH)], ...],
+            Field(min_length=1, max_length=32),
+        ]
+        | None
+    ) = Field(default=None, exclude_if=lambda value: value is None)
+
+    @field_validator("text_contains_any", mode="before")
+    @classmethod
+    def parse_alternatives(cls, value: object) -> object:
+        return tuple(value) if isinstance(value, list) else value
 
     @model_validator(mode="after")
     def validate_text_predicate(self) -> FinalResponseTarget:
-        if self.text_equals is not None and self.text_contains is not None:
+        if (
+            sum(
+                value is not None
+                for value in (self.text_equals, self.text_contains, self.text_contains_any)
+            )
+            > 1
+        ):
             raise ValueError("final-response target accepts only one text predicate")
+        if self.text_contains_any is not None and (
+            len(set(self.text_contains_any)) != len(self.text_contains_any)
+            or sum(len(value) for value in self.text_contains_any) > MAX_BEHAVIOR_TEXT_LENGTH
+        ):
+            raise ValueError("text alternatives must be unique and bounded in total length")
         return self
 
     @property
@@ -120,6 +143,8 @@ def evaluate_target(target: BehaviorTarget, observation: BehaviorObservation) ->
             return text == target.text_equals
         if target.text_contains is not None:
             return target.text_contains in text
+        if target.text_contains_any is not None:
+            return any(value in text for value in target.text_contains_any)
         return True
 
     matches = tuple(

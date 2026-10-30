@@ -159,6 +159,21 @@ def extract(
         str | None,
         typer.Option("--target", help="Target ID or unique target type."),
     ] = None,
+    text_contains: Annotated[
+        str | None,
+        typer.Option("--text-contains", help="Literal text required in a native final response."),
+    ] = None,
+    text_contains_any: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--text-contains-any",
+            help="Alternative literal text for a native final response. Repeat for each alternative.",
+        ),
+    ] = None,
+    command_contains: Annotated[
+        str | None,
+        typer.Option("--command-contains", help="Literal text required in a native shell command."),
+    ] = None,
     output: Annotated[
         Path | None,
         typer.Option(
@@ -183,6 +198,9 @@ def extract(
             session_id=session,
             decision_id=decision,
             target=target,
+            text_contains=text_contains,
+            text_contains_any=tuple(text_contains_any) if text_contains_any is not None else None,
+            command_contains=command_contains,
             output=output,
             output_format=output_format,
         )
