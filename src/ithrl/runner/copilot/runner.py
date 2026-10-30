@@ -187,6 +187,7 @@ class CopilotRunner:
                 str(error),
                 error.report,
                 error.native_output,
+                reason_code=error.reason_code,
             ) from error
         except CopilotIsolationError as error:
             raise _preparation_error(attempt, str(error), self._capability) from error
@@ -373,11 +374,14 @@ def _runtime_error(
     message: str,
     report: RuntimeReport,
     native_output: NativeOutputReference | None,
+    *,
+    reason_code: str | None = None,
 ) -> RunnerError:
     started = report.process_outcome != "not-started"
     return RunnerError(
         code,
         message,
+        reason_code=reason_code,
         provider_acceptance_state=(
             ProviderAcceptanceState.UNKNOWN if started else ProviderAcceptanceState.NOT_STARTED
         ),

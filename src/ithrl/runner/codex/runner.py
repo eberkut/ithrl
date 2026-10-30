@@ -211,6 +211,7 @@ class CodexRunner:
                 str(error),
                 error.report,
                 error.native_output,
+                reason_code=error.reason_code,
             ) from error
         except CodexIsolationError as error:
             raise RunnerError(
@@ -486,6 +487,8 @@ def _runtime_error(
     message: str,
     report: RuntimeReport,
     native_output: NativeOutputReference | None,
+    *,
+    reason_code: str | None = None,
 ) -> RunnerError:
     acceptance = (
         ProviderAcceptanceState.NOT_STARTED
@@ -495,6 +498,7 @@ def _runtime_error(
     return RunnerError(
         code,
         message,
+        reason_code=reason_code,
         provider_acceptance_state=acceptance,
         model_requested=attempt.execution_plan.model_requested,
         provider=attempt.execution_plan.capability.provider,
