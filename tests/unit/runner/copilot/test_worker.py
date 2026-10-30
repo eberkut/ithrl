@@ -1,368 +1,508 @@
 from __future__ import annotations
 
+import asyncio
 import json
-import os
-import time
+import sys
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
+import httpx
 import pytest
 
 from ithrl.runner.copilot import worker
 
 
-def _write_request(
-    tmp_path: Path,
+def _request(tmp_path: Path) -> dict[str, Any]:
+    return {
+        "commandFlags": ["--no-auto-update"],
+        "model": "fixture-model",
+        "nativeSession": str(tmp_path / "events.jsonl"),
+        "sessionId": "session-1",
+        "systemMessage": "Captured fixture guidance",
+        "target": "final-response",
+        "workspace": str(tmp_path),
+    }
+
+
+def test_physical_forward_gate_is_atomic_across_concurrent_callbacks() -> None:
+    gate = worker.ForwardGate()
+
+    def reserve(_index: int) -> bool:
+        return gate.reserve()
+
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        results = list(pool.map(reserve, range(64)))
+    assert sum(results) == gate.forwarded == 1
+    assert gate.rejected == 63
+
+
+def test_request_parser_has_no_trigger_or_semantic_import(tmp_path: Path) -> None:
+    value = _request(tmp_path)
+    assert worker._parse_request(json.dumps(value).encode()) == value
+    value["trigger"] = "invented continuation"
+    with pytest.raises(worker.WorkerError, match="unsupported shape"):
+        worker._parse_request(json.dumps(value).encode())
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("sessionId", "../escape"),
+        ("nativeSession", "relative"),
+        ("model", ""),
+        ("systemMessage", "bad\0guidance"),
+    ],
+)
+def test_private_request_refuses_unsafe_fields(tmp_path: Path, field: str, value: str) -> None:
+    request = _request(tmp_path)
+    request[field] = value
+    with pytest.raises(worker.WorkerError, match="invalid fields"):
+        worker._parse_request(json.dumps(request).encode())
+
+
+def test_duplicate_request_fields_and_constants_are_refused(tmp_path: Path) -> None:
+    for raw in (b'{"model":"fixture","model":"other"}', b'{"model":NaN}'):
+        with pytest.raises(worker.WorkerError, match="invalid JSON"):
+            worker._parse_request(raw)
+
+
+def test_worker_entrypoint_uses_owned_paths_and_refuses_caller_selected_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    request = _request(tmp_path)
+    owned_request = tmp_path / "request.json"
+    owned_request.write_text(json.dumps(request))
+    owned_request.chmod(0o600)
+    executable = tmp_path / "runner" / "copilot"
+    executable.parent.mkdir()
+    executable.write_text("owned executable")
+    executable.chmod(0o500)
+    foreign = tmp_path / "foreign.json"
+    foreign.write_text("private foreign input")
+    foreign.chmod(0o600)
+    calls: list[tuple[Path, dict[str, Any]]] = []
+
+    async def observe(path: Path, settings: dict[str, Any]) -> int:
+        calls.append((path, settings))
+        return 0
+
+    monkeypatch.setattr(worker, "_SANDBOX_ROOT", str(tmp_path))
+    monkeypatch.setattr(worker, "_run_session", observe)
+    assert worker.main([str(foreign), str(foreign)]) == 64
+    assert foreign.read_text() == "private foreign input"
+    assert owned_request.exists()
+    assert not calls
+    assert worker.main([]) == 0
+    assert calls == [(executable, request)]
+    assert not owned_request.exists()
+    assert foreign.read_text() == "private foreign input"
+
+
+def test_private_file_is_bounded_and_unlinked_after_checked_read(tmp_path: Path) -> None:
+    source = tmp_path / "request.json"
+    source.write_bytes(b"private")
+    source.chmod(0o600)
+    assert worker._read_private_file(source, maximum=7, unlink=True) == b"private"
+    assert not source.exists()
+    source.write_bytes(b"too large")
+    source.chmod(0o600)
+    with pytest.raises(worker.WorkerError, match="unsafe"):
+        worker._read_private_file(source, maximum=7)
+    assert source.exists()
+
+
+@pytest.mark.parametrize("kind", ["symlink", "hardlink", "public"])
+def test_private_file_refuses_links_and_public_permissions(tmp_path: Path, kind: str) -> None:
+    source = tmp_path / "source"
+    source.write_bytes(b"private")
+    source.chmod(0o600)
+    path = tmp_path / "request"
+    if kind == "symlink":
+        path.symlink_to(source)
+    elif kind == "hardlink":
+        path.hardlink_to(source)
+    else:
+        path.write_bytes(b"private")
+        path.chmod(0o644)
+    with pytest.raises(worker.WorkerError, match="unsafe"):
+        worker._read_private_file(path, maximum=100)
+    assert source.read_bytes() == b"private"
+
+
+@pytest.mark.parametrize(
+    ("target", "tools"), [("final-response", []), ("shell-action", ["builtin:bash"])]
+)
+def test_sdk_restore_options_clear_ambient_surfaces_and_preserve_system(
+    tmp_path: Path, target: str, tools: list[str]
+) -> None:
+    request = _request(tmp_path)
+    request["target"] = target
+    options = worker._resume_options(request, on_event=None, on_permission_request=None)
+    assert options["model"] == "fixture-model"
+    assert options["available_tools"] == tools
+    assert options["system_message"] == {"mode": "replace", "content": request["systemMessage"]}
+    assert options["continue_pending_work"] is options["allow_transcript_recovery"] is False
+    assert options["autopilot"] == {"continuation_enabled": False, "max_continues": 0}
+    for name in (
+        "enable_config_discovery",
+        "enable_managed_settings",
+        "request_extensions",
+        "request_canvas_renderer",
+    ):
+        assert options[name] is False
+    assert options["capi"]["enable_web_socket_responses"] is False
+
+
+def _outgoing(*, url: str = "https://api.githubcopilot.com/responses") -> httpx.Request:
+    # Managed provider encoding belongs to the SDK, including non-JSON bodies.
+    return httpx.Request("POST", url, content=b"opaque SDK provider encoding")
+
+
+def _context(**changes: object) -> SimpleNamespace:
+    return SimpleNamespace(
+        **{"session_id": "session-1", "parent_agent_id": None, "transport": "http", **changes}
+    )
+
+
+def _validate(
+    outgoing: httpx.Request,
     *,
-    flags: list[str] | None = None,
-    trigger: str = "private trigger",
-) -> tuple[Path, Path, Path]:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir(exist_ok=True)
-    semantic_session = tmp_path / "session.jsonl"
-    semantic_session.write_text('{"type":"session"}\n', encoding="utf-8")
-    request = tmp_path / "request.json"
-    request.write_text(
-        json.dumps(
-            {
-                "commandFlags": flags or ["--output-format=json", "--stream=off"],
-                "model": "fixture-model",
-                "semanticSession": os.fspath(semantic_session),
-                "target": "final-response",
-                "trigger": trigger,
-                "workspace": os.fspath(workspace),
-            }
+    context: SimpleNamespace | None = None,
+) -> bytes:
+    return worker._managed_request(
+        outgoing,
+        _context() if context is None else context,
+        session_id="session-1",
+    )
+
+
+def test_managed_route_preserves_opaque_sdk_encoding() -> None:
+    outgoing = _outgoing()
+    assert _validate(outgoing) == outgoing.content
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://api.githubcopilot.com/chat/completions",
+        "https://api.githubcopilot.com.attacker.example/chat/completions",
+        "https://custom-provider.example/v1/messages",
+        "https://user:password@api.githubcopilot.com/chat/completions",
+        "https://api.githubcopilot.com:8443/chat/completions",
+    ],
+)
+def test_custom_or_insecure_provider_routes_are_refused(url: str) -> None:
+    with pytest.raises(worker.WorkerError, match="routing"):
+        _validate(_outgoing(url=url))
+
+
+@pytest.mark.parametrize(
+    "changes", [{"session_id": "other"}, {"parent_agent_id": "parent"}, {"transport": "websocket"}]
+)
+def test_wrong_session_subagent_and_websocket_context_are_refused(
+    changes: dict[str, object],
+) -> None:
+    with pytest.raises(worker.WorkerError, match="routing"):
+        _validate(_outgoing(), context=_context(**changes))
+
+
+def test_model_catalogue_access_requires_the_managed_read_only_route() -> None:
+    context = _context(session_id=None)
+    request = httpx.Request("GET", "https://api.githubcopilot.com/models")
+    assert worker._is_model_catalog_request(request, context)
+    assert not worker._is_model_catalog_request(request, _context())
+    for url in (
+        "https://api.githubcopilot.com/responses",
+        "https://api.githubcopilot.com/models?destination=other",
+        "https://api.githubcopilot.com.attacker.example/models",
+        "http://api.githubcopilot.com/models",
+    ):
+        assert not worker._is_model_catalog_request(httpx.Request("GET", url), context)
+    assert not worker._is_model_catalog_request(
+        httpx.Request("POST", "https://api.githubcopilot.com/models"), context
+    )
+
+
+@pytest.mark.parametrize(
+    ("event_kind", "exit_code", "forwards"),
+    [
+        ("assistant.idle", 0, 0),
+        ("assistant.idle", 0, 1),
+        ("assistant.idle", 70, 2),
+        ("tool.execution_complete", 0, 1),
+        ("shell-two", 0, 1),
+        ("shell-followup-race", 0, 1),
+        ("shell-no-action", 0, 1),
+        ("shell-32", 0, 1),
+        ("shell-missing", 70, 1),
+        ("shell-unmatched", 70, 1),
+        ("shell-success", 70, 1),
+        ("shell-duplicate", 70, 1),
+        ("shell-duplicate-request", 70, 1),
+        ("shell-limit", 70, 1),
+        ("future.essential", 70, 0),
+        ("model.future_telemetry", 0, 0),
+        ("session.future_telemetry", 0, 0),
+        ("sandbox.decision", 0, 0),
+        ("user.message", 70, 0),
+    ],
+)
+@pytest.mark.parametrize("policy_verified", [True, False])
+@pytest.mark.parametrize(
+    "native_context", ["verified", "missing-system", "wrong-system", "missing-model", "wrong-model"]
+)
+def test_sdk_worker_empty_batch_adds_no_messages_and_emits_native_events(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    event_kind: str,
+    exit_code: int,
+    forwards: int,
+    policy_verified: bool,
+    native_context: str,
+) -> None:
+    context_verified = native_context == "verified"
+    if (
+        not policy_verified
+        or native_context.startswith("wrong-")
+        or (forwards and not context_verified)
+    ):
+        exit_code = 70
+    request = _request(tmp_path)
+    shell_event = event_kind == "tool.execution_complete" or event_kind.startswith("shell-")
+    if shell_event:
+        request["target"] = "shell-action"
+    native = Path(request["nativeSession"])
+    native.write_bytes(b'{"type":"session.start"}\n')
+    native.chmod(0o600)
+    recorded: dict[str, Any] = {}
+
+    class Session:
+        rpc: Session
+
+        def __init__(self, callback: Callable[[SimpleNamespace], None]) -> None:
+            self.rpc = self
+            self.callback = callback
+
+        async def send_messages(self, message: SimpleNamespace) -> SimpleNamespace:
+            recorded["messages"] = message.messages
+            outgoing = _outgoing()
+            dispatch = (
+                asyncio.create_task(
+                    recorded["client"]["request_handler"].send_request(outgoing, _context())
+                )
+                if forwards
+                else None
+            )
+            await asyncio.sleep(0)
+            assert recorded.get("physical_forwards", 0) == 0
+            options = recorded["resume"]
+            options["on_event"](
+                SimpleNamespace(
+                    to_dict=lambda: {
+                        "type": "session.managed_settings_resolved",
+                        "data": {
+                            "clientManaged": policy_verified,
+                            "bypassPermissionsDisabled": True,
+                            "failClosed": False,
+                            "permissionsContext": {
+                                "permissions": {
+                                    "disableBypassPermissionsMode": "disable",
+                                    "disableAssistedPermissionsMode": True,
+                                    "deny": ["Shell(*)"],
+                                }
+                            },
+                        },
+                    }
+                )
+            )
+            await asyncio.sleep(0)
+            proof_events = []
+            if native_context != "missing-system":
+                content = (
+                    request["systemMessage"] if native_context != "wrong-system" else "changed"
+                )
+                proof_events.append(
+                    {"type": "system.message", "data": {"content": content, "role": "system"}}
+                )
+            if native_context != "missing-model":
+                model = request["model"] if native_context != "wrong-model" else "other"
+                proof_events.append(
+                    {"type": "model.call_start", "data": {"model": model, "turnId": "turn-1"}}
+                )
+            if not policy_verified:
+                proof_events.reverse()
+            for index, proof in enumerate(proof_events):
+                self.callback(SimpleNamespace(to_dict=lambda proof=proof: proof))
+                if index == 0:
+                    await asyncio.sleep(0)
+                    assert recorded.get("physical_forwards", 0) == 0
+                    if dispatch is not None and native_context.startswith("verified"):
+                        assert not dispatch.done()
+            if native_context.startswith("missing-"):
+                self.callback(
+                    SimpleNamespace(to_dict=lambda: {"type": "assistant.idle", "data": {}})
+                )
+            if dispatch is not None:
+                if policy_verified and context_verified:
+                    await dispatch
+                else:
+                    with pytest.raises(worker.WorkerError):
+                        await dispatch
+            if forwards and policy_verified and context_verified:
+                if event_kind == "shell-followup-race":
+                    with pytest.raises(worker.WorkerError):
+                        await recorded["client"]["request_handler"].send_request(
+                            outgoing, _context()
+                        )
+                for _ in range(forwards - 1):
+                    with pytest.raises(worker.WorkerError):
+                        await recorded["client"]["request_handler"].send_request(
+                            outgoing, _context()
+                        )
+
+            def emit(kind: str, data: dict[str, object]) -> None:
+                self.callback(SimpleNamespace(to_dict=lambda: {"type": kind, "data": data}))
+
+            if event_kind == "shell-no-action":
+                emit(
+                    "assistant.message",
+                    {"content": "No shell action needed.", "toolRequests": None},
+                )
+                emit("assistant.idle", {})
+            elif shell_event:
+                count = (
+                    33
+                    if event_kind == "shell-limit"
+                    else (
+                        32
+                        if event_kind == "shell-32"
+                        else (2 if event_kind.startswith("shell-") else 1)
+                    )
+                )
+                ids = [f"tool-{index}" for index in range(count)]
+                if event_kind == "shell-duplicate-request":
+                    ids[1] = ids[0]
+                emit(
+                    "assistant.message",
+                    {
+                        "toolRequests": [
+                            {
+                                "toolCallId": identity,
+                                "name": "bash",
+                                "arguments": {"command": "fixture"},
+                            }
+                            for identity in ids
+                        ]
+                    },
+                )
+                for identity in ids:
+                    emit("tool.execution_start", {"toolCallId": identity, "toolName": "bash"})
+                for index, identity in enumerate(ids):
+                    if event_kind == "shell-missing" and index == 1:
+                        continue
+                    emit(
+                        "tool.execution_complete",
+                        {
+                            "toolCallId": "unmatched"
+                            if event_kind == "shell-unmatched"
+                            else identity,
+                            "success": event_kind == "shell-success",
+                            "error": {"code": "denied"},
+                        },
+                    )
+                    if event_kind == "shell-duplicate" and index == 0:
+                        emit(
+                            "tool.execution_complete",
+                            {"toolCallId": identity, "success": False, "error": {"code": "denied"}},
+                        )
+                if event_kind in {"tool.execution_complete", "shell-two", "shell-32"}:
+                    with pytest.raises(worker.WorkerError):
+                        await recorded["client"]["request_handler"].send_request(
+                            outgoing, _context()
+                        )
+                    emit("session.error", {})
+                else:
+                    emit("assistant.idle", {})
+            else:
+                emit(event_kind, {})
+            if event_kind.startswith(("model.", "session.")) or event_kind == "sandbox.decision":
+                self.callback(
+                    SimpleNamespace(to_dict=lambda: {"type": "assistant.idle", "data": {}})
+                )
+            return SimpleNamespace(message_ids=[])
+
+    class Client:
+        def __init__(self, **options: object) -> None:
+            recorded["client"] = options
+
+        async def start(self) -> None:
+            pass
+
+        async def stop(self) -> None:
+            pass
+
+        async def resume_session(self, session_id: str, **options: Any) -> Session:
+            recorded["resume"] = options
+            recorded["session_id"] = session_id
+            return Session(options["on_event"])
+
+    class Handler:
+        async def send_request(self, request: object, context: object) -> None:
+            recorded["physical_forwards"] = recorded.get("physical_forwards", 0) + 1
+
+    class Connection:
+        @staticmethod
+        def for_stdio(**options: object) -> dict[str, object]:
+            return options
+
+    monkeypatch.setitem(
+        sys.modules,
+        "copilot",
+        SimpleNamespace(
+            CopilotClient=Client,
+            CopilotRequestHandler=Handler,
+            RuntimeConnection=Connection,
+            ManagedSettings=SimpleNamespace,
+            ManagedSettingsPermissions=SimpleNamespace,
         ),
-        encoding="utf-8",
     )
-    request.chmod(0o600)
-    return request, semantic_session, workspace
-
-
-def _fake_copilot(tmp_path: Path) -> Path:
-    executable = tmp_path / "copilot"
-    executable.write_text(
-        """#!/usr/bin/python3
-import json
-import os
-import sys
-import time
-
-record_path = os.environ["ITHRL_WORKER_RECORD"]
-arguments = sys.argv[1:]
-if arguments[:3] == ["--no-auto-update", "sessions", "import"]:
-    behavior = os.environ.get("ITHRL_IMPORT_BEHAVIOR", "success")
-    if behavior == "timeout":
-        time.sleep(10)
-    if behavior == "failure":
-        sys.stderr.write("private import failure detail\\n")
-        raise SystemExit(7)
-    if behavior == "oversized":
-        sys.stdout.write("x" * 1024)
-        raise SystemExit(0)
-    if behavior in ("stdout-stream-overflow", "stderr-stream-overflow"):
-        os.write(1 if behavior.startswith("stdout") else 2, b"x" * 1024)
-        time.sleep(10)
-    if behavior == "malformed":
-        sys.stdout.write('{"private":"import output"}')
-        raise SystemExit(0)
-    if behavior == "duplicate":
-        sys.stdout.write(
-            '{"ok":true,"code":"session_imported",'
-            '"sessionId":"session-123","sessionId":"private replacement"}'
-        )
-        raise SystemExit(0)
-    document = {
-        "ok": True,
-        "code": os.environ.get("ITHRL_IMPORT_CODE", "session_imported"),
-        "sessionId": os.environ.get("ITHRL_SESSION_ID", "session-123"),
-    }
-    if "ITHRL_IMPORTED_COUNTS" in os.environ:
-        document["imported"] = json.loads(os.environ["ITHRL_IMPORTED_COUNTS"])
-    stdin = None
-else:
-    behavior = "resume"
-    document = None
-    stdin = sys.stdin.read()
-
-with open(record_path, "a", encoding="utf-8") as stream:
-    stream.write(json.dumps({"argv": arguments, "stdin": stdin}) + "\\n")
-if document is not None:
-    print(json.dumps(document))
-    raise SystemExit(0)
-raise SystemExit(int(os.environ.get("ITHRL_RESUME_RETURN_CODE", "0")))
-""",
-        encoding="utf-8",
+    monkeypatch.setitem(
+        sys.modules,
+        "copilot.generated.rpc",
+        SimpleNamespace(SendMessagesRequest=SimpleNamespace),
     )
-    executable.chmod(0o700)
-    return executable
-
-
-def _records(path: Path) -> list[dict[str, object]]:
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
-
-
-def test_main_imports_then_resumes_with_fixed_direct_arguments_and_private_stdin(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    flags = ["--output-format=json", "--stream=off", "--available-tools=none"]
-    request, semantic_session, workspace = _write_request(tmp_path, flags=flags)
-    executable = _fake_copilot(tmp_path)
-    record = tmp_path / "record.jsonl"
-    monkeypatch.setenv("ITHRL_WORKER_RECORD", os.fspath(record))
-
-    result = worker.main([os.fspath(request), os.fspath(executable)])
-
-    assert result == 0
-    assert not request.exists()
-    assert _records(record) == [
-        {
-            "argv": [
-                "--no-auto-update",
-                "sessions",
-                "import",
-                "--output",
-                "json",
-                "--working-directory",
-                os.fspath(workspace),
-                os.fspath(semantic_session),
-            ],
-            "stdin": None,
-        },
-        {
-            "argv": [*flags, "--model", "fixture-model", "--resume", "session-123"],
-            "stdin": "private trigger\n",
-        },
-    ]
-    assert "private trigger" not in json.dumps(_records(record)[1]["argv"])
-
-
-def test_explicit_empty_import_starts_a_fresh_controlled_session(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    request, _, _ = _write_request(tmp_path)
-    executable = _fake_copilot(tmp_path)
-    record = tmp_path / "record.jsonl"
-    monkeypatch.setenv("ITHRL_WORKER_RECORD", os.fspath(record))
-    monkeypatch.setenv(
-        "ITHRL_IMPORTED_COUNTS",
-        json.dumps(dict.fromkeys(("messages", "toolCalls", "toolResults", "attachments"), 0)),
+    assert asyncio.run(worker._run_session(Path("/fixture/copilot"), request)) == exit_code
+    assert recorded["messages"] == []
+    assert recorded["session_id"] == "session-1"
+    assert recorded["client"]["mode"] == "empty"
+    permissions = recorded["resume"]["managed_settings"].permissions
+    assert permissions.disable_bypass_permissions_mode == "disable"
+    assert permissions.disable_assisted_permissions_mode is True
+    assert permissions.deny == ["Shell(*)"]
+    assert permissions.allow == permissions.limit_to == []
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert events[0]["type"] == "ithrl.copilot.input"
+    assert events[-1]["type"] == "ithrl.copilot.complete"
+    assert events[-1]["success"] is (exit_code == 0)
+    if exit_code == 0 and event_kind in {"shell-two", "shell-32"}:
+        completions = [event for event in events if event["type"] == "tool.execution_complete"]
+        assert len(completions) == (32 if event_kind == "shell-32" else 2)
+        assert len({event["data"]["toolCallId"] for event in completions}) == len(completions)
+    actual_forwards = min(forwards, 1) if policy_verified and context_verified else 0
+    assert events[-1]["provider_calls_started"] == actual_forwards
+    assert recorded.get("physical_forwards", 0) == actual_forwards
+    rejected = (
+        max(forwards - 1, 0)
+        + (event_kind in {"tool.execution_complete", "shell-two", "shell-32"})
+        + (event_kind == "shell-followup-race")
     )
-
-    assert worker.main([os.fspath(request), os.fspath(executable)]) == 0
-
-    calls = _records(record)
-    assert len(calls) == 2
-    assert calls[1] == {
-        "argv": ["--output-format=json", "--stream=off", "--model", "fixture-model"],
-        "stdin": "private trigger\n",
-    }
-
-
-@pytest.mark.parametrize("field", ["messages", "toolCalls", "toolResults", "attachments"])
-@pytest.mark.parametrize("value", [1, False, "0", None])
-def test_import_counts_must_be_explicit_integer_zeros_for_fresh_session(
-    field: str, value: object
-) -> None:
-    imported: dict[str, object] = dict.fromkeys(
-        ("messages", "toolCalls", "toolResults", "attachments"), 0
+    assert events[-1]["requests_rejected"] == (
+        rejected if policy_verified and context_verified else 0
     )
-    imported[field] = value
-    receipt = {
-        "ok": True,
-        "code": "session_imported",
-        "sessionId": "session-123",
-        "imported": imported,
-    }
-
-    assert worker._parse_import_output(json.dumps(receipt).encode()) == "session-123"
-
-
-@pytest.mark.parametrize("imported", [{}, {"messages": 0, "toolCalls": 0, "toolResults": 0}, None])
-def test_incomplete_counts_do_not_select_empty_history_fallback(imported: object) -> None:
-    receipt = {
-        "ok": True,
-        "code": "session_imported",
-        "sessionId": "session-123",
-        "imported": imported,
-    }
-
-    assert worker._parse_import_output(json.dumps(receipt).encode()) == "session-123"
-
-
-def test_nonempty_import_resume_failure_does_not_start_a_fresh_session(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    request, _, _ = _write_request(tmp_path)
-    executable = _fake_copilot(tmp_path)
-    record = tmp_path / "record.jsonl"
-    monkeypatch.setenv("ITHRL_WORKER_RECORD", os.fspath(record))
-    monkeypatch.setenv(
-        "ITHRL_IMPORTED_COUNTS", '{"messages":1,"toolCalls":0,"toolResults":0,"attachments":0}'
+    assert "Captured fixture guidance" not in repr(
+        [event for event in events if event["type"] != "system.message"]
     )
-    monkeypatch.setenv("ITHRL_RESUME_RETURN_CODE", "23")
-
-    assert worker.main([os.fspath(request), os.fspath(executable)]) == 23
-
-    calls = _records(record)
-    assert len(calls) == 2
-    arguments = calls[1]["argv"]
-    assert isinstance(arguments, list)
-    assert arguments[-2:] == ["--resume", "session-123"]
-
-
-@pytest.mark.parametrize(
-    ("field", "replacement", "message"),
-    [
-        ("extra", "unsupported", "unsupported shape"),
-        ("commandFlags", ["not-a-flag"], "invalid fields"),
-        ("model", "model\0private", "invalid fields"),
-        ("target", "unknown", "invalid fields"),
-        ("workspace", "../private", "invalid fields"),
-    ],
-)
-def test_main_rejects_noncanonical_requests_without_exposing_content(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-    field: str,
-    replacement: object,
-    message: str,
-) -> None:
-    request, _, _ = _write_request(tmp_path)
-    value = json.loads(request.read_bytes())
-    value[field] = replacement
-    request.write_text(json.dumps(value), encoding="utf-8")
-    request.chmod(0o600)
-
-    result = worker.main([os.fspath(request), os.fspath(tmp_path / "missing")])
-
-    assert result == 70
-    error = capsys.readouterr().err
-    assert message in error
-    assert "private" not in error
-    assert os.fspath(request) not in error
-
-
-def test_main_rejects_oversized_and_non_private_request_files(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    oversized, _, _ = _write_request(tmp_path)
-    monkeypatch.setattr(worker, "MAX_REQUEST_BYTES", oversized.stat().st_size - 1)
-
-    assert worker.main([os.fspath(oversized), os.fspath(tmp_path / "missing")]) == 70
-    assert "request is unsafe" in capsys.readouterr().err
-
-    unsafe_mode, _, _ = _write_request(tmp_path)
-    unsafe_mode.chmod(0o644)
-
-    assert worker.main([os.fspath(unsafe_mode), os.fspath(tmp_path / "missing")]) == 70
-    assert "request is unsafe" in capsys.readouterr().err
-
-
-def test_main_rejects_duplicate_request_fields(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    request, _, _ = _write_request(tmp_path)
-    content = request.read_text(encoding="utf-8").replace(
-        '"model": "fixture-model"',
-        '"model": "fixture-model", "model": "private replacement"',
-    )
-    request.write_text(content, encoding="utf-8")
-    request.chmod(0o600)
-
-    assert worker.main([os.fspath(request), os.fspath(tmp_path / "missing")]) == 70
-    error = capsys.readouterr().err
-    assert "request contains invalid JSON" in error
-    assert "private replacement" not in error
-
-
-@pytest.mark.parametrize("code", ["wrong_code", ""])
-def test_main_requires_the_documented_session_import_result(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-    monkeypatch: pytest.MonkeyPatch,
-    code: str,
-) -> None:
-    request, _, _ = _write_request(tmp_path)
-    executable = _fake_copilot(tmp_path)
-    monkeypatch.setenv("ITHRL_WORKER_RECORD", os.fspath(tmp_path / "record.jsonl"))
-    monkeypatch.setenv("ITHRL_IMPORT_CODE", code)
-
-    result = worker.main([os.fspath(request), os.fspath(executable)])
-
-    assert result == 70
-    assert "import returned invalid output" in capsys.readouterr().err
-
-
-@pytest.mark.parametrize(
-    ("behavior", "message"),
-    [
-        ("failure", "import failed"),
-        ("malformed", "import returned invalid output"),
-        ("duplicate", "import returned invalid output"),
-        ("oversized", "import exceeded its output limit"),
-        ("timeout", "import timed out"),
-    ],
-)
-def test_import_failures_are_bounded_and_content_safe(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-    monkeypatch: pytest.MonkeyPatch,
-    behavior: str,
-    message: str,
-) -> None:
-    request, _, _ = _write_request(tmp_path)
-    executable = _fake_copilot(tmp_path)
-    monkeypatch.setenv("ITHRL_WORKER_RECORD", os.fspath(tmp_path / "record.jsonl"))
-    monkeypatch.setenv("ITHRL_IMPORT_BEHAVIOR", behavior)
-    if behavior == "oversized":
-        monkeypatch.setattr(worker, "MAX_IMPORT_OUTPUT_BYTES", 32)
-    if behavior == "timeout":
-        monkeypatch.setattr(worker, "_IMPORT_TIMEOUT_SECONDS", 0.01)
-
-    result = worker.main([os.fspath(request), os.fspath(executable)])
-
-    assert result == 70
-    error = capsys.readouterr().err
-    assert message in error
-    assert "private" not in error
-
-
-@pytest.mark.parametrize("behavior", ["stdout-stream-overflow", "stderr-stream-overflow"])
-def test_import_output_limit_stops_a_still_running_process(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-    monkeypatch: pytest.MonkeyPatch,
-    behavior: str,
-) -> None:
-    request, _, _ = _write_request(tmp_path)
-    executable = _fake_copilot(tmp_path)
-    record = tmp_path / "record.jsonl"
-    monkeypatch.setenv("ITHRL_WORKER_RECORD", os.fspath(record))
-    monkeypatch.setenv("ITHRL_IMPORT_BEHAVIOR", behavior)
-    monkeypatch.setattr(worker, "MAX_IMPORT_OUTPUT_BYTES", 32)
-    started = time.monotonic()
-
-    result = worker.main([os.fspath(request), os.fspath(executable)])
-
-    assert result == 70
-    assert time.monotonic() - started < 5
-    assert "import exceeded its output limit" in capsys.readouterr().err
-    assert not record.exists()
-
-
-def test_resume_exit_status_is_returned_without_interpreting_native_output(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    request, _, _ = _write_request(tmp_path)
-    executable = _fake_copilot(tmp_path)
-    monkeypatch.setenv("ITHRL_WORKER_RECORD", os.fspath(tmp_path / "record.jsonl"))
-    monkeypatch.setenv("ITHRL_RESUME_RETURN_CODE", "23")
-
-    assert worker.main([os.fspath(request), os.fspath(executable)]) == 23

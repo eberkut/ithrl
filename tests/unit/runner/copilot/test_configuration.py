@@ -143,7 +143,7 @@ def test_isolated_settings_disable_remote_and_interactive_features() -> None:
     assert json.loads(configuration.settings_data) == {
         "askUser": False,
         "autoUpdate": False,
-        "remote": "off",
+        "remoteSessions": False,
         "remoteExport": False,
     }
 

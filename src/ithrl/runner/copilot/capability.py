@@ -31,7 +31,6 @@ from ithrl.runner.copilot.isolation import (
 )
 from ithrl.runner.copilot.policy import (
     CAPTURE_TYPE,
-    CONTEXT_OPERATION,
     DISCOVERY_POLICY_VERSION,
     ENDPOINT,
     MATERIALIZATION,
@@ -55,13 +54,6 @@ _MAX_PROBE_STATE_BYTES = DEFAULT_DISPOSABLE_STATE_BYTES
 _MAX_PROBE_STATE_ENTRIES = 2_000
 _MAX_PROBE_STATE_DEPTH = 64
 _VERSION = re.compile(r"^GitHub Copilot CLI (?P<version>[^\s]+)$")
-_OPTION = re.compile(r"(?<![\w-])--[a-z][a-z0-9-]*")
-_IMPORT_OPTIONS = frozenset({"--dry-run", "--output", "--working-directory"})
-_SEMANTIC_SESSION = b"""\
-{"type":"session","version":1,"externalId":"ithrl-capability","createdAt":"2026-01-01T00:00:00.000Z"}
-{"type":"message","id":"user-1","timestamp":"2026-01-01T00:00:01.000Z","role":"user","content":[{"type":"text","text":"fixture"}]}
-{"type":"message","id":"assistant-1","timestamp":"2026-01-01T00:00:02.000Z","role":"assistant","content":[{"type":"text","text":"fixture"}]}
-"""
 _ISOLATION_RESULT = b"ithrl-copilot-isolation-ok\n"
 _ISOLATION_HOST_MARKER = b"ithrl-copilot-readable-host-marker\n"
 _ISOLATION_HOST_PARENT = Path("/var/tmp")  # noqa: S108 - host view outside private /tmp
@@ -69,12 +61,11 @@ _ISOLATION_UNAVAILABLE = "Copilot isolation runtime is unavailable or incompatib
 _ISOLATION_PROBE_SOURCE = f"""\
 #!/usr/bin/python3
 import json
-import sys
 from pathlib import Path
 
-request = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+request = json.loads(Path({f"{SANDBOX_ROOT}/request.json"!r}).read_text(encoding="utf-8"))
 protected = Path(request["protected"])
-copilot = Path(sys.argv[2])
+copilot = Path({f"{SANDBOX_ROOT}/runner/copilot"!r})
 if not copilot.is_file() or copilot.stat().st_mode & 0o111 == 0:
     raise SystemExit(68)
 if (protected / "readable-marker").read_bytes() != {_ISOLATION_HOST_MARKER!r}:
@@ -155,10 +146,8 @@ def detect_copilot_capability(
         workspace = _private_directory(root / "workspace")
         _private_directory(root / "runner")
         _private_directory(root / "tmp")
-        transcript = root / "session.jsonl"
         try:
             atomic_write_bytes(copilot_home / "settings.json", configuration.settings_data)
-            atomic_write_bytes(transcript, _SEMANTIC_SESSION)
         except CaseError as error:
             raise CopilotCapabilityError(
                 CopilotCapabilityErrorCode.PROBE_FAILED,
@@ -167,44 +156,7 @@ def detect_copilot_capability(
         environment = _discovery_environment()
         _probe_isolation_boundary(runtime, root)
         version = _probe_version(runtime, environment, workspace)
-        root_help, root_result = _probe_help(
-            runtime, environment, workspace, ("--help",), probe_stage="root-help"
-        )
-        try:
-            _require_root_options(root_help, configuration, target)
-        except CopilotCapabilityError as error:
-            _attach_result(error, root_result, "root-help")
-            raise
-        permission_help, permission_result = _probe_help(
-            runtime,
-            environment,
-            workspace,
-            ("help", "permissions"),
-            probe_stage="permissions-help",
-        )
-        try:
-            _require_permission_contract(permission_help)
-        except CopilotCapabilityError as error:
-            _attach_result(error, permission_result, "permissions-help")
-            raise
-        import_help, import_result = _probe_help(
-            runtime,
-            environment,
-            workspace,
-            ("sessions", "import", "--help"),
-            probe_stage="import-help",
-        )
-        try:
-            _require_import_options(import_help)
-        except CopilotCapabilityError as error:
-            _attach_result(error, import_result, "import-help")
-            raise
-        _probe_semantic_import(
-            runtime,
-            environment,
-            workspace,
-            transcript,
-        )
+        _probe_sdk_protocol(runtime, environment, workspace, target)
     _require_runtime_unchanged(runtime)
     return DetectedCopilotCapability(
         profile=_profile(
@@ -226,13 +178,13 @@ def _profile(
     target: CopilotTarget,
 ) -> CapabilityProfile:
     shell_action = target == "shell-action"
-    calls = 2 if shell_action else 1
+    calls = 1
     action_visibility = "visible" if shell_action else "not-applicable"
     action_denial = "enforced"
     deviations = [
-        "context is reconstructed through a fresh semantic session import",
+        "context is restored from the native evidence prefix without adding a user message",
         "Copilot custom instructions and skill retrieval are disabled; "
-        "captured assignment context is not imported",
+        "captured system guidance is restored exactly when available",
         "remote session sync and export are disabled",
         policy_deviation(target),
         f"runner policy {POLICY_VERSION}",
@@ -244,10 +196,6 @@ def _profile(
         f"runtime executables {runtime.identity}",
         "native event and target behavior require live calibration before application selection",
     ]
-    if shell_action:
-        deviations.append(
-            "two provider calls are reserved because Copilot may begin a continuation after denial"
-        )
     return CapabilityProfile(
         runner_type="copilot",
         runner_version=RUNNER_VERSION,
@@ -258,7 +206,7 @@ def _profile(
         deterministic=False,
         supported_capture_types=(CAPTURE_TYPE,),
         supported_materializations=(MATERIALIZATION,),
-        supported_context_operations=(CONTEXT_OPERATION,),
+        supported_context_operations=target_policy(target).context_operations,
         reconstruction_method=RECONSTRUCTION_METHOD,
         supported_targets=(target,),
         provider_transport="required",
@@ -405,111 +353,49 @@ def _probe_version(runtime: CopilotRuntime, environment: dict[str, str], cwd: Pa
     return match.group("version").removesuffix(".")
 
 
-def _probe_help(
+def _probe_sdk_protocol(
     runtime: CopilotRuntime,
     environment: dict[str, str],
     cwd: Path,
-    arguments: tuple[str, ...],
-    *,
-    probe_stage: str,
-) -> tuple[str, _CommandResult]:
-    result = _run_discovery(runtime, arguments, environment, cwd, probe_stage=probe_stage)
-    try:
-        return result.stdout.decode("utf-8"), result
-    except UnicodeError as error:
-        raise CopilotCapabilityError(
-            CopilotCapabilityErrorCode.UNSUPPORTED_PROTOCOL,
-            "Copilot returned invalid help output",
-            probe_stage=probe_stage,
-            probe_exit_code=0,
-            stdout=result.stdout,
-            stderr=result.stderr,
-        ) from error
-
-
-def _require_root_options(
-    help_text: str,
-    configuration: CopilotConfiguration,
     target: CopilotTarget,
 ) -> None:
-    required = {argument.partition("=")[0] for argument in target_policy(target).command_flags}
-    required.update({"--model", "--resume"})
-    if configuration.environment_names:
-        required.add("--secret-env-vars")
-    if not required.issubset(_help_options(help_text)):
-        raise CopilotCapabilityError(
-            CopilotCapabilityErrorCode.UNSAFE_POLICY,
-            "Copilot lacks a required non-interactive safety control",
-        )
-
-
-def _require_permission_contract(help_text: str) -> None:
-    normalized = " ".join(help_text.lower().split())
-    if (
-        "--available-tools" not in normalized
-        or "disables all other tools" not in normalized
-        or "denial rules always take precedence" not in normalized
-    ):
-        raise CopilotCapabilityError(
-            CopilotCapabilityErrorCode.UNSAFE_POLICY,
-            "Copilot tool availability or denial precedence is unsupported",
-        )
-
-
-def _require_import_options(help_text: str) -> None:
-    if not _IMPORT_OPTIONS.issubset(_help_options(help_text)):
-        raise CopilotCapabilityError(
-            CopilotCapabilityErrorCode.UNSUPPORTED_PROTOCOL,
-            "Copilot semantic session import is unsupported",
-        )
-
-
-def _help_options(help_text: str) -> frozenset[str]:
-    return frozenset(_OPTION.findall(help_text))
-
-
-def _probe_semantic_import(
-    runtime: CopilotRuntime,
-    environment: dict[str, str],
-    cwd: Path,
-    transcript: Path,
-) -> None:
-    result = _run_discovery(
-        runtime,
-        (
-            "sessions",
-            "import",
-            "--dry-run",
-            "--output",
-            "json",
-            "--working-directory",
-            f"{SANDBOX_ROOT}/workspace",
-            f"{SANDBOX_ROOT}/{transcript.name}",
-        ),
+    """Prove public RPC compatibility through a credential-free SDK handshake."""
+    source = f"""import asyncio
+import sys
+sys.path.insert(0, {f"{SANDBOX_ROOT}/runner/sdk-packages"!r})
+from copilot import CopilotClient, RuntimeConnection
+async def main():
+    client = CopilotClient(
+        connection=RuntimeConnection.for_stdio(path={f"{SANDBOX_ROOT}/runner/copilot"!r}, args={list(target_policy(target).command_flags)!r}),
+        mode="empty", base_directory={f"{SANDBOX_ROOT}/copilot-home"!r},
+        working_directory={f"{SANDBOX_ROOT}/workspace"!r}, log_level="error")
+    try:
+        await client.start()
+        result = await client.ping("ithrl-credential-free-protocol")
+        if result.message != "pong: ithrl-credential-free-protocol" or not isinstance(result.protocol_version, int):
+            raise ValueError("unsupported protocol")
+    finally:
+        await client.stop()
+asyncio.run(main())
+print("ithrl-copilot-sdk-protocol-ok")
+""".encode()
+    worker = cwd.parent / "protocol-worker.py"
+    atomic_write_bytes(worker, source)
+    result = _run_probe(
+        _bubblewrap_argv(runtime, state=cwd.parent, worker=worker.name, network_denied=True),
         environment,
         cwd,
-        probe_stage="semantic-import",
+        state_root=cwd.parent,
+        probe_stage="sdk-protocol",
+        failure_code=CopilotCapabilityErrorCode.UNSUPPORTED_PROTOCOL,
     )
-    try:
-        document = json.loads(result.stdout)
-    except (UnicodeError, json.JSONDecodeError) as error:
-        raise CopilotCapabilityError(
+    if result.stdout != b"ithrl-copilot-sdk-protocol-ok\n":
+        error = CopilotCapabilityError(
             CopilotCapabilityErrorCode.UNSUPPORTED_PROTOCOL,
-            "Copilot semantic import returned invalid output",
-            probe_stage="semantic-import",
-            probe_exit_code=0,
-            stdout=result.stdout,
-            stderr=result.stderr,
-        ) from error
-    if not isinstance(document, dict) or document.get("ok") is not True:
-        raise CopilotCapabilityError(
-            CopilotCapabilityErrorCode.UNSUPPORTED_PROTOCOL,
-            "Copilot semantic session import is unsupported",
-            probe_stage="semantic-import",
-            probe_exit_code=0,
-            stdout=result.stdout,
-            stderr=result.stderr,
+            "Copilot SDK non-interactive protocol is unsupported",
         )
+        _attach_result(error, result, "sdk-protocol")
+        raise error
 
 
 def _run_discovery(
@@ -695,14 +581,20 @@ def _require_bounded_probe_state(root: Path) -> None:
                         CopilotCapabilityErrorCode.PROBE_FAILED,
                         "Copilot capability state exceeded its entry limit",
                     )
-                metadata = entry.stat(follow_symlinks=False)
+                try:
+                    metadata = entry.stat(follow_symlinks=False)
+                except FileNotFoundError:
+                    continue  # A running SDK can remove its own temporary state.
                 if stat.S_ISDIR(metadata.st_mode):
                     if depth >= _MAX_PROBE_STATE_DEPTH:
                         raise CopilotCapabilityError(
                             CopilotCapabilityErrorCode.PROBE_FAILED,
                             "Copilot capability state exceeded its nesting limit",
                         )
-                    child = os.open(entry.name, flags, dir_fd=descriptor)
+                    try:
+                        child = os.open(entry.name, flags, dir_fd=descriptor)
+                    except FileNotFoundError:
+                        continue
                     try:
                         opened = os.fstat(child)
                         if (opened.st_dev, opened.st_ino) != (metadata.st_dev, metadata.st_ino):

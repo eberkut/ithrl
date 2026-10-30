@@ -79,8 +79,9 @@ valid match/nonmatch counts.
 Private fuzz results contain `summary.json`, `fuzz-session.json` and
 `sampling/sampling-state.json`; the observation database remains at its frozen external path.
 The session and state retain exact mutation payloads and configuration. Normal human/JSON output
-shows mutation type, byte count and digest without printing payload text. Keep the entire result
-and database private.
+shows mutation type, byte count and digest without printing payload text. The fixed triggering
+input covers what ithrl supplies to the harness; the harness may add context. Keep the entire
+result and database private.
 
 Resume with `ithrl fuzz RUN_OR_RESULT --resume`, adding `--acknowledge-model-execution` for a
 native campaign. The session freezes configuration, source, profile, store and limits. Resume
@@ -103,17 +104,22 @@ and limits behind the result claims.
 ## Budgets and resume
 
 The summary reports calibration, search, confirmation, eligibility, reliability and known usage.
-Actual, possible, pending and charged provider calls are separate counts. Copilot token usage is
-unavailable, and denied shell actions can leave possible continuation calls; unknown usage stays
-explicit.
-
 Actual calls record known starts; additional possible calls retain usage that the runner cannot
-exclude. Charged calls retain the full per-attempt allowance whenever provider work started,
-including completed turns, and include pending dispatch reservations. Codex's relay records
-physical requests separately, so actual calls can be lower than the charged count. Reopening a
-run reconciles saved
-observations before deciding whether another complete sampling block fits; it never repeats an
-unresolved dispatch.
+exclude. Completed attempts are charged their known calls. Failed attempts with started provider
+work retain the full per-attempt allowance, and pending dispatch reservations stay charged until
+reconciled. Reopening a run reconciles saved observations before admitting another complete block;
+it never repeats an unresolved dispatch.
+
+Copilot's request gate permits one inference request per attempt and blocks continuation after
+denial. Token usage depends on the native evidence available for each attempt; unknown usage stays
+explicit. Zero known tokens with nonzero unknown-token attempts does not mean zero token use.
+
+`max_provider_calls_per_attempt` reports the administrative cap frozen in the profile and run
+identity; see [plan limits](native-runs.md#3-inspect-the-complete-plan-and-budget) for
+configuration. Successful native continuations can exhaust it even when retries are disabled. A
+`provider-call-limit` error ends the run with a budget outcome and retained usage; it supplies no
+behavioral loss, automatic retry or continuation command. Inspect the evidence before choosing a
+different cap for a new run.
 
 When a search stops at a budget, follow its printed continuation command. Deterministic searches
 can resume from a saved result or active run. Sampled resume preserves the experiment and completed

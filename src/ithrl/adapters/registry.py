@@ -19,6 +19,7 @@ from ithrl.adapters.codex.discovery import discover_sources as discover_codex_so
 from ithrl.adapters.contracts import NativeSession, ParsingLimits
 from ithrl.adapters.copilot import PARSER as COPILOT_PARSER
 from ithrl.adapters.copilot.context import compile_context as compile_copilot_context
+from ithrl.adapters.copilot.context import editable_text as editable_copilot_text
 from ithrl.adapters.copilot.decisions import enumerate_decisions as enumerate_copilot_decisions
 from ithrl.adapters.copilot.discovery import discover_sources as discover_copilot_sources
 from ithrl.adapters.discovery import (
@@ -111,6 +112,7 @@ _BUILTIN_ADAPTERS = (
         discoverer=discover_copilot_sources,
         decision_enumerator=enumerate_copilot_decisions,
         context_compiler=compile_copilot_context,
+        text_discoverer=editable_copilot_text,
     ),
 )
 _ADAPTERS_BY_HARNESS = {adapter.harness: adapter for adapter in _BUILTIN_ADAPTERS}

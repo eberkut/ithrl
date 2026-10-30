@@ -10,6 +10,7 @@ import pytest
 
 import ithrl.runner.copilot.runner as copilot_runner_module
 from ithrl.case import CaseEvidence, CaseWorkspace
+from ithrl.context import content_digest
 from ithrl.execution import (
     ResolvedExecutionPlan,
     ResourceLimits,
@@ -17,6 +18,7 @@ from ithrl.execution import (
 )
 from ithrl.experiment import ExperimentDefinition
 from ithrl.measurement import observe_once
+from ithrl.mutation import TextAppend, TextMutation
 from ithrl.observations import ObservationIdentity, ObservationOutcome, ObservationStore
 from ithrl.runner import (
     PreparedAttempt,
@@ -31,6 +33,7 @@ from ithrl.runner.copilot import (
     CopilotRuntime,
     DetectedCopilotCapability,
 )
+from ithrl.runner.copilot.isolation import program_digest
 from ithrl.runner.copilot.materialize import (
     CopilotMaterializationError,
     CopilotMaterializationErrorCode,
@@ -41,8 +44,15 @@ from ithrl.runner.copilot.policy import (
     CopilotTarget,
 )
 from ithrl.runner.copilot.protocol import CopilotProtocolOutcome
+from ithrl.runner.evidence import AttemptEvidence
 from ithrl.runner.runtime import ProtectedPath, RuntimeReport
-from native_support.copilot import _FAKE_COPILOT, _capability, _case, _configuration
+from native_support.copilot import (
+    _FAKE_COPILOT,
+    _FAKE_COPILOT_WORKER,
+    _capability,
+    _case,
+    _configuration,
+)
 
 
 def _runner(
@@ -89,6 +99,15 @@ def _runner(
         ),
         workspace_paths=(ProtectedPath("original-workspace", original_workspace),),
     )
+    worker_source = tmp_path / f"fixture-worker-{mode}.py"
+    worker_source.write_text(
+        _FAKE_COPILOT_WORKER.replace("__MODE__", mode).replace(
+            "__MARKER__", json.dumps(str(marker))
+        ),
+        encoding="utf-8",
+    )
+    runner._worker_source = worker_source
+    runner._worker_digest = program_digest(worker_source)
     return runner, marker
 
 
@@ -146,21 +165,39 @@ def _attempt(
 
 
 @pytest.mark.parametrize("code", list(CopilotMaterializationErrorCode))
-@pytest.mark.parametrize("removed", [False, True])
+@pytest.mark.parametrize("change", ["original", "removal", "append"])
 def test_pure_candidate_admission_only_classifies_local_reconstruction_refusals(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     code: CopilotMaterializationErrorCode,
-    removed: bool,
+    change: str,
 ) -> None:
-    source, workspace, evidence = _case(tmp_path, "final-response")
+    source, workspace, evidence = _case(tmp_path, "final-response", context_sensitive=True)
     runner, marker = _runner(tmp_path, source, workspace, target="final-response")
     attempt = _attempt(evidence, runner)
-    if removed:
+    if change == "removal":
         node = next(n for n in evidence.context.nodes if n.mutable and not n.protected)
         attempt = replace(
             attempt,
             candidate=prepare_candidate(evidence, attempt.execution_plan, (node.id,)),
+            phase="search",
+            arm="candidate",
+        )
+    elif change == "append":
+        site = evidence.editable_text()[0]
+        mutation = TextMutation(
+            edits=(
+                TextAppend(
+                    context_id=site.context_id,
+                    content_index=site.content_index,
+                    original_text_digest=content_digest(site.original_text),
+                    text="Private append.",
+                ),
+            )
+        )
+        attempt = replace(
+            attempt,
+            candidate=prepare_candidate(evidence, attempt.execution_plan, mutation=mutation),
             phase="search",
             arm="candidate",
         )
@@ -171,7 +208,7 @@ def test_pure_candidate_admission_only_classifies_local_reconstruction_refusals(
     monkeypatch.setattr(copilot_runner_module, "materialize_copilot_attempt", refuse)
     expected = (
         CandidateInvalidError
-        if removed
+        if change != "original"
         and code
         in {
             CopilotMaterializationErrorCode.MISSING_TRIGGER,
@@ -184,6 +221,18 @@ def test_pure_candidate_admission_only_classifies_local_reconstruction_refusals(
     assert not (tmp_path / "attempts").exists()
     assert list((tmp_path / "output").iterdir()) == []
     assert not marker.exists()
+
+
+@pytest.mark.parametrize("target", ["final-response", "shell-action"])
+def test_rejects_stale_or_overadvertised_context_operation_profiles(target: CopilotTarget) -> None:
+    operations = (
+        ("dependency-closed-removal",)
+        if target == "final-response"
+        else ("dependency-closed-removal", "append-text")
+    )
+    profile = _capability(target).model_copy(update={"supported_context_operations": operations})
+    with pytest.raises(ValueError, match="does not satisfy the runner contract"):
+        copilot_runner_module._validate_capability(profile)
 
 
 @pytest.mark.parametrize("target", ["final-response", "shell-action"])
@@ -254,7 +303,7 @@ def test_stops_after_visible_denied_shell_action(tmp_path: Path) -> None:
     assert result.accounting.actions_requested == 1
     assert result.accounting.actions_denied == 1
     assert result.accounting.actions_executed == 0
-    assert result.accounting.process_outcome == "terminated"
+    assert result.accounting.process_outcome == "exited"
     assert result.accounting.cleanup_outcome == "verified"
     assert not marker.exists()
     assert not (tmp_path / "attempts" / result.attempt_id).exists()
@@ -468,25 +517,31 @@ def test_maps_invalid_native_output_without_exposing_content(
     assert refused.value.accounting.cleanup_outcome == "verified"
 
 
-def test_maps_timeout_after_verified_cleanup(tmp_path: Path) -> None:
+@pytest.mark.parametrize(("mode", "actual_calls"), [("sleep", 1), ("startup-sleep", 0)])
+def test_maps_timeout_after_verified_cleanup(tmp_path: Path, mode: str, actual_calls: int) -> None:
     source, workspace, evidence = _case(tmp_path, "final-response")
     runner, _ = _runner(
         tmp_path,
         source,
         workspace,
         target="final-response",
-        mode="sleep",
+        mode=mode,
     )
+    attempt = _attempt(evidence, runner, max_wall_time_seconds=1)
 
     with pytest.raises(RunnerError) as refused:
-        asyncio.run(runner.run(_attempt(evidence, runner, max_wall_time_seconds=1)))
+        asyncio.run(runner.run(attempt))
 
     assert refused.value.code is RunnerErrorCode.TIMEOUT
     assert refused.value.accounting is not None
     assert refused.value.accounting.process_outcome == "terminated"
     assert refused.value.accounting.cleanup_outcome == "verified"
-    assert refused.value.accounting.provider_calls_started == 1
+    assert refused.value.accounting.provider_calls_started == actual_calls
     assert refused.value.accounting.provider_calls_completed == 0
+    attempt_evidence = AttemptEvidence.from_error(attempt, refused.value)
+    assert attempt_evidence.provider_acceptance_state is ProviderAcceptanceState.UNKNOWN
+    assert attempt_evidence.provider_calls_possible == 1
+    assert attempt_evidence.provider_call_charge(1) == 1
 
 
 def test_maps_output_limit_and_preserves_bounded_native_evidence(tmp_path: Path) -> None:
@@ -553,6 +608,9 @@ def test_cancellation_waits_for_runner_cleanup(tmp_path: Path) -> None:
     assert cancelled.error.accounting is not None
     assert cancelled.error.accounting.process_outcome == "terminated"
     assert cancelled.error.accounting.cleanup_outcome == "verified"
-    assert cancelled.error.accounting.provider_calls_started == 1
+    assert cancelled.error.accounting.provider_calls_started in {0, 1}
     assert cancelled.error.accounting.provider_calls_completed == 0
+    attempt_evidence = AttemptEvidence.from_error(attempt, cancelled.error)
+    assert attempt_evidence.provider_acceptance_state is ProviderAcceptanceState.UNKNOWN
+    assert attempt_evidence.provider_call_charge(1) == 1
     assert not (tmp_path / "attempts" / attempt.attempt_id).exists()

@@ -55,7 +55,9 @@ def decode_line(line: bytes) -> dict[str, object]:
         ) from None
     event = cast(dict[str, object], value)
     event_type = event.get("type")
-    if not isinstance(event_type, str) or event_type not in SUPPORTED_EVENTS:
+    if not isinstance(event_type, str) or (
+        event_type not in SUPPORTED_EVENTS and not event_type.startswith(("model.", "session."))
+    ):
         raise CopilotProtocolError(
             "unsupported-event", "Copilot returned an unsupported event type"
         )

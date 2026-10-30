@@ -144,11 +144,10 @@ to a cap of 16 physical provider requests per attempt, giving a total allowance 
 when changing it. A native turn can require several successful Responses requests even with
 request and stream retries disabled. A lower cap can stop the turn before completion.
 
-For Copilot, omit both `--inter-attempt-delay 15` and `--max-provider-calls-per-attempt 16`. Use
-`--max-provider-calls 493` for a final-response run or `986` for a shell-action run. Detection
-determines its per-attempt bound; shell-action runs allow two calls because denial can trigger
-a continuation. These profiles cannot enforce a hard input-token limit and refuse a plan
-requiring one.
+For either Copilot target, omit `--inter-attempt-delay 15`, set
+`--max-provider-calls-per-attempt 1` and use `--max-provider-calls 493`. The request gate stops
+shell execution and any continuation after denial. These profiles cannot enforce a hard
+input-token limit and refuse a plan requiring one.
 
 The per-attempt cap is part of capability and saved-run identity. Use the same cap throughout
 preflight and execution; changing it requires a new plan. Increasing a sampled run's total

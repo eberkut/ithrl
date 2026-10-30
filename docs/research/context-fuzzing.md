@@ -58,8 +58,11 @@ Pure reconstruction checks found a suitable Codex final-response seam: append on
 `input_text` block of a copied prior `role=user`, `type=message` history item. Preserve message
 identity, outer record order, other fields and the fixed triggering input. Instructions, tools,
 model/provider routing, policy, assistant text, tool results and opaque/image blocks are excluded.
-Copilot mutation reconstruction is deferred because its semantic session serialization needs
-additional identity and ordering decisions.
+Copilot uses eligible prior `user.message` records in the copied native prefix. The editable
+field is `transformedContent` when captured, otherwise `content`; it must contain plain text.
+The overlay preserves native identities, record order, other fields and the selected turn's
+fixed user or completed-tool input. Reconstruction resumes that prefix without adding a user
+message.
 
 The credential-free prototype checked no-op reconstruction, duplication and appended paragraphs
 on sanitized fixture materialization. Non-text fields, trigger, source bytes and original objects
@@ -68,14 +71,14 @@ evidence digest was
 `3ef4dfd942afde6d62e8e15c204f2a0887e6a60f2adf53ef94d905a28ca6b087`.
 This establishes a local overlay boundary, with no harness or provider execution.
 
-The implemented materializers revalidate selectors, protected fields and original-value digests
-on defensive copies. Pure candidate admission occurs before sampling allocation. Candidate identity
+The implemented materializers revalidate selectors, protected fields and original-value digests on
+defensive copies. Pure candidate admission occurs before sampling allocation. Candidate identity
 binds the complete intervention and the source, target, reconstruction, effective policy and
 experiment; a generation seed/index or retained/removed partition alone cannot identify a mutation.
-Codex capability profiles advertise `append-text` for this seam; Copilot profiles remain
-removal-only. Native text discovery re-derives the saved decision and context before the adapter
-enumerates editable fields. The fixed triggering input is excluded. Native experimental support
-requires the [qualification gate](#native-applicability).
+Codex and Copilot final-response capability profiles advertise `append-text` for these seams;
+Copilot shell-action profiles remain removal-only. Native text discovery re-derives the saved
+decision and context before the adapter enumerates editable fields. The fixed triggering input is
+excluded. Native experimental support requires the [qualification gate](#native-applicability).
 
 ## Confirmation method and assumptions
 

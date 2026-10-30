@@ -18,17 +18,24 @@ from ithrl.runner.copilot.policy import (
     ENDPOINT,
     PROTOCOL_VERSION,
     PROVIDER,
+    RECONSTRUCTION_METHOD,
     CopilotTarget,
+    target_policy,
 )
 
-_FAKE_COPILOT = r"""#!/usr/bin/python3
+# Deliberately replaces only the SDK worker boundary. Runner tests still execute
+# the real Bubblewrap, private materialization, process monitor and parser. This
+# fixture does not establish SDK/native inference compatibility or provider support.
+_FAKE_COPILOT = "#!/usr/bin/python3\nraise SystemExit(0)\n"
+
+_FAKE_COPILOT_WORKER = r"""#!/usr/bin/python3
+import hashlib
 import json
 import os
 import sys
 import time
 
 MODE = "__MODE__"
-MARKER = __MARKER__
 
 
 def emit(event_type, data, **extra):
@@ -44,45 +51,48 @@ def emit(event_type, data, **extra):
     sys.stdout.flush()
 
 
-arguments = sys.argv[1:]
-if "sessions" in arguments and "import" in arguments:
-    session_path = arguments[-1]
-    with open(session_path, "rb") as source:
-        records = [json.loads(line) for line in source if line.strip()]
-    if not records or records[0].get("type") != "session":
-        raise SystemExit(3)
-    if MODE == "context-sensitive":
-        context_path = os.path.join(os.environ["COPILOT_HOME"], "fixture-context.json")
-        if os.path.exists(context_path):
-            raise SystemExit(5)
-        with open(context_path, "w") as output:
-            json.dump("ITHRL_REQUIRED_CONTEXT" in json.dumps(records), output)
-    print(json.dumps({"ok": True, "code": "session_imported", "sessionId": "session-1"}))
-    raise SystemExit(0)
+with open("/tmp/ithrl-state/request.json", encoding="utf-8") as source:
+    settings = json.load(source)
+os.unlink("/tmp/ithrl-state/request.json")
+with open(settings["nativeSession"], "rb") as source:
+    native = source.read()
+records = [json.loads(line) for line in native.splitlines() if line.strip()]
+assert records[0]["type"] == "session.start"
+assert any(record["type"] == "user.message" for record in records)
 
-trigger = sys.stdin.readline().rstrip("\n")
-if not trigger:
-    raise SystemExit(4)
+def receipt(kind, **fields):
+    print(json.dumps({"type": "ithrl.copilot." + kind, "schema_version": 1, **fields}), flush=True)
+
+if MODE == "startup-sleep":
+    time.sleep(60)
+
+receipt(
+    "input", native_session_sha256=hashlib.sha256(native).hexdigest(),
+    native_session_bytes=len(native), new_user_messages=0,
+    system_message_sha256=None if settings["systemMessage"] is None else
+        hashlib.sha256(settings["systemMessage"].encode()).hexdigest(),
+)
+request_digest = hashlib.sha256(b"credential-free fixture dispatch").hexdigest()
+receipt("forward", request_sha256=request_digest, provider_calls_started=1)
 if MODE == "sleep":
     time.sleep(60)
 if MODE == "malformed":
-    print("private-native-output")
+    print("private-native-output", flush=True)
     raise SystemExit(0)
 if MODE == "output":
     for _ in range(3000):
-        print("x" * 1024)
+        print("x" * 1024, flush=True)
     raise SystemExit(0)
 if MODE == "state":
     with open(os.path.join(os.environ["COPILOT_HOME"], "oversized.bin"), "wb") as output:
         output.write(b"x" * (512 * 1024))
 
 turn_id = "turn-1"
-model = arguments[arguments.index("--model") + 1]
+model = settings["model"]
 emit("session.skills_loaded", {"count": 0})
 emit("session.mcp_servers_loaded", {"count": 0})
 emit("session.tools_updated", {"tools": []})
 emit("session.info", {"configuration": {"tools": "filtered"}})
-emit("user.message", {"turnId": turn_id, "content": trigger})
 emit("assistant.turn_start", {"turnId": turn_id, "interactionId": "interaction-1"})
 emit("model.call_start", {"turnId": turn_id, "model": model})
 emit(
@@ -90,11 +100,10 @@ emit(
     {"turnId": turn_id, "model": model, "outcome": "success", "dispatchDurationMs": 1},
 )
 
-shell_action = "--available-tools=bash" in arguments
+shell_action = settings["target"] == "shell-action"
 required_context = True
 if MODE == "context-sensitive":
-    with open(os.path.join(os.environ["COPILOT_HOME"], "fixture-context.json")) as source:
-        required_context = json.load(source)
+    required_context = "ITHRL_REQUIRED_CONTEXT" in native.decode()
 if shell_action and MODE not in {"tool-free", "empty-final", "nonzero-final", "reasoning"}:
     request = {
         "toolCallId": "call-1",
@@ -134,10 +143,10 @@ if shell_action and MODE not in {"tool-free", "empty-final", "nonzero-final", "r
             "error": {"code": "denied", "message": "denied by fixture"},
         },
     )
-    time.sleep(2)
-    with open(MARKER, "w", encoding="utf-8") as marker:
-        marker.write("action executed\n")
-    raise SystemExit(5)
+    receipt("complete", provider_calls_started=1, requests_rejected=0,
+            websockets_rejected=0, permissions_denied=1,
+            request_sha256=request_digest, success=True)
+    raise SystemExit(0)
 
 emit(
     "assistant.message",
@@ -154,19 +163,9 @@ if MODE == "reasoning":
     emit("assistant.reasoning", {"content": "Private fixture timeline.", "reasoningId": "reasoning-1", "rte": True})
 emit("assistant.turn_end", {"turnId": turn_id})
 emit("assistant.idle", {}, ephemeral=True)
-result = {
-    "type": "result",
-    "timestamp": "2026-01-01T00:00:01.000Z",
-    "sessionId": "session-1",
-    "exitCode": 0,
-    "usage": {
-        "premiumRequests": 0,
-        "totalApiDurationMs": 1,
-        "sessionDurationMs": 2,
-        "codeChanges": {"linesAdded": 0, "linesRemoved": 0, "filesModified": 0},
-    },
-}
-print(json.dumps(result, separators=(",", ":")), flush=True)
+receipt("complete", provider_calls_started=1, requests_rejected=0,
+        websockets_rejected=0, permissions_denied=0,
+        request_sha256=request_digest, success=True)
 if MODE == "nonzero-final":
     raise SystemExit(5)
 if MODE == "continued":
@@ -286,11 +285,11 @@ def _capability(
         deterministic=False,
         supported_capture_types=("logical-session",),
         supported_materializations=("source-backed",),
-        supported_context_operations=("dependency-closed-removal",),
-        reconstruction_method="copilot-semantic-session-import-v1",
+        supported_context_operations=target_policy(target).context_operations,
+        reconstruction_method=RECONSTRUCTION_METHOD,
         supported_targets=(target,),
         provider_transport="required",
-        provider_calls_per_attempt=2 if target == "shell-action" else 1,
+        provider_calls_per_attempt=1,
         tool_network_access="forbidden",
         action_visibility="visible" if target == "shell-action" else "not-applicable",
         action_denial="enforced",

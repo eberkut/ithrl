@@ -77,11 +77,7 @@ class SmokeOptions:
 
     @property
     def provider_call_bound(self) -> int:
-        return (
-            2 * MAX_INFERENCE_REQUESTS
-            if self.profile == "codex-final"
-            else (4 if self.profile == "copilot-shell" else 2)
-        )
+        return 2 * MAX_INFERENCE_REQUESTS if self.profile == "codex-final" else 2
 
 
 def synthetic_case(root: Path, options: SmokeOptions) -> tuple[Path, CaseWorkspace, Path]:

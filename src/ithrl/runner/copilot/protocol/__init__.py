@@ -6,13 +6,12 @@ from ithrl.runner.copilot.protocol.contracts import (
     CopilotProtocolOutcome,
     ExpectedOutcome,
 )
-from ithrl.runner.copilot.protocol.parser import is_denied_tool_completion, parse_output
+from ithrl.runner.copilot.protocol.parser import parse_output
 
 __all__ = [
     "MAX_OUTPUT_LINE_BYTES",
     "CopilotProtocolError",
     "CopilotProtocolOutcome",
     "ExpectedOutcome",
-    "is_denied_tool_completion",
     "parse_output",
 ]

@@ -17,6 +17,7 @@ from typer.testing import CliRunner
 
 import ithrl.cli.native as native
 import ithrl.runner.codex.runner as codex_runner_module
+import ithrl.runner.copilot.runner as copilot_runner_module
 import ithrl.runner.runtime.process as process_runtime
 from ithrl.case import CaseWorkspace
 from ithrl.cli import ExitCode, app
@@ -39,10 +40,10 @@ from ithrl.results import (
     load_sampling_snapshot,
 )
 from ithrl.runner.codex import CodexProviderConfiguration, CodexRuntime
-from ithrl.runner.codex.isolation import program_digest
 from ithrl.runner.codex.protocol_contracts import MAX_INFERENCE_REQUESTS
 from ithrl.runner.copilot import CopilotRuntime, DetectedCopilotCapability
 from ithrl.runner.copilot.capability import CopilotCapabilityError, CopilotCapabilityErrorCode
+from ithrl.runner.copilot.isolation import program_digest
 from ithrl.runner.runtime import ProcessSpec
 from live.test_native_smoke import test_native_smoke as run_smoke
 from native_support import codex, copilot
@@ -145,10 +146,22 @@ def _scenario(
         monkeypatch.setattr(native, "detect_codex_capability", detect)
     else:
         source, case, _ = copilot._case(root, target, context_sensitive=mode == "context-sensitive")
-        executable.write_text(
-            copilot._FAKE_COPILOT.replace("__MODE__", mode)
+        executable.write_text(copilot._FAKE_COPILOT)
+        worker = root / "fixture-copilot-worker.py"
+        worker.write_text(
+            copilot._FAKE_COPILOT_WORKER.replace("__MODE__", mode)
             .replace("__MARKER__", json.dumps(str(marker)))
             .replace("Fixture complete.", response)
+        )
+        prepare_process = copilot_runner_module.prepare_copilot_process
+
+        def prepare_fixture_process(*args: Any, **kwargs: Any) -> ProcessSpec:
+            kwargs["worker_source"] = worker
+            kwargs["worker_digest"] = program_digest(worker)
+            return prepare_process(*args, **kwargs)
+
+        monkeypatch.setattr(
+            copilot_runner_module, "prepare_copilot_process", prepare_fixture_process
         )
         configuration = copilot._configuration()
         executable.chmod(0o700)
@@ -177,7 +190,7 @@ def _scenario(
         root / "data",
         marker,
         root / "observations.sqlite",
-        MAX_INFERENCE_REQUESTS if harness == "codex" else (2 if target == "shell-action" else 1),
+        MAX_INFERENCE_REQUESTS if harness == "codex" else 1,
     )
 
 
@@ -374,10 +387,8 @@ def test_native_cli_calibrates_and_reuses_independent_clean_attempts(
     assert report["status"] == "measurable"
     assert report["attempts_used"] == report["matches"] == 2
     assert report["actions_executed"] == 0
-    assert report["provider_calls"] == (None if scenario.calls_per_attempt > 1 else 2)
-    assert report["provider_call_accounting"] == (
-        "started-unknown" if scenario.calls_per_attempt > 1 else "accounted"
-    )
+    assert report["provider_calls"] == 2
+    assert report["provider_call_accounting"] == "accounted"
     assert snapshot.summary.provider_calls_completed == 2
     assert snapshot.summary.actions_requested == (2 if target == "shell-action" else 0)
     assert snapshot.summary.actions_denied == snapshot.summary.actions_requested
@@ -547,8 +558,8 @@ def test_native_sampled_shrink_reduces_only_irrelevant_context_and_freshly_confi
     assert all(child.poll() is not None for child in children)
     assert all(not path.exists() for path in workspaces)
     assert report["actual_provider_calls"] == len(observations)
-    assert report["possible_provider_calls"] == len(observations) * (scenario.calls_per_attempt - 1)
-    assert report["charged_provider_calls"] == len(observations) * scenario.calls_per_attempt
+    assert report["possible_provider_calls"] == 0
+    assert report["charged_provider_calls"] == len(observations)
     assert report["charged_provider_calls"] <= report["max_provider_calls"]
     assert report["runner_seconds"] == runner_milliseconds / 1000
     assert report["unknown_runner_attempts"] == report["pending_runner_seconds"] == 0
@@ -559,12 +570,8 @@ def test_native_sampled_shrink_reduces_only_irrelevant_context_and_freshly_confi
         <= report["max_wall_time_seconds"]
     )
     assert report["actions_executed"] == 0
-    assert report["provider_call_accounting"] == (
-        "started-unknown" if scenario.calls_per_attempt > 1 else "accounted"
-    )
-    assert report["provider_calls"] == (
-        None if scenario.calls_per_attempt > 1 else len(observations)
-    )
+    assert report["provider_call_accounting"] == "accounted"
+    assert report["provider_calls"] == len(observations)
     assert report["known_tokens"] == (108 * len(observations) if harness == "codex" else 0)
     assert report["unknown_token_attempts"] == (0 if harness == "codex" else len(observations))
     assert report["action_visibility"] == (

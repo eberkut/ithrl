@@ -1,723 +1,490 @@
 from __future__ import annotations
 
-import copy
+import hashlib
 import json
-from collections.abc import Iterable
 from typing import Any
 
 import pytest
 
-from ithrl.behavior import MAX_BEHAVIOR_TEXT_LENGTH
 from ithrl.runner.contracts import TokenUsage, ToolCall
-from ithrl.runner.copilot.protocol import (
-    MAX_OUTPUT_LINE_BYTES,
-    CopilotProtocolError,
-    CopilotProtocolOutcome,
-    ExpectedOutcome,
-    is_denied_tool_completion,
-    parse_output,
-)
-from ithrl.runner.copilot.protocol.contracts import MAX_ID_LENGTH
+from ithrl.runner.copilot.protocol import CopilotProtocolError, parse_output
+from ithrl.runner.copilot.protocol.contracts import MAX_OUTPUT_EVENTS, MAX_OUTPUT_LINE_BYTES
+from ithrl.runner.copilot.protocol.parser import physical_forward_count
 
-TURN_ID = "turn-fixture"
 MODEL = "fixture-model"
-TOOL_CALL_ID = "call-fixture"
-FINAL_TEXT = "Fixture complete."
-type Event = dict[str, Any]
+TURN = "fixture-turn"
+NATIVE = b'{"type":"session.start"}\n'
+SYSTEM = "Captured fixture guidance"
 
 
-def _event(event_type: str, data: Event) -> Event:
-    return {
-        "id": f"event-{event_type}",
-        "parentId": None,
-        "timestamp": "2026-01-01T00:00:00.000Z",
-        "type": event_type,
-        "data": data,
-    }
+def _event(kind: str, **data: object) -> dict[str, Any]:
+    return {"type": kind, "data": data}
 
 
-def _prefix(*, usage: Event | None = None) -> list[Event]:
+def _receipt(kind: str, **fields: object) -> dict[str, Any]:
+    return {"type": f"ithrl.copilot.{kind}", "schema_version": 1, **fields}
+
+
+def _input() -> dict[str, Any]:
+    return _receipt(
+        "input",
+        native_session_sha256=hashlib.sha256(NATIVE).hexdigest(),
+        native_session_bytes=len(NATIVE),
+        system_message_sha256=hashlib.sha256(SYSTEM.encode()).hexdigest(),
+        new_user_messages=0,
+    )
+
+
+def _complete() -> dict[str, Any]:
+    return _receipt(
+        "complete",
+        provider_calls_started=1,
+        requests_rejected=0,
+        websockets_rejected=0,
+        permissions_denied=0,
+        request_sha256="a" * 64,
+        success=True,
+    )
+
+
+def _events(*, shell_target: bool = False, usage: bool = False) -> list[dict[str, Any]]:
     events = [
-        _event("session.skills_loaded", {"count": 0}),
-        _event("session.mcp_servers_loaded", {"count": 0}),
-        _event("session.tools_updated", {"tools": ["bash"]}),
-        _event("session.info", {"configuration": {"tools": "filtered"}}),
-        _event("user.message", {"turnId": TURN_ID, "content": "Fixture prompt."}),
-        _event("assistant.turn_start", {"turnId": TURN_ID, "interactionId": "interaction"}),
-        _event("model.call_start", {"turnId": TURN_ID, "model": MODEL}),
+        _input(),
+        _event("session.resume", eventCount=3),
+        _event("system.message", content=SYSTEM),
+        _event("pending_messages.modified"),
+        _event("assistant.turn_start", turnId=TURN),
+        _event("model.call_start", turnId=TURN, model=MODEL),
+        _receipt("forward", provider_calls_started=1, request_sha256="a" * 64),
+        _event("model.call_finished", turnId=TURN, outcome="success"),
     ]
-    if usage is not None:
-        events.append(_event("assistant.usage", usage))
+    if usage:
+        events.append(
+            _event(
+                "assistant.usage", model=MODEL, inputTokens=100, outputTokens=12, cacheReadTokens=3
+            )
+        )
+    request = {"name": "bash", "toolCallId": "call-1", "arguments": {"command": "pwd"}}
     events.append(
         _event(
-            "model.call_finished",
-            {"turnId": TURN_ID, "outcome": "success", "dispatchDurationMs": 10},
+            "assistant.message",
+            messageId="message-1",
+            turnId=TURN,
+            model=MODEL,
+            content="" if shell_target else "Fixture complete.",
+            toolRequests=[request] if shell_target else [],
         )
     )
-    return events
+    events.append(_event("model.call_final_result", model=MODEL, result="success", isByok=False))
+    if shell_target:
+        events.extend(
+            [
+                _event(
+                    "tool.execution_start",
+                    toolCallId="call-1",
+                    toolName="bash",
+                    turnId=TURN,
+                    model=MODEL,
+                    arguments=request["arguments"],
+                ),
+                _event(
+                    "tool.execution_complete",
+                    toolCallId="call-1",
+                    turnId=TURN,
+                    model=MODEL,
+                    success=False,
+                    error={"code": "denied"},
+                ),
+            ]
+        )
+    else:
+        events.extend(
+            [
+                _event("assistant.turn_end", turnId=TURN),
+                _event("assistant.idle"),
+                _event("session.idle"),
+            ]
+        )
+    return [*events, _complete()]
 
 
-def _final_events(*, usage: Event | None = None) -> list[Event]:
-    return [
-        *_prefix(usage=usage),
+def _parse(events: list[dict[str, Any]], *, shell_target: bool = False):
+    return parse_output(
+        b"".join(json.dumps(e).encode() + b"\n" for e in events),
+        expected="shell-action" if shell_target else "final-response",
+        native_session=NATIVE,
+        system_message=SYSTEM,
+    )
+
+
+@pytest.mark.parametrize(
+    ("reason", "expected"),
+    [
+        ("native-context-unverified", "native-context-unverified"),
+        ("private-provider-error", "incomplete-dispatch"),
+        (["untrusted"], "incomplete-dispatch"),
+    ],
+)
+def test_worker_error_reports_only_known_diagnostic_codes(reason: object, expected: str) -> None:
+    events = _events()
+    events[-1].update(success=False, failure_code=reason)
+    with pytest.raises(CopilotProtocolError) as caught:
+        _parse(events)
+    assert caught.value.code == expected
+    assert "private-provider-error" not in str(caught.value)
+
+
+def test_native_final_response_needs_no_invented_user_or_cli_result() -> None:
+    outcome = _parse(_events())
+    assert outcome.final_text == "Fixture complete."
+    assert outcome.model_returned == MODEL
+    assert outcome.provider_calls_started == outcome.provider_calls_completed == 1
+    assert outcome.usage is None
+
+
+@pytest.mark.parametrize("shell_target", [False, True])
+def test_one_inference_can_emit_multiple_distinct_assistant_messages(shell_target: bool) -> None:
+    events = _events(shell_target=shell_target)
+    index = next(i for i, event in enumerate(events) if event["type"] == "assistant.message")
+    events[index:index] = [
         _event(
             "assistant.message",
-            {
-                "messageId": "message-fixture",
-                "apiCallId": "api-call-fixture",
-                "model": MODEL,
-                "content": FINAL_TEXT,
-                "toolRequests": [],
-                "turnId": TURN_ID,
-            },
+            messageId="reasoning-message",
+            turnId=TURN,
+            model=MODEL,
+            content="",
+            reasoningText="Consider the request.",
         ),
-        _event("assistant.turn_end", {"turnId": TURN_ID}),
-        {**_event("assistant.idle", {}), "ephemeral": True},
-        {
-            "type": "result",
-            "timestamp": "2026-01-01T00:00:01.000Z",
-            "sessionId": "session-fixture",
-            "exitCode": 0,
-            "usage": {
-                "premiumRequests": 0,
-                "totalApiDurationMs": 10,
-                "sessionDurationMs": 20,
-                "codeChanges": {"linesAdded": 0, "linesRemoved": 0, "filesModified": 0},
-            },
-        },
+        _event(
+            "assistant.message",
+            messageId="commentary-message",
+            turnId=TURN,
+            model=MODEL,
+            content="Checking the result.",
+        ),
     ]
+    outcome = _parse(events, shell_target=shell_target)
+    assert outcome.provider_calls_completed == 1
+    if shell_target:
+        assert outcome.actions_denied == 1
+    else:
+        assert outcome.final_text == "Fixture complete."
 
 
-def _request() -> Event:
-    return {
-        "toolCallId": TOOL_CALL_ID,
-        "name": "bash",
-        "arguments": {"command": "pwd", "description": "Show the directory."},
-        "type": "function",
-    }
+def test_native_usage_is_preserved_and_optional_counts_remain_unknown() -> None:
+    assert _parse(_events(usage=True)).usage == TokenUsage(
+        input_tokens=100, output_tokens=12, cached_input_tokens=3
+    )
+    events = _events()
+    events.insert(-1, _event("assistant.usage", model=MODEL))
+    assert _parse(events).usage is None
 
 
-def _shell_events() -> list[Event]:
-    request = _request()
-    return [
-        *_prefix(),
-        _event(
-            "assistant.message",
-            {
-                "messageId": "message-fixture",
-                "apiCallId": "api-call-fixture",
-                "model": MODEL,
-                "content": "",
-                "toolRequests": [request],
-                "turnId": TURN_ID,
-            },
-        ),
+@pytest.mark.parametrize("blocked_followups", [0, 1])
+def test_visible_native_denial_proves_no_action_execution(blocked_followups: int) -> None:
+    events = _events(shell_target=True)
+    events[-1]["requests_rejected"] = blocked_followups
+    outcome = _parse(events, shell_target=True)
+    assert outcome.tool_calls == (ToolCall(name="bash", arguments={"command": "pwd"}),)
+    assert outcome.actions_requested == outcome.actions_denied == 1
+    assert outcome.actions_executed == 0
+    assert outcome.provider_calls_started == outcome.provider_calls_completed == 1
+
+
+@pytest.mark.parametrize("missing_denial", [False, True])
+def test_parallel_shell_actions_require_every_explicit_denial(missing_denial: bool) -> None:
+    events = _events(shell_target=True)
+    message = next(event["data"] for event in events if event["type"] == "assistant.message")
+    message["content"] = "Inspect both parts of the working changes."
+    message["toolRequests"].append(
+        {"name": "bash", "toolCallId": "call-2", "arguments": {"command": "git diff"}}
+    )
+    start = next(i for i, event in enumerate(events) if event["type"] == "tool.execution_start")
+    events.insert(
+        start + 1,
         _event(
             "tool.execution_start",
-            {
-                "toolCallId": TOOL_CALL_ID,
-                "toolName": "bash",
-                "arguments": request["arguments"],
-                "turnId": TURN_ID,
-                "model": MODEL,
-            },
-        ),
-        _event(
-            "tool.execution_complete",
-            {
-                "toolCallId": TOOL_CALL_ID,
-                "model": MODEL,
-                "turnId": TURN_ID,
-                "success": False,
-                "error": {"message": "Permission denied.", "code": "denied"},
-                "toolTelemetry": {"properties": {"shell_error_category": "permission_denied"}},
-            },
-        ),
-    ]
-
-
-def _jsonl(events: Iterable[object]) -> bytes:
-    return b"".join(
-        json.dumps(event, ensure_ascii=False, separators=(",", ":")).encode() + b"\n"
-        for event in events
-    )
-
-
-@pytest.mark.parametrize("expected", ["final-response", "shell-action"])
-@pytest.mark.parametrize("text", [FINAL_TEXT, ""])
-def test_parse_tool_free_response_proves_normal_completion(
-    expected: ExpectedOutcome, text: str
-) -> None:
-    events = _final_events()
-    events[-4]["data"]["content"] = text
-
-    outcome = parse_output(_jsonl(events), expected=expected)
-
-    assert outcome == CopilotProtocolOutcome(
-        type="final-response",
-        model_returned=MODEL,
-        provider_calls_started=1,
-        provider_calls_completed=1,
-        final_text=text,
-    )
-
-
-@pytest.mark.parametrize(
-    ("expected", "shell_request"),
-    [("final-response", False), ("shell-action", False), ("shell-action", True)],
-)
-@pytest.mark.parametrize("api_call_id", [None, "", "x" * 516], ids=["absent", "empty", "long"])
-def test_optional_api_call_id_preserves_outcome_and_accounting(
-    expected: ExpectedOutcome, shell_request: bool, api_call_id: str | None
-) -> None:
-    events = _shell_events() if shell_request else _final_events()
-    baseline = parse_output(_jsonl(events), expected=expected)
-    message = next(event["data"] for event in events if event["type"] == "assistant.message")
-    if api_call_id is None:
-        del message["apiCallId"]
-    else:
-        message["apiCallId"] = api_call_id
-
-    assert parse_output(_jsonl(events), expected=expected) == baseline
-
-
-@pytest.mark.parametrize("api_call_id", [None, 1, True, [], {"private": "fixture-value"}])
-def test_present_api_call_id_requires_a_string(api_call_id: object) -> None:
-    events = _shell_events()
-    events[-3]["data"]["apiCallId"] = api_call_id
-
-    with pytest.raises(CopilotProtocolError) as raised:
-        parse_output(_jsonl(events), expected="shell-action")
-
-    assert raised.value.code == "invalid-field"
-    assert "fixture-value" not in str(raised.value)
-
-
-def test_api_call_id_cannot_exceed_encoded_line_bound() -> None:
-    events = _shell_events()
-    events[-3]["data"]["apiCallId"] = "x" * MAX_OUTPUT_LINE_BYTES
-
-    with pytest.raises(CopilotProtocolError) as raised:
-        parse_output(_jsonl(events), expected="shell-action")
-
-    assert raised.value.code == "line-limit"
-
-
-@pytest.mark.parametrize(
-    "missing_type", ["model.call_finished", "tool.execution_complete", "assistant.turn_end"]
-)
-def test_long_api_call_id_cannot_supply_completion_or_denial(missing_type: str) -> None:
-    events = _shell_events() if missing_type == "tool.execution_complete" else _final_events()
-    message = next(event["data"] for event in events if event["type"] == "assistant.message")
-    message["apiCallId"] = "x" * 516
-    events = [event for event in events if event["type"] != missing_type]
-
-    with pytest.raises(CopilotProtocolError):
-        parse_output(_jsonl(events), expected="shell-action")
-
-
-def test_long_api_call_id_cannot_allow_action_execution() -> None:
-    events = _shell_events()
-    events[-3]["data"]["apiCallId"] = "x" * 516
-    events[-1]["data"]["success"] = True
-
-    with pytest.raises(CopilotProtocolError) as raised:
-        parse_output(_jsonl(events), expected="shell-action")
-
-    assert raised.value.code == "action-not-denied"
-
-
-def test_parse_final_response_preserves_reported_token_usage() -> None:
-    usage = {
-        "model": MODEL,
-        "inputTokens": 100,
-        "outputTokens": 12,
-        "cacheReadTokens": 40,
-    }
-
-    outcome = parse_output(_jsonl(_final_events(usage=usage)), expected="final-response")
-
-    assert outcome.usage == TokenUsage(
-        input_tokens=100,
-        output_tokens=12,
-        cached_input_tokens=40,
-    )
-
-
-@pytest.mark.parametrize(
-    ("expected", "shell_request"),
-    [("final-response", False), ("shell-action", False), ("shell-action", True)],
-)
-@pytest.mark.parametrize("after_message", [False, True])
-@pytest.mark.parametrize("content", ["Private fixture timeline.", ""])
-def test_optional_reasoning_does_not_change_proved_outcome_or_accounting(
-    expected: ExpectedOutcome, shell_request: bool, after_message: bool, content: str
-) -> None:
-    events = _shell_events() if shell_request else _final_events()
-    baseline = parse_output(_jsonl(events), expected=expected)
-    message_index = next(
-        index for index, event in enumerate(events) if event["type"] == "assistant.message"
-    )
-    events.insert(
-        message_index + int(after_message),
-        _event(
-            "assistant.reasoning",
-            {"content": content, "reasoningId": "reasoning-fixture", "rte": False},
+            toolCallId="call-2",
+            toolName="bash",
+            turnId=TURN,
+            model=MODEL,
+            arguments={"command": "git diff"},
         ),
     )
-
-    assert parse_output(_jsonl(events), expected=expected) == baseline
-
-
-@pytest.mark.parametrize("identity", [{}, {"model": MODEL, "turnId": TURN_ID}])
-def test_reasoning_identity_fields_are_optional_and_matching_when_present(identity: Event) -> None:
-    events = _final_events()
-    baseline = parse_output(_jsonl(events), expected="final-response")
-    events.insert(
-        -3,
-        _event(
-            "assistant.reasoning", {"content": "", "reasoningId": "reasoning-fixture", **identity}
-        ),
-    )
-
-    assert parse_output(_jsonl(events), expected="final-response") == baseline
-
-
-@pytest.mark.parametrize(
-    ("placement", "code"),
-    [
-        ("before-call", "invalid-sequence"),
-        ("after-turn-end", "invalid-sequence"),
-        ("after-result", "continued-after-result"),
-        ("after-denial", "continued-after-denial"),
-    ],
-)
-def test_reasoning_requires_active_selected_call(placement: str, code: str) -> None:
-    events = _shell_events() if placement == "after-denial" else _final_events()
-    reasoning = _event("assistant.reasoning", {"content": "", "reasoningId": "reasoning-fixture"})
-    if placement == "before-call":
-        index = next(
-            index for index, event in enumerate(events) if event["type"] == "model.call_start"
+    if not missing_denial:
+        # Completions may arrive in a different order from the requests.
+        events.insert(
+            start + 2,
+            _event(
+                "tool.execution_complete",
+                toolCallId="call-2",
+                turnId=TURN,
+                model=MODEL,
+                success=False,
+                error={"code": "denied"},
+            ),
         )
-        events.insert(index, reasoning)
-    elif placement == "after-turn-end":
-        events.insert(-2, reasoning)
+        outcome = _parse(events, shell_target=True)
+        assert outcome.tool_calls == (
+            ToolCall(name="bash", arguments={"command": "pwd"}),
+            ToolCall(name="bash", arguments={"command": "git diff"}),
+        )
+        assert outcome.actions_requested == outcome.actions_denied == 2
+        assert outcome.actions_executed == 0
     else:
-        events.append(reasoning)
-
-    with pytest.raises(CopilotProtocolError) as raised:
-        parse_output(_jsonl(events), expected="shell-action")
-
-    assert raised.value.code == code
-
-
-def test_reasoning_from_subagent_is_rejected() -> None:
-    events = _final_events()
-    reasoning = _event("assistant.reasoning", {"content": "", "reasoningId": "reasoning-fixture"})
-    reasoning["agentId"] = "subagent-fixture"
-    events.insert(-3, reasoning)
-
-    with pytest.raises(CopilotProtocolError) as raised:
-        parse_output(_jsonl(events), expected="final-response")
-
-    assert raised.value.code == "subagent-event"
+        with pytest.raises(CopilotProtocolError, match="complete denied shell action"):
+            _parse(events, shell_target=True)
 
 
 @pytest.mark.parametrize(
-    "fields",
+    ("index", "field", "value"),
     [
-        {"reasoningId": "reasoning-fixture"},
-        {"content": ""},
-        {"content": None, "reasoningId": "reasoning-fixture"},
-        {"content": "", "reasoningId": ""},
-        {"content": "", "reasoningId": MAX_ID_LENGTH},
+        (0, "native_session_sha256", "a" * 64),
+        (0, "native_session_bytes", 999),
+        (0, "system_message_sha256", "b" * 64),
+        (0, "new_user_messages", 1),
+        (0, "schema_version", 2),
+        (0, "schema_version", True),
+        (0, "schema_version", 1.0),
+        (0, "new_user_messages", False),
+        (0, "new_user_messages", 0.0),
+        (0, "native_session_bytes", float(len(NATIVE))),
+        (6, "schema_version", True),
+        (6, "schema_version", 1.0),
+        (6, "provider_calls_started", True),
+        (6, "provider_calls_started", 1.0),
+        (-1, "schema_version", True),
+        (-1, "schema_version", 1.0),
+        (-1, "provider_calls_started", True),
+        (-1, "provider_calls_started", 1.0),
+        (-1, "websockets_rejected", False),
+        (-1, "websockets_rejected", 0.0),
+        (-1, "provider_calls_started", 2),
+        (-1, "requests_rejected", 1),
+        (-1, "websockets_rejected", 1),
+        (-1, "success", False),
     ],
 )
-def test_reasoning_requires_bounded_content_and_identifier(fields: Event) -> None:
-    events = _final_events()
-    events.insert(-3, _event("assistant.reasoning", fields))
-
-    with pytest.raises(CopilotProtocolError) as raised:
-        parse_output(_jsonl(events), expected="final-response")
-
-    assert raised.value.code == "invalid-field"
-
-
-@pytest.mark.parametrize(
-    "fields",
-    [
-        {"content": "", "reasoningId": "x" * (MAX_ID_LENGTH + 1)},
-        {"content": "x" * (MAX_BEHAVIOR_TEXT_LENGTH + 1), "reasoningId": "reasoning-fixture"},
-    ],
-)
-def test_opaque_reasoning_fields_use_existing_encoded_line_bound(fields: Event) -> None:
-    events = _final_events()
-    baseline = parse_output(_jsonl(events), expected="final-response")
-    events.insert(-3, _event("assistant.reasoning", fields))
-
-    assert parse_output(_jsonl(events), expected="final-response") == baseline
-
-
-@pytest.mark.parametrize(
-    ("identity", "code"),
-    [
-        ({"model": "different-model"}, "model-mismatch"),
-        ({"turnId": "different-turn"}, "turn-mismatch"),
-        ({"model": None}, "invalid-field"),
-        ({"turnId": None}, "invalid-field"),
-    ],
-)
-def test_reasoning_cannot_override_selected_identity(identity: Event, code: str) -> None:
-    events = _final_events()
-    events.insert(
-        -3,
-        _event(
-            "assistant.reasoning", {"content": "", "reasoningId": "reasoning-fixture", **identity}
-        ),
-    )
-
-    with pytest.raises(CopilotProtocolError) as raised:
-        parse_output(_jsonl(events), expected="final-response")
-
-    assert raised.value.code == code
-
-
-@pytest.mark.parametrize(
-    "missing_type",
-    ["model.call_finished", "assistant.message", "assistant.turn_end", "assistant.idle", "result"],
-)
-def test_reasoning_cannot_supply_missing_completion_evidence(missing_type: str) -> None:
-    events = _final_events()
-    events.insert(
-        -3, _event("assistant.reasoning", {"content": "", "reasoningId": "reasoning-fixture"})
-    )
-    events = [event for event in events if event["type"] != missing_type]
-
-    with pytest.raises(CopilotProtocolError) as raised:
-        parse_output(_jsonl(events), expected="shell-action")
-
-    assert raised.value.code in {"invalid-sequence", "incomplete-final-response"}
-
-
-@pytest.mark.parametrize("usage", [None, {"model": MODEL, "inputTokens": 100, "outputTokens": 12}])
-def test_optional_completion_and_session_telemetry_do_not_add_calls_or_token_usage(
-    usage: Event | None,
+def test_input_and_dispatch_receipts_are_bound_and_strict(
+    index: int, field: str, value: object
 ) -> None:
-    events = _final_events(usage=usage)
-    events.insert(
-        -3,
-        _event("model.call_final_result", {"model": MODEL, "result": "success", "isByok": False}),
-    )
-    events.insert(
-        -2,
-        _event(
-            "session.usage_checkpoint",
-            {"premiumRequests": 10, "inputTokens": 999, "outputTokens": 999, "modelCacheState": []},
-        ),
-    )
-
-    outcome = parse_output(_jsonl(events), expected="final-response")
-
-    assert outcome.provider_calls_started == outcome.provider_calls_completed == 1
-    assert outcome.usage == (TokenUsage(input_tokens=100, output_tokens=12) if usage else None)
-    assert outcome.final_text == FINAL_TEXT
+    events = _events()
+    events[index][field] = value
+    with pytest.raises(CopilotProtocolError):
+        _parse(events)
 
 
 @pytest.mark.parametrize(
-    ("fields", "code"),
+    "kind",
     [
-        ({"model": "different-model", "result": "success", "isByok": False}, "model-mismatch"),
-        ({"model": MODEL, "result": "failure", "isByok": False}, "provider-failure"),
-        ({"model": MODEL, "result": "success", "isByok": True}, "provider-failure"),
+        "ithrl.copilot.input",
+        "ithrl.copilot.forward",
+        "ithrl.copilot.complete",
+        "model.call_start",
+        "model.call_finished",
+        "assistant.message",
+        "assistant.turn_end",
+        "assistant.idle",
     ],
 )
-def test_optional_call_completion_cannot_override_model_or_provider_evidence(
-    fields: Event, code: str
-) -> None:
-    events = _final_events()
-    events.insert(-3, _event("model.call_final_result", fields))
-
-    with pytest.raises(CopilotProtocolError) as raised:
-        parse_output(_jsonl(events), expected="final-response")
-
-    assert raised.value.code == code
+def test_missing_dispatch_or_native_completion_fails_closed(kind: str) -> None:
+    events = [e for e in _events() if e["type"] != kind]
+    with pytest.raises(CopilotProtocolError):
+        _parse(events)
 
 
 @pytest.mark.parametrize(
-    ("event_type", "position"),
+    "kind",
     [
-        ("model.call_final_result", len(_prefix()) - 1),
-        ("model.call_final_result", -2),
-        ("session.usage_checkpoint", -3),
-        ("session.usage_checkpoint", -1),
+        "ithrl.copilot.forward",
+        "model.call_start",
+        "model.call_finished",
+        "assistant.message",
+        "assistant.turn_start",
     ],
 )
-def test_optional_telemetry_requires_its_valid_lifecycle_position(
-    event_type: str, position: int
+def test_duplicate_physical_or_native_dispatch_cannot_be_accepted(kind: str) -> None:
+    events = _events()
+    index = next(i for i, e in enumerate(events) if e["type"] == kind)
+    events.insert(index, events[index])
+    with pytest.raises(CopilotProtocolError):
+        _parse(events)
+
+
+@pytest.mark.parametrize(
+    ("kind", "data"),
+    [
+        ("user.message", {"content": "invented"}),
+        ("session.handoff", {}),
+        ("tool.execution_start", {}),
+        ("arbitrary.native.side-effect", {}),
+    ],
+)
+def test_new_user_messages_and_unknown_essential_events_are_refused(
+    kind: str, data: dict[str, object]
 ) -> None:
-    events = _final_events()
-    events.insert(
-        position, _event(event_type, {"model": MODEL, "result": "success", "isByok": False})
+    events = _events()
+    events.insert(-1, {"type": kind, "data": data})
+    with pytest.raises(CopilotProtocolError):
+        _parse(events)
+
+
+@pytest.mark.parametrize("wrong_type", [bool, float])
+@pytest.mark.parametrize(
+    ("index", "field", "calls", "value"),
+    [
+        (0, "schema_version", 1, 1),
+        (1, "schema_version", 1, 1),
+        (1, "provider_calls_started", 1, 1),
+        (-1, "schema_version", 0, 1),
+        (-1, "provider_calls_started", 0, 0),
+    ],
+)
+def test_recovery_counters_require_exact_integers(
+    index: int, field: str, calls: int, value: int, wrong_type: type[bool] | type[float]
+) -> None:
+    events = [_input()]
+    if calls:
+        events.append(_receipt("forward", provider_calls_started=1, request_sha256="a" * 64))
+    events.append(_complete())
+    events[-1]["provider_calls_started"] = calls
+
+    def output() -> bytes:
+        return b"".join(json.dumps(event).encode() + b"\n" for event in events)
+
+    assert physical_forward_count(output()) == calls
+    events[index][field] = wrong_type(value)
+    assert physical_forward_count(output()) is None
+
+
+@pytest.mark.parametrize(
+    ("kind", "field", "value"),
+    [
+        ("model.call_finished", "outcome", "failure"),
+        ("assistant.message", "turnId", "different"),
+        ("assistant.message", "model", "different"),
+        ("model.call_final_result", "isByok", True),
+        ("model.call_final_result", "result", "failure"),
+    ],
+)
+def test_provider_and_selected_turn_identity_are_native_evidence(
+    kind: str, field: str, value: object
+) -> None:
+    events = _events()
+    next(e for e in events if e["type"] == kind)["data"][field] = value
+    with pytest.raises(CopilotProtocolError):
+        _parse(events)
+
+
+@pytest.mark.parametrize(
+    ("data", "expected"),
+    [
+        ({"errorCode": "quota_exceeded", "statusCode": 402}, "provider-quota-exceeded"),
+        ({"statusCode": 401}, "provider-authentication-required"),
+        ({"statusCode": 402}, "provider-payment-required"),
+        ({"statusCode": 403}, "provider-access-denied"),
+        ({"statusCode": 429}, "provider-rate-limited"),
+        ({"statusCode": 503}, "provider-unavailable"),
+        ({"errorCode": "private-identifier"}, "session-error"),
+        ({"errorCode": "quota_exceeded", "statusCode": "402"}, "session-error"),
+        ({"statusCode": True}, "session-error"),
+    ],
+)
+def test_provider_failure_diagnostics_preserve_dispatch_and_exclude_native_text(
+    data: dict[str, object], expected: str
+) -> None:
+    events = _events()[:7]
+    complete = _complete()
+    complete["success"] = False
+    events.extend(
+        [
+            _event("model.call_failure", **data, errorMessage="private-error-message"),
+            _event("session.error", message="private-session-message"),
+            complete,
+        ]
     )
-
-    with pytest.raises(CopilotProtocolError) as raised:
-        parse_output(_jsonl(events), expected="final-response")
-
-    assert raised.value.code == "invalid-sequence"
-
-
-def test_parse_shell_action_requires_matching_denied_execution() -> None:
-    outcome = parse_output(_jsonl(_shell_events()), expected="shell-action")
-
-    assert outcome == CopilotProtocolOutcome(
-        type="shell-action",
-        model_returned=MODEL,
-        provider_calls_started=1,
-        provider_calls_completed=1,
-        tool_call=ToolCall(
-            name="bash",
-            arguments={"command": "pwd", "description": "Show the directory."},
-        ),
-        actions_requested=1,
-        actions_denied=1,
-    )
-
-
-def test_parse_shell_action_accepts_passive_background_task_updates() -> None:
-    events = _shell_events()
-    events.insert(-1, _event("session.background_tasks_changed", {}))
-
-    outcome = parse_output(_jsonl(events), expected="shell-action")
-
-    assert outcome.actions_denied == 1
-    assert outcome.actions_executed == 0
-
-
-def test_outcome_repr_excludes_model_content_and_tool_arguments() -> None:
-    final = parse_output(_jsonl(_final_events()), expected="final-response")
-    shell = parse_output(_jsonl(_shell_events()), expected="shell-action")
-
-    assert FINAL_TEXT not in repr(final)
-    assert "pwd" not in repr(shell)
-    assert "description" not in repr(shell)
-
-
-def test_denial_line_detector_accepts_only_explicit_denial_completion() -> None:
-    denial = _jsonl([_shell_events()[-1]])
-    success = copy.deepcopy(_shell_events()[-1])
-    success["data"] = {
-        "toolCallId": TOOL_CALL_ID,
-        "success": True,
-        "result": {"content": ""},
-    }
-
-    assert is_denied_tool_completion(denial)
-    assert not is_denied_tool_completion(_jsonl([success]))
-    assert not is_denied_tool_completion(b"not json\n")
-    assert not is_denied_tool_completion(b'{"type":"future.action"}\n')
+    with pytest.raises(CopilotProtocolError) as error:
+        _parse(events)
+    assert error.value.code == expected
+    assert "private" not in str(error.value)
+    output = b"".join(json.dumps(event).encode() + b"\n" for event in events)
+    assert physical_forward_count(output) == 1
 
 
 @pytest.mark.parametrize(
-    ("payload", "code"),
+    ("kind", "field", "value"),
     [
-        (b"", "empty-output"),
-        (b"not json\n", "invalid-json"),
-        (b"NaN\n", "invalid-number"),
-        (b'{"type":"result","type":"result"}\n', "duplicate-field"),
-        (_jsonl([["not", "an", "event"]]), "invalid-event"),
-        (_jsonl([{"type": "future.action", "data": {}}]), "unsupported-event"),
+        ("tool.execution_start", "arguments", {"command": "changed"}),
+        ("tool.execution_start", "toolName", "network"),
+        ("tool.execution_complete", "success", True),
+        ("tool.execution_complete", "error", {"code": "other"}),
+        ("tool.execution_complete", "toolCallId", "different"),
+        ("tool.execution_complete", "turnId", "different"),
     ],
 )
-def test_malformed_and_unknown_output_fails_closed(payload: bytes, code: str) -> None:
-    with pytest.raises(CopilotProtocolError) as raised:
-        parse_output(payload, expected="final-response")
-
-    assert raised.value.code == code
-
-
-def test_oversized_line_fails_closed() -> None:
-    oversized = b"{" + b" " * MAX_OUTPUT_LINE_BYTES + b"}\n"
-
-    with pytest.raises(CopilotProtocolError, match="byte limit") as raised:
-        parse_output(oversized, expected="final-response")
-
-    assert raised.value.code in {"line-limit", "output-limit"}
+def test_action_identity_and_explicit_denial_are_required(
+    kind: str, field: str, value: object
+) -> None:
+    events = _events(shell_target=True)
+    next(e for e in events if e["type"] == kind)["data"][field] = value
+    with pytest.raises(CopilotProtocolError):
+        _parse(events, shell_target=True)
 
 
-@pytest.mark.parametrize("expected", ["final-response", "shell-action"])
-def test_boolean_result_exit_code_is_not_zero(expected: ExpectedOutcome) -> None:
-    events = _final_events()
-    events[-1]["exitCode"] = False
-
-    with pytest.raises(CopilotProtocolError) as raised:
-        parse_output(_jsonl(events), expected=expected)
-
-    assert raised.value.code == "invalid-result"
-
-
-def test_multiple_tool_requests_are_ambiguous() -> None:
-    events = _shell_events()
-    message = events[-3]["data"]
-    message["toolRequests"].append(copy.deepcopy(message["toolRequests"][0]))
-
-    with pytest.raises(CopilotProtocolError, match="exactly one") as raised:
-        parse_output(_jsonl(events), expected="shell-action")
-
-    assert raised.value.code == "ambiguous-action"
-
-
-@pytest.mark.parametrize("tool_event", [-2, -1])
-def test_tool_evidence_after_tool_free_message_is_rejected(tool_event: int) -> None:
-    events = _final_events()
-    events.insert(-3, _shell_events()[tool_event])
-
-    with pytest.raises(CopilotProtocolError) as raised:
-        parse_output(_jsonl(events), expected="shell-action")
-
-    assert raised.value.code == "invalid-sequence"
-
-
-def test_requested_shell_action_cannot_finish_as_tool_free_response() -> None:
-    events = [*_shell_events()[:-2], *_final_events()[-3:]]
-
-    with pytest.raises(CopilotProtocolError) as raised:
-        parse_output(_jsonl(events), expected="shell-action")
-
-    assert raised.value.code == "invalid-sequence"
-
-
-def test_final_response_profile_still_rejects_requested_shell_action() -> None:
-    with pytest.raises(CopilotProtocolError) as raised:
-        parse_output(_jsonl(_shell_events()), expected="final-response")
-
-    assert raised.value.code == "unexpected-action"
+def test_native_usage_can_arrive_after_the_message() -> None:
+    events = _events()
+    events.insert(-1, _event("assistant.usage", model=MODEL, inputTokens=42, outputTokens=7))
+    assert _parse(events).usage == TokenUsage(input_tokens=42, output_tokens=7)
 
 
 @pytest.mark.parametrize(
-    ("event_index", "field", "value", "code"),
+    "usage",
     [
-        (-2, "toolCallId", "different-call", "action-mismatch"),
-        (-1, "toolCallId", "different-call", "action-mismatch"),
-        (-2, "turnId", "different-turn", "turn-mismatch"),
-        (-1, "model", "different-model", "model-mismatch"),
+        {"inputTokens": True, "outputTokens": 0},
+        {"inputTokens": 1},
+        {"inputTokens": 1, "outputTokens": -1},
+        {"inputTokens": 1, "outputTokens": 0, "cacheReadTokens": True},
     ],
 )
-def test_mismatched_action_evidence_fails_closed(
-    event_index: int,
-    field: str,
-    value: str,
-    code: str,
-) -> None:
-    events = _shell_events()
-    events[event_index]["data"][field] = value
-
-    with pytest.raises(CopilotProtocolError) as raised:
-        parse_output(_jsonl(events), expected="shell-action")
-
-    assert raised.value.code == code
-
-
-def test_successful_tool_execution_is_never_a_denied_action() -> None:
-    events = _shell_events()
-    completion = events[-1]["data"]
-    completion.update({"success": True, "result": {"content": "private"}})
-    completion.pop("error")
-
-    with pytest.raises(CopilotProtocolError, match="execution was denied") as raised:
-        parse_output(_jsonl(events), expected="shell-action")
-
-    assert raised.value.code == "action-not-denied"
+def test_malformed_usage_is_not_replaced_with_zero(usage: dict[str, object]) -> None:
+    events = _events()
+    events.insert(-1, _event("assistant.usage", model=MODEL, **usage))
+    with pytest.raises(CopilotProtocolError, match="usage"):
+        _parse(events)
 
 
 @pytest.mark.parametrize(
-    "event_type", ["model.call_start", "tool.execution_start", "assistant.message"]
+    "raw",
+    [
+        b"",
+        b'{"type":"assistant.idle","type":"assistant.idle"}\n',
+        b'{"type":"assistant.idle","data":{"value":NaN}}\n',
+        b"[]\n",
+        b"x" * (MAX_OUTPUT_LINE_BYTES + 1),
+    ],
 )
-def test_provider_call_or_action_after_denial_is_rejected_as_continuation(event_type: str) -> None:
-    events = [
-        *_shell_events(),
-        _event(event_type, {"turnId": TURN_ID, "model": MODEL}),
-    ]
-
-    with pytest.raises(CopilotProtocolError, match="continued") as raised:
-        parse_output(_jsonl(events), expected="shell-action")
-
-    assert raised.value.code == "continued-after-denial"
+def test_decoder_bounds_and_strict_json_fail_safely(raw: bytes) -> None:
+    with pytest.raises(CopilotProtocolError):
+        parse_output(raw, expected="final-response")
 
 
-def test_shutdown_lifecycle_after_denial_preserves_the_observed_action() -> None:
-    events = [
-        *_shell_events(),
-        _event("model.call_final_result", {"model": MODEL, "result": "success", "isByok": False}),
-        _event("assistant.turn_end", {"turnId": TURN_ID}),
-        _event("session.usage_checkpoint", {"premiumRequests": 10}),
-        _event("session.background_tasks_changed", {}),
-        _event("assistant.turn_start", {"turnId": "continuation-turn"}),
-    ]
-
-    result = parse_output(_jsonl(events), expected="shell-action")
-
-    assert result.actions_requested == result.actions_denied == 1
-    assert result.actions_executed == 0
-    assert result.provider_calls_started == result.provider_calls_completed == 1
+def test_model_telemetry_is_preserved_without_substituting_lifecycle_evidence() -> None:
+    events = _events()
+    events.insert(4, _event("model.turn_started", model=MODEL, turn=1))
+    events.insert(5, _event("sandbox.decision", decision="informational"))
+    events.insert(6, _event("model.call_failure", statusCode=503))
+    events.insert(-1, _event("model.future_telemetry", opaque=True))
+    assert _parse(events).final_text == "Fixture complete."
+    events = [event for event in events if event["type"] != "model.call_finished"]
+    with pytest.raises(CopilotProtocolError):
+        _parse(events)
 
 
-def test_shutdown_turn_end_must_match_the_selected_turn() -> None:
-    events = [*_shell_events(), _event("assistant.turn_end", {"turnId": "different-turn"})]
-
-    with pytest.raises(CopilotProtocolError) as raised:
-        parse_output(_jsonl(events), expected="shell-action")
-
-    assert raised.value.code == "turn-mismatch"
-
-
-def test_multiple_continuation_turns_after_denial_are_rejected() -> None:
-    events = [
-        *_shell_events(),
-        _event("assistant.turn_end", {"turnId": TURN_ID}),
-        _event("assistant.turn_start", {"turnId": "continuation-turn"}),
-        _event("assistant.turn_start", {"turnId": "another-turn"}),
-    ]
-
-    with pytest.raises(CopilotProtocolError) as raised:
-        parse_output(_jsonl(events), expected="shell-action")
-
-    assert raised.value.code == "continued-after-denial"
-
-
-@pytest.mark.parametrize("missing_type", ["model.call_start", "model.call_finished"])
-@pytest.mark.parametrize("expected", ["final-response", "shell-action"])
-def test_missing_provider_call_evidence_is_rejected(
-    missing_type: str, expected: ExpectedOutcome
-) -> None:
-    events = [event for event in _final_events() if event["type"] != missing_type]
-
-    with pytest.raises(CopilotProtocolError) as raised:
-        parse_output(_jsonl(events), expected=expected)
-
-    assert raised.value.code in {"invalid-sequence", "missing-provider-evidence"}
-
-
-@pytest.mark.parametrize("missing_type", ["assistant.turn_end", "assistant.idle", "result"])
-@pytest.mark.parametrize("expected", ["final-response", "shell-action"])
-def test_tool_free_response_requires_normal_turn_and_process_completion(
-    missing_type: str, expected: ExpectedOutcome
-) -> None:
-    events = [event for event in _final_events() if event["type"] != missing_type]
-
-    with pytest.raises(CopilotProtocolError) as raised:
-        parse_output(_jsonl(events), expected=expected)
-
-    assert raised.value.code in {"invalid-sequence", "incomplete-final-response"}
-
-
-def test_errors_do_not_echo_model_or_tool_content() -> None:
-    secret = "do-not-echo-this-value"
-    events = _shell_events()
-    request = events[-3]["data"]["toolRequests"][0]
-    request["arguments"] = {"command": secret}
-
-    with pytest.raises(CopilotProtocolError) as raised:
-        parse_output(_jsonl(events), expected="shell-action")
-
-    assert secret not in str(raised.value)
-    assert secret not in repr(raised.value)
+def test_verbose_native_telemetry_keeps_a_finite_record_bound() -> None:
+    events = _events()
+    events[-1:-1] = [_event("model.telemetry") for _ in range(MAX_OUTPUT_EVENTS - len(events))]
+    assert _parse(events).final_text == "Fixture complete."
+    events.insert(-1, _event("model.telemetry"))
+    with pytest.raises(CopilotProtocolError) as refused:
+        _parse(events)
+    assert refused.value.code == "event-limit"

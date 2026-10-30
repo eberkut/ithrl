@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import cast
+from dataclasses import dataclass, field
+from typing import Never, cast
 
 from ithrl.runner.contracts import TokenUsage, ToolCall
 from ithrl.runner.copilot.protocol.contracts import (
@@ -20,20 +20,22 @@ class ProtocolState:
     expected: ExpectedOutcome
     turn_id: str | None = None
     model: str | None = None
-    user_seen: bool = False
     call_started: bool = False
     call_finished: bool = False
     turn_started: bool = False
     message_seen: bool = False
+    message_ids: set[str] = field(default_factory=set)
     turn_ended: bool = False
     idle_seen: bool = False
     result_seen: bool = False
+    forwarded: bool = False
     denial_seen: bool = False
     continuation_started: bool = False
+    provider_failure_code: str | None = None
     final_text: str | None = None
-    tool_call_id: str | None = None
-    tool_call: ToolCall | None = None
-    tool_started: bool = False
+    tool_calls: dict[str, ToolCall] = field(default_factory=dict)
+    started_tools: set[str] = field(default_factory=set)
+    denied_tools: set[str] = field(default_factory=set)
     usage: TokenUsage | None = None
 
 
@@ -105,22 +107,24 @@ def bind_model(state: ProtocolState, model: str) -> None:
     state.model = model
 
 
-def match_tool_identity(state: ProtocolState, data: dict[str, object]) -> None:
+def match_tool_identity(state: ProtocolState, data: dict[str, object]) -> str:
     """Require action lifecycle evidence to match the selected request."""
 
     tool_call_id = required_string(data, "toolCallId", max_length=MAX_ID_LENGTH)
-    if tool_call_id != state.tool_call_id:
+    tool_call = state.tool_calls.get(tool_call_id)
+    if tool_call is None:
         raise CopilotProtocolError(
             "action-mismatch", "Copilot action evidence does not match its request"
         )
     tool_name = data.get("toolName")
-    if tool_name is not None and (state.tool_call is None or tool_name != state.tool_call.name):
+    if tool_name is not None and tool_name != tool_call.name:
         raise CopilotProtocolError(
             "action-mismatch", "Copilot action evidence does not match its request"
         )
+    return tool_call_id
 
 
-def invalid_sequence() -> None:
+def invalid_sequence() -> Never:
     """Reject an event outside the supported lifecycle."""
 
     raise CopilotProtocolError("invalid-sequence", "Copilot returned events in an invalid sequence")
