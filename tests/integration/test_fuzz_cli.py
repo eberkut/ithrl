@@ -105,7 +105,7 @@ def test_fake_dry_run_has_no_execution_or_storage(
     def forbidden(*_args: object, **_kwargs: object) -> None:
         pytest.fail("dry-run attempted execution or native detection")
 
-    monkeypatch.setattr("ithrl.cli.fuzz.native_selection", forbidden)
+    monkeypatch.setattr("ithrl.cli.native.native_selection", forbidden)
     monkeypatch.setattr("ithrl.runner.FakeRunner.run", forbidden)
     result = CliRunner().invoke(app, [*args, "--dry-run"])
     assert result.exit_code == 0, result.output
@@ -299,7 +299,7 @@ def mock_native(
             ),
         )
 
-    monkeypatch.setattr("ithrl.cli.fuzz.native_selection", detect)
+    monkeypatch.setattr("ithrl.cli.native.native_selection", detect)
     original = tmp_path / "original"
     original.mkdir(mode=0o700)
     (original / "protected.txt").write_text("unchanged\n")
@@ -920,6 +920,7 @@ def test_interrupted_campaign_refuses_busy_resume_and_expired_block_without_disp
 
     monkeypatch.setattr("ithrl.fuzz.campaign.datetime", SimpleNamespace(now=now))
     monkeypatch.setattr("ithrl.cli.fuzz_run.datetime", SimpleNamespace(now=now))
+    monkeypatch.setattr("ithrl.calibration.datetime", SimpleNamespace(now=now))
     expired = CliRunner().invoke(app, resume)
     output = json.loads(expired.stdout)
     assert expired.exit_code == ExitCode.PROVIDER, expired.output

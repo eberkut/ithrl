@@ -134,13 +134,7 @@ def test_adapter_layers_do_not_depend_on_execution_or_network_modules() -> None:
     )
 
     for source in package.rglob("*.py"):
-        tree = ast.parse(source.read_text(encoding="utf-8"))
-        imported = _imported_modules(tree)
-        assert not {
-            module
-            for module in imported
-            if any(module == blocked or module.startswith(f"{blocked}.") for blocked in forbidden)
-        }, source
+        _assert_no_forbidden_imports(source, forbidden)
 
 
 def test_case_layer_does_not_depend_on_harness_or_execution_modules() -> None:
@@ -161,13 +155,7 @@ def test_case_layer_does_not_depend_on_harness_or_execution_modules() -> None:
     )
 
     for source in package.rglob("*.py"):
-        tree = ast.parse(source.read_text(encoding="utf-8"))
-        imported = _imported_modules(tree)
-        assert not {
-            module
-            for module in imported
-            if any(module == blocked or module.startswith(f"{blocked}.") for blocked in forbidden)
-        }, source
+        _assert_no_forbidden_imports(source, forbidden)
 
 
 def test_shared_domain_layers_do_not_depend_on_concrete_harnesses() -> None:
@@ -208,13 +196,7 @@ def test_runner_core_does_not_depend_on_adapters_cli_or_workflow() -> None:
     forbidden = ("ithrl.adapters", "ithrl.cli", "ithrl.workflow")
 
     for source in (*package.glob("*.py"), *(package / "runtime").glob("*.py")):
-        tree = ast.parse(source.read_text(encoding="utf-8"))
-        imported = _imported_modules(tree)
-        assert not {
-            module
-            for module in imported
-            if any(module == blocked or module.startswith(f"{blocked}.") for blocked in forbidden)
-        }, source
+        _assert_no_forbidden_imports(source, forbidden)
 
 
 def test_concrete_runners_do_not_depend_on_ui_or_concrete_adapters() -> None:
@@ -252,6 +234,16 @@ def test_workflow_has_no_concrete_runner_selection_branch() -> None:
         isinstance(node, ast.Name) and node.id in {"FakeRunner", "FakeRunnerConfig"}
         for node in ast.walk(tree)
     )
+
+
+def _assert_no_forbidden_imports(source: Path, forbidden: tuple[str, ...]) -> None:
+    tree = ast.parse(source.read_text(encoding="utf-8"))
+    imported = _imported_modules(tree)
+    assert not {
+        module
+        for module in imported
+        if any(module == blocked or module.startswith(f"{blocked}.") for blocked in forbidden)
+    }, source
 
 
 def _imported_modules(tree: ast.AST) -> set[str]:

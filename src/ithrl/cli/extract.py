@@ -19,6 +19,7 @@ from ithrl.adapters import (
     DiscoveredSession,
     HarnessName,
     NativeSession,
+    SessionMetadata,
     select_decision,
 )
 from ithrl.behavior import BehaviorTarget, FinalResponseTarget, ShellActionTarget
@@ -116,7 +117,7 @@ def create_case_report(
             output=output,
             output_format=output_format,
         )
-    return _extract_native(
+    workspace, metadata, decision, target_id = _create_native_case(
         source=source,
         opened_session=opened_session,
         harness=selected_harness,
@@ -129,6 +130,9 @@ def create_case_report(
         output=output,
         output_format=output_format,
     )
+    # Release the detected session before independently reloading the published case.
+    del opened_session
+    return _native_case_report(workspace, metadata, decision, target_id)
 
 
 def _select_mode(
@@ -208,7 +212,7 @@ def _extract_synthetic(
     )
 
 
-def _extract_native(
+def _create_native_case(
     *,
     source: Path | None,
     opened_session: NativeSession | None,
@@ -221,7 +225,7 @@ def _extract_native(
     command_contains: str | None,
     output: Path | None,
     output_format: OutputFormat,
-) -> CommandOutput:
+) -> tuple[CaseWorkspace, SessionMetadata, DecisionSummary, str]:
     session = opened_session or _select_session(
         source=source,
         harness=harness,
@@ -274,6 +278,15 @@ def _extract_native(
         case_path=destination,
         experiment_target=experiment_target,
     )
+    return workspace, session.metadata, decision, target_id
+
+
+def _native_case_report(
+    workspace: CaseWorkspace,
+    metadata: SessionMetadata,
+    decision: DecisionSummary,
+    target_id: str,
+) -> CommandOutput:
     evidence = load_extracted_case(workspace)
     selected_target = next(item for item in decision.targets if item.target_id == target_id)
     return CommandOutput(
@@ -285,9 +298,9 @@ def _extract_native(
         capture_completeness=evidence.manifest.capture.completeness,
         replay_state=evidence.manifest.replay.state,
         replay_environment=evidence.manifest.replay.environment,
-        harness=session.metadata.format.harness,
-        harness_version=session.metadata.format.producer_version,
-        session_id=session.metadata.session_id,
+        harness=metadata.format.harness,
+        harness_version=metadata.format.producer_version,
+        session_id=metadata.session_id,
         decision_id=decision.decision_id,
         target_id=target_id,
         target_type=selected_target.type,

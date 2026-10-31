@@ -174,6 +174,21 @@ def test_growth_beyond_the_original_byte_limit_fails_verification(tmp_path: Path
     assert raised.value.code is ProtectionErrorCode.LIMIT_EXCEEDED
 
 
+def test_excessive_nesting_fails_verification_with_a_structured_limit(tmp_path: Path) -> None:
+    protected = tmp_path / "protected"
+    protected.mkdir()
+    snapshot = _capture(ProtectedPath("workspace", protected), max_entries=10000, max_bytes=0)
+    nested = protected
+    for _ in range(350):
+        nested /= "d"
+        nested.mkdir()
+
+    with pytest.raises(ProtectedPathError) as raised:
+        snapshot.verify()
+
+    assert raised.value.code is ProtectionErrorCode.LIMIT_EXCEEDED
+
+
 def test_root_and_nested_symlinks_are_rejected(tmp_path: Path) -> None:
     target = tmp_path / "target"
     target.write_text("content")

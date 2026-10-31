@@ -16,9 +16,14 @@ from ithrl.context import ContextGraph, ContextNode, JsonObject, JsonValue, cont
         unique=True,
     ),
     requested_indexes=st.sets(st.integers(min_value=0, max_value=19)),
+    dependency_indexes=st.lists(
+        st.sets(st.integers(min_value=0, max_value=19), max_size=3),
+        min_size=20,
+        max_size=20,
+    ),
 )
 def test_dependency_closure_materialization_never_leaves_an_orphan(
-    markers: list[str], requested_indexes: set[int]
+    markers: list[str], requested_indexes: set[int], dependency_indexes: list[set[int]]
 ) -> None:
     items: list[JsonValue] = [{"marker": marker} for marker in markers]
     request: JsonObject = {"input": items}
@@ -28,7 +33,9 @@ def test_dependency_closure_materialization_never_leaves_an_orphan(
             kind="message",
             path=f"/input/{index}",
             mutable=True,
-            depends_on=((f"ctx-{index - 1}",) if index else ()),
+            depends_on=tuple(
+                f"ctx-{parent}" for parent in sorted(dependency_indexes[index]) if parent < index
+            ),
             source="request.json",
             digest=content_digest(item),
         )
@@ -44,9 +51,9 @@ def test_dependency_closure_materialization_never_leaves_an_orphan(
     assert request == original
     retained = {node.id for node in nodes} - closure
     assert all(set(node.depends_on) <= retained for node in nodes if node.id in retained)
-    retained_input = materialized["input"]
-    assert isinstance(retained_input, list)
-    assert len(retained_input) == len(nodes) - len(closure)
+    assert materialized["input"] == [
+        item for node, item in zip(nodes, items, strict=True) if node.id in retained
+    ]
 
 
 @given(value=st.dictionaries(st.text(min_size=1), st.integers(), max_size=20))

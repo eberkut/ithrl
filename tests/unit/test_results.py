@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from functools import partial
 from pathlib import Path
 
 import pytest
@@ -31,6 +32,7 @@ from ithrl.results import (
     calibration_summary_from_observations,
     load_calibration_snapshot,
     load_result_snapshot,
+    storage,
     write_calibration_snapshot,
     write_result_snapshot,
 )
@@ -415,6 +417,42 @@ def _write_calibration(destination: Path, summary: CalibrationSummary) -> Path:
         },
         execution_plan=_sampled_plan(),
     )
+
+
+@pytest.mark.parametrize("kind", ["result", "calibration"])
+@pytest.mark.parametrize("failure", ["staging-sync", "parent-sync"])
+def test_snapshot_directory_sync_failure_preserves_publication_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str, failure: str
+) -> None:
+    destination = tmp_path / "snapshot"
+    sync = storage._sync_directory
+
+    def fail_sync(path: Path) -> None:
+        if (failure == "parent-sync") == (path == destination.parent):
+            raise OSError("injected directory sync failure")
+        sync(path)
+
+    if kind == "result":
+        write = _write
+    else:
+        summary = calibration_summary_from_observations(
+            base=_calibration_base(),
+            observations=(),
+            expected_policy_digest=_sampled_plan().safety_policy.digest,
+            max_provider_calls_per_attempt=_sampled_plan().capability.provider_calls_per_attempt,
+        )
+        write = partial(_write_calibration, summary=summary)
+
+    monkeypatch.setattr(storage, "_sync_directory", fail_sync)
+    with pytest.raises(OSError, match="injected directory sync failure"):
+        write(destination)
+
+    assert not tuple(tmp_path.glob(".snapshot-*"))
+    if failure == "parent-sync":
+        load = load_result_snapshot if kind == "result" else load_calibration_snapshot
+        assert load(destination).root == destination
+    else:
+        assert not destination.exists()
 
 
 def test_calibration_snapshot_round_trip_preserves_unknown_accounting(tmp_path: Path) -> None:

@@ -53,7 +53,7 @@ def materialize_copilot_attempt(attempt: PreparedAttempt) -> CopilotMaterializat
 
     _validate_compatible_attempt(attempt)
     try:
-        validate_extracted_case(attempt.evidence)
+        session = validate_extracted_case(attempt.evidence)
     except CaseFormatError:
         raise CopilotMaterializationError(
             CopilotMaterializationErrorCode.CHANGED_EVIDENCE,
@@ -63,7 +63,26 @@ def materialize_copilot_attempt(attempt: PreparedAttempt) -> CopilotMaterializat
         _validate_attempt_identities(attempt)
     except ValueError:
         _unsupported("the Copilot candidate does not match its evidence and execution plan")
-    return _materialize_session(attempt, _source_session(attempt))
+    decision = attempt.evidence.decision
+    if session is None or decision is None or decision.selector.source != _SOURCE_PATH:
+        raise CopilotMaterializationError(
+            CopilotMaterializationErrorCode.INCOMPATIBLE_CASE,
+            "the case has no supported Copilot source artifact",
+        )
+    native_session, session_id = _materialize_session(attempt, session)
+    # Release the original parse before independently validating the reconstructed prefix.
+    del session
+    try:
+        candidate_session = parse_session_bytes(native_session)
+    except AdapterError:
+        _unsupported("the retained Copilot context has invalid native relationships")
+    candidate_records = candidate_session.records
+    _validate_complete_tool_work(candidate_records)
+    return CopilotMaterialization(
+        native_session=native_session,
+        session_id=session_id,
+        system_message=_captured_system_message(candidate_records),
+    )
 
 
 def _validate_compatible_attempt(attempt: PreparedAttempt) -> None:
@@ -87,30 +106,10 @@ def _validate_compatible_attempt(attempt: PreparedAttempt) -> None:
         _unsupported("text mutation requires the unchanged original context")
 
 
-def _source_session(attempt: PreparedAttempt) -> NativeSession:
-    decision = attempt.evidence.decision
-    if decision is None:
-        _ambiguous("the Copilot case has no selected decision")
-    source = next(
-        (
-            artifact
-            for artifact in attempt.evidence.source_artifacts
-            if artifact.path == decision.selector.source == _SOURCE_PATH
-        ),
-        None,
-    )
-    if source is None:
-        raise CopilotMaterializationError(
-            CopilotMaterializationErrorCode.INCOMPATIBLE_CASE,
-            "the case has no supported Copilot source artifact",
-        )
-    return parse_session_bytes(source.content)
-
-
 def _materialize_session(
     attempt: PreparedAttempt,
     session: NativeSession,
-) -> CopilotMaterialization:
+) -> tuple[bytes, str]:
     decision = attempt.evidence.decision
     if decision is None:
         _ambiguous("the Copilot case has no selected decision")
@@ -148,16 +147,7 @@ def _materialize_session(
     native_session = b"".join(output)
     if len(native_session) > _MAX_NATIVE_SESSION_BYTES:
         _unsupported("the reconstructed Copilot native prefix exceeds the byte limit")
-    try:
-        candidate_session = parse_session_bytes(native_session)
-    except AdapterError:
-        _unsupported("the retained Copilot context has invalid native relationships")
-    _validate_complete_tool_work(candidate_session.records)
-    return CopilotMaterialization(
-        native_session=native_session,
-        session_id=session.metadata.session_id,
-        system_message=_captured_system_message(candidate_session.records),
-    )
+    return native_session, session.metadata.session_id
 
 
 def _trigger_node_id(

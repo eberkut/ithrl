@@ -123,7 +123,7 @@ def test_search_budget_fits_exact_remaining_cost_and_protected_confirmation() ->
 def test_search_budget_refuses_insufficient_call_or_time_capacity(
     changes: dict[str, int], expected: str
 ) -> None:
-    assert expected in (
+    assert (
         sampling_budget_refusal(
             allowance=_allowance(**changes),
             charged_provider_calls=4,
@@ -134,7 +134,7 @@ def test_search_budget_refuses_insufficient_call_or_time_capacity(
             search_blocks=1,
             role="search",
         )
-        or ""
+        == expected
     )
 
 

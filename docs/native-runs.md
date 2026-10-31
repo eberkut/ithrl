@@ -359,6 +359,9 @@ Extraction validates record structure and recognized relationships. Codex rollou
 by their initial `session_meta` record; they have no record-schema version field. Copilot's current
 adapter reads event schema `1`. Both adapters preserve unknown records without interpreting them.
 
+Codex `compacted` rollout records are preserved as evidence. The Codex runner refuses decisions
+whose retained context includes those records.
+
 Native runners check the installed harness's required operations, permissions, isolation and action
 denial locally. These checks and calibration determine whether the configured run can proceed.
 Public experimental support also requires a qualified live workflow for that target profile; see

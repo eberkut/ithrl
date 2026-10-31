@@ -196,8 +196,8 @@ def _parse_lines(raw: bytes, limits: ParsingLimits) -> tuple[JsonObject, ...]:
                 "session source contains a blank record",
                 line=line_number,
             )
-        record = _parse_record(line, line_number)
-        json_items += _count_json_items(record)
+        record, record_items = _parse_record(line, line_number)
+        json_items += record_items
         if json_items > limits.max_json_items:
             raise AdapterError(
                 AdapterErrorCode.JSON_LIMIT_EXCEEDED,
@@ -211,7 +211,7 @@ def _parse_lines(raw: bytes, limits: ParsingLimits) -> tuple[JsonObject, ...]:
     return tuple(records)
 
 
-def _parse_record(raw: bytes, line_number: int) -> JsonObject:
+def _parse_record(raw: bytes, line_number: int) -> tuple[JsonObject, int]:
     try:
         text = raw.decode("utf-8")
     except UnicodeError:
@@ -246,28 +246,14 @@ def _parse_record(raw: bytes, line_number: int) -> JsonObject:
             line=line_number,
         )
     try:
-        validate_json_limits(value)
+        json_items = validate_json_limits(value)
     except ValueError:
         raise AdapterError(
             AdapterErrorCode.JSON_LIMIT_EXCEEDED,
             "session record exceeds JSON structure limits",
             line=line_number,
         ) from None
-    return value
-
-
-def _count_json_items(value: JsonObject) -> int:
-    items = 0
-    pending: list[object] = [value]
-    while pending:
-        current = pending.pop()
-        if isinstance(current, dict):
-            items += len(current)
-            pending.extend(current.values())
-        elif isinstance(current, list):
-            items += len(current)
-            pending.extend(current)
-    return items
+    return value, json_items
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:

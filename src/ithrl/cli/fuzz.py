@@ -4,41 +4,20 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, Literal, TypedDict
+from typing import TYPE_CHECKING, Annotated, Literal, TypedDict
 
 import typer
 from platformdirs import user_data_path
 
-from ithrl.case import CaseWorkspace
 from ithrl.cli.fuzz_output import FuzzOutput, fuzz_exit_code, render_fuzz
-from ithrl.cli.fuzz_run import execute_fuzz, report_for_profile
-from ithrl.cli.fuzz_session import (
-    FuzzProfile,
-    FuzzSessionError,
-    load_fuzz_profile,
-    load_fuzz_session,
-    save_fuzz_profile,
-)
-from ithrl.cli.native import NativeSelectionError, native_selection
 from ithrl.cli.output import OutputFormat, shell_command
-from ithrl.cli.sampled import _observation_store_path
-from ithrl.execution import MAX_PROVIDER_CALLS_PER_ATTEMPT, ResourceLimits
-from ithrl.experiment import (
-    FakeRunnerConfig,
-    NativeRunnerConfig,
-    SampledExperimentDefinition,
-    UnavailableRunnerConfig,
-    parse_experiment_toml,
-)
-from ithrl.fuzz.configuration import (
-    FuzzConfiguration,
-    FuzzConfigurationError,
-    load_fuzz_configuration,
-)
-from ithrl.fuzz.sampling import prepare_fuzz_sampling
-from ithrl.fuzz.statistics import require_fuzz_numerics
-from ithrl.runner import prepare_candidate
-from ithrl.workflow import PreparedExperiment, prepare_experiment
+from ithrl.execution import MAX_PROVIDER_CALLS_PER_ATTEMPT
+
+if TYPE_CHECKING:
+    from ithrl.case import CaseWorkspace
+    from ithrl.cli.fuzz_session import FuzzProfile
+    from ithrl.fuzz.configuration import FuzzConfiguration
+    from ithrl.workflow import PreparedExperiment
 
 
 class FuzzInputRefusal(ValueError):
@@ -53,6 +32,20 @@ def prepare_fuzz_profile(
     detect: bool,
     max_provider_calls_per_attempt: int | None = None,
 ) -> tuple[FuzzProfile, PreparedExperiment]:
+    from ithrl.cli.fuzz_session import FuzzProfile
+    from ithrl.cli.native import native_selection
+    from ithrl.execution import ResourceLimits
+    from ithrl.experiment import (
+        FakeRunnerConfig,
+        NativeRunnerConfig,
+        SampledExperimentDefinition,
+        UnavailableRunnerConfig,
+        parse_experiment_toml,
+    )
+    from ithrl.fuzz.sampling import prepare_fuzz_sampling
+    from ithrl.runner import prepare_candidate
+    from ithrl.workflow import prepare_experiment
+
     evidence = workspace.load()
     persisted = parse_experiment_toml(evidence.default_experiment)
     if not isinstance(
@@ -139,6 +132,18 @@ def _handle(
     acknowledge: bool,
     max_provider_calls_per_attempt: int | None = None,
 ) -> FuzzOutput:
+    from ithrl.case import CaseWorkspace
+    from ithrl.cli.fuzz_run import execute_fuzz, report_for_profile
+    from ithrl.cli.fuzz_session import load_fuzz_profile, load_fuzz_session, save_fuzz_profile
+    from ithrl.cli.sampled import _observation_store_path
+    from ithrl.experiment import (
+        NativeRunnerConfig,
+        UnavailableRunnerConfig,
+        parse_experiment_toml,
+    )
+    from ithrl.fuzz.configuration import load_fuzz_configuration
+    from ithrl.fuzz.statistics import require_fuzz_numerics
+
     if detect and (dry_run or resume):
         raise FuzzInputRefusal("conflicting-modes")
     require_fuzz_numerics()
@@ -381,6 +386,10 @@ def fuzz(
     ] = OutputFormat.HUMAN,
 ) -> None:
     """Find and independently confirm a bounded decrease in the selected target rate."""
+    from ithrl.cli.fuzz_session import FuzzSessionError
+    from ithrl.cli.native import NativeSelectionError
+    from ithrl.fuzz.configuration import FuzzConfigurationError
+
     try:
         report = _handle(
             source,

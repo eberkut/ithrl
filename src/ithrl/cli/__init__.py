@@ -7,7 +7,7 @@ from contextlib import nullcontext
 from dataclasses import dataclass
 from importlib.metadata import version as distribution_version
 from pathlib import Path
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 from uuid import uuid4
 
 import typer
@@ -25,7 +25,6 @@ from ithrl.case import (
 from ithrl.case.filesystem import read_safe_text
 from ithrl.cli.extract import ExtractionSelectionError, create_case_report
 from ithrl.cli.fuzz import fuzz as fuzz_command
-from ithrl.cli.native import NativeSelection, NativeSelectionError, native_selection
 from ithrl.cli.output import (
     CommandOutput,
     ExitCode,
@@ -40,13 +39,6 @@ from ithrl.cli.output import (
     shell_command,
 )
 from ithrl.cli.paths import private_data_root
-from ithrl.cli.sampled import handle_sampled_shrink
-from ithrl.cli.sampled_reduction import (
-    SampledCommandLimits,
-    handle_sampled_reduction,
-    resume_sampled_shrink,
-)
-from ithrl.cli.sampled_session import SampledCliSession
 from ithrl.cli.shrink import prepare_shrink, save_outcome, validate_phase_observations
 from ithrl.execution.contracts import MAX_PROVIDER_CALLS_PER_ATTEMPT, MAX_WALL_TIME_SECONDS
 from ithrl.experiment import (
@@ -72,6 +64,10 @@ from ithrl.workflow import (
     PreparedExperiment,
     run_phases,
 )
+
+if TYPE_CHECKING:
+    from ithrl.cli.native import NativeSelection
+    from ithrl.cli.sampled_session import SampledCliSession
 
 app = typer.Typer(
     cls=JsonAwareGroup,
@@ -474,6 +470,14 @@ def _shrink(
     experiment_path: Path | None = None,
     verbose: bool = False,
 ) -> None:
+    from ithrl.cli.native import NativeSelectionError, native_selection
+    from ithrl.cli.sampled import handle_sampled_shrink
+    from ithrl.cli.sampled_reduction import (
+        SampledCommandLimits,
+        handle_sampled_reduction,
+        resume_sampled_shrink,
+    )
+
     if resume and (calibrate_only or dry_run):
         fail(
             "--resume cannot be combined with --calibrate-only or --dry-run",
