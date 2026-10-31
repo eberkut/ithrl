@@ -182,15 +182,13 @@ async def _collect_sampling_block_owned(
     active = bool(state.blocks and not state.blocks[-1].archived)
     if active and state.blocks[-1].plan.digest != plan.digest:
         raise ValueError("continuation requires the exact frozen block")
-    block = (
-        state_file.evidence(store)[-1] if active else SamplingBlockEvidence(plan=plan, attempts=())
-    )
+    prior_blocks = state_file.evidence(store)
+    block = prior_blocks[-1] if active else SamplingBlockEvidence(plan=plan, attempts=())
     if not active and any(progress.plan.block_id == plan.block_id for progress in state.blocks):
         raise ValueError("archived sampling blocks cannot be collected again")
     if not active and any(progress.plan.role == "confirmation" for progress in state.blocks):
         return _result(state_file, store, plan, clock(), "confirmation-already-started", block)
     # An unsafe earlier block cannot be hidden by archiving it and drawing a new block.
-    prior_blocks = state_file.evidence(store)
     if any(not earlier.eligible for earlier in prior_blocks):
         return _result(state_file, store, plan, clock(), "ineligible-prior-block", block)
     if (
@@ -431,8 +429,9 @@ def _result(
     reason: str,
     block: SamplingBlockEvidence | None = None,
 ) -> SamplingCollectionResult:
+    snapshot = state_file.snapshot(store, now=now)
     if block is None:
-        block = state_file.evidence(store)[-1]
+        block = snapshot.blocks[-1]
         if block.plan.digest != plan.digest:
             raise ValueError("sampling result does not match the frozen block")
-    return SamplingCollectionResult(block, state_file.usage(store, now=now), reason)
+    return SamplingCollectionResult(block, snapshot.usage, reason)

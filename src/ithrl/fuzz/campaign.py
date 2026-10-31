@@ -511,7 +511,8 @@ def _result(
     now: datetime,
     refusal: str | None,
 ) -> FuzzCampaignResult:
-    state = state_file.load(store)
+    snapshot = state_file.snapshot(store, now=now)
+    state = snapshot.state
     progress = state.fuzz_progress
     if progress is None:
         raise RunStateError("fuzz campaign has not been initialized")
@@ -521,13 +522,13 @@ def _result(
         and state.blocks
         and state.blocks[-1].plan.role == "confirmation"
     ):
-        confirmation = confirm_fuzz_evidence(state_file.evidence(store)[-1])
+        confirmation = confirm_fuzz_evidence(snapshot.blocks[-1])
         if progress.terminal is FuzzOutcome.INCOMPLETE:
             confirmation = ChangeConfirmation(FuzzOutcome.INCOMPLETE, None, None, None, None)
     return FuzzCampaignResult(
         progress.terminal or FuzzOutcome.INCOMPLETE,
         progress.selected_mutation,
         confirmation,
-        state_file.usage(store, now=now),
+        snapshot.usage,
         refusal or progress.collection_refusal or progress.stop_reason,
     )

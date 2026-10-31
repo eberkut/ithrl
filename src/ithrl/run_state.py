@@ -377,6 +377,13 @@ class SampledRunState(_SampledStateContract):
     def validate_history(self) -> SampledRunState:
         if self.fuzz_progress is not None and self.checkpoint is not None:
             raise ValueError("fuzz and reduction checkpoints cannot share a run")
+        self._validate_approval_history()
+        confirmations, references = self._validate_block_history()
+        self._validate_pending_dispatch(references)
+        self._validate_final_selection(confirmations)
+        return self
+
+    def _validate_approval_history(self) -> None:
         if any(item.allowance.run_id != self.run_id for item in self.approvals):
             raise ValueError("budget approvals must belong to this run")
         if len({item.approval_id for item in self.approvals}) != len(self.approvals):
@@ -385,6 +392,10 @@ class SampledRunState(_SampledStateContract):
             raise ValueError("initial allowance must precede run start")
         for earlier, later in zip(self.approvals, self.approvals[1:], strict=False):
             _validate_budget_extension(earlier, later)
+
+    def _validate_block_history(
+        self,
+    ) -> tuple[tuple[SamplingBlockProgress, ...], tuple[SamplingObservationReference, ...]]:
         if len({item.plan.block_id for item in self.blocks}) != len(self.blocks):
             raise ValueError("block IDs must be unique")
         previous_time = self.started_at
@@ -415,6 +426,11 @@ class SampledRunState(_SampledStateContract):
             raise ValueError("observation references must be unique across the run")
         if len({item.attempt_id for item in references}) != len(references):
             raise ValueError("prepared attempts must be unique across blocks")
+        return confirmations, references
+
+    def _validate_pending_dispatch(
+        self, references: tuple[SamplingObservationReference, ...]
+    ) -> None:
         if self.pending is not None:
             reservation = self.pending
             if not self.blocks or self.blocks[-1].archived:
@@ -432,6 +448,8 @@ class SampledRunState(_SampledStateContract):
                 raise ValueError("dispatch must be reserved within frozen freshness")
             if reservation.attempt_id in {item.attempt_id for item in references}:
                 raise ValueError("dispatch cannot repeat a published prepared attempt")
+
+    def _validate_final_selection(self, confirmations: tuple[SamplingBlockProgress, ...]) -> None:
         if self.selection is not None:
             selection, checkpoint = self.selection, self.checkpoint
             plan = selection.plan
@@ -468,13 +486,8 @@ class SampledRunState(_SampledStateContract):
                 or plan.candidate_digest != checkpoint.best_candidate_digest
             ):
                 raise ValueError("confirmation must bind the selected candidate and original")
-            confirmation = tuple(b for b in self.blocks if b.plan.role == "confirmation")
-            if len(confirmation) > 1 or (
-                confirmation
-                and (self.blocks[-1] != confirmation[0] or confirmation[0].plan != plan)
-            ):
+            if confirmations and confirmations[0].plan != plan:
                 raise ValueError("selection permits only its single final confirmation block")
-        return self
 
     @property
     def allowance(self) -> SamplingBudgetAllowance:
@@ -725,6 +738,16 @@ class SampledRunStateFile:
             from ithrl.fuzz.campaign import validate_campaign_progress
 
             validate_campaign_progress(state, observations, blocks)
+        SampledRunStateFile._validate_checkpoint_authority(state, checkpoint, blocks)
+        SampledRunStateFile._validate_selection_chronology(state, checkpoint, observations, blocks)
+        return observations, blocks
+
+    @staticmethod
+    def _validate_checkpoint_authority(
+        state: SampledRunState,
+        checkpoint: SampledReductionCheckpoint | None,
+        blocks: tuple[SamplingBlockEvidence, ...],
+    ) -> None:
         if checkpoint is not None:
             by_digest = {block.plan.digest: block for block in blocks}
             if (
@@ -734,6 +757,14 @@ class SampledRunStateFile:
                 or any(by_digest.get(block.plan.digest) != block for block in checkpoint.blocks)
             ):
                 raise RunStateError("sampled checkpoint differs from authoritative block progress")
+
+    @staticmethod
+    def _validate_selection_chronology(
+        state: SampledRunState,
+        checkpoint: SampledReductionCheckpoint | None,
+        observations: tuple[Observation, ...],
+        blocks: tuple[SamplingBlockEvidence, ...],
+    ) -> None:
         if state.selection is not None and state.fuzz_progress is None:
             selection = state.selection
             search = tuple(block for block in blocks if block.plan.role == "search")
@@ -747,7 +778,6 @@ class SampledRunStateFile:
                 for block in search
             ) or any(selection.selected_at < o.recorded_at for o in observations):
                 raise RunStateError("selection must follow calibration and search evidence")
-        return observations, blocks
 
     @staticmethod
     def _calibration(state: SampledRunState, store: ObservationStore) -> tuple[Observation, ...]:
@@ -840,12 +870,32 @@ class SampledRunStateFile:
     ) -> SamplingBlockEvidence:
         """Prove exact partial-block continuation; never clear or repeat an unresolved dispatch."""
 
-        current = self.load(store)
+        current, calibration, blocks = self._read_validated(store)
+        block, _ = self._validate_continuation(
+            current,
+            calibration,
+            blocks,
+            expected_plan_digest=expected_plan_digest,
+            now=now,
+        )
+        return block
+
+    @staticmethod
+    def _validate_continuation(
+        current: SampledRunState,
+        calibration: tuple[Observation, ...],
+        blocks: tuple[SamplingBlockEvidence, ...],
+        *,
+        expected_plan_digest: str,
+        now: datetime,
+    ) -> tuple[SamplingBlockEvidence, SampledRunUsage]:
+        """Check continuation against one fresh read within the owned operation."""
+
         if current.pending is not None:
             raise RunStateError("pending dispatch must be reconciled before continuation")
         if not current.blocks or current.blocks[-1].archived:
             raise RunStateError("no active sampled block is available")
-        block = self._hydrate(current.blocks[-1], store)
+        block = blocks[-1]
         if block.plan.digest != expected_plan_digest:
             raise RunStateError("continuation requires the exact frozen block identity")
         now = _sampled_time(now)
@@ -855,16 +905,21 @@ class SampledRunStateFile:
             raise RunStateError("continuation clock precedes recorded sampling progress")
         if block.complete or not block.eligible:
             raise RunStateError("sampled block does not permit incomplete continuation")
-        usage = self.usage(store, now=now)
+        usage = SampledRunStateFile._usage(current, calibration, blocks, now=now)
         if usage.wall_time_seconds >= current.allowance.max_wall_time_seconds:
             raise RunStateError("sampled run wall-time allowance is exhausted")
-        return block
+        return block, usage
 
     def reserve_dispatch(
         self, store: ObservationStore, reservation: SamplingDispatchReservation
     ) -> SampledRunState:
-        block = self.continue_block(
-            store, expected_plan_digest=reservation.block_digest, now=reservation.reserved_at
+        current, calibration, blocks = self._read_validated(store)
+        block, usage = self._validate_continuation(
+            current,
+            calibration,
+            blocks,
+            expected_plan_digest=reservation.block_digest,
+            now=reservation.reserved_at,
         )
         position = self._next_position(block)
         if reservation.schedule_position != position:
@@ -880,8 +935,6 @@ class SampledRunStateFile:
         expected_attempt = 1 + max((item.attempt for item in previous), default=0)
         if reservation.attempt != expected_attempt:
             raise RunStateError("dispatch must pin the next authoritative arm-local attempt")
-        current = self.load(store)
-        usage = self.usage(store, now=reservation.reserved_at)
         if (
             usage.charged_provider_calls + reservation.provider_calls
             > current.allowance.max_provider_calls
@@ -905,13 +958,13 @@ class SampledRunStateFile:
     ) -> SampledRunState:
         """Validate the pinned dispatch, append once, then atomically publish its reference."""
 
-        current = self.load(store)
+        current, _, blocks = self._read_validated(store)
         reference = self._reserved_reference(current, observation, independence_evidence_digest)
         updated = self._with_reference(current, reference)
         # Membership must validate before appending immutable evidence. Missing new record is
         # supplied locally only for this check; cached checkpoint is invalidated by progress.
         progress = updated.blocks[-1]
-        earlier = self._hydrate(current.blocks[-1], store)
+        earlier = blocks[-1]
         try:
             SamplingBlockEvidence(
                 plan=progress.plan,

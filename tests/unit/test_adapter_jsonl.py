@@ -152,19 +152,20 @@ def test_reader_stops_at_record_limit_for_newline_dense_input(tmp_path: Path) ->
     )
 
 
-def test_reader_applies_json_item_limit_across_records(tmp_path: Path) -> None:
+@pytest.mark.parametrize("item_limit", [5, 6])
+def test_reader_applies_json_item_limit_across_records(tmp_path: Path, item_limit: int) -> None:
     source = _write(tmp_path / "many-items.jsonl", b'{"items":[1,2]}\n' * 2)
-
-    _assert_error(
-        source,
-        AdapterErrorCode.JSON_LIMIT_EXCEEDED,
-        limits=ParsingLimits(
-            max_bytes=1024,
-            max_line_bytes=128,
-            max_records=10,
-            max_json_items=5,
-        ),
+    limits = ParsingLimits(
+        max_bytes=1024,
+        max_line_bytes=128,
+        max_records=10,
+        max_json_items=item_limit,
     )
+    if item_limit == 5:
+        error = _assert_error(source, AdapterErrorCode.JSON_LIMIT_EXCEEDED, limits=limits)
+        assert error.line == 2
+    else:
+        assert read_jsonl(source, limits=limits).records == ({"items": [1, 2]},) * 2
 
 
 def test_reader_maps_oversized_integer_to_stable_error(tmp_path: Path) -> None:

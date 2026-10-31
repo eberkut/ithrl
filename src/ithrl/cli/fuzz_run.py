@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
-from ithrl.calibration import CalibrationInFlightError, _read_inflight, run_sampled_calibration
+from ithrl.calibration import CalibrationInFlightError, _read_inflight, run_owned_calibration
 from ithrl.case import CaseWorkspace
 from ithrl.cli.fuzz_output import FuzzCounts, FuzzOutput, render_fuzz
 from ithrl.cli.fuzz_session import FuzzProfile, FuzzSession, publish_fuzz_result, save_fuzz_session
@@ -18,22 +17,10 @@ from ithrl.cli.progress import calibration_status, progress_display, sampling_st
 from ithrl.execution.budget import sampling_attempt_cost
 from ithrl.fuzz.campaign import _initialize_fuzz_campaign_owned, _run_fuzz_campaign_owned
 from ithrl.fuzz.sampling import confirm_fuzz_evidence, fuzz_budget_bounds
-from ithrl.observations import (
-    ObservationArm,
-    ObservationRole,
-    ObservationStore,
-    SamplingBlockEvidence,
-    SamplingBudgetAllowance,
-)
-from ithrl.run_state import SampledRunState, SampledRunStateFile, SamplingBudgetApproval
+from ithrl.observations import ObservationStore, SamplingBlockEvidence, SamplingBudgetAllowance
+from ithrl.run_state import SampledRunStateFile, SamplingBudgetApproval
 from ithrl.runner import prepare_candidate
-from ithrl.sampling import sampling_pacing_delay
 from ithrl.workflow import PreparedExperiment
-
-
-class _CalibrationBudgetStop(RuntimeError):
-    def __init__(self, reason: str) -> None:
-        self.reason = reason
 
 
 def _sampling_status(trial: int, block: SamplingBlockEvidence) -> str:
@@ -151,59 +138,24 @@ def _calibrate(
     profile = session.profile
     config = profile.configuration
     evidence = CaseWorkspace(profile.case_path).load()
-    original = prepare_candidate(evidence, prepared.execution_plan)
-
-    def refresh() -> SampledRunState:
-        observations = store.list_compatible(
-            prepared.identity,
-            candidate_digest=original.digest,
-            role=ObservationRole.CALIBRATION,
-            arm=ObservationArm.BASELINE,
-        )
-        state = state_file.record_calibration(store, tuple(o.observation_id for o in observations))
-        valid = sum(o.valid for o in observations)
-        progress(calibration_status(valid, config.calibration.required_valid, len(observations)))
-        return state
-
-    cost = sampling_attempt_cost(prepared.runner.capability_profile, prepared.resource_limits)
-    search = config.screening.original.max_attempts + config.screening.mutant.max_attempts
-    confirmation = (
-        config.confirmation.original.max_attempts + config.confirmation.mutant.max_attempts
+    result = run_owned_calibration(
+        evidence=evidence,
+        prepared=prepared,
+        store=store,
+        state_file=state_file,
+        first_comparison_attempts=(
+            config.screening.original.max_attempts + config.screening.mutant.max_attempts
+        ),
+        confirmation_attempts=(
+            config.confirmation.original.max_attempts + config.confirmation.mutant.max_attempts
+        ),
+        on_progress=lambda valid, dispatched: progress(
+            calibration_status(valid, config.calibration.required_valid, dispatched)
+        ),
+        eligibility_policy=config.eligibility_policy,
     )
-
-    def admit() -> None:
-        state = refresh()
-        delay = sampling_pacing_delay(state, store, datetime.now(UTC))
-        if delay:
-            time.sleep(delay)
-        usage = state_file.usage(store, now=datetime.now(UTC))
-        remaining = config.calibration.max_attempts - len(state.calibration_observation_ids)
-        if (
-            usage.charged_provider_calls + (remaining + search + confirmation) * cost.provider_calls
-            > state.allowance.max_provider_calls
-        ):
-            raise _CalibrationBudgetStop("provider-call-budget")
-        if (
-            usage.wall_time_seconds
-            + (remaining + search + confirmation)
-            * (cost.runner_seconds + state.allowance.inter_attempt_delay_seconds)
-            > state.allowance.max_wall_time_seconds
-        ):
-            raise _CalibrationBudgetStop("wall-time-budget")
-
-    refresh()
-    try:
-        result = run_sampled_calibration(
-            evidence=evidence,
-            prepared=prepared,
-            store=store,
-            before_attempt=admit,
-            eligibility_policy=config.eligibility_policy,
-        )
-    except _CalibrationBudgetStop as stop:
-        return stop.reason
-    finally:
-        refresh()
+    if isinstance(result, str):
+        return result
     if result.outcome == "measurable":
         return None
     if result.stop_reason == "valid-sample-limit":

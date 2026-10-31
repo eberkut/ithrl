@@ -5,9 +5,11 @@ from __future__ import annotations
 import asyncio
 import os
 import stat
+import time
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 from uuid import uuid4
@@ -17,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from ithrl.case import CaseEvidence, CaseWorkspace
 from ithrl.context import content_digest
+from ithrl.execution.budget import sampling_attempt_cost, sampling_budget_refusal
 from ithrl.experiment import (
     FakeRunnerConfig,
     NativeRunnerConfig,
@@ -41,7 +44,9 @@ from ithrl.results import (
     load_calibration_snapshot,
     write_calibration_snapshot,
 )
+from ithrl.run_state import SampledRunState, SampledRunStateFile
 from ithrl.runner import Candidate, PreparedAttempt, prepare_candidate
+from ithrl.sampling import sampling_pacing_delay
 from ithrl.workflow import PreparedExperiment
 
 
@@ -55,6 +60,12 @@ class CalibrationInFlightError(RuntimeError):
 
 class CalibrationWallTimeBudgetError(RuntimeError):
     """Command admission cannot fit the remaining calibration before its wall-time limit."""
+
+
+class _CalibrationBudgetStop(RuntimeError):
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        super().__init__(reason)
 
 
 class _InFlightAttempt(BaseModel):
@@ -134,6 +145,73 @@ def run_sampled_calibration(
                     "interrupted calibration has no terminal classification"
                 ) from None
             return classified
+
+
+def run_owned_calibration(
+    *,
+    evidence: CaseEvidence,
+    prepared: PreparedExperiment,
+    store: ObservationStore,
+    state_file: SampledRunStateFile,
+    first_comparison_attempts: int,
+    confirmation_attempts: int,
+    on_progress: Callable[[int, int], None],
+    eligibility_policy: SamplingEligibilityPolicy | None = None,
+) -> SampledCalibrationResult | str:
+    """Calibrate an owned run while preserving comparison and confirmation capacity.
+
+    The caller holds the run/store locks. Progress receives valid and dispatched counts.
+    Durable observations are attached to the run even when collection raises.
+    """
+
+    phase = _sampled_experiment(prepared).calibration
+    original = prepare_candidate(evidence, prepared.execution_plan)
+    cost = sampling_attempt_cost(prepared.execution_plan.capability, prepared.resource_limits)
+
+    def refresh() -> SampledRunState:
+        observations = store.list_compatible(
+            prepared.identity,
+            candidate_digest=original.digest,
+            role=ObservationRole.CALIBRATION,
+            arm=ObservationArm.BASELINE,
+        )
+        state = state_file.record_calibration(store, tuple(o.observation_id for o in observations))
+        on_progress(sum(o.valid for o in observations), len(observations))
+        return state
+
+    def admit() -> None:
+        state = refresh()
+        delay = sampling_pacing_delay(state, store, datetime.now(UTC))
+        if delay:
+            time.sleep(delay)
+        usage = state_file.usage(store, now=datetime.now(UTC))
+        remaining = max(0, phase.max_attempts - len(state.calibration_observation_ids))
+        refusal = sampling_budget_refusal(
+            allowance=state.allowance,
+            charged_provider_calls=usage.charged_provider_calls,
+            elapsed_seconds=usage.wall_time_seconds,
+            remaining_attempts=remaining + first_comparison_attempts,
+            attempt_cost=cost,
+            confirmation_attempts=confirmation_attempts,
+            search_blocks=0,
+            role="search",
+        )
+        if refusal is not None:
+            raise _CalibrationBudgetStop(refusal)
+
+    refresh()
+    try:
+        return run_sampled_calibration(
+            evidence=evidence,
+            prepared=prepared,
+            store=store,
+            before_attempt=admit,
+            eligibility_policy=eligibility_policy,
+        )
+    except _CalibrationBudgetStop as stop:
+        return stop.reason
+    finally:
+        refresh()
 
 
 def save_sampled_calibration_result(

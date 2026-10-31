@@ -6,20 +6,18 @@ import asyncio
 import math
 import os
 import sys
-import time
 from collections.abc import Callable
 from contextlib import redirect_stdout
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal, cast
+from typing import TYPE_CHECKING, Literal
 from uuid import uuid4
 
 import typer
 
-from ithrl.calibration import SampledCalibrationResult, _inflight_path, run_sampled_calibration
+from ithrl.calibration import SampledCalibrationResult, _inflight_path, run_owned_calibration
 from ithrl.case import CaseEvidence, CaseWorkspace
-from ithrl.cli.native import NativeSelection
 from ithrl.cli.output import (
     ExitCode,
     OutputFormat,
@@ -67,7 +65,6 @@ from ithrl.run_state import (
     SamplingBudgetApproval,
 )
 from ithrl.runner import prepare_candidate
-from ithrl.sampling import sampling_pacing_delay
 from ithrl.statistics import (
     BinomialSample,
     FixedSampleOutcome,
@@ -75,6 +72,9 @@ from ithrl.statistics import (
     optimistic_attainability,
 )
 from ithrl.workflow import PreparedExperiment, prepare_experiment, run_sampled_phases
+
+if TYPE_CHECKING:
+    from ithrl.cli.native import NativeSelection
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,14 +85,6 @@ class SampledCommandLimits:
     wall_seconds: int | None
     candidates: int | None
     inter_attempt_delay_seconds: int | None = None
-
-
-class _CalibrationBudgetStop(RuntimeError):
-    """Stop before a reservation when complete remaining work no longer fits."""
-
-    def __init__(self, reason: Literal["provider-call-budget", "wall-time-budget"]) -> None:
-        self.reason = reason
-        super().__init__(reason)
 
 
 def resume_sampled_shrink(
@@ -321,7 +313,7 @@ def handle_sampled_reduction(
                 render_sampled_reduction(report, output_format, verbose=verbose)
                 raise typer.Exit(sampled_reduction_exit_code(report))
             if state.checkpoint is None:
-                calibration = _calibrate_for_run(evidence, prepared, store, state_file, preflight)
+                calibration = _calibrate_for_run(evidence, prepared, store, state_file)
                 state = state_file.load(store)
                 if isinstance(calibration, str):
                     report = _run_report(
@@ -627,77 +619,28 @@ def _calibrate_for_run(
     prepared: PreparedExperiment,
     store: ObservationStore,
     state_file: SampledRunStateFile,
-    report: SampledReductionOutput,
-) -> SampledCalibrationResult | Literal["provider-call-budget", "wall-time-budget"]:
-    original = prepare_candidate(evidence, prepared.execution_plan)
-    phase = cast(SampledExperimentDefinition, prepared.experiment).calibration
-
-    def refresh_calibration_prefix() -> SampledRunState:
-        observed = store.list_compatible(
-            prepared.identity,
-            candidate_digest=original.digest,
-            role=ObservationRole.CALIBRATION,
-            arm=ObservationArm.BASELINE,
-        )
-        state = state_file.record_calibration(store, tuple(o.observation_id for o in observed))
-        progress_update(
-            calibration_status(
-                sum(observation.valid for observation in observed),
-                phase.required_valid,
-                len(observed),
-            )
-        )
-        return state
-
-    cost = sampling_attempt_cost(prepared.execution_plan.capability, prepared.resource_limits)
+) -> SampledCalibrationResult | str:
     experiment = prepared.experiment
     if not isinstance(experiment, SampledExperimentDefinition) or experiment.reduction is None:
         raise ValueError("complete sampled reduction required")
     reduction = experiment.reduction
-    search = reduction.search.original.max_attempts + reduction.search.candidate.max_attempts
-
-    def admit_attempt() -> None:
-        state = refresh_calibration_prefix()
-        delay = sampling_pacing_delay(state, store, datetime.now(UTC))
-        if delay:
-            time.sleep(delay)
-        usage = state_file.usage(store, now=datetime.now(UTC))
-        remaining = max(0, phase.max_attempts - len(state.calibration_observation_ids))
-        if (
-            usage.charged_provider_calls
-            + (remaining + search) * cost.provider_calls
-            + report.confirmation_provider_calls
-            > state.allowance.max_provider_calls
-        ):
-            raise _CalibrationBudgetStop("provider-call-budget")
-        if (
-            usage.wall_time_seconds
-            + (remaining + search) * cost.runner_seconds
-            + report.confirmation_runner_seconds
-            + (
-                remaining
-                + search
-                + reduction.confirmation.original.max_attempts
+    with progress_display() as progress_update:
+        return run_owned_calibration(
+            evidence=evidence,
+            prepared=prepared,
+            store=store,
+            state_file=state_file,
+            first_comparison_attempts=(
+                reduction.search.original.max_attempts + reduction.search.candidate.max_attempts
+            ),
+            confirmation_attempts=(
+                reduction.confirmation.original.max_attempts
                 + reduction.confirmation.candidate.max_attempts
-            )
-            * state.allowance.inter_attempt_delay_seconds
-            > state.allowance.max_wall_time_seconds
-        ):
-            raise _CalibrationBudgetStop("wall-time-budget")
-
-    try:
-        with progress_display() as progress_update:
-            refresh_calibration_prefix()
-            try:
-                result = run_sampled_calibration(
-                    evidence=evidence, prepared=prepared, store=store, before_attempt=admit_attempt
-                )
-            finally:
-                # Charge every durable observation even when collection raises before returning.
-                refresh_calibration_prefix()
-    except _CalibrationBudgetStop as stop:
-        return stop.reason
-    return result
+            ),
+            on_progress=lambda valid, dispatched: progress_update(
+                calibration_status(valid, experiment.calibration.required_valid, dispatched)
+            ),
+        )
 
 
 def _continuation_refusal(

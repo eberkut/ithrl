@@ -206,6 +206,7 @@ def write_result_snapshot(
             validated.checkpoint.model_dump(mode="json"),
         )
         _restrict_tree(staging)
+        _sync_directory(staging)
         staging.rename(destination)
         _sync_directory(destination.parent)
     except BaseException:
@@ -294,6 +295,7 @@ def write_calibration_snapshot(
             validated.execution_plan.model_dump(mode="json"),
         )
         _restrict_tree(staging)
+        _sync_directory(staging)
         staging.rename(destination)
         _sync_directory(destination.parent)
     except BaseException:

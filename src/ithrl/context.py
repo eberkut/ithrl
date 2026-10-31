@@ -71,8 +71,8 @@ def validate_json_limits(
     *,
     max_depth: int = MAX_JSON_DEPTH,
     max_items: int = MAX_JSON_ITEMS,
-) -> None:
-    """Reject invalid JSON values and structures outside local resource limits."""
+) -> int:
+    """Validate bounded JSON and return its object-entry and array-element count."""
 
     # An explicit stack keeps user-controlled nesting out of the Python call stack.
     pending: list[tuple[object, int]] = [(value, 0)]
@@ -98,6 +98,7 @@ def validate_json_limits(
             raise ValueError(f"unsupported JSON value type: {type(current).__name__}")
         if items > max_items:
             raise ValueError(f"JSON structure exceeds the {max_items}-item limit")
+    return items
 
 
 def decode_pointer(pointer: str) -> tuple[str, ...]:

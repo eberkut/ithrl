@@ -19,7 +19,7 @@ import pytest
 from typer.testing import CliRunner, Result
 
 import ithrl.calibration as calibration
-import ithrl.cli as cli
+import ithrl.cli.native as native
 import ithrl.cli.sampled as sampled
 import ithrl.cli.sampled_reduction as sampled_reduction
 import ithrl.cli.sampled_session as sampled_session
@@ -242,7 +242,7 @@ def operator_case(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> OperatorCa
             experiment=selected_experiment,
         )
 
-    monkeypatch.setattr(cli, "native_selection", select)
+    monkeypatch.setattr(native, "native_selection", select)
     frozen = {
         path: path.read_bytes()
         for root in (workspace.root, original)
@@ -299,7 +299,7 @@ def _install_wall_clock(monkeypatch: pytest.MonkeyPatch) -> Callable[[int], None
         nonlocal offset
         offset += timedelta(seconds=seconds)
 
-    for module in (sampled_reduction, workflow, observations):
+    for module in (sampled_reduction, calibration, workflow, observations):
         monkeypatch.setattr(module, "datetime", AdvancedDateTime)
     return advance
 
@@ -429,7 +429,7 @@ def test_paced_operator_flow_keeps_delay_on_resume_and_refuses_override(
     async def async_wait(seconds: float) -> None:
         wait(seconds)
 
-    monkeypatch.setattr(sampled_reduction.time, "sleep", wait)
+    monkeypatch.setattr(calibration.time, "sleep", wait)
     monkeypatch.setattr(sampling.asyncio, "sleep", async_wait)
     experiment = operator_case.selection.experiment
     assert isinstance(experiment, SampledExperimentDefinition)
@@ -512,7 +512,7 @@ def test_interrupted_calibration_pause_has_no_inflight_reservation(
     def interrupt(_seconds: float) -> None:
         raise KeyboardInterrupt
 
-    monkeypatch.setattr(sampled_reduction.time, "sleep", interrupt)
+    monkeypatch.setattr(calibration.time, "sleep", interrupt)
     result = _invoke(operator_case.command("--inter-attempt-delay", "2"))
     report = _json(result)
     assert report["stop_reason"] == "user-interrupt"

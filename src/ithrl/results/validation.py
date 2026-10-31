@@ -72,11 +72,12 @@ async def validate_sampled_result(
         confirmation = None
         if selection is not None:
             plan = selection.plan
-            search = tuple(b for b in state_file.evidence(store) if b.plan.role == "search")
+            blocks = state_file.evidence(store)
+            search = tuple(b for b in blocks if b.plan.role == "search")
             if any(not b.eligible for b in search):
                 raise ResultSnapshotError("ineligible search evidence forbids confirmation")
             block = next(
-                (b for b in state_file.evidence(store) if b.plan.role == "confirmation"),
+                (b for b in blocks if b.plan.role == "confirmation"),
                 SamplingBlockEvidence(plan=plan, attempts=()),
             )
             confirmation = SampledConfirmation.from_evidence(block)

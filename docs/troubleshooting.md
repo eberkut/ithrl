@@ -41,6 +41,10 @@ Do not disable permission checks or edit internal state to bypass a refusal. A n
 can pass the same capability checks without a product update; unsupported protocol or safety
 behavior requires investigation.
 
+`runner_error_reason_code = "protected-input-snapshot"` means the runner could not snapshot the
+source or original workspace before starting that attempt. Check read permissions, unsupported
+file types or links, and tree size or nesting limits.
+
 For custom Codex CA trust, configure `SSL_CERT_FILE` with a certificate bundle. The runner copies
 it into private disposable state and preserves certificate verification. A custom `SSL_CERT_DIR`
 under a path hidden by isolation is unavailable inside the runner.

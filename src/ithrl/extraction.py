@@ -137,10 +137,10 @@ def list_native_decisions(session: NativeSession) -> tuple[DecisionSummary, ...]
     return enumerate_decisions(session)
 
 
-def validate_extracted_case(evidence: CaseEvidence) -> None:
-    """Re-derive a logical-session case from its preserved native source."""
+def validate_extracted_case(evidence: CaseEvidence) -> NativeSession | None:
+    """Re-derive a logical-session case and return its verified native session."""
 
-    _rederive_extracted_case(evidence)
+    return _rederive_extracted_case(evidence)
 
 
 def editable_extracted_text(evidence: CaseEvidence) -> tuple[EditableText, ...]:

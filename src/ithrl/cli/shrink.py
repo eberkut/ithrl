@@ -5,11 +5,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 from uuid import uuid4
 
 from ithrl.case import CaseEvidence, CaseWorkspace
-from ithrl.cli.native import NativeSelection
 from ithrl.cli.output import CommandOutput, ExitCode, shell_command
 from ithrl.context import JsonObject, content_digest
 from ithrl.execution import ResourceLimits, SafetyPolicy
@@ -51,6 +50,9 @@ from ithrl.workflow import (
     PreparedExperiment,
     prepare_experiment,
 )
+
+if TYPE_CHECKING:
+    from ithrl.cli.native import NativeSelection
 
 
 @dataclass(frozen=True, slots=True)

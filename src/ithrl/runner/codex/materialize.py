@@ -7,7 +7,6 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 from ithrl.adapters.contracts import NativeSession
-from ithrl.adapters.registry import parse_session_bytes
 from ithrl.case import CaseFormatError
 from ithrl.context import ContextNode, JsonObject, JsonValue
 from ithrl.extraction import validate_extracted_case
@@ -100,27 +99,18 @@ def materialize_codex_attempt(attempt: PreparedAttempt) -> CodexMaterialization:
         )
 
     try:
-        validate_extracted_case(evidence)
+        session = validate_extracted_case(evidence)
     except CaseFormatError as error:
         raise CodexMaterializationError(
             CodexMaterializationErrorCode.CHANGED_EVIDENCE,
             "the preserved Codex evidence no longer matches the case",
         ) from error
 
-    source = next(
-        (
-            artifact
-            for artifact in evidence.source_artifacts
-            if artifact.path == decision.selector.source == _SOURCE_PATH
-        ),
-        None,
-    )
-    if source is None:
+    if session is None or decision.selector.source != _SOURCE_PATH:
         raise CodexMaterializationError(
             CodexMaterializationErrorCode.INCOMPATIBLE_CASE,
             "the case has no supported Codex source artifact",
         )
-    session = parse_session_bytes(source.content)
     return _materialize_session(attempt, session)
 
 

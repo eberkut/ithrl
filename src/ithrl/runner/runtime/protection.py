@@ -226,6 +226,11 @@ def _fingerprint(
         ) from None
     except ProtectedPathError:
         raise
+    except RecursionError:
+        raise ProtectedPathError(
+            ProtectionErrorCode.LIMIT_EXCEEDED,
+            "protected paths exceed the supported nesting depth",
+        ) from None
     except OSError:
         raise ProtectedPathError(
             ProtectionErrorCode.UNAVAILABLE,

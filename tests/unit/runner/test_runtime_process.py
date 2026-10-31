@@ -27,7 +27,11 @@ from ithrl.runner.runtime.contracts import (
 )
 from ithrl.runner.runtime.output import ProtectedOutputStore
 from ithrl.runner.runtime.process import run_isolated_process
-from ithrl.runner.runtime.protection import ProtectedPath
+from ithrl.runner.runtime.protection import (
+    ProtectedPath,
+    ProtectedPathError,
+    ProtectionErrorCode,
+)
 from ithrl.runner.runtime.state import (
     AttemptStateError,
     CleanupResult,
@@ -94,17 +98,24 @@ async def _run(
     return store, result
 
 
-@pytest.mark.parametrize("oversized", ["source", "workspace"])
-def test_snapshot_refusal_prevents_process_preparation(tmp_path: Path, oversized: str) -> None:
+@pytest.mark.parametrize("refusal", ["source-bytes", "workspace-bytes", "workspace-nesting"])
+def test_snapshot_refusal_prevents_process_preparation(tmp_path: Path, refusal: str) -> None:
     sources, workspaces = _protected_paths(tmp_path)
-    protected = sources[0].path if oversized == "source" else workspaces[0].path / "tracked.txt"
-    protected.write_bytes(b"x" * 32)
+    protected = sources[0].path if refusal == "source-bytes" else workspaces[0].path / "tracked.txt"
+    if refusal == "workspace-nesting":
+        nested = workspaces[0].path
+        for _ in range(350):
+            nested /= "d"
+            nested.mkdir()
+    else:
+        protected.write_bytes(b"x" * 32)
+    protected_before = protected.read_bytes()
     store = ProtectedOutputStore.open(tmp_path / "outputs")
 
     def prepare(_state: OwnedAttemptState) -> ProcessSpec:
         pytest.fail("snapshot refusal must occur before process preparation")
 
-    with pytest.raises(ProcessRuntimeError, match=r"protected.*byte limit") as refused:
+    with pytest.raises(ProcessRuntimeError, match="cannot snapshot protected inputs") as refused:
         asyncio.run(
             run_isolated_process(
                 attempt_id=ATTEMPT_ID,
@@ -114,7 +125,7 @@ def test_snapshot_refusal_prevents_process_preparation(tmp_path: Path, oversized
                 resource_limits=ResourceLimits(),
                 source_paths=sources,
                 workspace_paths=workspaces,
-                max_protected_entries=16,
+                max_protected_entries=10000,
                 max_protected_bytes=16,
             )
         )
@@ -122,12 +133,14 @@ def test_snapshot_refusal_prevents_process_preparation(tmp_path: Path, oversized
     error = refused.value
     assert error.code is RunnerErrorCode.PREPARATION
     assert error.reason_code == "protected-input-snapshot"
+    assert isinstance(error.__cause__, ProtectedPathError)
+    assert error.__cause__.code is ProtectionErrorCode.LIMIT_EXCEEDED
     assert error.native_output is None
     assert error.report.process_outcome == "not-started"
     assert error.report.cleanup_outcome == "not-required"
     assert error.report.native_output_bytes == error.report.disposable_state_bytes == 0
     assert error.report.source_store_effect == error.report.original_workspace_effect == "unchanged"
-    assert protected.read_bytes() == b"x" * 32
+    assert protected.read_bytes() == protected_before
     assert not (tmp_path / "state").exists()
 
 
@@ -178,28 +191,6 @@ def test_complete_output_is_refused_when_process_group_termination_is_unverified
         asyncio.run(_run(tmp_path, _prepare("describe")))
     assert refused.value.code is RunnerErrorCode.SAFETY
     assert refused.value.report.process_outcome == "unknown"
-
-
-def test_stdout_stop_terminates_after_the_matching_complete_line(tmp_path: Path) -> None:
-    def prepare(state: OwnedAttemptState) -> ProcessSpec:
-        work = state.member("work")
-        work.mkdir(mode=0o700)
-        return ProcessSpec(
-            argv=(sys.executable, str(HELPER), "lines", "before", "stop", "after"),
-            cwd=work,
-            environment={},
-            stop_after_stdout_line=lambda line: line == b"stop",
-        )
-
-    store, result = asyncio.run(_run(tmp_path, prepare))
-
-    assert result.native_output is not None
-    output = store.read(result.native_output)
-    assert output.stdout == b"before\nstop\n"
-    assert output.complete
-    assert result.report.stdout_stop_matched
-    assert result.report.process_outcome == "terminated"
-    assert not result.report.forced_termination
 
 
 def test_stdout_stop_preserves_every_complete_line_in_the_matching_chunk() -> None:
@@ -253,6 +244,7 @@ def test_stdout_stop_preserves_buffered_lines_and_drains_stderr(tmp_path: Path) 
     assert output.complete
     assert result.report.stdout_stop_matched
     assert result.report.process_outcome == "terminated"
+    assert not result.report.forced_termination
 
 
 def test_output_close_failure_marks_the_artifact_incomplete(
