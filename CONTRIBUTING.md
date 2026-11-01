@@ -1,12 +1,28 @@
 # Contributing
 
-Start with an [issue](https://github.com/eberkut/ithrl/issues) describing the problem or proposed
-change. Pull requests are limited to collaborators; discuss the work before preparing one.
+Open an [issue](https://github.com/eberkut/ithrl/issues) for a bug report, question or proposed
+change. Pull requests are limited to collaborators. If you are not a collaborator and want to
+implement a change, agree on scope and ask the maintainer about access in the issue before preparing
+a PR.
 
 For bug reports, include the ithrl version, platform, sanitized error code and steps to reproduce.
 Keep full sessions, cases, proprietary source and credentials out of public reports. Report
 suspected vulnerabilities through
 [private vulnerability reporting](https://github.com/eberkut/ithrl/security/advisories/new).
+
+## First contribution
+
+1. Find an existing issue or open one, and agree on scope with the maintainer.
+2. Follow [development setup](#development-setup) to prepare the locked environment.
+3. Make a focused change using [Preparing a change](#preparing-a-change), and run the relevant
+   [checks](#checks).
+4. Open a PR linking the issue and explaining the change and its validation. Follow the
+   [review requirements](#pull-request-review).
+
+For task-specific instructions, see [documentation](#documentation),
+[workflows and dependencies](#workflow-and-dependency-checks),
+[integration tests](#credential-free-integration-tests) or
+[native smoke tests](#opt-in-native-smoke-tests).
 
 ## Development setup
 
@@ -92,19 +108,19 @@ package names and versions without installing those packages, resolving alternat
 fixes. CI evaluates markers on each supported Python version. This covers locked versions rather
 than every version permitted by package dependency ranges.
 
-GitHub's dependency graph and Dependency Review use the inventory GitHub has for each commit.
-Before relying on them for `uv.lock` coverage, compare the hosted package/version inventory with
-the locked export on each supported Python version. The PR dependency-review job rejects newly
-introduced known vulnerabilities at any severity across runtime, development and unknown scopes.
-It uses a read-only token and does not check out or execute PR code. If it reports incomplete
-dependency snapshots, wait for GitHub's graph update and rerun the job. No license allowlist is
-enforced by this check. Keep the lockfile audit above as the full-inventory CI gate; Dependabot
-version updates alone do not establish dependency-graph coverage.
+For dependency changes, run the lockfile audit above on each supported Python version. GitHub's
+dependency graph may omit packages from `uv.lock`, so Dependabot and Dependency Review cannot
+replace that audit.
+
+The PR dependency-review job rejects newly introduced known vulnerabilities at any severity across
+runtime, development and unknown scopes. It uses a read-only token and does not check out or execute
+PR code. If it reports incomplete dependency snapshots, wait for GitHub's graph update and rerun
+the job. License checks are disabled.
 
 CI runs weekly on Monday at 06:17 UTC to detect new advisories. Dependabot checks Python, Actions
 and pre-commit dependencies weekly, groups minor/patch updates and leaves majors individually
 reviewable. Ordinary updates have a seven-day cooldown; security updates have none. Updates are
-never automatically merged. Hosted dependency-graph coverage is a separate verification gate.
+never automatically merged.
 
 ## Documentation
 
@@ -130,6 +146,10 @@ Use [architecture](docs/architecture.md) to locate current contracts,
 [research](docs/research/index.md) for methods, measurements and reproducibility. Amend the owning
 document instead of maintaining a second plan. A new decision record should explain context,
 decision, alternatives and consequences; supersede an old decision explicitly when needed.
+
+Before evaluating a new study, declare its tested domain, criteria, seeds, budget and intended
+claims. Report costs across complete workflows, including failed and incomplete work, and document
+the alternatives and limitations needed to interpret the results.
 
 The optional `docs` dependency group pins MkDocs and the shadcn theme. Search runs in the browser;
 fonts and scripts are served with the site. GitHub star-count requests and raw Markdown copying
@@ -203,7 +223,7 @@ uv run pytest -o addopts= tests/integration/test_fuzz_cli.py -q
 ```
 
 These tests establish local contracts. Native qualification is recorded in the
-[measurement notes](docs/native-runs.md#compatibility-and-measurements).
+[measurements](docs/measurements.md).
 
 ## Opt-in native smoke tests
 
@@ -272,6 +292,8 @@ CodeRabbit's optional planning and code-generation features are configured in
 
 ## Preparing a release
 
+The release procedures below are for maintainers with repository and package-publishing access.
+
 For every feature, aim for parity across supported harnesses. Any exception must be clearly
 justified and documented before release.
 
@@ -323,8 +345,8 @@ ownership and the following repository/index settings:
 - Release-tag rules permit the maintainer's signed-tag creation and prevent unapproved tag
   replacement or deletion. The workflow never creates a tag.
 
-The dispatch gate admits the repository's current maintainer identity and requires the full source
-SHA and exact final `X.Y.Z` version. Replace the placeholders with the reviewed values:
+The release workflow accepts dispatches only from the repository maintainer. Supply the full source
+commit SHA and exact final `X.Y.Z` version. Replace the placeholders with the reviewed values:
 
 ```bash
 gh workflow run release.yml --repo eberkut/ithrl --ref main \

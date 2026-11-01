@@ -5,7 +5,7 @@ decision evidence and harness-specific runners can support context interventions
 provider-request capture is optional. The results describe the installations inspected during the
 study. For current capabilities, see the [README supported-inputs
 table](https://github.com/eberkut/ithrl/blob/main/README.md#supported-inputs); the later
-[native measurements](../measurements.md) describe the qualified reduction profiles.
+[native measurements](../measurements.md) describe qualified reduction and fuzzing profiles.
 
 ## Research basis
 

@@ -68,9 +68,9 @@ uv run --locked --offline --no-sync python research/fuzzing/study.py sensitivity
 ```
 
 The generated `analysis.json` can be compared with `results.json`'s `analysis` object.
-Synthetic attempted calls are bookkeeping units, with one simulated provider call per
-attempt; there are zero real provider calls and zero provider charges. The 512-call maximum
-study bracket and the selected 384-attempt allowance do not establish a subscription quota,
-token cost, model effect size or native runtime. Those require separately approved,
-budget-limited live studies for an exact safe runner profile. This research reference is
+Each simulated attempt counts as one call; the study makes zero real provider requests.
+The 512-call study bracket and selected 384-attempt allowance are simulation limits. Provider
+quotas, token usage, monetary costs, model effect sizes and native runtime require measurements on
+the relevant workload and runner profile. The [native measurements](../../docs/measurements.md)
+report completed Codex and Copilot experiments and their costs. This synthetic reference is
 separate from the installed runtime and makes no native support claim.

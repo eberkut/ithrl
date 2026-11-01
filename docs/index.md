@@ -2,7 +2,7 @@
 
 `ithrl` extracts a selected decision from a saved coding-agent session and searches for context
 that preserves its behavior. It also explores text appends that change the selected behavior,
-with a qualified Codex prior-user append workflow.
+with qualified Codex and Copilot prior-user append workflows.
 
 Start with
 [installation and the bundled example](https://github.com/eberkut/ithrl/blob/main/README.md#install).

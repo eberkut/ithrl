@@ -1,8 +1,14 @@
 # ithrl
 
-`ithrl` extracts a decision from a saved coding-agent session and searches for a smaller context
-that preserves its behavior. Use it to turn a long session into a debugging case you can inspect
-and test.
+[![PyPI](https://img.shields.io/pypi/v/ithrl.svg)](https://pypi.org/project/ithrl/)
+[![CI](https://github.com/eberkut/ithrl/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/eberkut/ithrl/actions/workflows/ci.yml)
+
+`ithrl` turns saved Codex and GitHub Copilot sessions into debugging experiments. Search for a
+smaller context that preserves a chosen response or tool request, or a small text change that alters
+it.
+
+[Documentation](https://eberkut.github.io/ithrl/) · [Try it](#try-it) ·
+[Supported inputs](#supported-inputs)
 
 ## Install
 
@@ -12,15 +18,15 @@ With [uv](https://docs.astral.sh/uv/):
 uv tool install ithrl
 ```
 
-Or use `pipx install ithrl`. In an existing virtual environment, use `python -m pip install ithrl`.
-Check the installation with `ithrl --help` and `ithrl --version`.
+For context fuzzing, use `uv tool install 'ithrl[fuzz]'` instead. You can also install with
+`pipx install ithrl` or, in an existing virtual environment, `python -m pip install ithrl`.
 
 Tested on Python 3.12–3.14. Native runners require Linux. APIs and saved formats may change before
 1.0; keep your source sessions and record the version used for each case.
 
 ## Try it
 
-The bundled example needs no account, agent installation or model access:
+The bundled deterministic example needs no account, agent installation or model access:
 
 ```bash
 mkdir -m 700 ithrl-demo
@@ -28,26 +34,28 @@ ithrl extract --example --output ithrl-demo/case
 ithrl shrink ithrl-demo/case --observation-store ithrl-demo/observations.sqlite
 ```
 
-The example starts with seven context markers, `A` through `G`. The result keeps `A` and `C`,
-confirms the behavior, and reports zero provider calls and zero executed actions. Inspect it:
+The result removes half the context items and confirms that the target is preserved. Output excerpt:
 
-```bash
-cat ithrl-demo/case/results/*/request.json
-cat ithrl-demo/case/results/*/summary.json
+```text
+Reduced and confirmed
+  context items   10 -> 5
+  original test   target observed
+  search          1-minimal; all valid single removals tested
+  confirmation    target preserved
+  observations    15
+  No network requests or provider calls. No actions executed.
 ```
 
-All generated example data stays in `ithrl-demo`. Extraction refuses to overwrite an existing case;
-use a new directory to repeat it. You can remove the directory and its contents when finished.
+Inspect the saved result in `ithrl-demo/case/results/`; the
+[results guide](https://github.com/eberkut/ithrl/blob/main/docs/results.md) explains its files.
+Use a new directory to repeat the example; extraction refuses to overwrite an existing case.
 
 ## Commands
 
-- `ithrl extract` creates a case from a saved session. In a terminal, omit the source to browse
-  available sessions and select a decision.
-- `ithrl shrink CASE` tests context removals and saves the result. `--dry-run` inspects the plan;
-  `--format json` produces machine-readable output. A stopped search prints its resume command.
-- `ithrl fuzz CASE --config PRIVATE_TOML` explores text appends
-  and independently confirms one decrease in the selected behavior's match rate. Start with the
-  [fuzzing walkthrough](https://github.com/eberkut/ithrl/blob/main/docs/native-runs.md#context-fuzzing).
+- `ithrl extract` browses saved sessions and creates a case from a selected decision.
+- `ithrl shrink CASE` searches for context removals that preserve the selected behavior.
+- `ithrl fuzz CASE --config PRIVATE_TOML` searches for and simplifies text appends that decrease how
+  often the selected behavior occurs, with independent confirmation.
 
 For example, extract a saved session file:
 
@@ -55,12 +63,12 @@ For example, extract a saved session file:
 ithrl extract path/to/session.jsonl --output .ithrl/case
 ```
 
-Cases contain copied session content and should stay private. Extraction makes no provider calls and
-never executes recorded actions. Native reduction makes model requests and requires an explicit
-experiment; see the
-[native-run guide](https://github.com/eberkut/ithrl/blob/main/docs/native-runs.md).
+Extraction makes no provider calls. Native experiments require Linux, usable Bubblewrap, an
+installed harness and model access. Review the provider, safety controls and call/time budget in the
+[native-run guide](https://github.com/eberkut/ithrl/blob/main/docs/native-runs.md) before execution.
+Returned actions are observed and denied. Cases contain copied session content; keep them private.
 
-### Supported inputs
+## Supported inputs
 
 | Input | Extracted decisions | Reduction | Fuzzing |
 | --- | --- | --- | --- |
@@ -69,18 +77,16 @@ experiment; see the
 | Copilot CLI session events | Final responses and shell requests | Experimental final-response and denied `bash` runner | Experimental final-response text appends |
 
 Native Codex and Copilot final-response fuzzing supports appending text to eligible prior user
-input while preserving the fixed triggering input. Synthetic campaigns completed discovery,
-simplification and fresh confirmation;
-[measurements](https://github.com/eberkut/ithrl/blob/main/docs/measurements.md#native-context-fuzzing)
-record their effects, costs and limits. This evidence does
-not establish ordinary-session success rates or general sampling defaults.
-[Saved-session measurements](https://github.com/eberkut/ithrl/blob/main/docs/measurements.md#saved-session-experiments)
-record selected reduction and fuzzing outcomes, including inconclusive and incomplete runs.
+input while preserving the fixed triggering input. The
+[fuzzing walkthrough](https://github.com/eberkut/ithrl/blob/main/docs/native-runs.md#context-fuzzing)
+starts with a local example and covers native execution.
 
-Native compatibility is checked against the installed harness's protocol, capabilities and safety
-controls.
-[Compatibility and measurements](https://github.com/eberkut/ithrl/blob/main/docs/native-runs.md#compatibility-and-measurements)
-records the tested configurations and how to check another release.
+[Saved-session measurements](https://github.com/eberkut/ithrl/blob/main/docs/measurements.md#saved-session-experiments)
+include a confirmed Codex reduction with 50.17% lower mean input tokens per confirmation
+observation, using a 20-percentage-point preservation margin. The measurements report costs and
+unsuccessful outcomes alongside completed runs. Check
+[native compatibility](https://github.com/eberkut/ithrl/blob/main/docs/native-runs.md#compatibility-and-measurements)
+for the installed harness's requirements.
 
 ## Documentation
 

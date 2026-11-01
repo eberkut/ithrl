@@ -26,7 +26,6 @@ run without credentials or provider calls. Native measurements are reported sepa
 synthetic replay does not repeat model execution.
 
 Analytic guarantees, simulations, fixture checks and live measurements answer different questions.
-Keep failed alternatives and corrections visible when interpreting a result. New studies should
-declare their tested domain, criteria, seeds, complete-workflow costs and claim scope before
-evaluating outcomes, then link their design and follow-up work through
-[issues](https://github.com/eberkut/ithrl/issues) and [decision records](../decisions/index.md).
+Studies report tested domains, criteria, seeds, complete-workflow costs, alternatives and
+limitations needed to interpret their results. [Issues](https://github.com/eberkut/ithrl/issues)
+track follow-up work; [decision records](../decisions/index.md) explain adopted designs.
