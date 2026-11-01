@@ -297,14 +297,15 @@ recalculate the total-call allowance before reviewing the plan. The saved profil
 retain that cap; changing it requires a new profile and run.
 
 Choose pacing in the private copy before detection. Keep `inter_attempt_delay_seconds = 15` for
-Codex, matching its completed campaign. For Copilot, keep the 350-call ceiling and set
-`inter_attempt_delay_seconds = 0`, matching its measured native-prefix campaign. Copilot's
-per-attempt inference cap is one. Pacing is administrative, consumes wall time and does not
-change the statistical sample targets. These settings apply to this synthetic exercise; provider
-throttling and ordinary-session costs remain workload-dependent. The call ceiling can stop
-exploration early while preserving the 72-attempt fresh-confirmation reserve. The six-hour ceiling
-is an administrative limit; [measurements](measurements.md#calls-duration-and-resource-use) record
-the completed durations.
+Codex, matching its completed campaign. For Copilot, set `max_provider_calls = 339` and
+`inter_attempt_delay_seconds = 0`, matching its measured native-prefix campaign. That campaign, its
+control and interrupted-run calls shared a combined 350-call qualification allowance. Copilot's
+per-attempt inference cap is one. Pacing is administrative, consumes wall time and does not change
+the statistical sample targets. These settings apply to this synthetic exercise; provider throttling
+and ordinary-session costs remain workload-dependent. The call ceiling can stop exploration early
+while preserving the 72-attempt fresh-confirmation reserve. The six-hour ceiling is an
+administrative limit; [measurements](measurements.md#calls-duration-and-resource-use) record the
+completed durations.
 
 Extract the Codex case:
 

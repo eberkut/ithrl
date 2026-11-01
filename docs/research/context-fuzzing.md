@@ -5,8 +5,9 @@ and fresh-confirmation procedure for a planted target-rate decrease from `.90` t
 complete-workflow success rate was 90.25%, with a simultaneous 99% lower bound of 88.86896%,
 exceeding the prospective 80% gate. These results support the design for the specified synthetic
 workload. Later [native campaigns](../measurements.md#native-context-fuzzing) measured completed
-Codex and Copilot append-text workflows. The Copilot campaign used semantic import; it does not
-qualify the native-prefix SDK runner. Ordinary-session success rates remain unmeasured.
+Codex and Copilot append-text workflows. Copilot completed separate campaigns under its earlier
+semantic-import profile and its native-prefix SDK profile. The latter qualified final-response
+text appends through native-prefix reconstruction. Ordinary-session success rates remain unmeasured.
 
 The implementation provides deterministic mutation generation and simplification, sampled
 comparisons and durable campaign recovery through the shared observation store. The
