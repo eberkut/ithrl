@@ -259,10 +259,9 @@ progress and the inspected plan go to stderr.
 Use a source checkout with the locked development environment, including the `fuzz` extra; see
 [contributor setup](https://github.com/eberkut/ithrl/blob/main/CONTRIBUTING.md#development-setup).
 You also need Linux, usable Bubblewrap, an installed native harness and its local authentication.
-The public inputs below contain only the synthetic response-token exercise. The execution steps
-below use Codex. For Copilot, use its source and decision from the table and pass
-`--harness copilot` when extracting. A new native run makes real provider requests and can produce
-different observations.
+The public inputs below contain only the synthetic response-token exercise. Choose one harness
+when extracting; the remaining detection and execution steps apply to either harness. A new native
+run makes real provider requests and can produce different observations.
 
 | Harness | Public source | Decision | Target |
 | --- | --- | --- | --- |
@@ -307,11 +306,19 @@ while preserving the 72-attempt fresh-confirmation reserve. The six-hour ceiling
 administrative limit; [measurements](measurements.md#calls-duration-and-resource-use) record the
 completed durations.
 
-Extract the Codex case:
+Extract one case. For Codex:
 
 ```bash
 uv run ithrl extract examples/fuzz/codex.jsonl --harness codex \
   --decision decision-f5eaba307afd19db --target final-response \
+  --output "$FUZZ_RUN/case" --format json
+```
+
+For Copilot:
+
+```bash
+uv run ithrl extract examples/fuzz/copilot.jsonl --harness copilot \
+  --decision decision-cf9cce503bc9fc40 --target final-response \
   --output "$FUZZ_RUN/case" --format json
 ```
 
