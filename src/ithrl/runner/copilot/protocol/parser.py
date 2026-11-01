@@ -133,6 +133,9 @@ def parse_output(
             "managed-policy-unverified",
             "native-context-unverified",
             "inference-request-refused",
+            "model-catalog-connection",
+            "model-catalog-tls",
+            "model-catalog-failed",
         }
     ):
         raise CopilotProtocolError(failure_code, "Copilot worker refused native execution")

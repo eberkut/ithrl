@@ -66,13 +66,13 @@ experiment; see the
 | --- | --- | --- | --- |
 | Bundled synthetic example | Synthetic tool request | Deterministic local runner | Local fake runner |
 | Codex CLI rollouts | Final responses | Experimental native runner | Experimental prior-user text appends |
-| Copilot CLI session events | Final responses and shell requests | Experimental final-response and denied `bash` runner | Not qualified |
+| Copilot CLI session events | Final responses and shell requests | Experimental final-response and denied `bash` runner | Experimental final-response text appends |
 
-Native Codex fuzzing is qualified for appending text to eligible prior user input while preserving
-its fixed triggering input. One synthetic case completed discovery, simplification and fresh
-confirmation;
+Native Codex and Copilot final-response fuzzing supports appending text to eligible prior user
+input while preserving the fixed triggering input. Synthetic campaigns completed discovery,
+simplification and fresh confirmation;
 [measurements](https://github.com/eberkut/ithrl/blob/main/docs/measurements.md#native-context-fuzzing)
-record its effect, costs and limits. Copilot text mutation remains unsupported. This evidence does
+record their effects, costs and limits. This evidence does
 not establish ordinary-session success rates or general sampling defaults.
 [Saved-session measurements](https://github.com/eberkut/ithrl/blob/main/docs/measurements.md#saved-session-experiments)
 record selected reduction and fuzzing outcomes, including inconclusive and incomplete runs.

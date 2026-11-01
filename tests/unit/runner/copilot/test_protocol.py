@@ -121,6 +121,9 @@ def _parse(events: list[dict[str, Any]], *, shell_target: bool = False):
     ("reason", "expected"),
     [
         ("native-context-unverified", "native-context-unverified"),
+        ("model-catalog-connection", "model-catalog-connection"),
+        ("model-catalog-tls", "model-catalog-tls"),
+        ("model-catalog-failed", "model-catalog-failed"),
         ("private-provider-error", "incomplete-dispatch"),
         (["untrusted"], "incomplete-dispatch"),
     ],

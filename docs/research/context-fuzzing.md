@@ -5,8 +5,9 @@ and fresh-confirmation procedure for a planted target-rate decrease from `.90` t
 complete-workflow success rate was 90.25%, with a simultaneous 99% lower bound of 88.86896%,
 exceeding the prospective 80% gate. These results support the design for the specified synthetic
 workload. Later [native campaigns](../measurements.md#native-context-fuzzing) measured completed
-Codex and Copilot append-text workflows. The Copilot campaign used semantic import; it does not
-qualify the native-prefix SDK runner. Ordinary-session success rates remain unmeasured.
+Codex and Copilot append-text workflows. Copilot completed separate campaigns under its earlier
+semantic-import profile and its native-prefix SDK profile. The latter qualified final-response
+text appends through native-prefix reconstruction. Ordinary-session success rates remain unmeasured.
 
 The implementation provides deterministic mutation generation and simplification, sampled
 comparisons and durable campaign recovery through the shared observation store. The
@@ -346,15 +347,10 @@ cover role separation, complete-block admission and failure handling.
 The synthetic study selected the procedure and tested its assumptions before native execution.
 Its rates and modeled costs remain specific to that study.
 
-A completed Codex final-response campaign qualified appending text to eligible prior user input.
-A Copilot campaign completed the same synthetic exercise under its earlier semantic-import
-reconstruction. Each passed duplication control and calibration, simplified a stress append and
-confirmed the selected intervention with fresh samples. Protected-state and cleanup checks passed,
-and no returned actions executed.
-
-The Copilot semantic import transformed the triggering input, including a per-attempt
-`<current_datetime>` element. Native-prefix reconstruction instead resumes captured records without
-adding a user message; its live qualification remains separate. Neither reconstruction establishes
+Native campaigns apply the procedure to eligible prior-user text while preserving the selected
+decision's triggering input. The Copilot semantic-import profile transformed the supplied trigger,
+including a per-attempt `<current_datetime>` element. Its native-prefix SDK profile resumes the
+captured records without adding a user message. Neither reconstruction establishes
 identical complete provider input. The independent, stationary sampling assumptions apply to the
 controlled harness surface.
 

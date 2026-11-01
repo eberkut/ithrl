@@ -155,6 +155,9 @@ the selected model-turn boundary without injecting a user message, including dec
 results. Captured system guidance is restored when present and verified before inference; current
 custom-instruction and skill retrieval are disabled. A managed-request gate permits one inference
 request, verifies effective policy and denies shell execution before a continuation can dispatch.
+The session-independent model-catalogue GET permits up to three connection attempts within the
+outer attempt timeout. Its attempts are counted separately from inference; certificate failures
+remain terminal, and inference requests receive no retries.
 The controlled prefix and policy define the experiment; uncaptured historical guidance and
 harness-added context remain reconstruction limits.
 

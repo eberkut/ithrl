@@ -176,11 +176,11 @@ the experiment and pacing and reuses compatible saved calibration observations.
 ## Context fuzzing
 
 `ithrl fuzz` explores bounded text appends and confirms at most one decrease in the selected
-behavior's match rate. Fuzzing requires the optional `fuzz` extra (`ithrl[fuzz]`).
-Codex supports appends to eligible prior user input while preserving the selected decision's
-triggering input. The [measurements](measurements.md#native-context-fuzzing) record the completed
-synthetic campaign and its limits. Copilot native-prefix appends have reconstruction coverage but
-have not completed live qualification. Copilot shell-action profiles support context removal only.
+behavior's match rate. Fuzzing requires the optional `fuzz` extra (`ithrl[fuzz]`). Codex and Copilot
+support appends to eligible prior user input while preserving the selected decision's triggering
+input. The [measurements](measurements.md#native-context-fuzzing) record the completed synthetic
+campaigns and their limits. Copilot restores the native session prefix through the installed CLI and
+SDK. Copilot shell-action profiles support context removal only.
 
 To exercise the complete workflow locally, create a fresh example case:
 
@@ -259,10 +259,9 @@ progress and the inspected plan go to stderr.
 Use a source checkout with the locked development environment, including the `fuzz` extra; see
 [contributor setup](https://github.com/eberkut/ithrl/blob/main/CONTRIBUTING.md#development-setup).
 You also need Linux, usable Bubblewrap, an installed native harness and its local authentication.
-The public inputs below contain only the synthetic response-token exercise. The execution steps
-below use Codex. The Copilot source is available for extraction and reconstruction checks; it does
-not qualify Copilot native-prefix execution. A new native run makes real provider requests and can
-produce different observations.
+The public inputs below contain only the synthetic response-token exercise. Choose one harness
+when extracting; the remaining detection and execution steps apply to either harness. A new native
+run makes real provider requests and can produce different observations.
 
 | Harness | Public source | Decision | Target |
 | --- | --- | --- | --- |
@@ -297,18 +296,29 @@ recalculate the total-call allowance before reviewing the plan. The saved profil
 retain that cap; changing it requires a new profile and run.
 
 Choose pacing in the private copy before detection. Keep `inter_attempt_delay_seconds = 15` for
-Codex, matching its completed campaign. Pacing is administrative, consumes wall time and does not
-change the statistical sample targets. These settings apply to this synthetic exercise; provider
-throttling and ordinary-session costs remain workload-dependent. The call ceiling can stop
-exploration early while preserving the 72-attempt fresh-confirmation reserve. The six-hour ceiling
-is an administrative limit; [measurements](measurements.md#calls-duration-and-resource-use) record
-the completed durations.
+Codex, matching its completed campaign. For Copilot, set `max_provider_calls = 339` and
+`inter_attempt_delay_seconds = 0`, matching its measured native-prefix campaign. That campaign, its
+control and interrupted-run calls shared a combined 350-call qualification allowance. Copilot's
+per-attempt inference cap is one. Pacing is administrative, consumes wall time and does not change
+the statistical sample targets. These settings apply to this synthetic exercise; provider throttling
+and ordinary-session costs remain workload-dependent. The call ceiling can stop exploration early
+while preserving the 72-attempt fresh-confirmation reserve. The six-hour ceiling is an
+administrative limit; [measurements](measurements.md#calls-duration-and-resource-use) record the
+completed durations.
 
-Extract the Codex case:
+Extract one case. For Codex:
 
 ```bash
 uv run ithrl extract examples/fuzz/codex.jsonl --harness codex \
   --decision decision-f5eaba307afd19db --target final-response \
+  --output "$FUZZ_RUN/case" --format json
+```
+
+For Copilot:
+
+```bash
+uv run ithrl extract examples/fuzz/copilot.jsonl --harness copilot \
+  --decision decision-cf9cce503bc9fc40 --target final-response \
   --output "$FUZZ_RUN/case" --format json
 ```
 
