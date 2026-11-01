@@ -346,15 +346,10 @@ cover role separation, complete-block admission and failure handling.
 The synthetic study selected the procedure and tested its assumptions before native execution.
 Its rates and modeled costs remain specific to that study.
 
-A completed Codex final-response campaign qualified appending text to eligible prior user input.
-A Copilot campaign completed the same synthetic exercise under its earlier semantic-import
-reconstruction. Each passed duplication control and calibration, simplified a stress append and
-confirmed the selected intervention with fresh samples. Protected-state and cleanup checks passed,
-and no returned actions executed.
-
-The Copilot semantic import transformed the triggering input, including a per-attempt
-`<current_datetime>` element. Native-prefix reconstruction instead resumes captured records without
-adding a user message; its live qualification remains separate. Neither reconstruction establishes
+Native campaigns apply the procedure to eligible prior-user text while preserving the selected
+decision's triggering input. The Copilot semantic-import profile transformed the supplied trigger,
+including a per-attempt `<current_datetime>` element. Its native-prefix SDK profile resumes the
+captured records without adding a user message. Neither reconstruction establishes
 identical complete provider input. The independent, stationary sampling assumptions apply to the
 controlled harness surface.
 

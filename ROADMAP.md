@@ -22,18 +22,15 @@ in the existing target's match probability among valid observations. A finding d
 selected experiment, including execution reliability and assumptions. It does not establish a
 model defect, a unique cause or semantic equivalence of the original and changed context.
 
-The Codex prior-user append workflow has completed qualification, including
+The Codex and Copilot prior-user append workflows have completed synthetic qualification, including
 simplification and fresh confirmation. See
-[measurements](docs/measurements.md#native-context-fuzzing) for its workload, result and cost, and
-[fuzzing research](docs/research/context-fuzzing.md) for the method and assumptions.
+[measurements](docs/measurements.md#native-context-fuzzing) for their workloads, results and costs,
+and [fuzzing research](docs/research/context-fuzzing.md) for the method and assumptions.
 
-The next deliverables are:
-
-1. [Derive practical settings and public claims](https://github.com/eberkut/ithrl/issues/10) from
-   complete-workflow usefulness and measured costs.
-2. [Qualify Copilot final-response text-mutation fuzzing](https://github.com/eberkut/ithrl/issues/29)
-   with faithful reconstruction, useful simplification and fresh confirmation. This is required
-   v0.2 scope before release preparation.
+[Practical settings and public claims](https://github.com/eberkut/ithrl/issues/10) cover
+complete-workflow usefulness and measured costs.
+[Copilot qualification](https://github.com/eberkut/ithrl/issues/29) tracks its reconstruction,
+simplification and fresh-confirmation acceptance checks.
 
 One synthetic case supplies no general sampling preset or ordinary-session success rate. The
 [fuzzing capability issue](https://github.com/eberkut/ithrl/issues/5) and

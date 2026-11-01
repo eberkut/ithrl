@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import ssl
 import sys
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -167,6 +168,48 @@ def _context(**changes: object) -> SimpleNamespace:
     )
 
 
+def _install_sdk(monkeypatch: pytest.MonkeyPatch, *, client: type[Any], handler: type[Any]) -> None:
+    class Connection:
+        @staticmethod
+        def for_stdio(**options: object) -> dict[str, object]:
+            return options
+
+    monkeypatch.setitem(
+        sys.modules,
+        "copilot",
+        SimpleNamespace(
+            CopilotClient=client,
+            CopilotRequestHandler=handler,
+            RuntimeConnection=Connection,
+            ManagedSettings=SimpleNamespace,
+            ManagedSettingsPermissions=SimpleNamespace,
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "copilot.generated.rpc",
+        SimpleNamespace(SendMessagesRequest=SimpleNamespace),
+    )
+
+
+def _permission_event(verified: bool = True) -> dict[str, object]:
+    return {
+        "type": "session.managed_settings_resolved",
+        "data": {
+            "clientManaged": verified,
+            "bypassPermissionsDisabled": True,
+            "failClosed": False,
+            "permissionsContext": {
+                "permissions": {
+                    "disableBypassPermissionsMode": "disable",
+                    "disableAssistedPermissionsMode": True,
+                    "deny": ["Shell(*)"],
+                }
+            },
+        },
+    }
+
+
 def _validate(
     outgoing: httpx.Request,
     *,
@@ -224,6 +267,125 @@ def test_model_catalogue_access_requires_the_managed_read_only_route() -> None:
     assert not worker._is_model_catalog_request(
         httpx.Request("POST", "https://api.githubcopilot.com/models"), context
     )
+
+
+@pytest.mark.parametrize(
+    ("scenario", "catalog_calls", "inference_calls", "reason", "delays"),
+    [
+        ("connect-once", 2, 1, None, [0.5]),
+        ("timeout-twice", 3, 1, None, [0.5, 1.0]),
+        ("exhausted", 3, 0, "model-catalog-connection", [0.5, 1.0]),
+        ("certificate", 1, 0, "model-catalog-tls", []),
+        ("catalog-refused", 1, 0, "model-catalog-failed", []),
+        ("duplicate-catalog", 1, 0, "model-catalog-failed", []),
+        ("inference-failed", 1, 1, "inference-request-refused", []),
+        ("cancelled", 1, 0, None, [0.5]),
+        ("policy-revoked", 1, 0, "managed-policy-unverified", [0.5]),
+    ],
+)
+def test_catalogue_recovery_is_bounded_and_never_replays_inference(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    scenario: str,
+    catalog_calls: int,
+    inference_calls: int,
+    reason: str | None,
+    delays: list[float],
+) -> None:
+    request = _request(tmp_path)
+    native = Path(request["nativeSession"])
+    native.write_bytes(b'{"type":"session.start"}\n')
+    native.chmod(0o600)
+    recorded: dict[str, Any] = {"catalog": 0, "inference": 0, "delays": []}
+
+    def emit(document: dict[str, object]) -> None:
+        recorded["on_event"](SimpleNamespace(to_dict=lambda: document))
+
+    async def pause(delay: float) -> None:
+        recorded["delays"].append(delay)
+        if scenario == "cancelled":
+            raise asyncio.CancelledError
+        if scenario == "policy-revoked":
+            emit(_permission_event(False))
+
+    class Session:
+        def __init__(self) -> None:
+            self.rpc = self
+
+        async def send_messages(self, message: SimpleNamespace) -> SimpleNamespace:
+            assert message.messages == []
+            emit(_permission_event())
+            handler = recorded["handler"]
+            catalog = httpx.Request("GET", "https://api.githubcopilot.com/models")
+            await handler.send_request(catalog, _context(session_id=None))
+            if scenario == "duplicate-catalog":
+                await handler.send_request(catalog, _context(session_id=None))
+            emit({"type": "system.message", "data": {"content": request["systemMessage"]}})
+            emit({"type": "model.call_start", "data": {"model": request["model"]}})
+            await handler.send_request(_outgoing(), _context())
+            emit({"type": "assistant.idle", "data": {}})
+            return SimpleNamespace(message_ids=[])
+
+    class Client:
+        def __init__(self, **options: Any) -> None:
+            recorded["handler"] = options["request_handler"]
+
+        async def start(self) -> None:
+            pass
+
+        async def stop(self) -> None:
+            recorded["stopped"] = True
+
+        async def resume_session(self, session_id: str, **options: Any) -> Session:
+            recorded["on_event"] = options["on_event"]
+            return Session()
+
+    class Handler:
+        async def send_request(self, outgoing: httpx.Request, context: object) -> httpx.Response:
+            if outgoing.method == "GET":
+                recorded["catalog"] += 1
+                if scenario == "certificate":
+                    try:
+                        raise ssl.SSLCertVerificationError("fixture certificate refusal")
+                    except ssl.SSLCertVerificationError as error:
+                        raise httpx.ConnectError("fixture connection refusal") from error
+                if scenario == "catalog-refused":
+                    raise worker.WorkerError("fixture catalogue refusal")
+                if scenario == "timeout-twice" and recorded["catalog"] < 3:
+                    raise httpx.ConnectTimeout("fixture connection timeout")
+                if scenario in {"exhausted", "cancelled", "policy-revoked"} or (
+                    scenario == "connect-once" and recorded["catalog"] == 1
+                ):
+                    raise httpx.ConnectError("fixture connection refusal")
+            else:
+                recorded["inference"] += 1
+                if scenario == "inference-failed":
+                    raise httpx.ConnectError("fixture inference connection refusal")
+            return httpx.Response(200, request=outgoing, content=b"{}")
+
+    _install_sdk(monkeypatch, client=Client, handler=Handler)
+    monkeypatch.setattr(worker.asyncio, "sleep", pause)
+    invocation = worker._run_session(Path("/fixture/copilot"), request)
+    if scenario == "cancelled":
+        with pytest.raises(asyncio.CancelledError):
+            asyncio.run(invocation)
+    else:
+        assert asyncio.run(invocation) == (0 if reason is None else 70)
+    complete = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert recorded["catalog"] == complete["catalog_requests_started"] == catalog_calls
+    assert recorded["inference"] == complete["provider_calls_started"] == inference_calls
+    assert recorded["delays"] == delays
+    assert recorded["stopped"] is True
+    if reason is not None:
+        assert complete["failure_code"] == reason
+        assert complete["failure_stage"] == (
+            "managed-policy"
+            if scenario == "policy-revoked"
+            else "inference-request"
+            if scenario == "inference-failed"
+            else "model-catalog"
+        )
 
 
 @pytest.mark.parametrize(
@@ -300,25 +462,7 @@ def test_sdk_worker_empty_batch_adds_no_messages_and_emits_native_events(
             await asyncio.sleep(0)
             assert recorded.get("physical_forwards", 0) == 0
             options = recorded["resume"]
-            options["on_event"](
-                SimpleNamespace(
-                    to_dict=lambda: {
-                        "type": "session.managed_settings_resolved",
-                        "data": {
-                            "clientManaged": policy_verified,
-                            "bypassPermissionsDisabled": True,
-                            "failClosed": False,
-                            "permissionsContext": {
-                                "permissions": {
-                                    "disableBypassPermissionsMode": "disable",
-                                    "disableAssistedPermissionsMode": True,
-                                    "deny": ["Shell(*)"],
-                                }
-                            },
-                        },
-                    }
-                )
-            )
+            options["on_event"](SimpleNamespace(to_dict=lambda: _permission_event(policy_verified)))
             await asyncio.sleep(0)
             proof_events = []
             if native_context != "missing-system":
@@ -454,27 +598,7 @@ def test_sdk_worker_empty_batch_adds_no_messages_and_emits_native_events(
         async def send_request(self, request: object, context: object) -> None:
             recorded["physical_forwards"] = recorded.get("physical_forwards", 0) + 1
 
-    class Connection:
-        @staticmethod
-        def for_stdio(**options: object) -> dict[str, object]:
-            return options
-
-    monkeypatch.setitem(
-        sys.modules,
-        "copilot",
-        SimpleNamespace(
-            CopilotClient=Client,
-            CopilotRequestHandler=Handler,
-            RuntimeConnection=Connection,
-            ManagedSettings=SimpleNamespace,
-            ManagedSettingsPermissions=SimpleNamespace,
-        ),
-    )
-    monkeypatch.setitem(
-        sys.modules,
-        "copilot.generated.rpc",
-        SimpleNamespace(SendMessagesRequest=SimpleNamespace),
-    )
+    _install_sdk(monkeypatch, client=Client, handler=Handler)
     assert asyncio.run(worker._run_session(Path("/fixture/copilot"), request)) == exit_code
     assert recorded["messages"] == []
     assert recorded["session_id"] == "session-1"

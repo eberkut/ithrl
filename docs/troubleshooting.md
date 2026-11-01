@@ -58,6 +58,17 @@ environment. Authenticate through Copilot itself; a token from another CLI may l
 Copilot preserves supported proxy settings. Configured `SSL_CERT_FILE` and `NODE_EXTRA_CA_CERTS`
 bundles are bounded, copied into private disposable state and referenced there. If certificate
 setup is refused, check the configured files and permissions; keep certificate verification enabled.
+Copilot's SDK forwards HTTP through the Python runtime used by `ithrl`. A successful CLI login
+does not verify that this runtime accepts the configured certificate chain.
+
+`model-catalog-connection` identifies exhausted connection recovery for Copilot's read-only model
+catalogue. The runner allows three connection attempts, with 0.5- and 1-second delays, within the
+existing attempt timeout. `model-catalog-tls` identifies a certificate-verification failure;
+`model-catalog-failed` identifies another catalogue refusal. Check network/proxy connectivity,
+certificate trust or account access as appropriate. Catalogue connection recovery preserves the
+SDK's proxy and certificate settings and never retries an inference request. HTTP status errors
+and failures while streaming the catalogue body are outside this recovery loop.
+
 Recognized startup warnings before the selected turn are accepted as metadata. Warnings do not
 establish successful authentication or provider acceptance; inspect the resulting refusal and
 private diagnostic if execution fails.

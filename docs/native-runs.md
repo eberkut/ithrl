@@ -176,11 +176,11 @@ the experiment and pacing and reuses compatible saved calibration observations.
 ## Context fuzzing
 
 `ithrl fuzz` explores bounded text appends and confirms at most one decrease in the selected
-behavior's match rate. Fuzzing requires the optional `fuzz` extra (`ithrl[fuzz]`).
-Codex supports appends to eligible prior user input while preserving the selected decision's
-triggering input. The [measurements](measurements.md#native-context-fuzzing) record the completed
-synthetic campaign and its limits. Copilot native-prefix appends have reconstruction coverage but
-have not completed live qualification. Copilot shell-action profiles support context removal only.
+behavior's match rate. Fuzzing requires the optional `fuzz` extra (`ithrl[fuzz]`). Codex and Copilot
+support appends to eligible prior user input while preserving the selected decision's triggering
+input. The [measurements](measurements.md#native-context-fuzzing) record the completed synthetic
+campaigns and their limits. Copilot restores the native session prefix through the installed CLI and
+SDK. Copilot shell-action profiles support context removal only.
 
 To exercise the complete workflow locally, create a fresh example case:
 
@@ -260,9 +260,9 @@ Use a source checkout with the locked development environment, including the `fu
 [contributor setup](https://github.com/eberkut/ithrl/blob/main/CONTRIBUTING.md#development-setup).
 You also need Linux, usable Bubblewrap, an installed native harness and its local authentication.
 The public inputs below contain only the synthetic response-token exercise. The execution steps
-below use Codex. The Copilot source is available for extraction and reconstruction checks; it does
-not qualify Copilot native-prefix execution. A new native run makes real provider requests and can
-produce different observations.
+below use Codex. For Copilot, use its source and decision from the table and pass
+`--harness copilot` when extracting. A new native run makes real provider requests and can produce
+different observations.
 
 | Harness | Public source | Decision | Target |
 | --- | --- | --- | --- |
@@ -297,7 +297,9 @@ recalculate the total-call allowance before reviewing the plan. The saved profil
 retain that cap; changing it requires a new profile and run.
 
 Choose pacing in the private copy before detection. Keep `inter_attempt_delay_seconds = 15` for
-Codex, matching its completed campaign. Pacing is administrative, consumes wall time and does not
+Codex, matching its completed campaign. For Copilot, keep the 350-call ceiling and set
+`inter_attempt_delay_seconds = 0`, matching its measured native-prefix campaign. Copilot's
+per-attempt inference cap is one. Pacing is administrative, consumes wall time and does not
 change the statistical sample targets. These settings apply to this synthetic exercise; provider
 throttling and ordinary-session costs remain workload-dependent. The call ceiling can stop
 exploration early while preserving the 72-attempt fresh-confirmation reserve. The six-hour ceiling

@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+import ssl
 import stat
 import sys
 import threading
@@ -21,6 +22,7 @@ _SANDBOX_ROOT = "/tmp/ithrl-state"  # noqa: S108 - private process namespace
 _MAX_MODEL_BYTES = 1024
 _MAX_SHELL_ACTIONS = 32  # BehaviorObservation limit; worker runs without project imports.
 _MAX_TOOL_ID_LENGTH = 512
+_MAX_CATALOG_ATTEMPTS = 3
 _SESSION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,255}$")
 
 # Explicitly interpreted event classes. Session/model telemetry and sandbox decisions
@@ -200,6 +202,17 @@ def _is_model_catalog_request(request: Any, context: Any) -> bool:
     )
 
 
+def _is_certificate_error(error: BaseException) -> bool:
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        if isinstance(current, ssl.SSLCertVerificationError):
+            return True
+        seen.add(id(current))
+        current = current.__cause__ or current.__context__
+    return False
+
+
 class ForwardGate:
     """Atomically reserve at most one physical HTTP inference forward."""
 
@@ -256,6 +269,7 @@ async def _run_session(executable: Path, request: dict[str, Any]) -> int:
     # -S disables site initialization and all ambient .pth/import hooks. Only the
     # explicitly mounted installed SDK requirements enter the import search path.
     sys.path.insert(0, f"{_SANDBOX_ROOT}/runner/sdk-packages")
+    import httpx
     from copilot import (
         CopilotClient,
         CopilotRequestHandler,
@@ -269,6 +283,7 @@ async def _run_session(executable: Path, request: dict[str, Any]) -> int:
     native = _read_private_file(Path(request["nativeSession"]), maximum=MAX_NATIVE_SESSION_BYTES)
     gate = ForwardGate()
     catalog_gate = ForwardGate()
+    catalog_requests_started = 0
     done = asyncio.Event()
     policy_proof = asyncio.Event()
     context_proof = asyncio.Event()
@@ -304,6 +319,7 @@ async def _run_session(executable: Path, request: dict[str, Any]) -> int:
         @override
         async def send_request(self, request: Any, ctx: Any) -> Any:
             nonlocal failed, dispatch_digest, failure_stage, failure_reason, failure_code
+            nonlocal catalog_requests_started
             if denied_target:
                 # The selected shell request is already visible and denied. A
                 # native follow-up is outside this observation and never forwarded.
@@ -314,14 +330,27 @@ async def _run_session(executable: Path, request: dict[str, Any]) -> int:
                 # delivery; ordered action events still determine the observation.
                 gate.reserve()
                 raise WorkerError("Copilot attempted more than one physical inference request")
+            catalog = False
             try:
                 await policy_proof.wait()
                 if failed or not effective_policy_verified:
                     raise WorkerError("Copilot effective managed permission policy is unverified")
-                if _is_model_catalog_request(request, ctx):
+                catalog = _is_model_catalog_request(request, ctx)
+                if catalog:
                     if not catalog_gate.reserve():
                         raise WorkerError("Copilot repeated its model catalogue request")
-                    return await super().send_request(request, ctx)
+                    # Only connection establishment for this read-only metadata GET
+                    # may repeat. Reuse the SDK transport and its proxy/CA settings.
+                    for index in range(_MAX_CATALOG_ATTEMPTS):
+                        if failed or not effective_policy_verified or gate.forwarded:
+                            raise WorkerError("Copilot catalogue recovery is no longer permitted")
+                        catalog_requests_started += 1
+                        try:
+                            return await super().send_request(request, ctx)
+                        except (httpx.ConnectError, httpx.ConnectTimeout) as error:
+                            if _is_certificate_error(error) or index == _MAX_CATALOG_ATTEMPTS - 1:
+                                raise
+                            await asyncio.sleep(0.5 * 2**index)
                 await context_proof.wait()
                 if failed or not system_message_verified or not model_verified:
                     raise WorkerError("Copilot native inference context is unverified")
@@ -344,17 +373,24 @@ async def _run_session(executable: Path, request: dict[str, Any]) -> int:
                 return await super().send_request(request, ctx)
             except Exception as error:
                 failed = True
-                failure_stage = "inference-request"
-                failure_reason = _failure_reason(error)
-                failure_code = (
-                    "managed-policy-unverified"
-                    if not effective_policy_verified
-                    else "native-context-unverified"
-                    if not system_message_verified or not model_verified
-                    else "inference-request-refused"
-                )
+                if failure_stage is None:
+                    failure_stage = "model-catalog" if catalog else "inference-request"
+                    failure_reason = _failure_reason(error)
+                    if catalog:
+                        if _is_certificate_error(error):
+                            failure_code = "model-catalog-tls"
+                        elif isinstance(error, (httpx.ConnectError, httpx.ConnectTimeout)):
+                            failure_code = "model-catalog-connection"
+                        else:
+                            failure_code = "model-catalog-failed"
+                    elif not effective_policy_verified:
+                        failure_code = "managed-policy-unverified"
+                    elif not system_message_verified or not model_verified:
+                        failure_code = "native-context-unverified"
+                    else:
+                        failure_code = "inference-request-refused"
                 done.set()
-                raise WorkerError("Copilot inference request failed or was refused") from None
+                raise WorkerError("Copilot request failed or was refused") from None
 
         @override
         async def open_websocket(self, ctx: Any) -> Any:
@@ -556,7 +592,7 @@ async def _run_session(executable: Path, request: dict[str, Any]) -> int:
                 "type": "ithrl.copilot.complete",
                 "schema_version": 1,
                 "provider_calls_started": gate.forwarded,
-                "catalog_requests_started": catalog_gate.forwarded,
+                "catalog_requests_started": catalog_requests_started,
                 "requests_rejected": gate.rejected,
                 "websockets_rejected": gate.websockets_rejected,
                 "permissions_denied": permission_denials,

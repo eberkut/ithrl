@@ -106,8 +106,8 @@ input remained fixed. Ongoing use requires structural detection, plan review and
 described in the [native-run guide](native-runs.md#context-fuzzing).
 
 The Copilot campaign used `copilot-semantic-session-import-v1`, which imported semantic history
-and supplied a triggering message. It measures that reconstruction. Live qualification of the
-native-prefix SDK runner remains separate.
+and supplied a triggering message. It measures that reconstruction. The
+[native-prefix SDK measurements](#copilot-native-prefix-sdk) use a separate reconstruction.
 
 A prior user message establishes a response token, and the fixed triggering input asks for the
 latest active token. The stress append contains four paragraphs: three irrelevant notes and one
@@ -211,6 +211,55 @@ One synthetic case per harness demonstrates a completed workflow under its recor
 cases do not estimate ordinary-session success rates, repeated-campaign costs or monetary cost.
 Intervention-byte reduction does not establish provider-token savings, causal explanation or a model
 defect. Copilot shell-action fuzzing remains unsupported.
+
+### Copilot native-prefix SDK
+
+Copilot CLI `1.0.104` with Python SDK `1.0.28` completed the public synthetic campaign through
+`copilot-native-prefix-sdk-v1`. The identified wheel ran on Python `3.12.3`, using saved Copilot
+credentials, the `github-copilot` managed endpoint and `gpt-6.1-sol`.
+
+A fresh duplication control produced six matching observations: four unchanged-original and two
+duplicated-input observations. Independent reconstruction checks verified that the mutation changed
+one prior-user text field. Native input receipts matched the reconstructed prefix in every attempt;
+the selected turn continued without an added user message. Managed action denial, protected-state
+snapshots and cleanup checks passed.
+
+The main campaign used the sampling settings above, zero added pacing, and a 339-call ceiling.
+The control had an eight-call ceiling. These limits kept the control, campaign and three calls
+from an interrupted campaign within a combined 350-call allowance. Neither sampling thresholds nor
+confirmation targets changed.
+
+The campaign completed one discovery and five simplification comparisons. Its initial 1,676-byte
+append became **142 UTF-8 bytes**, a **91.5% decrease**. Fresh confirmation produced
+**20/20 original matches and 0/20 mutant matches**. The estimated decrease was `1.0`, with an exact
+one-sided lower bound of `0.6631330580338293`, above the required `.10` at `alpha=.05`. Selection
+preceded all 40 confirmation observations; the canonical state and result snapshot contained one
+confirmation block. The audit independently recomputed the bound from the saved counts.
+
+| Workflow | Actual / additional possible / charged calls | Known input + output tokens | Whole-command time |
+| --- | --- | --- | --- |
+| Native-prefix duplication control | 6 / 0 / 6 | 18,325 | 67.62 seconds |
+| Native-prefix fuzz campaign | 139 / 0 / 139 | 431,763 | 1,621.21 seconds (27 minutes 1 second) |
+
+All 139 campaign observations were valid, with zero runner errors, invalid observations or unknown
+token usage. No calls remained possible or pending. Runner time totaled 1,561.794 seconds; CLI
+reported wall time was 1,613.760151 seconds. Whole-command time includes startup and exit.
+Native output was at most 157,105 bytes per observation, with median 81,509 bytes. Peak disposable
+state was 246,999,357 bytes across 405 entries. Every attempt verified unchanged source/workspace
+and cleanup without residual state. No actions executed and no tool-side network effects occurred.
+
+The campaign recorded 139 catalogue connection attempts and needed no catalogue retries. Bounded
+connection recovery, terminal certificate failures and inference non-replay were checked with
+provider-free fault injection. The
+[troubleshooting guide](troubleshooting.md#native-setup-and-preflight) owns catalogue failure
+diagnostics and recovery limits.
+
+Separate native-prefix preparation used six model calls for a duplication control and three for
+a campaign that stopped during catalogue retrieval before its first mutant inference. A separate
+TLS refusal occurred before inference and used zero model calls. Including that work, the fresh
+control and the completed campaign, native-prefix qualification consumed **154 model calls**.
+The failed observations remain execution failures and contribute no behavioral losses or
+confirmation samples. These counts are separate from the semantic-import measurements above.
 
 ## Saved-session experiments
 
