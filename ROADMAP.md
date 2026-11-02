@@ -9,7 +9,7 @@ with scope and release dates decided from evidence.
 
 ## Harness priorities
 
-Codex and GitHub Copilot are the primary supported harnesses. Closing feature gaps between them
+Codex and GitHub Copilot are the primary harness integrations. Closing feature gaps between them
 is the current priority.
 
 ## Current work: context fuzzing
@@ -32,9 +32,9 @@ complete-workflow usefulness and measured costs.
 [Copilot qualification](https://github.com/eberkut/ithrl/issues/29) tracks its reconstruction,
 simplification and fresh-confirmation acceptance checks.
 
-One synthetic case supplies no general sampling preset or ordinary-session success rate. The
-[fuzzing capability issue](https://github.com/eberkut/ithrl/issues/5) and
-[`v0.2.0` milestone](https://github.com/eberkut/ithrl/milestone/1) own scope and acceptance.
+See the [fuzzing capability issue](https://github.com/eberkut/ithrl/issues/5) and
+[`v0.2.0` milestone](https://github.com/eberkut/ithrl/milestone/1) for scope and acceptance
+criteria.
 
 [Release preparation and publication](https://github.com/eberkut/ithrl/issues/11) follow acceptance
 for both Codex and Copilot.
@@ -70,12 +70,12 @@ environment and effective runner policy before attributing a regression to conte
 model, harness or execution environment remain explicit experimental factors.
 
 Claude Code, OpenCode and Pi are planned additional integrations. Claude Code and OpenCode have
-promising portability evidence in the [feasibility study](docs/research/feasibility.md); Pi needs
-an initial applicability assessment. Each requires an adapter, faithful reconstruction, isolation,
+promising portability evidence in the [feasibility study](docs/research/feasibility.md); Pi needs an
+initial applicability assessment. Each requires an adapter, faithful reconstruction, isolation,
 calibration and a useful live workflow before becoming supported. Their order and release scope
-remain open; [the integration issue](https://github.com/eberkut/ithrl/issues/14) owns assessment,
-prioritization and scoped implementation work. Add them incrementally while maintaining Codex and
-Copilot parity.
+remain open; [the integration issue](https://github.com/eberkut/ithrl/issues/14) tracks assessment,
+prioritization and implementation. Add them incrementally while maintaining Codex and Copilot
+parity.
 
 ### Passive reacquisition analysis
 
@@ -86,9 +86,9 @@ Passive analysis should work without provider calls; implementing agent handoffs
 
 ## Further capability candidates
 
-- Additional mutators: duplication, supported whitespace changes, independent reordering and
-  stale/irrelevant observations. Label approximate-invariance expectations and intentional stress
-  explicitly; a mutator name cannot prove semantic equivalence.
+- Further mutation operations: supported whitespace changes, independent reordering and adding
+  stale or irrelevant observations outside prior-user text. State whether each tests expected
+  invariance or introduces intentional stress; a mutator name cannot prove semantic equivalence.
 - Optional `record` adapters for future sessions when ordinary saved evidence is insufficient.
   Prior instrumentation must remain unnecessary for supported post-hoc extraction.
 - Trajectory runners where faithful execution seams and safe action policies exist. The current
@@ -113,13 +113,11 @@ cost proposal.
 
 ## Planning and release policy
 
-Repository issues own executable scope, acceptance criteria and dependencies. Release milestones
-group accepted scope; the [public Project](https://github.com/users/eberkut/projects/1/views/4)
-provides views over those same issues. Design rationale lives in
-[decision records](docs/decisions/index.md), methods and evidence in
-[research](docs/research/index.md), and the current system model in
-[architecture](docs/architecture.md). Keep task status in GitHub rather than a second checklist
-here.
+GitHub issues track implementation scope, acceptance criteria and dependencies. Release milestones
+group this work, and the [public Project](https://github.com/users/eberkut/projects/1/views/4) shows
+status. See [decision records](docs/decisions/index.md) for rationale,
+[research](docs/research/index.md) for methods and evidence, and
+[architecture](docs/architecture.md) for the current design.
 
 Before 1.0, project-owned schema tags remain at `1` while formats evolve directly. Breaking changes
 are acceptable; current-format validation and evidence identity remain strict. A future stable

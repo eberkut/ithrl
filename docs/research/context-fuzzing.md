@@ -1,13 +1,12 @@
 # Context fuzzing: a bounded single-finding design
 
-The 2026-10-23 credential-free study selected a useful synthetic discovery, mutation simplification
+The credential-free study selected a useful synthetic discovery, mutation simplification
 and fresh-confirmation procedure for a planted target-rate decrease from `.90` to `.10`. The minimum
 complete-workflow success rate was 90.25%, with a simultaneous 99% lower bound of 88.86896%,
 exceeding the prospective 80% gate. These results support the design for the specified synthetic
-workload. Later [native campaigns](../measurements.md#native-context-fuzzing) measured completed
-Codex and Copilot append-text workflows. Copilot completed separate campaigns under its earlier
-semantic-import profile and its native-prefix SDK profile. The latter qualified final-response
-text appends through native-prefix reconstruction. Ordinary-session success rates remain unmeasured.
+workload. The [native measurements](../measurements.md#native-context-fuzzing) evaluate completed
+Codex app-server and Copilot native-prefix append-text workflows, with their own input and
+execution checks. Ordinary-session success rates remain unmeasured.
 
 The implementation provides deterministic mutation generation and simplification, sampled
 comparisons and durable campaign recovery through the shared observation store. The
@@ -305,36 +304,22 @@ common response probability from `.90` to `.50` during confirmation produced 3 d
 drift robustness. Interleaving and finite freshness mitigate temporal separation; they do not
 demonstrate independence or stationarity.
 
-Two sensitivity corrections were reviewed explicitly. Before sensitivity execution, filtering was
-corrected to apply the mutant conditional rate `1/3` regardless of placement/components. Reporting
-was then corrected to recognize those as real conditional effects and omit inapplicable paragraph
-geometry metrics; the identical sensitivity seed was replayed. Original freezes and prior results
-were retained. Qualification parameters and draws were unchanged, and twelve selected qualification
-cells replayed identically after the corrections. Independent validation checked all 7,128 row
-counts, terminal/cost invariants, replay equality and corrected sensitivity interpretation.
+The outcome-dependent-validity sensitivity uses the mutant conditional rate `1/3` at every
+placement. These declarations represent real conditional effects; planted-paragraph geometry
+metrics do not apply to that sensitivity. The aggregate evidence includes checks of all 7,128 row
+counts, terminal/cost invariants and replay equality.
 
 ## Reproducibility and implementation evidence
 
 The [study artifact index](https://github.com/eberkut/ithrl/blob/main/research/fuzzing/README.md)
-identifies the sanitized programme, numerical method, study/validation code and aggregate evidence,
-with reproduction instructions. Simulation and pure fixture reconstruction require no credentials,
-native harness or provider. Regenerating study output and running current service tests answer
-different questions: the study checks the prospective synthetic design; tests check the implemented
-contracts and failure paths.
-
-The corrected study freeze used these SHA-256 identities:
-
-| Artifact | SHA-256 |
-| --- | --- |
-| `programme.json` | `37c0a9b43c39f0e8f5c5bed89ae1295cd66ab980d0fe972b645fb718783b20b8` |
-| `method.py` | `fb6c5d1ada3d6a2f49dd18f2f25704970665ae73bf9f619e66531da893c00b6e` |
-| `study.py` | `75e2afac5112e865fce37905b9d0bda8666f8fd69002c1b634e3499593d9d8f6` |
-
-The original pre-correction programme and study identities were respectively
-`ba830b8596048fd46292ca749c5f92ad6485d3302721a52597072c8c21687639` and
-`8894418399aaeeaddcf61731f9e52d9d961bbcf06250704e66f7391b18e8a8bb`.
-These identities describe the study's evaluated sources. Each reproduction records the source
-and dependency identities used for that run; see the artifact index for commands and coverage.
+identifies the sanitized programme, numerical method, source identities and aggregate evidence,
+with reproduction instructions. Its
+[saved-result provenance](https://github.com/eberkut/ithrl/blob/main/research/fuzzing/README.md#saved-result-provenance)
+records the corrected study's source hashes and sensitivity corrections. Each reproduction records
+its own source and dependency identities; the full qualification grid has not been rerun after
+public-source relocation. Simulation and pure fixture reconstruction require no credentials,
+native harness or provider. Study replay evaluates the prospective synthetic design; application
+tests check the implemented contracts and failure paths.
 
 The [architecture map](../architecture.md#developer-map) locates the current implementation;
 [statistical tests](https://github.com/eberkut/ithrl/blob/main/tests/unit/test_fuzz_statistics.py)
@@ -354,8 +339,7 @@ captured records without adding a user message. Neither reconstruction establish
 identical complete provider input. The independent, stationary sampling assumptions apply to the
 controlled harness surface.
 
-The [measurements](../measurements.md#native-context-fuzzing) own native workloads, exact results,
-configuration, usage and resource costs; the [native-run guide](../native-runs.md#context-fuzzing)
-owns the execution procedure. One synthetic case per measured profile supplies no ordinary-session
-success-rate estimate or universal preset. Changed reconstruction or request policies require
-separate qualification. Copilot shell-action fuzzing remains outside this qualification.
+See [measurements](../measurements.md#native-context-fuzzing) for native workloads, results and
+costs, and [native runs](../native-runs.md#context-fuzzing) for execution instructions. Native
+qualification covers the measured reconstruction and request policy; changes require their own
+qualification. Copilot shell-action fuzzing remains outside this qualification.
