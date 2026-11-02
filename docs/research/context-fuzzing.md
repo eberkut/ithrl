@@ -313,10 +313,13 @@ counts, terminal/cost invariants and replay equality.
 
 The [study artifact index](https://github.com/eberkut/ithrl/blob/main/research/fuzzing/README.md)
 identifies the sanitized programme, numerical method, source identities and aggregate evidence,
-with reproduction instructions. Each reproduction records its source and dependency identities.
-Simulation and pure fixture reconstruction require no credentials, native harness or provider.
-Study replay evaluates the prospective synthetic design; application tests check the implemented
-contracts and failure paths.
+with reproduction instructions. Its
+[saved-result provenance](https://github.com/eberkut/ithrl/blob/main/research/fuzzing/README.md#saved-result-provenance)
+records the corrected study's source hashes and sensitivity corrections. Each reproduction records
+its own source and dependency identities; the full qualification grid has not been rerun after
+public-source relocation. Simulation and pure fixture reconstruction require no credentials,
+native harness or provider. Study replay evaluates the prospective synthetic design; application
+tests check the implemented contracts and failure paths.
 
 The [architecture map](../architecture.md#developer-map) locates the current implementation;
 [statistical tests](https://github.com/eberkut/ithrl/blob/main/tests/unit/test_fuzz_statistics.py)

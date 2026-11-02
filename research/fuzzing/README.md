@@ -20,6 +20,26 @@ quantiles. The numerical algorithm and seeded domain are preserved from the comp
 The saved terminal counts use the full `calibration-not-measurable` label, correcting historical
 string truncation without changing any counts or numerical results.
 
+## Saved-result provenance
+
+The saved aggregates come from the completed study before public-source relocation. Its corrected
+sources had these recorded SHA-256 identities:
+
+| Source | SHA-256 |
+| --- | --- |
+| `programme.json` | `37c0a9b43c39f0e8f5c5bed89ae1295cd66ab980d0fe972b645fb718783b20b8` |
+| `method.py` | `fb6c5d1ada3d6a2f49dd18f2f25704970665ae73bf9f619e66531da893c00b6e` |
+| `study.py` | `75e2afac5112e865fce37905b9d0bda8666f8fd69002c1b634e3499593d9d8f6` |
+
+Before sensitivity evaluation, filtering was corrected to use the mutant conditional rate `1/3`
+at every placement. Reporting then excluded inapplicable paragraph-geometry metrics, and the same
+sensitivity seed was replayed. Qualification parameters and draws were unchanged; twelve selected
+qualification cells replayed identically after these corrections.
+
+These hashes identify the evaluated study sources. Public relocation and subsequent maintenance
+changed the source bytes without rerunning the full qualification grid. Each new reproduction
+records its current sources separately; the short replay below checks only its stated coverage.
+
 ## Reproduce
 
 Run from the repository root with Python 3.12–3.14 and the repository's locked `fuzz` extra.
@@ -72,5 +92,5 @@ Each simulated attempt counts as one call; the study makes zero real provider re
 The 512-call study bracket and selected 384-attempt allowance are simulation limits. Provider
 quotas, token usage, monetary costs, model effect sizes and native runtime require measurements on
 the relevant workload and runner profile. The [native measurements](../../docs/measurements.md)
-report completed Codex and Copilot experiments and their costs. This synthetic reference is
+report resource usage for completed Codex and Copilot experiments. This synthetic reference is
 separate from the installed runtime and makes no native support claim.
