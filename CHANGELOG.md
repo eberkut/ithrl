@@ -1,8 +1,56 @@
 # CHANGELOG
 
-<!-- version list -->
+## v0.2.0 (2026-11-02)
 
-## v0.1.0 (2026-10-17)
+### Bug Fixes
+
+- **codex**: Bound and account for physical provider requests
+  ([#33](https://github.com/eberkut/ithrl/pull/33),
+  [`88529d6`](https://github.com/eberkut/ithrl/commit/88529d6f8b930dbcc546a0011f085c67d0bef1ac))
+
+- **copilot**: Recover catalogue connections and qualify fuzzing
+  ([#37](https://github.com/eberkut/ithrl/pull/37),
+  [`ff6cf63`](https://github.com/eberkut/ithrl/commit/ff6cf6324325f7f6dad8f8c9c80ea58bfe4e249a))
+
+- **copilot**: Restore native session prefixes through the CLI
+  ([#34](https://github.com/eberkut/ithrl/pull/34),
+  [`36845dd`](https://github.com/eberkut/ithrl/commit/36845ddb8239c0a488552297aaa70e6211979e59))
+
+- **fuzz**: Preserve accounting and validate campaign recovery
+  ([#25](https://github.com/eberkut/ithrl/pull/25),
+  [`f1f4793`](https://github.com/eberkut/ithrl/commit/f1f479318fe914f3033667b65381f7101bd3aaea))
+
+- **sampling**: Enforce calibration budgets and report durable progress
+  ([#32](https://github.com/eberkut/ithrl/pull/32),
+  [`bd40577`](https://github.com/eberkut/ithrl/commit/bd40577c734d70b36e59a9e6d3babafa1502bfd3))
+
+### Features
+
+- **extract**: Support literal predicates for native decisions
+  ([#31](https://github.com/eberkut/ithrl/pull/31),
+  [`3b18c2b`](https://github.com/eberkut/ithrl/commit/3b18c2bdd814c4e4c3bf79825a8cab77eb433661))
+
+- **fuzz**: Add mutation and sampled comparison services
+  ([`56ee8b8`](https://github.com/eberkut/ithrl/commit/56ee8b8c5e1370b91db6c9c952eb8ceec19c95ae))
+
+- **fuzz**: Expose inspectable campaigns and saved results
+  ([#24](https://github.com/eberkut/ithrl/pull/24),
+  [`e60e472`](https://github.com/eberkut/ithrl/commit/e60e47230b99e50ff42de7cd8fb89b3769e6d6e2))
+
+- **fuzz**: Persist campaigns and recover interrupted execution
+  ([#22](https://github.com/eberkut/ithrl/pull/22),
+  [`806667f`](https://github.com/eberkut/ithrl/commit/806667f47e8bae1ccbf9b32fadc511ca559675d0))
+
+- **fuzz**: Qualify native Codex text appends ([#28](https://github.com/eberkut/ithrl/pull/28),
+  [`a5b880b`](https://github.com/eberkut/ithrl/commit/a5b880b60ef9834bb57b2c4950e18cd17ff0b275))
+
+### Performance Improvements
+
+- Streamline local workflows and harden result publication
+  ([#36](https://github.com/eberkut/ithrl/pull/36),
+  [`43b9d81`](https://github.com/eberkut/ithrl/commit/43b9d81d0dcff85708da5c914986a68bbe8141db))
+
+## v0.1.0 (2026-10-23)
 
 ### Bug Fixes
 
