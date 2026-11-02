@@ -74,7 +74,7 @@ Returned actions are observed and denied. Cases contain copied session content; 
 | --- | --- | --- | --- |
 | Bundled synthetic example | Synthetic tool request | Deterministic local runner | Local fake runner |
 | Codex CLI rollouts | Final responses | Experimental native runner | Experimental prior-user text appends |
-| Copilot CLI session events | Final responses and shell requests | Experimental final-response and denied `bash` runner | Experimental final-response text appends |
+| Copilot CLI session events | Final responses and shell requests | Experimental final-response and denied `bash` runner | Experimental prior-user text appends for final-response targets |
 
 Native Codex and Copilot final-response fuzzing supports appending text to eligible prior user
 input while preserving the fixed triggering input. The
@@ -84,7 +84,7 @@ starts with a local example and covers native execution.
 [Saved-session measurements](https://github.com/eberkut/ithrl/blob/main/docs/measurements.md#saved-session-experiments)
 include a confirmed reduction for one Codex session and its chosen predicate: 50.17% lower mean
 input tokens per confirmation observation, using a 20-percentage-point preservation margin.
-The measurements report costs and unsuccessful outcomes alongside completed runs. Check
+The measurements report resource usage and unsuccessful outcomes alongside completed runs. Check
 [native compatibility](https://github.com/eberkut/ithrl/blob/main/docs/native-runs.md#compatibility-and-measurements)
 for the installed harness's requirements.
 
@@ -93,7 +93,7 @@ for the installed harness's requirements.
 Read the [documentation site](https://eberkut.github.io/ithrl/) or browse the guides below.
 
 - [Native runs](https://github.com/eberkut/ithrl/blob/main/docs/native-runs.md): session selection,
-  experiment configuration, preflight, model execution and measured costs.
+  experiment configuration, preflight, model execution and measured resource usage.
 - [Results and privacy](https://github.com/eberkut/ithrl/blob/main/docs/results.md): saved files,
   result interpretation, budgets, resume and sensitive data.
 - [Contributing](https://github.com/eberkut/ithrl/blob/main/CONTRIBUTING.md): issue-first
