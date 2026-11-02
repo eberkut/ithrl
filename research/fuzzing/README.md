@@ -36,9 +36,10 @@ at every placement. Reporting then excluded inapplicable paragraph-geometry metr
 sensitivity seed was replayed. Qualification parameters and draws were unchanged; twelve selected
 qualification cells replayed identically after these corrections.
 
-These hashes identify the evaluated study sources. Public relocation and subsequent maintenance
-changed the source bytes without rerunning the full qualification grid. Each new reproduction
-records its current sources separately; the short replay below checks only its stated coverage.
+The historical source snapshot is not distributed with this reference; its recorded checksums alone
+cannot support exact source-level reproduction. The commands below use the current public sources
+and record their identities. The short replay compares its stated coverage with the saved
+aggregates. The full qualification grid has not been rerun after public-source relocation.
 
 ## Reproduce
 
