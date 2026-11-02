@@ -12,12 +12,12 @@ with scope and release dates decided from evidence.
 Codex and GitHub Copilot are the primary harness integrations. Closing feature gaps between them
 is the current priority.
 
-## Current work: context fuzzing
+## Completed: v0.2 context fuzzing
 
 The `ithrl fuzz` command explores bounded context changes, simplifies interventions and
 independently confirms their effects.
 
-The first fuzzing milestone supports **one confirmed finding per campaign**: a declared decrease
+The released fuzzing capability supports **one confirmed finding per campaign**: a declared decrease
 in the existing target's match probability among valid observations. A finding describes the
 selected experiment, including execution reliability and assumptions. It does not establish a
 model defect, a unique cause or semantic equivalence of the original and changed context.
@@ -36,27 +36,42 @@ See the [fuzzing capability issue](https://github.com/eberkut/ithrl/issues/5) an
 [`v0.2.0` milestone](https://github.com/eberkut/ithrl/milestone/1) for scope and acceptance
 criteria.
 
-[Release preparation and publication](https://github.com/eberkut/ithrl/issues/11) follow acceptance
-for both Codex and Copilot.
-They remain separate from implementing the capability. Broader mutation families and multiple-
-finding campaigns need their own evidence and prospective error allocation.
+[Version 0.2.0](https://github.com/eberkut/ithrl/releases/tag/v0.2.0) is published, with
+[release preparation and publication](https://github.com/eberkut/ithrl/issues/11) complete.
+Broader mutation families and multiple-finding campaigns need their own evidence and prospective
+error allocation.
+
+## Current work: v0.3 deeper reduction
+
+The agreed scope is provider-free retained-context inspection and finer removal within supported
+prior-user text, with Codex and Copilot final-response parity. Begin with inspection of saved
+results, then define text-section removal contracts, integrate both native runners and qualify
+useful ordinary saved-session workflows. [Issue #12](https://github.com/eberkut/ithrl/issues/12)
+owns implementation scope and acceptance.
+
+Choose section boundaries, workload-specific usefulness criteria and execution budgets before
+provider-backed evaluation. Finer native removal needs its own reconstruction, safety and live-use
+evidence. Ablation, alternative reproducers, interaction analysis and statistically confirmed
+single-removal minimality are deferred; they are not v0.3 release requirements.
 
 ## Direction by version
 
 | Stage | Outcome | Candidate features |
 | --- | --- | --- |
 | **[v0.2: context fuzzing](https://github.com/eberkut/ithrl/issues/5)** | Find small context changes that alter a selected behavior | Bounded seeded mutations, discovery and mutation simplification, one fresh confirmed finding, exact recovery and explicit cost/reliability reporting |
-| **[v0.3: deeper reduction](https://github.com/eberkut/ithrl/issues/12)** | Examine how small and robust a reproducer is | Supported content-block/section removal, retained-context inspection, ablation, alternative reproducers, interactions and optional confirmed 1-minimality |
+| **[v0.3: deeper reduction](https://github.com/eberkut/ithrl/issues/12)** | Inspect retained context and reduce within supported prior-user text | Provider-free inspection, text-section removal and qualified Codex/Copilot final-response workflows |
 | **[v0.4: comparative debugging](https://github.com/eberkut/ithrl/issues/13)** | Isolate behavior-changing differences between compatible cases | `compare`, context-version delta debugging and another qualified harness integration |
 | **[v0.5: trace forensics](https://github.com/eberkut/ithrl/issues/15)** | Explain what information was acquired again | Passive reacquisition analysis around compaction, resume, forks and handoffs |
 
 ### Deeper reduction
 
 Reduction within a message must preserve its native structure and protocol dependencies. Retained
-context inspection should distinguish dependencies retained for validity, unremovable state and
-items whose removal changed the measured behavior.
+context inspection should distinguish protected or frozen material, dependency constraints,
+rejected removal trials, incomplete evidence and untested work. Trial explanations must identify
+the tested context; a rejected sampled screen does not establish behavioral necessity.
 
-Retained-item and full-original ablation answer different questions and must report their baseline.
+Deferred retained-item and full-original ablation answer different questions and must report their
+baseline.
 Alternative reproducer search can expose several preserving contexts and interactions; none is
 automatically a unique explanation. Deterministic single-removal minimality and statistically
 confirmed minimality are distinct claims. The latter requires additional complete comparisons,
