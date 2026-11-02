@@ -82,9 +82,9 @@ input while preserving the fixed triggering input. The
 starts with a local example and covers native execution.
 
 [Saved-session measurements](https://github.com/eberkut/ithrl/blob/main/docs/measurements.md#saved-session-experiments)
-include a confirmed Codex reduction with 50.17% lower mean input tokens per confirmation
-observation, using a 20-percentage-point preservation margin. The measurements report costs and
-unsuccessful outcomes alongside completed runs. Check
+include a confirmed reduction for one Codex session and its chosen predicate: 50.17% lower mean
+input tokens per confirmation observation, using a 20-percentage-point preservation margin.
+The measurements report costs and unsuccessful outcomes alongside completed runs. Check
 [native compatibility](https://github.com/eberkut/ithrl/blob/main/docs/native-runs.md#compatibility-and-measurements)
 for the installed harness's requirements.
 

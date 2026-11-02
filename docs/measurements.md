@@ -103,6 +103,7 @@ Complete provider prompts may contain further harness context.
 
 | Setting | Measured configuration |
 | --- | --- |
+| Mutation generation | Both campaigns: seed `20261027`, `append-stale-text` and stress text from `examples/fuzz/campaign.toml` |
 | Calibration | 3 valid observations, at least 2 matches, at most 7 attempts |
 | Exploratory comparison | Fresh original 8 valid / 18 attempts; mutant 8 valid / 18 attempts |
 | Exploratory threshold | Original-minus-mutant match-rate decrease of at least 40 percentage points |

@@ -110,8 +110,9 @@ Fuzz campaigns record a fixed mutation order, exact bounded payloads, counts of 
 and the identity of the generator and traversal code in the collector's private sampled state.
 Calibration completes and is charged before campaign initialization. On resume, the campaign
 reconstructs traversal from the saved mutation order and validated exploratory observations without
-invoking a runner. Candidate-local admission refusals consume work without allocating a sampling
-block. An unavailable comparison ends the campaign as incomplete.
+executing runner attempts or making provider requests. Pure candidate-admission checks may still
+run. Candidate-local admission refusals consume work without allocating a sampling block. An
+unavailable comparison ends the campaign as incomplete.
 
 Before final confirmation starts, the run state freezes the selected mutation and its complete
 comparison policy. Resume reconstructs completed confirmation and terminal outcomes from the
