@@ -63,7 +63,9 @@ needs representative evidence. This decision creates no provider-call or publica
 
 ## Consequences
 
-Strict sampling spends more original-context calls than the qualified synthetic lazy policy,
-but preserves the tested evidence ownership and resume model. The current approximately 10k
-profile measurements remain applicable. They do not cover larger contexts, shared-baseline savings
-or separately timed construction and initialization.
+Strict sampling uses more original-context calls than the evaluated synthetic lazy-sharing policy.
+It preserves the tested evidence ownership and resume model. The native studies supporting this
+decision covered a planted approximately 10k workload and did not separately time construction or
+initialization. [Subsequent measurements](../measurements.md#saved-session-experiments) include
+selected larger saved-session cases. Native measurements have not established call savings from
+sharing baseline observations or a justified time limit for reusing them.

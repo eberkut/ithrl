@@ -70,7 +70,7 @@ dev = [
   "pytest-github-actions-annotate-failures>=0.4.2",
   "PyYAML>=6",
   "radon==6.0.1",
-  "ruff==0.17.1",
+  "ruff==0.17.2",
   "rumdl==0.3.0",
   "scipy-stubs>=1.18",
   "types-jsonschema>=4.25",

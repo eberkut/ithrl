@@ -99,12 +99,12 @@ baseline_policy = "strict-fresh-original"
 eligibility_policy = "safe-provider-overload"
 
 [reduction.search.original]
-required_valid = 4
-max_attempts = 8
+required_valid = 20
+max_attempts = 30
 
 [reduction.search.candidate]
-required_valid = 5
-max_attempts = 9
+required_valid = 20
+max_attempts = 30
 
 [reduction.confirmation]
 one_sided_confidence = 0.95
@@ -124,31 +124,70 @@ Leave the case's internal JSON and SQLite files unchanged.
 
 This plan tests whether the selected candidate's match probability is no more than
 **20 percentage points below the original's**, among valid observations. Confirmation uses Newcombe
-method 10 with nominal 95% one-sided confidence. The counts and margin come from the
-[measured synthetic workload](measurements.md); they are not general-purpose defaults. Choose the
-margin deliberately and budget the complete plan. See [sampled results](results.md#sampled-results)
-for assumptions and error handling.
+method 10 with nominal 95% one-sided confidence. The
+[measured saved-session Codex reduction](measurements.md#confirmed-codex-reduction) used these
+counts, margin and a two-comparison search limit. It confirmed a reduction with 50.17% lower mean
+input tokens per observation.
+
+Choose the predicate and an acceptable degradation margin before collecting observations. This
+measured configuration provides a bounded starting point; its usefulness on other decisions depends
+on their behavior, variability and removable context. The earlier
+[synthetic reduction reference](measurements.md#synthetic-reduction-reference) used smaller search
+samples on a planted instruction. See [sampled results](results.md#sampled-results) for assumptions
+and error handling.
 
 ### 3. Inspect the complete plan and budget
+
+For the Codex configuration above:
 
 ```bash
 ithrl shrink CASE --experiment PRIVATE_EXPERIMENT \
   --original-workspace ORIGINAL --observation-store PRIVATE_STORE \
-  --max-candidates 14 --max-provider-calls 7888 --max-wall-time 86400 \
+  --max-candidates 2 --max-provider-calls 6000 --max-wall-time 57600 \
   --max-provider-calls-per-attempt 16 \
   --attempt-timeout 120 --inter-attempt-delay 15 --dry-run --format json
 ```
 
-The plan protects up to 248 confirmation attempts within 493 total attempt slots. Codex defaults
-to a cap of 16 physical provider requests per attempt, giving a total allowance of 7,888.
-`--max-provider-calls-per-attempt N` selects a cap from 1 to 16; recalculate the total-call budget
-when changing it. A native turn can require several successful Responses requests even with
-request and stream retries disabled. A lower cap can stop the turn before completion.
+This allows `7 + 2*(30+30) + 2*124 = 375` attempts, including 248 for fresh confirmation.
+At the 16-request per-attempt cap, its maximum provider-call allowance is 6,000. The measured run
+used 293 calls. The 16-hour wall limit admits conservative attempt deadlines, cancellation and
+pacing; reported CLI wall time was 2 hours 4 minutes 37 seconds.
 
-For either Copilot target, omit `--inter-attempt-delay 15`, set
-`--max-provider-calls-per-attempt 1` and use `--max-provider-calls 493`. The request gate stops
-shell execution and any continuation after denial. These profiles cannot enforce a hard
-input-token limit and refuse a plan requiring one.
+The two-comparison limit bounds exploratory cost. Search may finish with `search-incomplete` and
+still confirm the selected candidate, as the measured run did. For a wider search, increase
+`--max-candidates` before execution and raise the call and wall-time limits to cover the additional
+complete comparisons. See [sampled results](results.md#sampled-results) for the distinction between
+search coverage and confirmation.
+
+A native turn can require several successful requests even with retries disabled. Codex accepts
+`--max-provider-calls-per-attempt N` from 1 to 16 and defaults to 16. A lower cap can stop a turn
+before completion. Recalculate the total-call allowance when changing it.
+
+The same sampling plan with a Copilot runner allows at most 375 calls. Set
+`--max-provider-calls-per-attempt 1`, use `--max-provider-calls 375` and omit the 15-second delay.
+This translates the plan's resource limits; the
+[Copilot saved-session measurements](measurements.md#earlier-copilot-reductions) used separate
+sampling configurations. The request gate stops shell execution and any continuation after denial.
+
+The current profiles have these operating limits:
+
+| Limit | Codex | Copilot |
+| --- | --- | --- |
+| Physical inference requests per attempt | 1–16; default 16 | 1 |
+| Inter-attempt delay | Defaults to zero; measured examples use 15 seconds | Defaults to zero; measured examples use zero |
+| Native output per attempt | 8 MiB | 8 MiB |
+| Disposable files per attempt | 64 MiB; 10,000 entries | 256 MiB; 10,000 entries |
+| Token usage | Reported for completed observations in the measured profiles | Available when native events report it; unknown usage remains explicit |
+| Hard input-token cap | Unavailable | Unavailable |
+
+Both harnesses use the same frozen sampling and independent-confirmation contracts. The model and
+provider are selected from captured evidence and supported local configuration. Token telemetry
+depends on the native profile: the current Copilot SDK campaign reported usage, while older
+semantic-import campaigns did not. See [measurements](measurements.md#native-context-fuzzing).
+
+The dry-run's minimum call/time figures are conservative admission requirements based on maximum
+attempts, the per-attempt request cap, timeouts and pacing. Use measured latency and usage to
+estimate actual cost. Neither profile enforces a hard monetary cap.
 
 The per-attempt cap is part of capability and saved-run identity. Use the same cap throughout
 preflight and execution; changing it requires a new plan. Increasing a sampled run's total
@@ -159,7 +198,8 @@ predictable from provider-call limits.
 
 ### 4. Run the experiment
 
-Use the complete-plan preflight's `next_command`, which includes `--acknowledge-model-execution`.
+Use the complete-plan preflight's `next_command` through the same installation and environment
+used for preflight. It includes `--acknowledge-model-execution`.
 This makes real model requests. Calibration, search and fresh confirmation run within the displayed
 limits. Keep the printed result directory and inspect `summary.json`; see [results and
 resume](results.md) for its interpretation and continuation rules.
@@ -278,11 +318,12 @@ install -m 600 examples/fuzz/campaign.toml "$FUZZ_RUN/campaign.toml"
 ```
 
 The configuration uses the measured statistical settings: 3 calibration samples, 8 samples per
-exploratory arm, 20 fresh samples per confirmation arm, `.40` screening decrease and a final
-required decrease greater than `.10` at `alpha=.05`. It permits one candidate and ten simplification
-trials, with a 350-call ceiling, six-hour wall-time ceiling, 120-second attempt timeout and 24-hour
-freshness. It uses the opt-in `safe-provider-overload` eligibility policy. These settings measured a
-large planted effect; 20 confirmation samples have weak power for moderate effects. See the
+exploratory arm, 20 fresh samples per confirmation arm, a 40-percentage-point screening decrease
+and a final required decrease greater than 10 percentage points at `alpha=.05`. It permits one
+candidate and ten simplification trials, with a 350-call ceiling, six-hour wall-time ceiling,
+120-second attempt timeout and 24-hour freshness. It uses the opt-in `safe-provider-overload`
+eligibility policy. These settings measured a large planted effect; 20 confirmation samples have
+weak power for moderate effects. See the
 [effect-size limits](research/context-fuzzing.md#alternatives-and-effect-size-limits) before
 adapting the experiment to another workload.
 
@@ -382,5 +423,5 @@ experiment. A changed digest prevents reuse of an old pinned plan or incompatibl
 
 The [measurements](measurements.md) record benchmark construction, completed reduction and fuzzing
 workflows, tested harness versions, confirmation results and costs. Other releases go through the
-same local compatibility checks. The example's 24-hour wall-time limit is an administrative ceiling;
-use the measured times to understand the completed workload's duration.
+same local compatibility checks. Wall-time and call limits are administrative ceilings; use the
+measurements to estimate the duration and usage of the recorded workloads.

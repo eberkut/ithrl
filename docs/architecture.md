@@ -9,8 +9,8 @@ runtime.
 The
 [README supported-inputs table](https://github.com/eberkut/ithrl/blob/main/README.md#supported-inputs)
 defines the public capability claim. The public commands are `extract`, `shrink` and `fuzz`. Fuzzing
-has a credential-free local walkthrough and a qualified Codex append-text profile for eligible
-prior user input. See [native runs](native-runs.md) for the operator
+has a credential-free local walkthrough and qualified Codex and Copilot append-text profiles for
+eligible prior user input. See [native runs](native-runs.md) for the operator
 procedure, [measurements](measurements.md#native-context-fuzzing) for qualification evidence and
 [results](results.md) for interpreting output.
 
@@ -59,10 +59,8 @@ request.
 Stable node identities address original evidence even after earlier nodes are removed. Atomic
 groups and dependency closure preserve relationships such as tool calls and their results.
 Intrinsic editability belongs to the evidence; whether a particular operation can be reconstructed
-belongs to the runner and execution plan. An optional runner admission check rejects a
-candidate-local reconstruction failure before sampling resources are allocated. This check is
-pure and follows validation of the immutable original; runtime validation still occurs at
-execution.
+belongs to the runner and execution plan. Runners can perform an
+[admission check](#execution-and-privacy-boundary) before sampling resources are allocated.
 
 Digests identify the inputs and configuration used for each measurement:
 
@@ -108,12 +106,13 @@ holdout to select another candidate.
 [ADR 0002](decisions/0002-fixed-samples-and-durable-dispatch.md) explains fixed samples, eligibility
 and recovery; [results](results.md#sampled-results) describes the resulting claims and assumptions.
 
-Fuzz campaigns freeze generated mutation order, exact bounded payloads, consumed proposal
-work and generator/traversal implementation identity in the same private sampled state used by the
-collector. Calibration is completed and charged before campaign initialization. On recovery,
-campaign traversal is reconstructed from the frozen sequence and authoritative exploratory
-observations; this replay performs no runner calls. Candidate-local admission refusals consume
-work without allocating a sampling block. An unavailable screen stops with an incomplete outcome.
+Fuzz campaigns record a fixed mutation order, exact bounded payloads, counts of examined proposals
+and the identity of the generator and traversal code in the collector's private sampled state.
+Calibration completes and is charged before campaign initialization. On resume, the campaign
+reconstructs traversal from the saved mutation order and validated exploratory observations without
+executing runner attempts or making provider requests. Pure candidate-admission checks may still
+run. Candidate-local admission refusals consume work without allocating a sampling block. An
+unavailable comparison ends the campaign as incomplete.
 
 Before final confirmation starts, the run state freezes the selected mutation and its complete
 comparison policy. Resume reconstructs completed confirmation and terminal outcomes from the

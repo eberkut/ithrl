@@ -20,6 +20,27 @@ quantiles. The numerical algorithm and seeded domain are preserved from the comp
 The saved terminal counts use the full `calibration-not-measurable` label, correcting historical
 string truncation without changing any counts or numerical results.
 
+## Saved-result provenance
+
+The saved aggregates come from the completed study before public-source relocation. Its corrected
+sources had these recorded SHA-256 identities:
+
+| Source | SHA-256 |
+| --- | --- |
+| `programme.json` | `37c0a9b43c39f0e8f5c5bed89ae1295cd66ab980d0fe972b645fb718783b20b8` |
+| `method.py` | `fb6c5d1ada3d6a2f49dd18f2f25704970665ae73bf9f619e66531da893c00b6e` |
+| `study.py` | `75e2afac5112e865fce37905b9d0bda8666f8fd69002c1b634e3499593d9d8f6` |
+
+Before sensitivity evaluation, filtering was corrected to use the mutant conditional rate `1/3`
+at every placement. Reporting then excluded inapplicable paragraph-geometry metrics, and the same
+sensitivity seed was replayed. Qualification parameters and draws were unchanged; twelve selected
+qualification cells replayed identically after these corrections.
+
+The historical source snapshot is not distributed with this reference; its recorded checksums alone
+cannot support exact source-level reproduction. The commands below use the current public sources
+and record their identities. The short replay compares its stated coverage with the saved
+aggregates. The full qualification grid has not been rerun after public-source relocation.
+
 ## Reproduce
 
 Run from the repository root with Python 3.12–3.14 and the repository's locked `fuzz` extra.
@@ -68,9 +89,9 @@ uv run --locked --offline --no-sync python research/fuzzing/study.py sensitivity
 ```
 
 The generated `analysis.json` can be compared with `results.json`'s `analysis` object.
-Synthetic attempted calls are bookkeeping units, with one simulated provider call per
-attempt; there are zero real provider calls and zero provider charges. The 512-call maximum
-study bracket and the selected 384-attempt allowance do not establish a subscription quota,
-token cost, model effect size or native runtime. Those require separately approved,
-budget-limited live studies for an exact safe runner profile. This research reference is
+Each simulated attempt counts as one call; the study makes zero real provider requests.
+The 512-call study bracket and selected 384-attempt allowance are simulation limits. Provider
+quotas, token usage, monetary costs, model effect sizes and native runtime require measurements on
+the relevant workload and runner profile. The [native measurements](../../docs/measurements.md)
+report resource usage for completed Codex and Copilot experiments. This synthetic reference is
 separate from the installed runtime and makes no native support claim.

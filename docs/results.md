@@ -49,7 +49,12 @@ separately.
 
 The inference assumes independent valid observations and stationarity within each comparison.
 Sampled confirmation does not establish global or confirmed minimality, causality or campaign-wide
-confidence. Keep the search result and final preservation result separate when reporting a run.
+confidence. `search-incomplete` records unfinished search coverage, for example at a comparison
+limit. It can accompany `confirmed-preserving` when a safe search stop leaves a selected candidate
+and enough budget for complete fresh confirmation. Report both outcomes.
+
+A preservation verdict can also apply when the selected context is unchanged. Report actual
+removals and usage to establish whether the run produced a useful reduction.
 
 The opt-in Codex `safe-provider-overload` policy permits a fresh attempt after a verified structured
 overload with no captured output, unchanged protected state and verified cleanup. Failed
@@ -110,6 +115,11 @@ work retain the full per-attempt allowance, and pending dispatch reservations st
 reconciled. Reopening a run reconciles saved observations before admitting another complete block;
 it never repeats an unresolved dispatch.
 
+One valid observation can include several physical requests. Compare input usage by totaling all
+requests contributing to each observation and including every valid observation in each declared
+arm. A complete arm mean requires known input usage for every observation; do not silently average
+only the known subset. Cached input tokens are already included in total input tokens.
+
 Copilot's request gate permits one inference request per attempt and blocks continuation after
 denial. Token usage depends on the native evidence available for each attempt; unknown usage stays
 explicit. Zero known tokens with nonzero unknown-token attempts does not mean zero token use.
@@ -126,6 +136,10 @@ can resume from a saved result or active run. Sampled resume preserves the exper
 work. For sampled `shrink`, supported administrative limits may increase; fuzz resume keeps its
 original limits. Neither repeats completed confirmation or automatically replays an unresolved
 dispatch.
+
+Starting sampled `shrink` again from the case without `--resume` creates another run with its own
+budget. To continue existing work, use `--resume` with its saved run or result directory. Reusing
+the observation database alone does not resume that run.
 
 `--inter-attempt-delay SECONDS` defaults to zero, persists across sampled resume and consumes the
 overall wall-time allowance. A run also stops when its evidence becomes stale or its safety
