@@ -1,11 +1,14 @@
 # Sampled reduction design research
 
-Studies completed on **2026-10-03–2026-10-15** led to exploratory candidate screening followed by
-one independent fresh confirmation of a durably selected candidate. They also rejected eager
-baseline prefetch, measured a limited synthetic benefit from lazy sharing, and retained strict fresh
-baselines in production. This page records numerical results and failed alternatives.
-See [results](../results.md) to interpret current output, and [measurements](../measurements.md)
-for the completed native workloads, settings and costs.
+Sampled reduction uses exploratory candidate screening followed by one independent fresh
+confirmation of a durably selected candidate. The design studies rejected eager baseline prefetch,
+measured a limited synthetic benefit from lazy sharing, and retained strict fresh baselines in
+production. This page records their methods, numerical results and failed alternatives.
+
+Study budgets and native layouts describe the evaluated workloads. Use
+[native runs](../native-runs.md#prepare-native-reduction) for current operator settings,
+[measurements](../measurements.md) for native results and costs, and [results](../results.md)
+to interpret output.
 [ADR 0003](../decisions/0003-strict-fresh-baselines.md) records the baseline decision.
 
 ## Method and confidence convention
@@ -244,7 +247,7 @@ The result selected lazy groups of two as a useful **synthetic** design. Product
 remained disabled pending native savings, finite freshness admission and composed ownership/
 resume validation. It did not justify an epoch framework or a default change.
 
-## Native-layout reconciliation and accepted envelope
+## Native-layout budget study
 
 Actual native message encodings changed the search path/budget calculation. The four-group
 layout with the small plan and a ten-comparison cap achieved only 77.2418%, 77.2038% and
@@ -253,24 +256,21 @@ The failure-free position-0 cap-exhaustion probability was 14.8483%. A prospecti
 comparison of caps 14 and 20 selected **14**, the smallest tested pass: 91.5047%, 91.4589%,
 90.1717%. Twenty added about `.00013` percentage points at the worst position.
 
-That selected configuration reserves `7 + 14*(8+9) + 2*124 = 493` attempts. The measured profiles
-then reserved at most 493 calls for final response or 986 for Copilot shell. Current profile call
-bounds are documented in the
-[native-run procedure](../native-runs.md#3-inspect-the-complete-plan-and-budget). The arithmetic
-protects fresh confirmation and is an admission ceiling, not expected consumption. The actual three
-successful native runs each used ten comparisons and 293 attempts. Their exact profiles, 75%
-editable-byte removal, 100/100 matches per confirmation arm, runtime and conservative call charges
-are in [measurements](../measurements.md); those results are not a general native success-rate
-estimate. Original/retained mild degradation and noisy workloads remain outside the selected
-configuration's demonstrated useful envelope.
+That configuration reserves `7 + 14*(8+9) + 2*124 = 493` attempts. Its measured profiles allowed
+493 calls for final response or 986 for Copilot shell. The arithmetic protects fresh confirmation;
+it does not predict consumption. Three successful runs each used ten comparisons and 293 attempts.
+Their 75% editable-byte removal and 100/100 confirmation matches per arm appear in the
+[synthetic reduction reference](../measurements.md#synthetic-reduction-reference).
 
-The accepted scope on 2026-10-15 was Codex final response, Copilot final response and Copilot
-denied shell action at approximately 10k locally estimated input tokens. **100k qualification
-was deferred** for quota/cost reasons. Larger source preparations and pure reconstruction did
-not establish 100k execution, token savings, money savings or capacity. Complete-command and
-aggregate runner clocks were accepted; separate candidate-construction/initialization spans
-were unavailable. No native comparison established sharing savings or finite freshness, so
-strict fresh baselines remained the production policy.
+The modeled usefulness rates apply to this planted layout and its small search samples. They do
+not establish an envelope for ordinary sessions, noisy targets or mild degradation. The
+[saved-session measurements](../measurements.md#saved-session-experiments) evaluate different
+workloads and configurations, including a larger search sample on Codex. Current per-attempt
+request bounds also differ from these historical call allowances.
+
+100k execution remains unqualified. Larger source preparations and pure reconstruction establish
+neither execution capacity nor token or monetary savings at that scale. No native comparison
+established baseline-sharing savings, so strict fresh baselines remain the production policy.
 
 ## Failed and interrupted native predecessors
 
@@ -292,42 +292,24 @@ Pending dispatches in interrupted runs were never permission to replay them.
 | Codex later user interruption | 111 / 0 / 0 | 111 | 2,276.26 s |
 | Codex paced structured overload; search incomplete | 23 / 0 / 0 | 23 | 514.71 s |
 
-The HTTP 503 run completed its search, retained the instruction and removed 75% of editable
-bytes, but confirmation stopped after 31 original and 33 candidate valid matches followed by
-one error. It did not prove safe preacceptance or outcome-independent exclusion, so confirmation
-was ineligible. The two interrupted Copilot searches likewise completed their sweeps and 75%
-removal, but their holdouts stopped at 29/28 and 31/17 original/candidate matches. Neither
-established preservation. All remain distinct from the later successful runs.
+The HTTP 503 and interrupted Copilot runs completed their searches but lacked complete eligible
+confirmation. They supply no preservation verdict. Controls also exposed two validity boundaries: a
+completed tool-free response under a shell target is a valid nonmatch, and optional informational
+metadata must not invalidate an otherwise proved completed outcome. Completion, action visibility
+and action-denial requirements remain strict. No behavioral conclusion follows from a protocol
+error.
 
-An earlier Copilot control failed with empty output and authentication-error signals; its possible
-call remained charged. After reauthentication, two separate one-call smoke tests succeeded.
-A concurrent invocation had no Copilot dispatch or unresolved reservation, as verified from durable
-state and process evidence; its failure message did not identify the cause. Subsequent controls ran
-serially. Preflight also refused a changed Codex installation before a provider call, requiring
-redetection and fresh controls.
-
-The controls exposed parser defects relevant to validity: a completed tool-free response under
-a shell target must be a valid nonmatch, and optional informational reasoning/opaque metadata
-must not invalidate an otherwise proved completed outcome. Those bounded cases were corrected
-and tested without loosening action/start/denial or completion proof. Earlier terminal failures
-and charges were not rewritten. The final short-control cohort produced two full matches, two
-retained matches and two removed nonmatches for each of the three profiles. No behavioral
-conclusion was inferred from a protocol error.
-
-The 429 errors did not distinguish allowance exhaustion from request-rate throttling and supplied
-no reset time or retry delay. The usage-exhaustion error, generic HTTP 503 and later structured
-overload are distinct categories; they do not justify one general retry rule. These outcomes
-explain why successful-run cost is not expected campaign cost and repeated successful runs
-cannot be selected to recover the original nominal error claim.
+The 429 errors supplied neither a reset time nor a retry delay and did not distinguish allowance
+exhaustion from request-rate throttling. Usage exhaustion, generic HTTP 503 and structured overload
+require separate handling. These costs explain why successful-run duration alone cannot estimate
+campaign cost, and repeated successful runs cannot recover the original nominal error claim.
 
 ## Overload replacement: separate safety and inference limits
 
-Pacing did not eliminate every external failure. On 2026-10-14 a 24-attempt, 15-second-paced
-full-original diagnostic produced 24 matches with no errors, followed by a paced full run that
-stopped after 23 charged calls with 12 matches, ten nonmatches and one structured
-`serverOverloaded` error. No confirmation ran. The native error had `willRetry:false`, no
-captured assistant/reasoning/tool output, verified cleanup and unchanged protected state.
-Acceptance was unknown. It was retained as an error, not treated as a behavioral loss.
+Pacing alone does not eliminate external failures. A paced run retained a structured
+`serverOverloaded` error with `willRetry:false`, no captured assistant/reasoning/tool output,
+verified cleanup and unchanged protected state. Acceptance remained unknown. That bounded
+no-output category motivated the separate eligibility policy below.
 
 The prospectively frozen opt-in `safe-provider-overload` policy permits a new attempt only for
 that structured no-output category with exact provenance, enforced action denial and verified
