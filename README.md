@@ -18,8 +18,9 @@ With [uv](https://docs.astral.sh/uv/):
 uv tool install ithrl
 ```
 
-For context fuzzing, use `uv tool install 'ithrl[fuzz]'` instead. You can also install with
-`pipx install ithrl` or, in an existing virtual environment, `python -m pip install ithrl`.
+You can also install with `pipx install ithrl` or, in an existing virtual environment,
+`python -m pip install ithrl`. For context fuzzing, use `'ithrl[fuzz]'` in place of `ithrl` in
+the installation command.
 
 Tested on Python 3.12–3.14. Native runners require Linux. APIs and saved formats may change before
 1.0; keep your source sessions and record the version used for each case.

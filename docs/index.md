@@ -1,8 +1,8 @@
 # ithrl documentation
 
 `ithrl` extracts a selected decision from a saved coding-agent session and searches for context
-that preserves its behavior. It also explores text appends that change the selected behavior,
-with qualified Codex and Copilot prior-user append workflows.
+that preserves its behavior. Context fuzzing explores text appends to prior user input for Codex
+and Copilot final-response targets.
 
 Start with
 [installation and the bundled example](https://github.com/eberkut/ithrl/blob/main/README.md#install).
