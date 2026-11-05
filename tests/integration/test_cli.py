@@ -311,19 +311,22 @@ def test_unusable_observation_store_fails_before_creating_run_state(tmp_path: Pa
 
 
 @pytest.mark.parametrize(
-    "arguments",
+    ("arguments", "command"),
     [
-        ["extract", "/definitely/missing", "--inference", "x", "--format", "json"],
-        ["shrink", "/definitely/missing", "--max-candidates", "0", "--format=json"],
-        ["unknown", "--format", "json"],
+        (["extract", "/definitely/missing", "--inference", "x", "--format", "json"], "extract"),
+        (["shrink", "/definitely/missing", "--max-candidates", "0", "--format=json"], "shrink"),
+        (["fuzz", "case", "--unknown-option", "--format", "json"], "fuzz"),
+        (["unknown", "--format", "json"], "ithrl"),
+        (["unknown", "extract", "--format", "json"], "ithrl"),
     ],
 )
-def test_command_line_parser_errors_honor_json_format(arguments: list[str]) -> None:
+def test_command_line_parser_errors_honor_json_format(arguments: list[str], command: str) -> None:
     result = CliRunner().invoke(app, arguments, color=False)
 
     assert result.exit_code == ExitCode.USAGE
     report = json.loads(result.stdout)
     assert report["status"] == "error"
+    assert report["command"] == command
     assert report["error_code"] == "invalid-command-line"
     assert report["exit_code"] == ExitCode.USAGE
     assert report["network_calls"] == 0
@@ -1051,6 +1054,30 @@ def test_candidate_runner_failure_is_checkpointed_and_can_be_resumed(
         if observation.observation_id == failed_ids[0]
     )
     assert failed.outcome is ObservationOutcome.RUNNER_ERROR
+
+    before = {path: path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("inspection attempted a process, network or observation store")
+
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    monkeypatch.setattr(socket, "socket", forbidden)
+    monkeypatch.setattr(ObservationStore, "__init__", forbidden)
+    arguments = ["inspect", "retained", str(case), "--result", report["result_path"]]
+    inspected = runner.invoke(app, [*arguments, "--format", "json"])
+    assert inspected.exit_code == ExitCode.SUCCESS, inspected.output
+    inspection = json.loads(inspected.stdout)
+    assert inspection["failed_candidate_observation_count"] == 1
+    assert inspection["search_result"] == "search-incomplete"
+    assert inspection["trials"] == []
+    assert all(not node["trial_indexes"] for node in inspection["nodes"])
+    assert any("Failed deterministic candidate runs" in note for note in inspection["limitations"])
+    assert "candidate transport failed" not in inspected.stdout
+    assert all(observation_id not in inspected.stdout for observation_id in failed_ids)
+    human = runner.invoke(app, arguments)
+    assert human.exit_code == ExitCode.SUCCESS, human.output
+    assert "failed candidate observation count: 1" in human.stdout
+    assert before == {path: path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
 
 
 def test_conflicting_local_observations_use_internal_failure_not_provider_failure(

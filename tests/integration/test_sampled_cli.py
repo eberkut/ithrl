@@ -7,7 +7,10 @@ import json
 import math
 import os
 import shlex
+import shutil
+import socket
 import stat
+import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, tzinfo
@@ -279,6 +282,56 @@ def _assert_no_dispatch(case: OperatorCase) -> None:
     assert not (case.workspace.root / ".runs").exists()
     assert not (case.workspace.root / "results").exists()
     case.assert_sources_unchanged()
+
+
+def test_retained_inspection_reads_sampled_snapshot_without_live_run_or_store(
+    operator_case: OperatorCase, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    completed = _invoke(operator_case.command())
+    assert completed.exit_code == 0, completed.output
+    saved = _json(completed)
+    result_path = Path(saved["result_path"])
+    calls = len(operator_case.runner.calls)
+    shutil.rmtree(operator_case.workspace.root / ".runs")
+    before = {
+        path: path.read_bytes()
+        for root in (operator_case.workspace.root, operator_case.store_path.parent)
+        for path in root.rglob("*")
+        if path.is_file()
+    }
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("inspection attempted native execution or observation-store access")
+
+    monkeypatch.setattr(native, "native_selection", forbidden)
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    monkeypatch.setattr(socket, "socket", forbidden)
+    monkeypatch.setattr(ObservationStore, "__init__", forbidden)
+    inspected = _invoke(
+        [
+            "inspect",
+            "retained",
+            str(operator_case.workspace.root),
+            "--result",
+            str(result_path),
+            "--format",
+            "json",
+        ]
+    )
+    assert inspected.exit_code == 0, inspected.output
+    report = _json(inspected)
+    assert report["mode"] == "sampled"
+    assert report["confirmation"]["status"] == saved["confirmation_result"]
+    assert len(operator_case.runner.calls) == calls
+    after = {
+        path: path.read_bytes()
+        for root in (operator_case.workspace.root, operator_case.store_path.parent)
+        for path in root.rglob("*")
+        if path.is_file()
+    }
+    assert after == before
+    assert not (operator_case.workspace.root / ".runs").exists()
+    operator_case.assert_sources_unchanged()
 
 
 def _install_wall_clock(monkeypatch: pytest.MonkeyPatch) -> Callable[[int], None]:

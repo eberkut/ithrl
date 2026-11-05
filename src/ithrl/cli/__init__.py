@@ -25,6 +25,7 @@ from ithrl.case import (
 from ithrl.case.filesystem import read_safe_text
 from ithrl.cli.extract import ExtractionSelectionError, create_case_report
 from ithrl.cli.fuzz import fuzz as fuzz_command
+from ithrl.cli.inspect import app as inspect_app
 from ithrl.cli.output import (
     CommandOutput,
     ExitCode,
@@ -79,6 +80,7 @@ app = typer.Typer(
 
 
 app.command()(fuzz_command)
+app.add_typer(inspect_app, name="inspect")
 
 
 def _version_option(value: bool) -> None:

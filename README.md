@@ -55,6 +55,9 @@ Use a new directory to repeat the example; extraction refuses to overwrite an ex
 
 - `ithrl extract` browses saved sessions and creates a case from a selected decision.
 - `ithrl shrink CASE` searches for context removals that preserve the selected behavior.
+- `ithrl inspect retained CASE --result RESULT` explains retained units and recorded removal trials
+  from a saved reduction without model access. See
+  [results and privacy](https://github.com/eberkut/ithrl/blob/main/docs/results.md#inspect-retained-context).
 - `ithrl fuzz CASE --config PRIVATE_TOML` searches for and simplifies text appends that decrease how
   often the selected behavior occurs, with independent confirmation.
 
