@@ -43,6 +43,10 @@ statistical baseline; the search parent is the context from which another remova
 | Joint or historical trial | An outcome for several removals or an earlier context; it cannot explain each retained item individually. |
 | Invalid, incomplete, ineligible or untested work | No supported behavioral conclusion for that removal. |
 
+Deterministic reports include `failed_candidate_observation_count` for recorded candidate-run
+failures. The checkpoint lacks their removal-set details, so failures cannot be attributed to
+individual units or treated as behavioral losses. This count is unavailable for sampled results.
+
 A sampled screen rejection is exploratory, not confirmed loss or necessity. Search coverage and
 fresh confirmation are reported separately. The report includes the recorded target type,
 confirmation counts, margin and interval when available. Missing fields are `null` in JSON and

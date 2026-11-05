@@ -356,13 +356,15 @@ class JsonAwareGroup(TyperGroup):
             )
         except ClickException as error:
             command: Literal["ithrl", "extract", "shrink", "fuzz", "inspect"] = "ithrl"
-            if "extract" in arguments:
+            context = getattr(error, "ctx", None)
+            subcommand = context.find_root().invoked_subcommand if context is not None else None
+            if subcommand == "extract":
                 command = "extract"
-            elif "shrink" in arguments:
+            elif subcommand == "shrink":
                 command = "shrink"
-            elif "fuzz" in arguments:
+            elif subcommand == "fuzz":
                 command = "fuzz"
-            elif "inspect" in arguments:
+            elif subcommand == "inspect":
                 command = "inspect"
             report = ErrorOutput(
                 command=command,

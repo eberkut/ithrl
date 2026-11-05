@@ -460,6 +460,7 @@ def test_sampled_screen_rejection_is_not_a_confirmed_behavioral_loss() -> None:
     assert report.trials[0].candidate is not None
     assert report.trials[0].candidate.no_matches == 1
     assert report.confirmation.status == "not-run"
+    assert report.failed_candidate_observation_count is None
     assert report.reconstruction_method is None
     assert any("do not establish confirmed loss" in line for line in report.limitations)
 
@@ -508,7 +509,21 @@ def test_incomplete_confirmation_has_no_interval() -> None:
     assert report.candidate.valid == 0
 
 
-def test_complete_confirmation_reports_fresh_arm_counts_and_recorded_policy() -> None:
+@pytest.mark.parametrize(
+    ("original_matches", "candidate_matches", "status", "difference", "interval"),
+    [
+        (20, 20, "confirmed-preserving", 0.0, (-0.11915783736096439, 0.11915783736096439)),
+        (10, 20, "confirmed-preserving", 0.5, (0.29026671808036014, 0.672596232114844)),
+        (20, 10, "failed", -0.5, (-0.672596232114844, -0.29026671808036014)),
+    ],
+)
+def test_complete_confirmation_reports_fresh_arm_counts_and_recorded_policy(
+    original_matches: int,
+    candidate_matches: int,
+    status: str,
+    difference: float,
+    interval: tuple[float, float],
+) -> None:
     _, search = _sampled()
     plan = search.plan.model_copy(
         update={
@@ -518,6 +533,7 @@ def test_complete_confirmation_reports_fresh_arm_counts_and_recorded_policy() ->
         }
     )
     counts = {"baseline": 0, "candidate": 0}
+    matches = {"baseline": original_matches, "candidate": candidate_matches}
     attempts = []
     template = search.attempts[0].observation
     for index, arm in enumerate(plan.schedule):
@@ -533,7 +549,9 @@ def test_complete_confirmation_reports_fresh_arm_counts_and_recorded_policy() ->
                 "role": ObservationRole.CONFIRMATION,
                 "arm": ObservationArm(arm),
                 "attempt": counts[arm],
-                "outcome": ObservationOutcome.MATCH,
+                "outcome": ObservationOutcome.MATCH
+                if counts[arm] <= matches[arm]
+                else ObservationOutcome.NO_MATCH,
                 "attempt_evidence": AttemptEvidence(
                     attempt_id=f"attempt-{index:032x}",
                     attempt_digest=content_digest(index),
@@ -548,19 +566,20 @@ def test_complete_confirmation_reports_fresh_arm_counts_and_recorded_policy() ->
     confirmation = SampledConfirmation.from_evidence(
         SamplingBlockEvidence(plan=plan, attempts=tuple(attempts))
     )
-    report = _confirmation(
-        "confirmed-preserving", confirmation, confirmation.evidence.plan.preservation
-    )
-    assert report.status == "confirmed-preserving"
+    report = _confirmation(status, confirmation, confirmation.evidence.plan.preservation)
+    assert report.status == status
     assert report.original is not None
-    assert report.original.matches == report.original.valid == 20
+    assert report.original.matches == original_matches
+    assert report.original.valid == 20
     assert report.candidate is not None
-    assert report.candidate.matches == report.candidate.valid == 20
-    assert report.difference == 0
+    assert report.candidate.matches == candidate_matches
+    assert report.candidate.valid == 20
+    assert report.difference == pytest.approx(difference)
     assert report.lower_bound is not None
-    assert -0.12 < report.lower_bound < 0
+    assert report.lower_bound == pytest.approx(interval[0])
     assert report.upper_bound is not None
-    assert 0 < report.upper_bound < 0.12
+    assert report.upper_bound == pytest.approx(interval[1])
+    assert report.lower_bound < report.upper_bound
 
 
 def test_partial_active_block_has_no_invented_node_attribution() -> None:

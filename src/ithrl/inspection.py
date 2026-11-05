@@ -129,6 +129,7 @@ class RetainedInspection(_InspectionModel):
     action_execution: Literal["denied"] | None
     search_result: str
     final_sweep_complete: bool
+    failed_candidate_observation_count: int | None = Field(default=None, ge=0)
     confirmation: ConfirmationInspection
     nodes: tuple[RetainedNodeInspection, ...]
     trials: tuple[TrialInspection, ...]
@@ -208,12 +209,22 @@ def build_retained_inspection(
         else loaded.recorded_metadata.get("reconstruction_method")
     )
     policy_digest = plan.safety_policy.digest if plan is not None else None
+    failed_count = (
+        len(deterministic.checkpoint.failed_candidate_observation_ids)
+        if deterministic is not None
+        else None
+    )
     limitations = (
         _HISTORICAL_LIMIT,
         "Trial outcomes apply to their complete removals and tested search parent; "
         "joint removals do not explain each retained item.",
         *loaded.validation_limits,
     )
+    if failed_count:
+        limitations += (
+            "Failed deterministic candidate runs lack recorded removal-set details; "
+            "they cannot be attributed to retained units or treated as behavioral losses.",
+        )
     if sampled is not None:
         limitations += (
             "Exploratory screens do not establish confirmed loss, necessity or sampled minimality.",
@@ -234,6 +245,7 @@ def build_retained_inspection(
         action_execution=plan.safety_policy.action_execution if plan is not None else None,
         search_result=search,
         final_sweep_complete=complete,
+        failed_candidate_observation_count=failed_count,
         confirmation=confirmation,
         nodes=nodes,
         trials=trials,

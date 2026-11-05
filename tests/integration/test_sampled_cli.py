@@ -323,7 +323,13 @@ def test_retained_inspection_reads_sampled_snapshot_without_live_run_or_store(
     assert report["mode"] == "sampled"
     assert report["confirmation"]["status"] == saved["confirmation_result"]
     assert len(operator_case.runner.calls) == calls
-    assert before == {path: path.read_bytes() for path in before}
+    after = {
+        path: path.read_bytes()
+        for root in (operator_case.workspace.root, operator_case.store_path.parent)
+        for path in root.rglob("*")
+        if path.is_file()
+    }
+    assert after == before
     assert not (operator_case.workspace.root / ".runs").exists()
     operator_case.assert_sources_unchanged()
 

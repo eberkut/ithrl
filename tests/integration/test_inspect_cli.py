@@ -45,6 +45,7 @@ def test_inspect_is_offline_and_leaves_all_inputs_unchanged(
     report = json.loads(inspected.stdout)
     assert report["command"] == "inspect"
     assert report["mode"] == "deterministic"
+    assert report["failed_candidate_observation_count"] == 0
     assert report["confirmation"]["status"] == "confirmed-preserving"
     assert report["nodes"]
     assert all("text" not in n for n in report["nodes"])
@@ -149,6 +150,31 @@ def test_inspect_parser_errors_use_the_json_envelope() -> None:
             "case",
             "--result",
             "result",
+            "--max-text-bytes",
+            "65537",
+            "--format",
+            "json",
+        ],
+    )
+    assert result.exit_code == 2
+    error = json.loads(result.stdout)
+    assert error["command"] == "inspect"
+    assert error["error_code"] == "invalid-command-line"
+
+
+@pytest.mark.parametrize("command_name", ["extract", "shrink", "fuzz", "inspect"])
+@pytest.mark.parametrize("argument", ["case", "result"])
+def test_inspect_parser_error_command_ignores_command_names_in_paths(
+    command_name: str, argument: str
+) -> None:
+    result = CliRunner().invoke(
+        app,
+        [
+            "inspect",
+            "retained",
+            command_name if argument == "case" else "case",
+            "--result",
+            command_name if argument == "result" else "result",
             "--max-text-bytes",
             "65537",
             "--format",
