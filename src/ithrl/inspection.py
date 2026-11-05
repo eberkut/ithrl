@@ -20,10 +20,10 @@ from ithrl.reduce import (
     SampledCandidateTrial,
     SampledConfirmation,
     SampledInvalidCandidateTrial,
+    classify_confirmation,
 )
 from ithrl.results.inspection import RetainedResult, load_retained_result
 from ithrl.runner import Candidate
-from ithrl.statistics import BinomialSample, classify_fixed_sample
 
 MAX_INSPECTION_TEXT_BYTES = 65_536
 type TrialOutcome = Literal[
@@ -428,16 +428,8 @@ def _confirmation(
         )
     evidence = confirmation.evidence
     original, candidate = evidence.original_counts, evidence.candidate_counts
-    interval = None
-    if evidence.eligible and evidence.complete:
-        interval = classify_fixed_sample(
-            BinomialSample(candidate.matches, candidate.valid),
-            BinomialSample(original.matches, original.valid),
-            required_candidate=policy.confirmation.candidate.required_valid,
-            required_original=policy.confirmation.original.required_valid,
-            confidence=policy.confirmation.one_sided_confidence,
-            margin=policy.margin,
-        ).interval
+    classification = classify_confirmation(evidence, policy=policy)
+    interval = classification.interval if classification else None
     return ConfirmationInspection(
         status=status,
         margin=policy.margin,

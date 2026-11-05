@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import json
 import os
 import stat
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import datetime
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
@@ -15,7 +13,7 @@ from typing import Any
 from ithrl.case import CaseEvidence, CaseWorkspace
 from ithrl.case.filesystem import lstat_regular_file, read_safe_text, validate_existing_root
 from ithrl.context import ContextGraphError, JsonValue, content_digest
-from ithrl.execution import ResolvedExecutionPlan, ResourceLimits
+from ithrl.execution import ResolvedExecutionPlan
 from ithrl.experiment import ExperimentDefinition, SampledExperimentDefinition
 from ithrl.extraction import validate_experiment_target, validate_extracted_case
 from ithrl.observations import ObservationIdentity
@@ -25,24 +23,12 @@ from ithrl.results.storage import load_result_snapshot
 from ithrl.results.validation import loads_json, validate_result_case
 from ithrl.run_state import SampledRunState
 from ithrl.runner import Candidate
+from ithrl.sampled_run_metadata import SampledRunMetadata
 
 _MAX_FILE_BYTES = 64 * 1024 * 1024
 _MAX_SESSION_BYTES = 1024 * 1024
 _SAMPLED_FILES = frozenset(
     {"summary.json", "result.json", "experiment.toml", "retained-context.jsonl", "cli-session.json"}
-)
-_SESSION_FIELDS = frozenset(
-    {
-        "run_id",
-        "run_directory",
-        "source_case",
-        "original_workspace",
-        "observation_store",
-        "experiment",
-        "resource_limits",
-        "original_identity",
-        "started_at",
-    }
 )
 _OFFLINE_LIMITS = (
     "Inspection checks saved evidence and identities without opening the observation database.",
@@ -152,8 +138,11 @@ def _load_sampled(root: Path, evidence: CaseEvidence, summary: dict[str, Any]) -
     experiment = SampledExperimentDefinition.from_toml(_read_private(root / "experiment.toml"))
     if evidence.decision is not None:
         validate_experiment_target(evidence.decision, experiment.target)
-    session = _read_object(root / "cli-session.json", max_bytes=_MAX_SESSION_BYTES)
-    _validate_session(session, state, experiment)
+    session_raw = _read_private(root / "cli-session.json", max_bytes=_MAX_SESSION_BYTES)
+    loads_json(session_raw, label="sampled session")
+    session = SampledRunMetadata.model_validate_json(session_raw)
+    if not session.matches_state(state) or session.experiment != experiment:
+        raise ValueError("sampled session differs from saved state")
     _validate_result_state(result, state)
     identity = result.checkpoint.original_identity
     if (
@@ -196,41 +185,6 @@ def _load_sampled(root: Path, evidence: CaseEvidence, summary: dict[str, Any]) -
     )
 
 
-def _validate_session(
-    session: dict[str, Any], state: SampledRunState, experiment: SampledExperimentDefinition
-) -> None:
-    if set(session) != _SESSION_FIELDS:
-        raise ValueError("unsupported sampled session structure")
-    for name in ("run_directory", "source_case", "original_workspace", "observation_store"):
-        value = session[name]
-        if not isinstance(value, str) or len(value) > 4096:
-            raise ValueError("invalid recorded session path")
-        path = Path(value)
-        if not path.is_absolute() or ".." in path.parts:
-            raise ValueError("unsafe recorded session path")
-    if Path(session["run_directory"]) != Path(session["source_case"]) / ".runs" / state.run_id:
-        raise ValueError("recorded run is not bound to its source case")
-    identity = ObservationIdentity.model_validate_json(json.dumps(session["original_identity"]))
-    source_experiment = SampledExperimentDefinition.model_validate_json(
-        json.dumps(session["experiment"])
-    )
-    ResourceLimits.model_validate_json(json.dumps(session["resource_limits"]))
-    started = datetime.fromisoformat(session["started_at"])
-    if (
-        session["run_id"] != state.run_id
-        or session["source_case"] != state.source_case
-        or session["observation_store"] != state.observation_store
-        or started.tzinfo is None
-        or started != state.started_at
-        or identity != state.original_identity
-        or source_experiment != experiment
-        or experiment.reduction is None
-        or (state.checkpoint is not None and state.checkpoint.reduction != experiment.reduction)
-        or any(b.plan.procedure != experiment.reduction for b in state.blocks)
-    ):
-        raise ValueError("sampled session differs from saved state")
-
-
 def _validate_result_state(result: SampledReductionEvidence, state: SampledRunState) -> None:
     if (
         state.checkpoint != result.checkpoint
@@ -261,14 +215,7 @@ def _validate_result_state(result: SampledReductionEvidence, state: SampledRunSt
         if progress.plan != block.plan or len(progress.observations) != len(block.attempts):
             raise ValueError("sampling snapshot has different evidence")
         for reference, attempt in zip(progress.observations, block.attempts, strict=True):
-            observation = attempt.observation
-            if (
-                reference.observation_id != observation.observation_id
-                or reference.attempt_id != observation.attempt_evidence.attempt_id
-                or reference.attempt_digest != observation.attempt_evidence.attempt_digest
-                or reference.schedule_position != attempt.schedule_position
-                or reference.independence_evidence_digest != attempt.independence_evidence_digest
-            ):
+            if not reference.matches_attempt(attempt):
                 raise ValueError("saved evidence differs from durable references")
 
 

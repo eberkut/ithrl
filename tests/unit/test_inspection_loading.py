@@ -421,3 +421,47 @@ def test_sampled_trial_binds_requested_removal_to_effective_graph_closure(tmp_pa
     SampledRunState.model_validate_json((result / "sampling/sampling-state.json").read_text())
     with pytest.raises(ResultSnapshotError):
         load_retained_result(case, result)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("started_at", 1791331200),
+        ("started_at", "1791331200"),
+        ("started_at", "20261018"),
+        ("started_at", "2026-10-07"),
+        ("started_at", "2026-10-07T00:00:00z"),
+        ("started_at", "2026-10-07 00:00:00Z"),
+        ("started_at", "2026-10-07T00:00:00"),
+        ("started_at", "0001-01-01T00:00:00+23:59"),
+        ("started_at", "9999-12-31T23:59:59-23:59"),
+        ("original_workspace", "relative"),
+        ("observation_store", "/private/../store"),
+        ("run_directory", "/private/foreign-run"),
+    ],
+)
+def test_detached_inspection_uses_shared_metadata_validation(
+    tmp_path: Path, field: str, value: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    case, result = _sampled(tmp_path)
+    path = result / "cli-session.json"
+    metadata = json.loads(path.read_text())
+    metadata[field] = value
+    _write(path, metadata)
+    before = {p: p.read_bytes() for root in (case, result) for p in root.rglob("*") if p.is_file()}
+    monkeypatch.setattr(subprocess, "Popen", _forbid_runtime)
+    monkeypatch.setattr(sqlite3, "connect", _forbid_runtime)
+    with pytest.raises(ResultSnapshotError) as error:
+        load_retained_result(case, result)
+    assert str(error.value) == "cannot inspect a valid reduction snapshot for this case"
+    assert {p: p.read_bytes() for p in before} == before
+
+
+def test_detached_inspection_compares_recorded_paths_as_paths(tmp_path: Path) -> None:
+    case, result = _sampled(tmp_path)
+    path = result / "cli-session.json"
+    metadata = json.loads(path.read_text())
+    metadata["source_case"] += "/."
+    metadata["observation_store"] = metadata["observation_store"].replace("/missing-", "//missing-")
+    _write(path, metadata)
+    assert load_retained_result(case, result).sampled is not None

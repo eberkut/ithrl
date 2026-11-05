@@ -21,6 +21,7 @@ from ithrl.reduce.contracts import (
     SearchClassification,
     SearchPhase,
     SearchStatus,
+    classify_confirmation,
     validate_checkpoint_identity,
 )
 from ithrl.reduce.engine import DeterministicReducer, SampledReducer, SampledSearchResult
@@ -49,5 +50,6 @@ __all__ = [
     "SearchClassification",
     "SearchPhase",
     "SearchStatus",
+    "classify_confirmation",
     "validate_checkpoint_identity",
 ]

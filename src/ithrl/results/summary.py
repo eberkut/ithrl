@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 
 from ithrl.execution import MAX_PROVIDER_CALLS_PER_ATTEMPT
-from ithrl.observations import Observation, ObservationArm, ObservationOutcome, ObservationRole
+from ithrl.observations import Observation, ObservationArm, ObservationRole, SamplingArmCounts
 from ithrl.results.models import CalibrationSummary, ResultSummary
 from ithrl.runner.contracts import RunAccounting, TokenUsage
 
@@ -344,18 +344,12 @@ def calibration_summary_from_observations(
     all_policy_known = bool(observations) and all(
         item.attempt_evidence.effective_policy_digest is not None for item in observations
     )
+    counts = SamplingArmCounts.from_observations(observations)
     values = {
         **base,
         "calibration_observation_ids": tuple(item.observation_id for item in observations),
         "observations_recorded": len(observations),
-        "matches": sum(item.outcome is ObservationOutcome.MATCH for item in observations),
-        "no_matches": sum(item.outcome is ObservationOutcome.NO_MATCH for item in observations),
-        "invalid_observations": sum(
-            item.outcome is ObservationOutcome.INVALID_OBSERVATION for item in observations
-        ),
-        "runner_errors": sum(
-            item.outcome is ObservationOutcome.RUNNER_ERROR for item in observations
-        ),
+        **counts.model_dump(exclude={"dispatched", "valid"}),
         "terminal_error_category": observations[-1].error_category if observations else None,
         "provider_calls_started": started_known if complete_accounting else None,
         "provider_calls_completed": (

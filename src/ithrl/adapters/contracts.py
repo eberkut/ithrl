@@ -4,13 +4,18 @@ from __future__ import annotations
 
 import copy
 import hashlib
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Annotated, Literal
+from typing import TYPE_CHECKING, Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from ithrl.context import JsonObject
+from ithrl.adapters.errors import AdapterError, AdapterErrorCode
+from ithrl.context import JsonObject, SourceRecordSelector, content_digest
 from ithrl.timestamps import validate_rfc3339_timestamp
+
+if TYPE_CHECKING:
+    from ithrl.decisions import DecisionSelector
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,3 +109,35 @@ class NativeSession:
     @property
     def record_count(self) -> int:
         return len(self._records)
+
+
+def validate_decision_selector(
+    session: NativeSession,
+    selector: DecisionSelector,
+    records: tuple[JsonObject, ...],
+    *,
+    harness: str,
+    source: str,
+    record_selector: Callable[[int, JsonObject], SourceRecordSelector],
+) -> None:
+    """Bind a selector to captured records before interpreting its native identity."""
+
+    index = selector.record.line - 1
+    if (
+        selector.harness != harness
+        or selector.session_id != session.metadata.session_id
+        or selector.source != source
+        or index >= session.record_count
+    ):
+        raise AdapterError(
+            AdapterErrorCode.DECISION_NOT_FOUND,
+            "decision selector does not match the selected session",
+        )
+    record = records[index]
+    if selector.record != record_selector(
+        index, record
+    ) or selector.record_digest != content_digest(record):
+        raise AdapterError(
+            AdapterErrorCode.DECISION_NOT_FOUND,
+            "decision selector does not match the selected session",
+        )

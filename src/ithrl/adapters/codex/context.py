@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import cast
 
-from ithrl.adapters.contracts import NativeSession
+from ithrl.adapters.contracts import NativeSession, validate_decision_selector
 from ithrl.adapters.errors import AdapterError, AdapterErrorCode
 from ithrl.context import (
     MAX_CONTEXT_NODES,
@@ -38,7 +38,14 @@ def compile_context(session: NativeSession, selector: DecisionSelector) -> Conte
     """Build context preceding one selector produced from the parsed session."""
 
     records = session.records
-    _validate_selector(session, selector, records)
+    validate_decision_selector(
+        session,
+        selector,
+        records,
+        harness=_HARNESS,
+        source=_SOURCE,
+        record_selector=source_selector,
+    )
     context_count = selector.context_before_line - 1
     if context_count > MAX_CONTEXT_NODES:
         raise AdapterError(
@@ -54,7 +61,7 @@ def editable_text(
     """Discover ordinary prior-user text while preserving the selected turn input."""
 
     records = session.records
-    trigger_id = _trigger_node_id(context.nodes, records, selector.context_before_line)
+    trigger_id = decision_input_node_id(context.nodes, records, selector)
     return tuple(
         site
         for node in context.nodes
@@ -65,16 +72,17 @@ def editable_text(
     )
 
 
-def _trigger_node_id(
-    nodes: tuple[ContextNode, ...], records: tuple[JsonObject, ...], boundary: int
+def decision_input_node_id(
+    nodes: tuple[ContextNode, ...], records: tuple[JsonObject, ...], selector: DecisionSelector
 ) -> str:
     """Identify the last native model input before the selected decision boundary."""
 
+    boundary = selector.context_before_line
     for node in reversed(nodes):
-        selector = node.selector
-        if selector is None or selector.line >= boundary:
+        native_selector = node.selector
+        if native_selector is None or native_selector.line >= boundary:
             continue
-        record = records[selector.line - 1]
+        record = records[native_selector.line - 1]
         if record.get("type") != "response_item":
             continue
         payload = _object(record.get("payload"))
@@ -109,32 +117,6 @@ def opaque_prefix(records: tuple[JsonObject, ...]) -> tuple[bool, ...]:
     for record in records:
         prefixes.append(prefixes[-1] or _is_opaque_record(record))
     return tuple(prefixes)
-
-
-def _validate_selector(
-    session: NativeSession,
-    selector: DecisionSelector,
-    records: tuple[JsonObject, ...],
-) -> None:
-    index = selector.record.line - 1
-    if (
-        selector.harness != _HARNESS
-        or selector.session_id != session.metadata.session_id
-        or selector.source != _SOURCE
-        or index >= session.record_count
-    ):
-        raise AdapterError(
-            AdapterErrorCode.DECISION_NOT_FOUND,
-            "decision selector does not match the selected session",
-        )
-    record = records[index]
-    if selector.record != source_selector(
-        index, record
-    ) or selector.record_digest != content_digest(record):
-        raise AdapterError(
-            AdapterErrorCode.DECISION_NOT_FOUND,
-            "decision selector does not match the selected session",
-        )
 
 
 def _context_nodes(records: tuple[JsonObject, ...]) -> tuple[ContextNode, ...]:

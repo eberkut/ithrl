@@ -6,9 +6,11 @@ import copy
 from dataclasses import dataclass, field
 from enum import StrEnum
 
+from ithrl.adapters import AdapterError
 from ithrl.adapters.contracts import NativeSession
+from ithrl.adapters.registry import decision_input_node_id
 from ithrl.case import CaseFormatError
-from ithrl.context import ContextNode, JsonObject, JsonValue
+from ithrl.context import JsonObject, JsonValue
 from ithrl.extraction import validate_extracted_case
 from ithrl.mutation import EditableText, MutationError, append_message_text
 from ithrl.runner.codex.policy import (
@@ -20,7 +22,6 @@ from ithrl.runner.codex.policy import (
 from ithrl.runner.contracts import PreparedAttempt
 
 _SOURCE_PATH = "source/rollout.jsonl"
-_MODEL_INPUT_TYPES = frozenset({"message", "custom_tool_call_output", "function_call_output"})
 _IGNORED_RECORD_TYPES = frozenset(
     {
         "event_msg",
@@ -74,7 +75,6 @@ class CodexMaterialization:
     base_instructions: str | None = field(repr=False)
     developer_instructions: str | None = field(repr=False)
     history: tuple[JsonObject, ...] = field(repr=False)
-    history_context_ids: tuple[str, ...] = field(repr=False)
     turn_input: CodexTurnInput = field(repr=False)
 
 
@@ -145,7 +145,15 @@ def _materialize_session(
         if node.id in retained:
             selected.append((node.id, records[selector.line - 1]))
 
-    trigger_id = _trigger_node_id(evidence.context.nodes, records, boundary)
+    try:
+        trigger_id = decision_input_node_id(
+            session, decision.selector, evidence.context, records=records
+        )
+    except AdapterError:
+        raise CodexMaterializationError(
+            CodexMaterializationErrorCode.MISSING_TRIGGER,
+            "the selected Codex decision has no supported triggering input",
+        ) from None
     if trigger_id not in retained:
         raise CodexMaterializationError(
             CodexMaterializationErrorCode.MISSING_TRIGGER,
@@ -161,7 +169,6 @@ def _materialize_session(
     applied = edit is None
 
     history: list[JsonObject] = []
-    history_context_ids: list[str] = []
     trigger: JsonObject | None = None
     for node_id, record in selected:
         record_type = _string(record.get("type"))
@@ -179,7 +186,6 @@ def _materialize_session(
                         ) from error
                     applied = True
                 history.append(copy.deepcopy(payload))
-                history_context_ids.append(node_id)
             continue
         if record_type not in _IGNORED_RECORD_TYPES:
             raise CodexMaterializationError(
@@ -217,7 +223,6 @@ def _materialize_session(
             allow_document=False,
         ),
         history=tuple(history),
-        history_context_ids=tuple(history_context_ids),
         turn_input=_turn_input(trigger, history),
     )
 
@@ -229,28 +234,6 @@ def editable_codex_text(attempt: PreparedAttempt) -> tuple[EditableText, ...]:
         raise MutationError("text discovery requires the unchanged original")
     materialize_codex_attempt(attempt)
     return attempt.evidence.editable_text()
-
-
-def _trigger_node_id(
-    nodes: tuple[ContextNode, ...], records: tuple[JsonObject, ...], boundary: int
-) -> str:
-    for node in reversed(nodes):
-        selector = node.selector
-        if selector is None or selector.line >= boundary:
-            continue
-        record = records[selector.line - 1]
-        if record.get("type") != "response_item":
-            continue
-        payload = _object(record.get("payload"))
-        item_type = _string(payload.get("type"))
-        if item_type not in _MODEL_INPUT_TYPES:
-            continue
-        if item_type != "message" or payload.get("role") in {"user", "developer", "system"}:
-            return node.id
-    raise CodexMaterializationError(
-        CodexMaterializationErrorCode.MISSING_TRIGGER,
-        "the selected Codex decision has no supported triggering input",
-    )
 
 
 def _selected_turn_context(

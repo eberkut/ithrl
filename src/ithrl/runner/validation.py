@@ -79,13 +79,10 @@ def _validate_result_state_contract(
     attempt: PreparedAttempt,
     accounting: RunAccounting,
 ) -> None:
-    if attempt.execution_plan.capability.disposable_state_effect == "none" and (
-        accounting.disposable_state_bytes or accounting.disposable_state_entries
-    ):
-        raise RunnerError(
-            RunnerErrorCode.CONTRACT,
-            "runner reported disposable state that its capability excludes",
-        )
+    violation = _error_state_contract_violation(attempt, accounting)
+    if violation is not None:
+        code, message = violation
+        raise RunnerError(code, message)
 
 
 def _validate_result_actions(result: RunResult) -> None:
@@ -103,10 +100,10 @@ def _validate_result_actions(result: RunResult) -> None:
 
 
 def _validate_result_protected_state(accounting: RunAccounting) -> None:
-    if accounting.source_store_effect != "unchanged":
-        raise RunnerError(RunnerErrorCode.SAFETY, "runner changed the preserved source session")
-    if accounting.original_workspace_effect != "unchanged":
-        raise RunnerError(RunnerErrorCode.SAFETY, "runner changed the original workspace")
+    violation = _error_protected_state_violation(accounting)
+    if violation is not None:
+        code, message = violation
+        raise RunnerError(code, message)
 
 
 def _validate_result_transport(attempt: PreparedAttempt, accounting: RunAccounting) -> None:
@@ -170,16 +167,12 @@ def _validate_usage_limits(attempt: PreparedAttempt, result: RunResult) -> None:
 
 
 def _validate_native_output(result: RunResult) -> None:
-    accounting = result.accounting
-    if (result.native_output is None) != (accounting.native_output_bytes == 0):
-        raise RunnerError(
-            RunnerErrorCode.CONTRACT, "native output reference and byte count disagree"
-        )
-    if (
-        result.native_output is not None
-        and result.native_output.size_bytes != accounting.native_output_bytes
-    ):
-        raise RunnerError(RunnerErrorCode.CONTRACT, "native output reference has the wrong size")
+    violation = _native_output_violation(
+        result.native_output, result.accounting.native_output_bytes
+    )
+    if violation is not None:
+        code, message = violation
+        raise RunnerError(code, message)
     if result.native_output is not None and not result.native_output.complete:
         raise RunnerError(RunnerErrorCode.CONTRACT, "completed runner output must be complete")
 

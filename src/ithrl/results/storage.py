@@ -184,35 +184,7 @@ def write_result_snapshot(
         checkpoint=checkpoint,
     )
 
-    staging = Path(tempfile.mkdtemp(prefix=f".{destination.name}-", dir=destination.parent))
-    if os.name == "posix":
-        staging.chmod(0o700)
-    try:
-        _write_json(staging / "summary.json", validated.summary.model_dump(mode="json"))
-        if validated.reduced_request is not None:
-            _write_json(staging / "request.json", validated.reduced_request)
-        _write_text(
-            staging / "retained-context.jsonl",
-            "".join(f"{line.rstrip()}\n" for line in validated.retained_context_lines),
-        )
-        _write_text(staging / "experiment.toml", validated.experiment_source)
-        _write_json(staging / "provenance.json", validated.provenance.model_dump(mode="json"))
-        _write_json(
-            staging / "execution-plan.json",
-            validated.execution_plan.model_dump(mode="json"),
-        )
-        _write_json(
-            staging / "checkpoint.json",
-            validated.checkpoint.model_dump(mode="json"),
-        )
-        _restrict_tree(staging)
-        _sync_directory(staging)
-        staging.rename(destination)
-        _sync_directory(destination.parent)
-    except BaseException:
-        shutil.rmtree(staging, ignore_errors=True)
-        raise
-    return destination
+    return _write_snapshot(destination, validated)
 
 
 def load_result_snapshot(root: Path) -> ResultSnapshot:
@@ -277,23 +249,37 @@ def write_calibration_snapshot(
         execution_plan=execution_plan,
     )
 
+    return _write_snapshot(destination, validated)
+
+
+def _write_snapshot(
+    destination: Path,
+    snapshot: ResultSnapshot | CalibrationSnapshot,
+) -> Path:
+    """Publish validated files in order, retaining the destination after parent-sync failure."""
+
     staging = Path(tempfile.mkdtemp(prefix=f".{destination.name}-", dir=destination.parent))
     if os.name == "posix":
         staging.chmod(0o700)
     try:
-        _write_json(staging / "summary.json", validated.summary.model_dump(mode="json"))
-        if validated.request is not None:
-            _write_json(staging / "request.json", validated.request)
+        _write_json(staging / "summary.json", snapshot.summary.model_dump(mode="json"))
+        request = (
+            snapshot.reduced_request if isinstance(snapshot, ResultSnapshot) else snapshot.request
+        )
+        if request is not None:
+            _write_json(staging / "request.json", request)
         _write_text(
             staging / "retained-context.jsonl",
-            "".join(f"{line.rstrip()}\n" for line in validated.retained_context_lines),
+            "".join(f"{line.rstrip()}\n" for line in snapshot.retained_context_lines),
         )
-        _write_text(staging / "experiment.toml", validated.experiment_source)
-        _write_json(staging / "provenance.json", validated.provenance.model_dump(mode="json"))
+        _write_text(staging / "experiment.toml", snapshot.experiment_source)
+        _write_json(staging / "provenance.json", snapshot.provenance.model_dump(mode="json"))
         _write_json(
             staging / "execution-plan.json",
-            validated.execution_plan.model_dump(mode="json"),
+            snapshot.execution_plan.model_dump(mode="json"),
         )
+        if isinstance(snapshot, ResultSnapshot):
+            _write_json(staging / "checkpoint.json", snapshot.checkpoint.model_dump(mode="json"))
         _restrict_tree(staging)
         _sync_directory(staging)
         staging.rename(destination)

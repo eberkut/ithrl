@@ -10,7 +10,12 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from ithrl.context import MAX_CONTEXT_NODES, JsonObject, content_digest
 from ithrl.experiment import SampledReductionPlan
 from ithrl.observations import ObservationIdentity, SamplingBlockEvidence
-from ithrl.statistics import BinomialSample, FixedSampleOutcome, classify_fixed_sample
+from ithrl.statistics import (
+    BinomialSample,
+    FixedSampleClassification,
+    FixedSampleOutcome,
+    classify_fixed_sample,
+)
 
 ALGORITHM_NAME = "hierarchical-ddmin"
 ALGORITHM_VERSION = "2"
@@ -447,6 +452,28 @@ class SampledReductionCheckpoint(BaseModel):
         return self.original_identity
 
 
+def classify_confirmation(
+    evidence: SamplingBlockEvidence, *, policy: SampledReductionPlan | None = None
+) -> FixedSampleClassification | None:
+    """Assess complete eligible preservation evidence under its confirmation policy."""
+
+    if not evidence.eligible:
+        return None
+    if not evidence.complete:
+        return FixedSampleClassification(FixedSampleOutcome.INCOMPLETE, None)
+    policy = evidence.plan.preservation if policy is None else policy
+    phase = policy.confirmation
+    candidate, original = evidence.candidate_counts, evidence.original_counts
+    return classify_fixed_sample(
+        BinomialSample(candidate.matches, candidate.valid),
+        BinomialSample(original.matches, original.valid),
+        required_candidate=phase.candidate.required_valid,
+        required_original=phase.original.required_valid,
+        confidence=phase.one_sided_confidence,
+        margin=policy.margin,
+    )
+
+
 class SampledConfirmation(BaseModel):
     """One fresh final comparison with the fixed-sample statistical outcome."""
 
@@ -457,18 +484,8 @@ class SampledConfirmation(BaseModel):
 
     @classmethod
     def from_evidence(cls, evidence: SamplingBlockEvidence) -> SampledConfirmation:
-        outcome = FixedSampleOutcome.INCOMPLETE if evidence.eligible else None
-        if evidence.complete and evidence.eligible:
-            phase = evidence.plan.preservation.confirmation
-            outcome = classify_fixed_sample(
-                BinomialSample(evidence.candidate_counts.matches, evidence.candidate_counts.valid),
-                BinomialSample(evidence.original_counts.matches, evidence.original_counts.valid),
-                required_candidate=phase.candidate.required_valid,
-                required_original=phase.original.required_valid,
-                confidence=phase.one_sided_confidence,
-                margin=evidence.plan.preservation.margin,
-            ).outcome
-        return cls(evidence=evidence, outcome=outcome)
+        classification = classify_confirmation(evidence)
+        return cls(evidence=evidence, outcome=classification.outcome if classification else None)
 
     @model_validator(mode="after")
     def validate_outcome(self) -> SampledConfirmation:
@@ -476,19 +493,8 @@ class SampledConfirmation(BaseModel):
             raise ValueError("preservation confirmation requires a reduction procedure")
         if self.evidence.plan.role != "confirmation":
             raise ValueError("sampled confirmation requires confirmation evidence")
-        expected = FixedSampleOutcome.INCOMPLETE if self.evidence.eligible else None
-        if self.evidence.complete and self.evidence.eligible:
-            phase = self.evidence.plan.preservation.confirmation
-            candidate = self.evidence.candidate_counts
-            original = self.evidence.original_counts
-            expected = classify_fixed_sample(
-                BinomialSample(candidate.matches, candidate.valid),
-                BinomialSample(original.matches, original.valid),
-                required_candidate=phase.candidate.required_valid,
-                required_original=phase.original.required_valid,
-                confidence=phase.one_sided_confidence,
-                margin=self.evidence.plan.preservation.margin,
-            ).outcome
+        classification = classify_confirmation(self.evidence)
+        expected = classification.outcome if classification else None
         if self.outcome != expected:
             raise ValueError("confirmation outcome does not match complete eligible evidence")
         return self

@@ -4,6 +4,7 @@ import json
 import os
 from functools import partial
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -133,7 +134,11 @@ def _request() -> JsonObject:
     return {"model": "fake", "input": [{"marker": "keep"}]}
 
 
-def _checkpoint(**overrides: object) -> ReductionCheckpoint:
+def _checkpoint(
+    plan: ResolvedExecutionPlan | None = None, /, **overrides: object
+) -> ReductionCheckpoint:
+    if plan is None:
+        plan = _plan()
     specifications = (
         ("chunk", (), ("ctx-a", "ctx-b"), ("ctx-a", "ctx-b"), False),
         ("chunk", (), ("ctx-b",), ("ctx-b",), True),
@@ -165,11 +170,11 @@ def _checkpoint(**overrides: object) -> ReductionCheckpoint:
         )
     )
     values: dict[str, object] = {
-        "case_digest": _plan().case_digest,
-        "experiment_digest": _experiment().digest,
-        "runner_fingerprint": _plan().runner_fingerprint,
-        "execution_plan_digest": _plan().digest,
-        "target_digest": _plan().target_digest,
+        "case_digest": plan.case_digest,
+        "experiment_digest": plan.experiment_digest,
+        "runner_fingerprint": plan.runner_fingerprint,
+        "execution_plan_digest": plan.digest,
+        "target_digest": plan.target_digest,
         "algorithm_digest": ALGORITHM_DIGEST,
         "removed_context_ids": ("ctx-b",),
         "trials": trials,
@@ -181,11 +186,16 @@ def _checkpoint(**overrides: object) -> ReductionCheckpoint:
 
 
 def _summary(
+    plan: ResolvedExecutionPlan | None = None,
+    checkpoint: ReductionCheckpoint | None = None,
+    /,
     **overrides: object,
 ) -> ResultSummary:
-    plan = _plan()
+    if plan is None:
+        plan = _plan()
     request = _request()
-    checkpoint = _checkpoint()
+    if checkpoint is None:
+        checkpoint = _checkpoint(plan)
     retained_context = [
         _node("ctx-a", "/input/0").model_dump(mode="json"),
         _node("ctx-c", "/input/2").model_dump(mode="json"),
@@ -207,7 +217,7 @@ def _summary(
         "run_id": "run-001",
         "status": "reduced",
         "case_digest": plan.case_digest,
-        "experiment_digest": _experiment().digest,
+        "experiment_digest": plan.experiment_digest,
         "target_digest": plan.target_digest,
         "execution_plan_digest": plan.digest,
         "candidate_digest": candidate.digest,
@@ -242,10 +252,11 @@ def _write(destination: Path, *, summary: ResultSummary | None = None) -> Path:
     experiment_path.parent.mkdir(parents=True, exist_ok=True)
     experiment_path.write_text(_EXPERIMENT, encoding="utf-8")
     nodes = (_node("ctx-a", "/input/0"), _node("ctx-c", "/input/2"))
-    checkpoint = _checkpoint()
+    plan = _plan()
+    checkpoint = _checkpoint(plan)
     return write_result_snapshot(
         destination=destination,
-        summary=summary or _summary(),
+        summary=summary or _summary(plan, checkpoint),
         request=_request(),
         retained_context_lines=tuple(node.model_dump_json() for node in nodes),
         experiment_source=experiment_path,
@@ -254,7 +265,7 @@ def _write(destination: Path, *, summary: ResultSummary | None = None) -> Path:
             "inference_call_id": "inference-001",
             "trace_schema": "synthetic-v1",
         },
-        execution_plan=_plan(),
+        execution_plan=plan,
         checkpoint=checkpoint,
     )
 
@@ -453,6 +464,49 @@ def test_snapshot_directory_sync_failure_preserves_publication_state(
         assert load(destination).root == destination
     else:
         assert not destination.exists()
+
+
+@pytest.mark.parametrize("kind", ["result", "calibration"])
+def test_snapshot_serialization_failure_occurs_after_prior_writes_and_cleans_staging(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    destination = tmp_path / "snapshot"
+    dump = ResolvedExecutionPlan.model_dump
+    serialized_after: list[str] = []
+
+    class Interrupted(BaseException):
+        pass
+
+    def fail_plan_dump(plan: ResolvedExecutionPlan, **kwargs: Any) -> dict[str, Any]:
+        staging = tuple(tmp_path.glob(".snapshot-*"))
+        if kwargs.get("mode") == "json" and staging:
+            serialized_after.extend(sorted(path.name for path in staging[0].iterdir()))
+            raise Interrupted("injected serialization interruption")
+        return dump(plan, **kwargs)
+
+    if kind == "result":
+        write = _write
+    else:
+        summary = calibration_summary_from_observations(
+            base=_calibration_base(),
+            observations=(),
+            expected_policy_digest=_sampled_plan().safety_policy.digest,
+            max_provider_calls_per_attempt=1,
+        )
+        write = partial(_write_calibration, summary=summary)
+    monkeypatch.setattr(ResolvedExecutionPlan, "model_dump", fail_plan_dump)
+    with pytest.raises(Interrupted, match="injected serialization interruption"):
+        write(destination)
+
+    assert serialized_after == [
+        "experiment.toml",
+        "provenance.json",
+        "request.json",
+        "retained-context.jsonl",
+        "summary.json",
+    ]
+    assert not destination.exists()
+    assert not tuple(tmp_path.glob(".snapshot-*"))
 
 
 def test_calibration_snapshot_round_trip_preserves_unknown_accounting(tmp_path: Path) -> None:

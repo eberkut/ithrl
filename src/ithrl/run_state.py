@@ -244,6 +244,18 @@ class SamplingObservationReference(_SampledStateContract):
     schedule_position: Annotated[int, Field(ge=0)]
     independence_evidence_digest: _StateDigest | None = None
 
+    def matches_attempt(self, attempt: SamplingAttempt) -> bool:
+        """Match the five persisted identity fields of an observed sampling attempt."""
+
+        observation = attempt.observation
+        return (
+            self.observation_id == observation.observation_id
+            and self.attempt_id == observation.attempt_evidence.attempt_id
+            and self.attempt_digest == observation.attempt_evidence.attempt_digest
+            and self.schedule_position == attempt.schedule_position
+            and self.independence_evidence_digest == attempt.independence_evidence_digest
+        )
+
 
 class SamplingBlockProgress(_SampledStateContract):
     """One immutable admitted plan and its append-only ordered observation references."""

@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import signal
 import stat
 import subprocess
 import time
@@ -45,10 +44,10 @@ from ithrl.runner.copilot.policy import (
     target_policy,
 )
 from ithrl.runner.runtime import PROCESS_CANCELLATION_GRACE_SECONDS
+from ithrl.runner.runtime.probes import process_group_exists, stop_probe_group
 
 _PROBE_TIMEOUT_SECONDS = 15
 _PROBE_POLL_SECONDS = 0.05
-_PROBE_TERMINATION_GRACE_SECONDS = 1.0
 _MAX_PROBE_OUTPUT_BYTES = 1024 * 1024
 _MAX_PROBE_STATE_BYTES = DEFAULT_DISPOSABLE_STATE_BYTES
 _MAX_PROBE_STATE_ENTRIES = 2_000
@@ -450,7 +449,7 @@ def _run_probe(
             returncode = _wait_for_probe(process, stdout, stderr, failure_code, state_root)
         except CopilotCapabilityError as error:
             refusal = error
-            if process is not None and not _stop_probe_group(process):
+            if process is not None and not stop_probe_group(process):
                 refusal = CopilotCapabilityError(
                     failure_code,
                     "Copilot capability probe processes could not be stopped",
@@ -459,7 +458,7 @@ def _run_probe(
             raise refusal from None
         except TimeoutError:
             message = "Copilot capability probe timed out"
-            if process is not None and not _stop_probe_group(process):
+            if process is not None and not stop_probe_group(process):
                 message = "Copilot capability probe processes could not be stopped"
             refusal = CopilotCapabilityError(failure_code, message)
             _capture_probe_error(refusal, process, stdout, stderr, probe_stage)
@@ -469,7 +468,7 @@ def _run_probe(
                 CopilotCapabilityErrorCode.UNAVAILABLE,
                 "Copilot capability probe could not start",
             )
-            if process is not None and not _stop_probe_group(process):
+            if process is not None and not stop_probe_group(process):
                 refusal = CopilotCapabilityError(
                     failure_code,
                     "Copilot capability probe processes could not be stopped",
@@ -478,10 +477,10 @@ def _run_probe(
             raise refusal from error
         except BaseException:
             if process is not None:
-                _stop_probe_group(process)
+                stop_probe_group(process)
             raise
-        if _probe_group_exists(process.pid):
-            stopped = _stop_probe_group(process)
+        if process_group_exists(process.pid):
+            stopped = stop_probe_group(process)
             message = (
                 "Copilot capability probe left a descendant process"
                 if stopped
@@ -642,42 +641,6 @@ def _require_bounded_probe_state(root: Path) -> None:
             CopilotCapabilityErrorCode.PROBE_FAILED,
             "Copilot capability state could not be inspected",
         ) from error
-
-
-def _stop_probe_group(process: subprocess.Popen[bytes]) -> bool:
-    _signal_probe_group(process.pid, signal.SIGTERM)
-    if _wait_probe_group_gone(process):
-        return True
-    _signal_probe_group(process.pid, signal.SIGKILL)
-    return _wait_probe_group_gone(process)
-
-
-def _wait_probe_group_gone(process: subprocess.Popen[bytes]) -> bool:
-    deadline = time.monotonic() + _PROBE_TERMINATION_GRACE_SECONDS
-    while time.monotonic() < deadline:
-        process.poll()
-        if not _probe_group_exists(process.pid):
-            return True
-        time.sleep(_PROBE_POLL_SECONDS)
-    process.poll()
-    return not _probe_group_exists(process.pid)
-
-
-def _signal_probe_group(process_group: int, selected_signal: signal.Signals) -> None:
-    try:
-        os.killpg(process_group, selected_signal)
-    except OSError:
-        return
-
-
-def _probe_group_exists(process_group: int) -> bool:
-    try:
-        os.killpg(process_group, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
 
 
 def _discovery_environment() -> dict[str, str]:

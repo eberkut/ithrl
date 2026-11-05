@@ -68,58 +68,52 @@ async def evaluate() -> dict:
         str(p): BASELINE.holdout_probabilities(p) for p in (BASELINE.P_ORIGINAL, BASELINE.P_REMOVED)
     }
     family = []
-    original_cap = BASELINE.MAX_COMPARISONS
-    try:
-        for cap in CONFIGURATION["comparison_caps"]:
-            BASELINE.MAX_COMPARISONS = cap
-            rows = []
-            for failure in CONFIGURATION["independent_preaccept_failure_probabilities"]:
-                for position in CONFIGURATION["instruction_positions"]:
-                    rows.append(
-                        await BASELINE.enumerate_position(
-                            position, failure, holdout["0.9"]["preserves"]
-                        )
+    for cap in CONFIGURATION["comparison_caps"]:
+        rows = []
+        for failure in CONFIGURATION["independent_preaccept_failure_probabilities"]:
+            for position in CONFIGURATION["instruction_positions"]:
+                rows.append(
+                    await BASELINE.enumerate_position(
+                        position, failure, holdout["0.9"]["preserves"], max_comparisons=cap
                     )
-                    if (
-                        time.perf_counter() - started
-                        > CONFIGURATION["maximum_family_evaluation_seconds"]
-                    ):
-                        raise TimeoutError("native budget family exceeded its evaluation limit")
-            minimums = {
-                str(failure): min(
-                    row["unconditional_useful_probability"]
-                    for row in rows
-                    if row["independent_preaccept_failure_probability"] == failure
                 )
-                for failure in CONFIGURATION["independent_preaccept_failure_probabilities"]
+                if (
+                    time.perf_counter() - started
+                    > CONFIGURATION["maximum_family_evaluation_seconds"]
+                ):
+                    raise TimeoutError("native budget family exceeded its evaluation limit")
+        minimums = {
+            str(failure): min(
+                row["unconditional_useful_probability"]
+                for row in rows
+                if row["independent_preaccept_failure_probability"] == failure
+            )
+            for failure in CONFIGURATION["independent_preaccept_failure_probabilities"]
+        }
+        maximum_attempts = (
+            CONFIGURATION["calibration_required_valid_minimum_matches_max_attempts"][2]
+            + cap
+            * (
+                CONFIGURATION["search_original_valid_max_attempts"][1]
+                + CONFIGURATION["search_candidate_valid_max_attempts"][1]
+            )
+            + 2 * CONFIGURATION["confirmation_each_valid_max_attempts"][1]
+        )
+        family.append(
+            {
+                "comparison_cap": cap,
+                "rows": rows,
+                "minimum_unconditional_useful_probability_by_failure": minimums,
+                "every_position_at_least_0_80_by_failure": {
+                    key: value >= 0.80 for key, value in minimums.items()
+                },
+                "worst_case_attempts_and_final_response_calls": maximum_attempts,
+                "worst_case_shell_possible_provider_calls": 2 * maximum_attempts,
+                "deadline_plus_grace_upper_bound_seconds": maximum_attempts * deadline,
+                "fits_frozen_86400_second_command_limit_at_deadlines": maximum_attempts * deadline
+                <= CONFIGURATION["command_wall_limit_seconds"],
             }
-            maximum_attempts = (
-                CONFIGURATION["calibration_required_valid_minimum_matches_max_attempts"][2]
-                + cap
-                * (
-                    CONFIGURATION["search_original_valid_max_attempts"][1]
-                    + CONFIGURATION["search_candidate_valid_max_attempts"][1]
-                )
-                + 2 * CONFIGURATION["confirmation_each_valid_max_attempts"][1]
-            )
-            family.append(
-                {
-                    "comparison_cap": cap,
-                    "rows": rows,
-                    "minimum_unconditional_useful_probability_by_failure": minimums,
-                    "every_position_at_least_0_80_by_failure": {
-                        key: value >= 0.80 for key, value in minimums.items()
-                    },
-                    "worst_case_attempts_and_final_response_calls": maximum_attempts,
-                    "worst_case_shell_possible_provider_calls": 2 * maximum_attempts,
-                    "deadline_plus_grace_upper_bound_seconds": maximum_attempts * deadline,
-                    "fits_frozen_86400_second_command_limit_at_deadlines": maximum_attempts
-                    * deadline
-                    <= CONFIGURATION["command_wall_limit_seconds"],
-                }
-            )
-    finally:
-        BASELINE.MAX_COMPARISONS = original_cap
+        )
     passing = [
         item["comparison_cap"]
         for item in family

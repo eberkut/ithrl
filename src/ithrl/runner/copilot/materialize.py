@@ -9,7 +9,7 @@ from typing import Never
 
 from ithrl.adapters import AdapterError
 from ithrl.adapters.contracts import NativeSession
-from ithrl.adapters.registry import parse_session_bytes
+from ithrl.adapters.registry import decision_input_node_id, parse_session_bytes
 from ithrl.case import CaseFormatError
 from ithrl.context import ContextNode, JsonObject, JsonValue, content_digest
 from ithrl.extraction import validate_extracted_case
@@ -117,9 +117,15 @@ def _materialize_session(
     boundary = decision.selector.context_before_line
     retained = frozenset(attempt.candidate.retained_context_ids)
     selected = _selected_context(attempt.evidence.context.nodes, records, boundary, retained)
-    fixed_input = _trigger_node_id(
-        attempt.evidence.context.nodes, records, boundary, decision.selector.turn_id
-    )
+    try:
+        fixed_input = decision_input_node_id(
+            session, decision.selector, attempt.evidence.context, records=records
+        )
+    except AdapterError:
+        raise CopilotMaterializationError(
+            CopilotMaterializationErrorCode.AMBIGUOUS_BOUNDARY,
+            "the selected Copilot decision has no supported native input boundary",
+        ) from None
     if fixed_input not in retained:
         raise CopilotMaterializationError(
             CopilotMaterializationErrorCode.MISSING_TRIGGER,
@@ -148,29 +154,6 @@ def _materialize_session(
     if len(native_session) > _MAX_NATIVE_SESSION_BYTES:
         _unsupported("the reconstructed Copilot native prefix exceeds the byte limit")
     return native_session, session.metadata.session_id
-
-
-def _trigger_node_id(
-    nodes: tuple[ContextNode, ...],
-    records: tuple[JsonObject, ...],
-    boundary: int,
-    turn_id: str,
-) -> str:
-    """Require the fixed native input independently of editable-text discovery."""
-
-    if (
-        boundary < 2
-        or boundary > len(records)
-        or records[boundary - 1].get("type") != "assistant.turn_start"
-        or _object(records[boundary - 1].get("data")).get("turnId") != turn_id
-    ):
-        _ambiguous("the selected Copilot decision has no supported native input boundary")
-    for index in range(boundary - 2, -1, -1):
-        if records[index].get("type") == "assistant.turn_start":
-            break
-        if records[index].get("type") in {"user.message", "tool.execution_complete"}:
-            return nodes[index].id
-    return _ambiguous("the selected Copilot decision has no supported native input boundary")
 
 
 def _selected_context(

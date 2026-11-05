@@ -15,7 +15,6 @@ from pydantic import ValidationError
 import ithrl.cli.sampled_session as sessions
 from ithrl.case import CaseEvidence, CaseWorkspace
 from ithrl.cli.sampled_session import (
-    SampledCliSession,
     SampledCliSessionError,
     load_cli_run_state,
     load_cli_session,
@@ -50,6 +49,7 @@ from ithrl.run_state import (
     SampledRunStateFile,
     SamplingBudgetApproval,
 )
+from ithrl.sampled_run_metadata import SampledRunMetadata
 from ithrl.synthetic import extract_inference
 
 _TIME = datetime(2026, 10, 7, tzinfo=UTC)
@@ -63,7 +63,7 @@ class Bundle:
     state: SampledRunState
     store: ObservationStore
     result: SampledReductionEvidence
-    session: SampledCliSession
+    session: SampledRunMetadata
 
 
 @pytest.fixture
@@ -138,7 +138,7 @@ def bundle(tmp_path: Path) -> Bundle:
         state = state_file.save_checkpoint(store, checkpoint)
     original_workspace = tmp_path / "original"
     original_workspace.mkdir(mode=0o700)
-    session = SampledCliSession(
+    session = SampledRunMetadata(
         run_id="run-1",
         run_directory=state_file.path.parent,
         source_case=workspace.root.absolute(),
@@ -186,7 +186,16 @@ def test_live_metadata_roundtrip_is_immutable_and_private(bundle: Bundle) -> Non
 
 @pytest.mark.parametrize(
     "change",
-    ["relative", "traversal", "foreign-run", "calibration-only", "identity", "naive-time", "extra"],
+    [
+        "relative",
+        "traversal",
+        "foreign-run",
+        "calibration-only",
+        "identity",
+        "naive-time",
+        "numeric-time",
+        "extra",
+    ],
 )
 def test_session_contract_rejects_unbound_inputs(bundle: Bundle, change: str) -> None:
     values = bundle.session.model_dump()
@@ -205,10 +214,12 @@ def test_session_contract_rejects_unbound_inputs(bundle: Bundle, change: str) ->
             )
         case "naive-time":
             values["started_at"] = _TIME.replace(tzinfo=None)
+        case "numeric-time":
+            values["started_at"] = _TIME.timestamp()
         case "extra":
             values["credential"] = "never-accepted"
     with pytest.raises(ValidationError):
-        SampledCliSession.model_validate(values)
+        SampledRunMetadata.model_validate(values)
 
 
 @pytest.mark.parametrize("unsafe", ["symlink", "hardlink", "mode", "oversized", "duplicate"])
@@ -500,4 +511,91 @@ def test_live_state_loader_refuses_unsafe_files(
     before = path.read_bytes()
     with pytest.raises(SampledCliSessionError):
         load_cli_run_state(bundle.session.run_directory)
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "started_at",
+    [
+        1791331200,
+        1791331200.0,
+        "1791331200",
+        "20261018",
+        "2026-10-07",
+        "2026-10-07T00:00:00z",
+        "2026-10-07 00:00:00Z",
+    ],
+)
+def test_run_metadata_requires_rfc3339_datetime_string(bundle: Bundle, started_at: object) -> None:
+    values = bundle.session.model_dump(mode="json")
+    values["started_at"] = started_at
+    with pytest.raises(ValidationError):
+        SampledRunMetadata.model_validate_json(json.dumps(values))
+    (bundle.session.run_directory / "cli-session.json").write_text(json.dumps(values))
+    with pytest.raises(SampledCliSessionError) as error:
+        load_cli_session(bundle.session.run_directory)
+    assert str(error.value) == "cannot load private sampled CLI session"
+
+
+def test_run_metadata_associates_normalized_paths_without_access(
+    bundle: Bundle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def refuse(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("metadata association must not access recorded paths")
+
+    values = bundle.session.model_dump(mode="json")
+    values["source_case"] += "/."
+    state = bundle.state.model_copy(
+        update={
+            "source_case": str(bundle.session.source_case) + "/.",
+            "observation_store": str(bundle.session.observation_store.parent)
+            + "//"
+            + bundle.session.observation_store.name,
+        }
+    )
+    monkeypatch.setattr(Path, "stat", refuse)
+    monkeypatch.setattr(Path, "lstat", refuse)
+    monkeypatch.setattr(Path, "resolve", refuse)
+    metadata = SampledRunMetadata.model_validate_json(json.dumps(values))
+    assert metadata.matches_state(state)
+
+
+@pytest.mark.parametrize(
+    ("started_at", "expected"),
+    [
+        ("2026-10-07T00:00:00Z", _TIME),
+        ("2026-10-07T02:00:00+02:00", _TIME),
+        ("2026-10-06T22:00:00-02:00", _TIME),
+        ("2026-10-07T00:00:00.123456Z", _TIME.replace(microsecond=123456)),
+    ],
+)
+def test_run_metadata_normalizes_supported_rfc3339_timestamps(
+    bundle: Bundle, started_at: str, expected: datetime
+) -> None:
+    values = bundle.session.model_dump(mode="json")
+    values["started_at"] = started_at
+    metadata = SampledRunMetadata.model_validate_json(json.dumps(values))
+    assert metadata.started_at == expected
+    assert metadata.started_at.tzinfo is UTC
+
+
+@pytest.mark.parametrize("started_at", ["0001-01-01T00:00:00+23:59", "9999-12-31T23:59:59-23:59"])
+def test_run_metadata_rejects_timestamps_outside_utc_range(bundle: Bundle, started_at: str) -> None:
+    values = bundle.session.model_dump(mode="json")
+    values["started_at"] = started_at
+    with pytest.raises(ValidationError) as error:
+        SampledRunMetadata.model_validate_json(json.dumps(values))
+    assert error.value.errors(include_input=False, include_context=False)[0]["msg"] == (
+        "Value error, session start must be within the supported UTC range"
+    )
+    python_values = bundle.session.model_dump()
+    python_values["started_at"] = datetime.fromisoformat(started_at)
+    with pytest.raises(ValidationError):
+        SampledRunMetadata.model_validate(python_values)
+    path = bundle.session.run_directory / "cli-session.json"
+    path.write_text(json.dumps(values))
+    before = path.read_bytes()
+    with pytest.raises(SampledCliSessionError) as live_error:
+        load_cli_session(bundle.session.run_directory)
+    assert str(live_error.value) == "cannot load private sampled CLI session"
     assert path.read_bytes() == before

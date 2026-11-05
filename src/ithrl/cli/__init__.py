@@ -68,7 +68,7 @@ from ithrl.workflow import (
 
 if TYPE_CHECKING:
     from ithrl.cli.native import NativeSelection
-    from ithrl.cli.sampled_session import SampledCliSession
+    from ithrl.sampled_run_metadata import SampledRunMetadata
 
 app = typer.Typer(
     cls=JsonAwareGroup,
@@ -511,7 +511,7 @@ def _shrink(
         def select_saved(
             workspace: CaseWorkspace,
             evidence: CaseEvidence,
-            session: SampledCliSession,
+            session: SampledRunMetadata,
         ) -> NativeSelection:
             if (
                 max_provider_calls_per_attempt is not None

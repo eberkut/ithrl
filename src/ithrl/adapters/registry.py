@@ -13,12 +13,14 @@ from pydantic import ValidationError
 from ithrl.adapters._jsonl import JsonlDocument, read_jsonl, read_jsonl_bytes
 from ithrl.adapters.codex import PARSER as CODEX_PARSER
 from ithrl.adapters.codex.context import compile_context as compile_codex_context
+from ithrl.adapters.codex.context import decision_input_node_id as codex_decision_input_node_id
 from ithrl.adapters.codex.context import editable_text as editable_codex_text
 from ithrl.adapters.codex.decisions import enumerate_decisions as enumerate_codex_decisions
 from ithrl.adapters.codex.discovery import discover_sources as discover_codex_sources
 from ithrl.adapters.contracts import NativeSession, ParsingLimits
 from ithrl.adapters.copilot import PARSER as COPILOT_PARSER
 from ithrl.adapters.copilot.context import compile_context as compile_copilot_context
+from ithrl.adapters.copilot.context import decision_input_node_id as copilot_decision_input_node_id
 from ithrl.adapters.copilot.context import editable_text as editable_copilot_text
 from ithrl.adapters.copilot.decisions import enumerate_decisions as enumerate_copilot_decisions
 from ithrl.adapters.copilot.discovery import discover_sources as discover_copilot_sources
@@ -32,7 +34,7 @@ from ithrl.adapters.discovery import (
     SourceScan,
 )
 from ithrl.adapters.errors import AdapterError, AdapterErrorCode
-from ithrl.context import ContextGraph
+from ithrl.context import ContextGraph, ContextNode, JsonObject
 from ithrl.decisions import DecisionDraft, DecisionSelector, DecisionSummary, SelectedDecision
 from ithrl.mutation import EditableText
 
@@ -79,6 +81,17 @@ class TextDiscoverer(Protocol):
     ) -> tuple[EditableText, ...]: ...
 
 
+class DecisionInputLocator(Protocol):
+    """Identify the fixed native input in an already validated decision context."""
+
+    def __call__(
+        self,
+        nodes: tuple[ContextNode, ...],
+        records: tuple[JsonObject, ...],
+        selector: DecisionSelector,
+    ) -> str | None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class _AdapterRegistration:
     harness: HarnessName
@@ -86,6 +99,7 @@ class _AdapterRegistration:
     discoverer: SessionDiscoverer
     decision_enumerator: DecisionEnumerator
     context_compiler: ContextCompiler
+    decision_input_locator: DecisionInputLocator
     text_discoverer: TextDiscoverer | None = None
 
 
@@ -104,6 +118,7 @@ _BUILTIN_ADAPTERS = (
         discoverer=discover_codex_sources,
         decision_enumerator=enumerate_codex_decisions,
         context_compiler=compile_codex_context,
+        decision_input_locator=codex_decision_input_node_id,
         text_discoverer=editable_codex_text,
     ),
     _AdapterRegistration(
@@ -112,12 +127,31 @@ _BUILTIN_ADAPTERS = (
         discoverer=discover_copilot_sources,
         decision_enumerator=enumerate_copilot_decisions,
         context_compiler=compile_copilot_context,
+        decision_input_locator=copilot_decision_input_node_id,
         text_discoverer=editable_copilot_text,
     ),
 )
 _ADAPTERS_BY_HARNESS = {adapter.harness: adapter for adapter in _BUILTIN_ADAPTERS}
 _ADAPTERS_BY_FORMAT = {adapter.parser.format_name: adapter for adapter in _BUILTIN_ADAPTERS}
 _BUILTIN_PARSERS = tuple(adapter.parser for adapter in _BUILTIN_ADAPTERS)
+
+
+def decision_input_node_id(
+    session: NativeSession,
+    selector: DecisionSelector,
+    context: ContextGraph,
+    *,
+    records: tuple[JsonObject, ...],
+) -> str | None:
+    """Locate the fixed input using the caller's verified native record snapshot."""
+
+    adapter = _ADAPTERS_BY_FORMAT.get(session.metadata.format.name)
+    if adapter is None:
+        raise AdapterError(
+            AdapterErrorCode.UNSUPPORTED_FORMAT,
+            "session format does not support decision input discovery",
+        )
+    return adapter.decision_input_locator(context.nodes, records, selector)
 
 
 def editable_session_text(

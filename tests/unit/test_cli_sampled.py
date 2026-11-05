@@ -5,10 +5,11 @@ from __future__ import annotations
 import json
 import os
 import shlex
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import cast
 from unittest.mock import Mock
 
 import pytest
@@ -27,14 +28,22 @@ from ithrl.experiment import (
 )
 from ithrl.observations import ObservationOutcome
 from ithrl.synthetic import extract_inference
+from ithrl.workflow import PreparedExperiment
 
 FIXTURE = Path(__file__).parents[1] / "fixtures/synthetic-trace.json"
 
 
+@dataclass(frozen=True, slots=True)
+class _PreparedCase:
+    workspace: CaseWorkspace
+    evidence: CaseEvidence
+    prepared: SimpleNamespace
+    original_workspace: Path
+    observation_store: Path
+
+
 @pytest.fixture
-def prepared_case(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> tuple[CaseWorkspace, CaseEvidence, Any, Path, Path]:
+def prepared_case(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _PreparedCase:
     def fixture_candidate(*_args: object) -> SimpleNamespace:
         return SimpleNamespace(digest="fixture-digest")
 
@@ -94,11 +103,11 @@ def prepared_case(
     original.mkdir()
     store = tmp_path / "private" / "observations.sqlite"
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
-    return workspace, evidence, prepared, original, store
+    return _PreparedCase(workspace, evidence, prepared, original, store)
 
 
 def _invoke(
-    prepared_case: tuple[CaseWorkspace, CaseEvidence, Any, Path, Path],
+    prepared_case: _PreparedCase,
     *,
     dry_run: bool = False,
     calibrate_only: bool = True,
@@ -109,16 +118,17 @@ def _invoke(
     inter_attempt_delay_seconds: int = 0,
     experiment_path: Path | None = None,
 ) -> None:
-    workspace, evidence, prepared, original, store = prepared_case
     sampled.handle_sampled_shrink(
-        workspace,
-        evidence,
-        prepared,
+        prepared_case.workspace,
+        prepared_case.evidence,
+        cast(PreparedExperiment, prepared_case.prepared),
         dry_run=dry_run,
         calibrate_only=calibrate_only,
         acknowledge_model_execution=acknowledge_model_execution,
-        original_workspace=original,
-        observation_store=observation_store if observation_store is not None else store,
+        original_workspace=prepared_case.original_workspace,
+        observation_store=(
+            observation_store if observation_store is not None else prepared_case.observation_store
+        ),
         output_format=output_format,
         max_wall_time_seconds=max_wall_time_seconds,
         inter_attempt_delay_seconds=inter_attempt_delay_seconds,
@@ -138,11 +148,11 @@ def services(monkeypatch: pytest.MonkeyPatch) -> tuple[Mock, Mock, Mock]:
 
 
 def test_dry_run_has_reproducible_bounds_without_store_or_calibration(
-    prepared_case: tuple[CaseWorkspace, CaseEvidence, Any, Path, Path],
+    prepared_case: _PreparedCase,
     services: tuple[Mock, Mock, Mock],
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    experiment_path = prepared_case[0].root / "experiments" / "explicit.toml"
+    experiment_path = prepared_case.workspace.root / "experiments" / "explicit.toml"
     _invoke(
         prepared_case,
         dry_run=True,
@@ -169,8 +179,10 @@ def test_dry_run_has_reproducible_bounds_without_store_or_calibration(
     assert report["provider_call_accounting"] == "not-started"
     assert report["provider_calls"] == report["actions_executed"] == 0
     command = shlex.split(report["next_command"])
-    assert command[command.index("--original-workspace") + 1] == str(prepared_case[3])
-    assert command[command.index("--observation-store") + 1] == str(prepared_case[4])
+    assert command[command.index("--original-workspace") + 1] == str(
+        prepared_case.original_workspace
+    )
+    assert command[command.index("--observation-store") + 1] == str(prepared_case.observation_store)
     for flag, value in (
         ("--required-valid", "2"),
         ("--minimum-matches", "1"),
@@ -183,15 +195,15 @@ def test_dry_run_has_reproducible_bounds_without_store_or_calibration(
     ):
         assert command[command.index(flag) + 1] == value
     assert "--acknowledge-model-execution" in command
-    assert not prepared_case[4].exists()
-    assert not (prepared_case[0].root / "results").exists()
+    assert not prepared_case.observation_store.exists()
+    assert not (prepared_case.workspace.root / "results").exists()
     for service in services:
         service.assert_not_called()
 
 
 @pytest.mark.parametrize("interactive", [False, True])
 def test_acknowledgement_required_or_declined_before_store_writes(
-    prepared_case: tuple[CaseWorkspace, CaseEvidence, Any, Path, Path],
+    prepared_case: _PreparedCase,
     services: tuple[Mock, Mock, Mock],
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -225,7 +237,7 @@ def test_acknowledgement_required_or_declined_before_store_writes(
     ],
 )
 def test_post_dispatch_failures_never_claim_zero_or_expose_exception_text(
-    prepared_case: tuple[CaseWorkspace, CaseEvidence, Any, Path, Path],
+    prepared_case: _PreparedCase,
     services: tuple[Mock, Mock, Mock],
     capsys: pytest.CaptureFixture[str],
     failure: BaseException,
@@ -261,7 +273,7 @@ def test_post_dispatch_failures_never_claim_zero_or_expose_exception_text(
     ],
 )
 def test_outcomes_have_truthful_accounting_and_only_safe_continuations(
-    prepared_case: tuple[CaseWorkspace, CaseEvidence, Any, Path, Path],
+    prepared_case: _PreparedCase,
     services: tuple[Mock, Mock, Mock],
     capsys: pytest.CaptureFixture[str],
     outcome: str,
@@ -301,7 +313,7 @@ def test_outcomes_have_truthful_accounting_and_only_safe_continuations(
     services[1].return_value = result
     services[2].side_effect = None
     services[2].return_value = SimpleNamespace(
-        summary=summary, root=prepared_case[0].root / "results/fixture"
+        summary=summary, root=prepared_case.workspace.root / "results/fixture"
     )
     if expected_exit is None:
         _invoke(prepared_case, acknowledge_model_execution=True)
@@ -331,11 +343,12 @@ def test_outcomes_have_truthful_accounting_and_only_safe_continuations(
 
 @pytest.mark.parametrize("relative", ["case", "original", "native-attempts", "native-output"])
 def test_observation_storage_cannot_overlap_protected_or_disposable_state(
-    prepared_case: tuple[CaseWorkspace, CaseEvidence, Any, Path, Path],
+    prepared_case: _PreparedCase,
     tmp_path: Path,
     relative: str,
 ) -> None:
-    workspace, _, _, original, _ = prepared_case
+    workspace = prepared_case.workspace
+    original = prepared_case.original_workspace
     roots = {
         "case": workspace.root,
         "original": original,
@@ -350,13 +363,13 @@ def test_observation_storage_cannot_overlap_protected_or_disposable_state(
     "suffix", ["", ".calibration.lock", ".calibration.inflight", "-wal", "-shm", "-journal"]
 )
 def test_store_lifecycle_hardlinks_refused_before_ack_or_write(
-    prepared_case: tuple[CaseWorkspace, CaseEvidence, Any, Path, Path],
+    prepared_case: _PreparedCase,
     services: tuple[Mock, Mock, Mock],
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
     suffix: str,
 ) -> None:
-    store = prepared_case[4]
+    store = prepared_case.observation_store
     store.parent.mkdir()
     source = tmp_path / "other-file"
     source.write_text("protected content")
@@ -374,7 +387,7 @@ def test_store_lifecycle_hardlinks_refused_before_ack_or_write(
 
 @pytest.mark.parametrize("stage", ["preflight", "render", "store"])
 def test_ctrl_c_before_dispatch_is_sampled_and_explicitly_unstarted(
-    prepared_case: tuple[CaseWorkspace, CaseEvidence, Any, Path, Path],
+    prepared_case: _PreparedCase,
     services: tuple[Mock, Mock, Mock],
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -401,13 +414,13 @@ def test_ctrl_c_before_dispatch_is_sampled_and_explicitly_unstarted(
 
 @pytest.mark.parametrize("unsafe", ["store-symlink", "parent-symlink", "directory", "dotdot"])
 def test_unsafe_store_paths_refused_without_writes(
-    prepared_case: tuple[CaseWorkspace, CaseEvidence, Any, Path, Path],
+    prepared_case: _PreparedCase,
     services: tuple[Mock, Mock, Mock],
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
     unsafe: str,
 ) -> None:
-    store = prepared_case[4]
+    store = prepared_case.observation_store
     target = tmp_path / "other"
     target.mkdir()
     if unsafe == "parent-symlink":
@@ -430,7 +443,7 @@ def test_unsafe_store_paths_refused_without_writes(
 
 
 def test_human_dry_run_distinguishes_probe_from_provider_calls(
-    prepared_case: tuple[CaseWorkspace, CaseEvidence, Any, Path, Path],
+    prepared_case: _PreparedCase,
     services: tuple[Mock, Mock, Mock],
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -449,7 +462,7 @@ def test_human_dry_run_distinguishes_probe_from_provider_calls(
     ("accounted", "may_have_started", "possible"), [(None, 7, 1), (7, 7, 0), (2, 2, 1)]
 )
 def test_ambiguous_or_overbound_summary_cannot_be_rendered_as_known_calls(
-    prepared_case: tuple[CaseWorkspace, CaseEvidence, Any, Path, Path],
+    prepared_case: _PreparedCase,
     services: tuple[Mock, Mock, Mock],
     capsys: pytest.CaptureFixture[str],
     accounted: int | None,
@@ -460,7 +473,7 @@ def test_ambiguous_or_overbound_summary_cannot_be_rendered_as_known_calls(
     services[1].return_value = SimpleNamespace(observations=())
     services[2].side_effect = None
     services[2].return_value = SimpleNamespace(
-        root=prepared_case[0].root / "results/fixture",
+        root=prepared_case.workspace.root / "results/fixture",
         summary=SimpleNamespace(
             provider_calls_started=accounted,
             provider_calls_may_have_started=may_have_started,
@@ -487,7 +500,7 @@ def test_ambiguous_or_overbound_summary_cannot_be_rendered_as_known_calls(
 
 
 def test_actual_typer_confirmation_ctrl_c_is_interrupted_not_declined(
-    prepared_case: tuple[CaseWorkspace, CaseEvidence, Any, Path, Path],
+    prepared_case: _PreparedCase,
     services: tuple[Mock, Mock, Mock],
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

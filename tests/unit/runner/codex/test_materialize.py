@@ -7,8 +7,10 @@ from pathlib import Path
 import pytest
 
 from ithrl.adapters import enumerate_decisions, parse_session
+from ithrl.adapters.contracts import NativeSession
 from ithrl.case import CaseEvidence
-from ithrl.context import content_digest
+from ithrl.context import JsonObject, content_digest
+from ithrl.decisions import DecisionEvidence
 from ithrl.execution import (
     CapabilityProfile,
     ResolvedExecutionPlan,
@@ -22,6 +24,7 @@ from ithrl.runner import PreparedAttempt, prepare_candidate
 from ithrl.runner.codex.materialize import (
     CodexMaterializationError,
     CodexMaterializationErrorCode,
+    _materialize_session,
     editable_codex_text,
     materialize_codex_attempt,
 )
@@ -205,7 +208,6 @@ def test_text_append_changes_only_copied_prior_user_block(tmp_path: Path) -> Non
     result = materialize_codex_attempt(_with_mutation(attempt, mutation))
     assert result.history != before.history
     assert result.history[1:] == before.history[1:]
-    assert result.history_context_ids == before.history_context_ids
     assert result.turn_input == before.turn_input
     assert (
         result.base_instructions,
@@ -357,3 +359,74 @@ def test_refuses_present_unsupported_instruction_or_model_setting(
 
     assert refused.value.code is CodexMaterializationErrorCode.UNSUPPORTED_CONTEXT
     assert "unexpected" not in str(refused.value)
+
+
+def test_materializes_direct_user_trigger_without_history(tmp_path: Path) -> None:
+    source = FIXTURES / "codex-session" / "rollout.jsonl"
+    records = [json.loads(line) for line in source.read_text().splitlines()]
+    records = [
+        record
+        for record in records
+        if record["type"] != "response_item" or record["payload"].get("type") == "message"
+    ]
+    selected = tmp_path / "rollout.jsonl"
+    selected.write_text("".join(json.dumps(record) + "\n" for record in records))
+    session = parse_session(selected)
+    decision = enumerate_decisions(session)[0]
+    evidence = extract_decision(
+        session,
+        decision_id=decision.decision_id,
+        target_id=decision.targets[0].target_id,
+        case_path=tmp_path / "case",
+    ).load()
+    materialized = materialize_codex_attempt(_attempt(evidence))
+    assert materialized.history == ()
+    assert materialized.turn_input.items == (
+        {"type": "text", "text": "Inspect the fixture context."},
+    )
+    assert editable_codex_text(_attempt(evidence)) == ()
+
+
+@pytest.mark.parametrize("boundary", [1, 10_000])
+def test_invalid_boundary_precedes_missing_trigger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary: int
+) -> None:
+    attempt = _attempt(_evidence(tmp_path))
+    decision = attempt.evidence.decision
+    assert decision is not None
+    changed_decision = decision.model_copy(
+        update={"selector": decision.selector.model_copy(update={"context_before_line": boundary})}
+    )
+
+    def selected_decision(_evidence: CaseEvidence) -> DecisionEvidence:
+        return changed_decision
+
+    monkeypatch.setattr(CaseEvidence, "decision", property(selected_decision))
+    session = parse_session(FIXTURES / "codex-session" / "rollout.jsonl")
+    with pytest.raises(CodexMaterializationError) as captured:
+        _materialize_session(attempt, session)
+    assert captured.value.code is CodexMaterializationErrorCode.AMBIGUOUS_BOUNDARY
+    assert str(captured.value) == "the selected Codex decision has an invalid context boundary"
+
+
+def test_missing_native_input_retains_materialization_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    attempt = _attempt(_evidence(tmp_path))
+    session = parse_session(FIXTURES / "codex-session" / "rollout.jsonl")
+    records: tuple[JsonObject, ...] = tuple(
+        {**record, "payload": {"type": "reasoning"}}
+        if record.get("type") == "response_item"
+        else record
+        for record in session.records
+    )
+
+    def selected_records(_session: NativeSession) -> tuple[JsonObject, ...]:
+        return records
+
+    monkeypatch.setattr(NativeSession, "records", property(selected_records))
+    with pytest.raises(CodexMaterializationError) as captured:
+        _materialize_session(attempt, session)
+    assert captured.value.code is CodexMaterializationErrorCode.MISSING_TRIGGER
+    assert str(captured.value) == "the selected Codex decision has no supported triggering input"
+    assert captured.value.__cause__ is None

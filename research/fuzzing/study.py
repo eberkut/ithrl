@@ -238,7 +238,6 @@ def simulate(
     masks = np.full(n, 15, dtype=np.int8)
     finished = np.ones(n, dtype=bool) if workflow != "adaptive-shrink" else np.zeros(n, dtype=bool)
     reason = np.full(n, "", dtype="U32")
-    max_seen = 0
     original_invalid = invalid if invalid_original is None else invalid_original
     unchanged_mutant_rate = p_original if p_null_mutant is None else p_null_mutant
     reserve = 2 * attempts_limit(n_confirm)
@@ -264,7 +263,6 @@ def simulate(
         reason[complete & (baseline < 2)] = "calibration-not-measurable"
 
     def pair(indices: np.ndarray, required: int, rates: np.ndarray, *, final: bool = False):
-        nonlocal max_seen
         ceiling = attempts_limit(required)
         future = 0 if final else reserve
         admission = calls[indices] + 2 * ceiling + future <= budget
@@ -283,7 +281,6 @@ def simulate(
         indices, rates = indices[complete_pair], rates[complete_pair]
         xo = rng.binomial(required, p_original, size=len(indices))
         xm = rng.binomial(required, rates, size=len(indices))
-        max_seen = max(max_seen, int(calls.max()))
         return indices, xo, xm
 
     if workflow == "direct-unshrunk":

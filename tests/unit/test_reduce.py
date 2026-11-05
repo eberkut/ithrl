@@ -40,6 +40,7 @@ from ithrl.runner import (
     FakeRunner,
     PreparedAttempt,
     RunAccounting,
+    Runner,
     RunnerError,
     RunnerErrorCode,
     RunResult,
@@ -99,15 +100,17 @@ def _reducer(
     evidence: CaseEvidence,
     store: ObservationStore,
     *,
+    runner: Runner | None = None,
     alternatives: tuple[frozenset[str], ...] = (),
     maximum: int | None = None,
     resume: ReductionCheckpoint | None = None,
 ) -> DeterministicReducer:
-    runner = FakeRunner(
-        required_markers=frozenset({"A", "C"}),
-        alternative_marker_sets=alternatives,
-        tool_name="exec_command",
-    )
+    if runner is None:
+        runner = FakeRunner(
+            required_markers=frozenset({"A", "C"}),
+            alternative_marker_sets=alternatives,
+            tool_name="exec_command",
+        )
     target = ShellActionTarget(tool_name_equals="exec_command")
     experiment = _experiment(
         target,
@@ -339,38 +342,7 @@ def test_failed_candidate_attempt_counts_against_resume_budget(tmp_path: Path) -
     evidence = _evidence()
     store = ObservationStore(tmp_path / "observations.sqlite")
     runner = FailOnceRunner()
-    target = ShellActionTarget(tool_name_equals="exec_command")
-    experiment = _experiment(target)
-    policy = SafetyPolicy.credential_free()
-    limits = ResourceLimits.credential_free()
-    report = resolve_execution_plan(
-        runner.capability_profile,
-        experiment,
-        evidence=evidence,
-        runner_fingerprint=runner.fingerprint,
-        safety_policy=policy,
-        resource_limits=limits,
-    )
-    assert report.plan is not None
-    identity = ObservationIdentity(
-        case_digest=evidence.digest,
-        experiment_digest=experiment.digest,
-        runner_fingerprint=runner.fingerprint,
-        execution_plan_digest=report.plan.digest,
-        target_digest=target.digest,
-        algorithm_digest=ALGORITHM_DIGEST,
-    )
-
-    first = DeterministicReducer(
-        runner=runner,
-        target=target,
-        execution_plan=report.plan,
-        safety_policy=policy,
-        resource_limits=limits,
-        identity=identity,
-        observation_store=store,
-        max_candidate_runs=1,
-    )
+    first = _reducer(evidence, store, runner=runner, maximum=1)
     with pytest.raises(RunnerExecutionError):
         asyncio.run(first.reduce(evidence))
 
@@ -378,32 +350,12 @@ def test_failed_candidate_attempt_counts_against_resume_budget(tmp_path: Path) -
     assert checkpoint.candidate_runs_used == 1
     assert len(checkpoint.failed_candidate_observation_ids) == 1
 
-    no_budget = DeterministicReducer(
-        runner=runner,
-        target=target,
-        execution_plan=report.plan,
-        safety_policy=policy,
-        resource_limits=limits,
-        identity=identity,
-        observation_store=store,
-        max_candidate_runs=1,
-        resume=checkpoint,
-    )
+    no_budget = _reducer(evidence, store, runner=runner, maximum=1, resume=checkpoint)
     partial = asyncio.run(no_budget.reduce(evidence))
     assert partial.status == "search-incomplete"
     assert runner.calls == 1
 
-    continued = DeterministicReducer(
-        runner=runner,
-        target=target,
-        execution_plan=report.plan,
-        safety_policy=policy,
-        resource_limits=limits,
-        identity=identity,
-        observation_store=store,
-        max_candidate_runs=2,
-        resume=checkpoint,
-    )
+    continued = _reducer(evidence, store, runner=runner, maximum=2, resume=checkpoint)
     resumed = asyncio.run(continued.reduce(evidence))
     assert resumed.candidate_runs_used == 2
     assert runner.calls == 2
@@ -427,56 +379,16 @@ def test_blocked_retry_does_not_change_candidate_budget_or_checkpoint(tmp_path: 
     evidence = _evidence()
     store = ObservationStore(tmp_path / "unsafe-observations.sqlite")
     runner = UnsafeRunner()
-    target = ShellActionTarget(tool_name_equals="exec_command")
-    experiment = _experiment(target)
-    policy = SafetyPolicy.credential_free()
-    limits = ResourceLimits.credential_free()
-    report = resolve_execution_plan(
-        runner.capability_profile,
-        experiment,
-        evidence=evidence,
-        runner_fingerprint=runner.fingerprint,
-        safety_policy=policy,
-        resource_limits=limits,
-    )
-    assert report.plan is not None
-    identity = ObservationIdentity(
-        case_digest=evidence.digest,
-        experiment_digest=experiment.digest,
-        runner_fingerprint=runner.fingerprint,
-        execution_plan_digest=report.plan.digest,
-        target_digest=target.digest,
-        algorithm_digest=ALGORITHM_DIGEST,
-    )
-
-    first = DeterministicReducer(
-        runner=runner,
-        target=target,
-        execution_plan=report.plan,
-        safety_policy=policy,
-        resource_limits=limits,
-        identity=identity,
-        observation_store=store,
-        max_candidate_runs=1,
-    )
+    first = _reducer(evidence, store, runner=runner, maximum=1)
     with pytest.raises(RunnerExecutionError, match="safety"):
         asyncio.run(first.reduce(evidence))
     checkpoint = first.checkpoint
 
-    resumed = DeterministicReducer(
-        runner=runner,
-        target=target,
-        execution_plan=report.plan,
-        safety_policy=policy,
-        resource_limits=limits,
-        identity=identity,
-        observation_store=store,
-        max_candidate_runs=2,
-        resume=checkpoint,
-    )
+    resumed = _reducer(evidence, store, runner=runner, maximum=2, resume=checkpoint)
     with pytest.raises(RunnerExecutionError, match="automatic retry is disabled"):
         asyncio.run(resumed.reduce(evidence))
 
     assert resumed.checkpoint == checkpoint
     assert runner.calls == 1
-    assert len(store.list_for_experiment(experiment.digest)) == 1
+    experiment_digest = _experiment(ShellActionTarget(tool_name_equals="exec_command")).digest
+    assert len(store.list_for_experiment(experiment_digest)) == 1

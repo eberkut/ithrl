@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from typing import cast
 
-from ithrl.adapters.contracts import NativeSession
+from ithrl.adapters.contracts import NativeSession, validate_decision_selector
 from ithrl.adapters.errors import AdapterError, AdapterErrorCode
 from ithrl.context import (
     MAX_CONTEXT_NODES,
@@ -28,7 +28,14 @@ def compile_context(session: NativeSession, selector: DecisionSelector) -> Conte
     """Build context preceding one selector produced from the parsed session."""
 
     records = session.records
-    _validate_selector(session, selector, records)
+    validate_decision_selector(
+        session,
+        selector,
+        records,
+        harness=_HARNESS,
+        source=_SOURCE,
+        record_selector=source_selector,
+    )
     context_count = selector.context_before_line - 1
     if context_count > MAX_CONTEXT_NODES:
         raise AdapterError(
@@ -44,17 +51,19 @@ def editable_text(
     """Discover effective historical user text, excluding the fixed current input."""
 
     records = session.records
-    _validate_selector(session, selector, records)
-    fixed_input = _fixed_input_line(records, selector)
+    validate_decision_selector(
+        session,
+        selector,
+        records,
+        harness=_HARNESS,
+        source=_SOURCE,
+        record_selector=source_selector,
+    )
+    fixed_input = decision_input_node_id(context.nodes, records, selector)
     sites = []
     for node in context.nodes:
         native_selector = node.selector
-        if (
-            not node.mutable
-            or node.protected
-            or native_selector is None
-            or native_selector.line == fixed_input
-        ):
+        if not node.mutable or node.protected or native_selector is None or node.id == fixed_input:
             continue
         record = records[native_selector.line - 1]
         if record.get("type") != "user.message":
@@ -66,8 +75,10 @@ def editable_text(
     return tuple(sites)
 
 
-def _fixed_input_line(records: tuple[JsonObject, ...], selector: DecisionSelector) -> int:
-    """Locate the native user or completed-tool input for the selected model turn."""
+def decision_input_node_id(
+    nodes: tuple[ContextNode, ...], records: tuple[JsonObject, ...], selector: DecisionSelector
+) -> str | None:
+    """Locate the fixed input; None means it is absent from the supplied graph."""
 
     boundary = selector.context_before_line
     if (
@@ -84,7 +95,14 @@ def _fixed_input_line(records: tuple[JsonObject, ...], selector: DecisionSelecto
         if records[index].get("type") == "assistant.turn_start":
             break
         if records[index].get("type") in {"user.message", "tool.execution_complete"}:
-            return index + 1
+            return next(
+                (
+                    node.id
+                    for node in nodes
+                    if node.selector is not None and node.selector.line == index + 1
+                ),
+                None,
+            )
     raise AdapterError(
         AdapterErrorCode.INVALID_SESSION,
         "the selected Copilot decision has no supported native input",
@@ -109,32 +127,6 @@ def opaque_prefix(records: tuple[JsonObject, ...]) -> tuple[bool, ...]:
         record_type = cast(str, record["type"])
         prefixes.append(prefixes[-1] or _is_opaque(record_type))
     return tuple(prefixes)
-
-
-def _validate_selector(
-    session: NativeSession,
-    selector: DecisionSelector,
-    records: tuple[JsonObject, ...],
-) -> None:
-    index = selector.record.line - 1
-    if (
-        selector.harness != _HARNESS
-        or selector.session_id != session.metadata.session_id
-        or selector.source != _SOURCE
-        or index >= session.record_count
-    ):
-        raise AdapterError(
-            AdapterErrorCode.DECISION_NOT_FOUND,
-            "decision selector does not match the selected session",
-        )
-    record = records[index]
-    if selector.record != source_selector(
-        index, record
-    ) or selector.record_digest != content_digest(record):
-        raise AdapterError(
-            AdapterErrorCode.DECISION_NOT_FOUND,
-            "decision selector does not match the selected session",
-        )
 
 
 def _context_nodes(records: tuple[JsonObject, ...]) -> tuple[ContextNode, ...]:

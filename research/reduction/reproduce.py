@@ -266,7 +266,6 @@ def replay_operational() -> dict:
 
 
 def replay_native() -> dict:
-    native_layout.MAX_COMPARISONS = 10
     baseline = asyncio.run(native_layout.evaluate())
     compare(baseline, read("native-layout-results.json"), "native-layout")
     family = asyncio.run(native_budget.evaluate())
