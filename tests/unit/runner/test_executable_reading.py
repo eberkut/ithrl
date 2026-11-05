@@ -83,7 +83,7 @@ def test_executable_read_races_preserve_error_and_final_stat_order(
 
 
 @pytest.mark.parametrize(("reader", "error_type"), READERS)
-def test_final_executable_stat_failure_retains_harness_exception_boundary(
+def test_final_executable_stat_failure_is_translated(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     reader: Callable[[Path], tuple[Path, str]],
@@ -110,10 +110,47 @@ def test_final_executable_stat_failure_retains_harness_exception_boundary(
 
     monkeypatch.setattr(os, "fstat", record_fstat)
     monkeypatch.setattr(Path, "stat", selected_stat)
-    expected = PermissionError if reader is read_codex else error_type
-    with pytest.raises(expected) as captured:
+    with pytest.raises(error_type) as captured:
         reader(source)
-    if reader is read_codex:
-        assert captured.value.__cause__ is None
-    else:
-        assert isinstance(captured.value.__cause__, PermissionError)
+    assert "unavailable" in str(captured.value)
+    assert isinstance(captured.value.__cause__, PermissionError)
+
+
+@pytest.mark.parametrize(("reader", "error_type"), READERS)
+def test_executable_path_replacement_after_final_descriptor_stat_is_refused(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    reader: Callable[[Path], tuple[Path, str]],
+    error_type: type[RuntimeError],
+) -> None:
+    source = tmp_path / "program"
+    source.write_bytes(b"fixture")
+    source.chmod(0o700)
+    original_fstat = os.fstat
+    original_stat = Path.stat
+    descriptor_stats = 0
+    pathname_stats = 0
+
+    def replace_after_stat(descriptor: int) -> os.stat_result:
+        nonlocal descriptor_stats
+        metadata = original_fstat(descriptor)
+        descriptor_stats += 1
+        if descriptor_stats == 2:
+            replacement = tmp_path / "replacement"
+            replacement.write_bytes(b"fixture")
+            replacement.chmod(0o700)
+            replacement.replace(source)
+        return metadata
+
+    def record_final_stat(path: Path, *, follow_symlinks: bool = True) -> os.stat_result:
+        nonlocal pathname_stats
+        if path == source and descriptor_stats == 2:
+            pathname_stats += 1
+        return original_stat(path, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(os, "fstat", replace_after_stat)
+    monkeypatch.setattr(Path, "stat", record_final_stat)
+    with pytest.raises(error_type, match="executable changed"):
+        reader(source)
+    assert descriptor_stats == 2
+    assert pathname_stats == 1

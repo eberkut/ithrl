@@ -352,8 +352,8 @@ def _read_executable(path: Path) -> tuple[Path, str]:
         digest = executable_digest(
             target, metadata, harness="Codex", error_type=CodexIsolationError
         )
+        if file_state(target.stat()) != file_state(metadata):
+            raise CodexIsolationError("a required Codex runtime executable changed")
     except OSError as error:
         raise CodexIsolationError("a required Codex runtime executable is unavailable") from error
-    if file_state(target.stat()) != file_state(metadata):
-        raise CodexIsolationError("a required Codex runtime executable changed")
     return target, digest
