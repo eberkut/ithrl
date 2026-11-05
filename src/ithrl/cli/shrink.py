@@ -36,13 +36,13 @@ from ithrl.reduce import (
 )
 from ithrl.results import (
     ResultSnapshot,
-    ResultSnapshotError,
     ResultStatus,
     ResultSummary,
     SearchResult,
     load_result_snapshot,
     write_result_snapshot,
 )
+from ithrl.results.validation import validate_result_case
 from ithrl.run_state import RunStateError, RunStateFile
 from ithrl.runner import RunnerRegistry, prepare_candidate
 from ithrl.workflow import (
@@ -351,7 +351,7 @@ def prepare_shrink(
     workspace, previous, run_state = _resolve_source(source, resume=resume)
     evidence = load_extracted_case(workspace)
     if previous is not None:
-        _validate_result_case(previous, evidence)
+        validate_result_case(previous, evidence)
     experiment = parse_experiment_toml(evidence.default_experiment)
     if (
         native_selection_factory is not None
@@ -495,31 +495,3 @@ def _resolve_source(
         return CaseWorkspace.open(Path(state.source_case)), None, state_file
     snapshot = load_result_snapshot(source)
     return CaseWorkspace.open(snapshot.summary.source_case), snapshot, None
-
-
-def _validate_result_case(snapshot: ResultSnapshot, evidence: CaseEvidence) -> None:
-    summary = snapshot.summary
-    original_ids = tuple(node.id for node in evidence.context.nodes)
-    if evidence.digest != summary.case_digest or original_ids != summary.original_context_ids:
-        raise ResultSnapshotError("result snapshot does not match its source case")
-    try:
-        removed = evidence.context.dependency_closure(summary.removed_context_ids)
-        expected_candidate = prepare_candidate(evidence, snapshot.execution_plan, removed)
-    except ValueError as error:
-        raise ResultSnapshotError("result removals are invalid for the source case") from error
-    if tuple(sorted(removed)) != tuple(sorted(summary.removed_context_ids)):
-        raise ResultSnapshotError("result removals are not dependency-closed")
-    if expected_candidate.digest != summary.candidate_digest:
-        raise ResultSnapshotError("result candidate does not match source-case materialization")
-    if expected_candidate.materialization == "exact-request":
-        if evidence.materialize(removed) != snapshot.reduced_request:
-            raise ResultSnapshotError("result request does not match source-case materialization")
-    elif snapshot.reduced_request is not None:
-        raise ResultSnapshotError("source-backed result contains a materialized request")
-    retained_lines = tuple(
-        node.model_dump_json()
-        for node in evidence.context.nodes
-        if node.id in summary.retained_context_ids
-    )
-    if retained_lines != snapshot.retained_context_lines:
-        raise ResultSnapshotError("retained context does not match the source case")

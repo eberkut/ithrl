@@ -18,6 +18,58 @@ Other files record the experiment, execution plan and provenance. Native reconst
 no `request.json`; use the retained-context records and recorded reconstruction method. Leave
 internal JSON and SQLite state unchanged so validation and resume can verify it.
 
+## Inspect retained context
+
+Inspect a saved reduction alongside its original case:
+
+```bash
+ithrl inspect retained CASE --result RESULT
+ithrl inspect retained CASE --result RESULT --format json
+```
+
+The inspector reads the case and saved deterministic or sampled result. It needs no installed
+native harness, credentials, original workspace, live run directory or observation database.
+It makes no provider calls, starts no harness probes and changes no input files.
+
+The report lists retained units, their editability and dependencies, and the recorded removal
+trials that concern them. Each trial identifies its search parent, requested and effective
+removals, candidate, and outcome. Sampled comparisons retain the full immutable original as their
+statistical baseline; the search parent is the context from which another removal was proposed.
+
+| Evidence | Interpretation |
+| --- | --- |
+| Protected or frozen unit | The edit graph prevents its removal; this is a structural constraint. |
+| Final-parent single-removal trial | Evidence about that complete removal from the final context, under the recorded procedure. |
+| Joint or historical trial | An outcome for several removals or an earlier context; it cannot explain each retained item individually. |
+| Invalid, incomplete, ineligible or untested work | No supported behavioral conclusion for that removal. |
+
+A sampled screen rejection is exploratory, not confirmed loss or necessity. Search coverage and
+fresh confirmation are reported separately. The report includes the recorded target type,
+confirmation counts, margin and interval when available. Missing fields are `null` in JSON and
+shown as unavailable in human output. Current sampled snapshots do not contain their full execution
+plan, so their reconstruction method and detailed runner policy remain unavailable.
+
+Inspection validates saved identities and consistency against the supplied case; it does not
+recheck observations in an external database or reproduce historical execution. Results concern
+the recorded reconstructed context and runner policy. Byte counts measure canonical JSON encoded
+as UTF-8, not provider tokens or monetary savings.
+
+For private troubleshooting, explicitly include retained content with a total display allowance:
+
+```bash
+ithrl inspect retained CASE --result RESULT --show-text --max-text-bytes 4096
+ithrl inspect retained CASE --result RESULT --show-text --text-node NODE_ID
+```
+
+This displays serialized request values or native records, which may contain sensitive session
+content. Markup and terminal controls are escaped. The byte allowance applies across all displayed
+content after escaping, with a maximum of 65,536 bytes; truncation is explicit. Default output
+contains metadata only. Keep text-enabled output private.
+
+Use `--text-node` with a retained unit ID from the report to inspect a later unit without spending
+the allowance on earlier records. All unit metadata and trial evidence remain in the report;
+only the selected unit's content is displayed.
+
 ## Deterministic results
 
 The bundled example uses the deterministic local runner. A `search-1-minimal` result means every

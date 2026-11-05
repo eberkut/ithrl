@@ -50,6 +50,7 @@ RUNTIME_MODULES = frozenset(
         PurePosixPath("ithrl/cli/fuzz_output.py"),
         PurePosixPath("ithrl/cli/fuzz_session.py"),
         PurePosixPath("ithrl/cli/extract.py"),
+        PurePosixPath("ithrl/cli/inspect.py"),
         PurePosixPath("ithrl/cli/native.py"),
         PurePosixPath("ithrl/cli/output.py"),
         PurePosixPath("ithrl/cli/progress.py"),
@@ -78,6 +79,7 @@ RUNTIME_MODULES = frozenset(
         PurePosixPath("ithrl/fuzz/simplify.py"),
         PurePosixPath("ithrl/fuzz/statistics.py"),
         PurePosixPath("ithrl/measurement.py"),
+        PurePosixPath("ithrl/inspection.py"),
         PurePosixPath("ithrl/mutation.py"),
         PurePosixPath("ithrl/observations.py"),
         PurePosixPath("ithrl/path_safety.py"),
@@ -87,6 +89,7 @@ RUNTIME_MODULES = frozenset(
         PurePosixPath("ithrl/reduce/search.py"),
         PurePosixPath("ithrl/results/__init__.py"),
         PurePosixPath("ithrl/results/models.py"),
+        PurePosixPath("ithrl/results/inspection.py"),
         PurePosixPath("ithrl/results/storage.py"),
         PurePosixPath("ithrl/results/summary.py"),
         PurePosixPath("ithrl/results/validation.py"),
@@ -397,6 +400,23 @@ def _assert_installed_workflow(wheel: Path, tmp_path: Path, expected_version: st
     assert summary["provider_calls"] == summary["actions_executed"] == 0
     request = json.loads((summary_path.parent / "request.json").read_text(encoding="utf-8"))
     assert [item["content"] for item in request["input"]] == ["A", "C"]
+    inspected = _run(
+        str(executable),
+        "inspect",
+        "retained",
+        str(case),
+        "--result",
+        str(summary_path.parent),
+        "--format",
+        "json",
+        cwd=runtime,
+        env=child_environment,
+    )
+    report = json.loads(inspected.stdout)
+    assert report["command"] == "inspect"
+    assert report["confirmation"]["status"] == "confirmed-preserving"
+    assert report["candidate_digest"] == summary["candidate_digest"]
+    assert all("text" not in node for node in report["nodes"])
     _assert_installed_resume(executable, runtime, child_environment)
     _run(
         str(python),

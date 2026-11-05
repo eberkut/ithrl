@@ -116,7 +116,7 @@ class CommandOutput(_OutputEnvelope):
 
 class ErrorOutput(_OutputEnvelope):
     kind: Literal["deterministic"] = "deterministic"
-    command: Literal["ithrl", "extract", "shrink", "fuzz"]
+    command: Literal["ithrl", "extract", "shrink", "fuzz", "inspect"]
     status: Literal["error"] = "error"
     exit_code: int
     error_code: str
@@ -355,13 +355,15 @@ class JsonAwareGroup(TyperGroup):
                 **extra,
             )
         except ClickException as error:
-            command: Literal["ithrl", "extract", "shrink", "fuzz"] = "ithrl"
+            command: Literal["ithrl", "extract", "shrink", "fuzz", "inspect"] = "ithrl"
             if "extract" in arguments:
                 command = "extract"
             elif "shrink" in arguments:
                 command = "shrink"
             elif "fuzz" in arguments:
                 command = "fuzz"
+            elif "inspect" in arguments:
+                command = "inspect"
             report = ErrorOutput(
                 command=command,
                 exit_code=error.exit_code,
@@ -388,7 +390,7 @@ def _requests_json(arguments: Sequence[str]) -> bool:
 
 
 def command_boundary(
-    command: Literal["extract", "shrink"],
+    command: Literal["extract", "shrink", "inspect"],
 ) -> Callable[[Callable[..., None]], Callable[..., None]]:
     """Convert uncaught command failures to the public error format."""
 
@@ -798,7 +800,7 @@ def fail(
     message: str,
     code: ExitCode,
     output_format: OutputFormat,
-    command: Literal["extract", "shrink"],
+    command: Literal["extract", "shrink", "inspect"],
     error_code: str,
 ) -> Never:
     if output_format is OutputFormat.JSON:

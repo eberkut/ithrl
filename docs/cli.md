@@ -20,6 +20,7 @@ $ ithrl [OPTIONS] COMMAND [ARGS]...
 * `fuzz`: Find and independently confirm a bounded...
 * `extract`: Create a case from a saved agent session...
 * `shrink`: Find a smaller context that preserves the...
+* `inspect`: Inspect saved experimental evidence...
 
 ## `ithrl fuzz`
 
@@ -120,3 +121,44 @@ $ ithrl shrink [OPTIONS] {CASE_OR_RESULT}
 
 Example: ithrl shrink .ithrl/case
 Resume:  ithrl shrink RESULT_DIRECTORY --resume
+
+## `ithrl inspect`
+
+Inspect saved experimental evidence without running a harness.
+
+**Usage**:
+
+```console
+$ ithrl inspect [OPTIONS] COMMAND [ARGS]...
+```
+
+**Options**:
+
+* `--help`: Show this message and exit.
+
+**Commands**:
+
+* `retained`: Explain retained context and recorded...
+
+### `ithrl inspect retained`
+
+Explain retained context and recorded removal trials without collecting observations.
+
+**Usage**:
+
+```console
+$ ithrl inspect retained [OPTIONS] {case}
+```
+
+**Arguments**:
+
+* `case`: Case containing the original evidence.  [required]
+
+**Options**:
+
+* `--result <path>`: Saved deterministic or sampled reduction result directory.  [required]
+* `--format <human|json>`: Human-readable or JSON output.  [default: human]
+* `--show-text`: Include bounded retained content; keep output private.
+* `--text-node <str>`: Display text only for this retained unit ID; requires --show-text.
+* `--max-text-bytes <int range>`: Maximum total UTF-8 bytes of escaped retained content with --show-text.  [default: 4096; 1&lt;=x&lt;=65536]
+* `--help`: Show this message and exit.

@@ -8,7 +8,9 @@ runtime.
 
 The
 [README supported-inputs table](https://github.com/eberkut/ithrl/blob/main/README.md#supported-inputs)
-defines the public capability claim. The public commands are `extract`, `shrink` and `fuzz`. Fuzzing
+defines the public capability claim. The public commands are `extract`, `shrink`, `inspect retained`
+and `fuzz`. Retained-context inspection reads saved evidence without resolving runners or opening
+an observation store. Fuzzing
 has a credential-free local walkthrough and qualified Codex and Copilot append-text profiles for
 eligible prior user input. See [native runs](native-runs.md) for the operator
 procedure, [measurements](measurements.md#native-context-fuzzing) for qualification evidence and
@@ -212,6 +214,7 @@ Python module names are not public API commitments.
 | `fuzz/configuration.py` | Private operator policy and command limits, bound to an immutable original |
 | `fuzz/progress.py`, `fuzz/campaign.py` | Frozen mutation order, authoritative traversal recovery, durable selection and terminal campaign evidence over shared sampled state |
 | `workflow.py`, `results/` | Application phase composition and validated result models, summaries and snapshots |
+| `inspection.py`, `results/inspection.py`, `cli/inspect.py` | Offline result/case binding, retained-context interpretation and CLI presentation |
 | `cli/` | Public command selection, native setup, progress, continuation and presentation |
 | `path_safety.py`, `timestamps.py` | Shared private-path/lock primitives and timestamp validation |
 

@@ -11,7 +11,7 @@ The example runs locally without an agent installation or model access.
 - [Native runs](native-runs.md): select a saved decision, configure a reduction experiment and
   inspect its provider, safety controls and budget before execution. The page also covers native
   fuzzing and a provider-free walkthrough.
-- [Results and privacy](results.md): read saved evidence, interpret preservation and usage,
+- [Results and privacy](results.md): inspect retained context, interpret preservation and usage,
   and keep private session data out of public reports.
 - [CLI reference](cli.md): commands, arguments, options and defaults generated from the CLI.
 - [Troubleshooting](troubleshooting.md): selection, setup, refusal and resume problems.

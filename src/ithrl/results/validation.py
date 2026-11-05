@@ -37,7 +37,7 @@ from ithrl.results.models import (
     ResultSummary,
     SampledReductionEvidence,
 )
-from ithrl.runner import Candidate
+from ithrl.runner import Candidate, prepare_candidate
 
 if TYPE_CHECKING:
     from ithrl.case import CaseEvidence
@@ -619,3 +619,33 @@ def validation_message(error: ValidationError) -> str:
         f"{'.'.join(str(part) for part in issue['loc'])}: {issue['msg']}"
         for issue in error.errors(include_url=False, include_input=False)
     )
+
+
+def validate_result_case(snapshot: ResultSnapshot, evidence: CaseEvidence) -> None:
+    """Bind a validated deterministic snapshot to its immutable source case."""
+
+    summary = snapshot.summary
+    original_ids = tuple(node.id for node in evidence.context.nodes)
+    if evidence.digest != summary.case_digest or original_ids != summary.original_context_ids:
+        raise ResultSnapshotError("result snapshot does not match its source case")
+    try:
+        removed = evidence.context.dependency_closure(summary.removed_context_ids)
+        expected_candidate = prepare_candidate(evidence, snapshot.execution_plan, removed)
+    except ValueError as error:
+        raise ResultSnapshotError("result removals are invalid for the source case") from error
+    if tuple(sorted(removed)) != tuple(sorted(summary.removed_context_ids)):
+        raise ResultSnapshotError("result removals are not dependency-closed")
+    if expected_candidate.digest != summary.candidate_digest:
+        raise ResultSnapshotError("result candidate does not match source-case materialization")
+    if expected_candidate.materialization == "exact-request":
+        if evidence.materialize(removed) != snapshot.reduced_request:
+            raise ResultSnapshotError("result request does not match source-case materialization")
+    elif snapshot.reduced_request is not None:
+        raise ResultSnapshotError("source-backed result contains a materialized request")
+    retained_lines = tuple(
+        node.model_dump_json()
+        for node in evidence.context.nodes
+        if node.id in summary.retained_context_ids
+    )
+    if retained_lines != snapshot.retained_context_lines:
+        raise ResultSnapshotError("retained context does not match the source case")
