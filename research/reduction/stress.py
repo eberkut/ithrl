@@ -53,7 +53,7 @@ def validate_profile(tree: dict, plan, size: int, scenario: dict) -> None:
     confirmation_drift_proof(tree, plan, size, scenario)
 
 
-def simulate_batch(tree, plan, size, scenario, n, seed, table, fixture):
+def simulate_batch(tree, plan, size, scenario, n, seed, table):
     """Return per-replica arrays; sample no unvisited candidate suffix.
 
     Valid provider acceptances and all dispatched potential calls are separate.
@@ -70,10 +70,6 @@ def simulate_batch(tree, plan, size, scenario, n, seed, table, fixture):
     names = (
         "provider_calls",
         "dispatched_attempts",
-        "charged_potential_calls",
-        "preacceptance_failures",
-        "useful_success",
-        "apparent_useful_success",
         "calibration_failed",
         "calibration_incomplete",
         "search_incomplete",
@@ -91,13 +87,8 @@ def simulate_batch(tree, plan, size, scenario, n, seed, table, fixture):
         "resume_refused",
         "same_plan_resume",
         "any_false_accept",
-        "comparisons",
-        "original_arms",
-        "candidate_arms",
-        "uncharged_unsampled_calls",
     )
     metrics = {name: np.zeros(n, dtype=np.int32) for name in names}
-    position = scenario.get("instruction_position", 0)
     lifetime = scenario.get("cohort_expiry_slots", 10**9)
     margin = Fraction(str(scenario.get("margin", 0.2)))
 
@@ -105,7 +96,6 @@ def simulate_batch(tree, plan, size, scenario, n, seed, table, fixture):
         matches, valid, attempts, end, shock = block
         metrics["provider_calls"][index] += valid.sum(axis=0)
         metrics["dispatched_attempts"][index] += attempts.sum(axis=0)
-        metrics["charged_potential_calls"][index] += attempts.sum(axis=0)
         times[index] = end
         return matches, valid, attempts, shock
 
@@ -158,8 +148,6 @@ def simulate_batch(tree, plan, size, scenario, n, seed, table, fixture):
                 total_rows=n,
             )
             first_matches, first_valid, _, first_shock = charge(index, first)
-            metrics["original_arms"][index] += 1
-            metrics["candidate_arms"][index] += 1
             if resume == "same":
                 metrics["same_plan_resume"][index] += 1
             if resume == "stale":
@@ -202,7 +190,6 @@ def simulate_batch(tree, plan, size, scenario, n, seed, table, fixture):
                         total_rows=n,
                     )
                     candidate, candidate_valid, _, shock = charge(ids, block)
-                    metrics["candidate_arms"][ids] += 1
                     expired = times[ids] - start[pending] >= lifetime
                     stopped = expired | (candidate_valid[0] != plan.candidate_n)
                     metrics["expiry"][ids] += expired
@@ -224,7 +211,6 @@ def simulate_batch(tree, plan, size, scenario, n, seed, table, fixture):
                 )
                 bad, _, _ = reference.truth(scenario, times[ids], mask(member), shock)
                 metrics["any_false_accept"][ids] |= (admit & bad).astype(np.int32)
-                metrics["comparisons"][ids] += 1
                 prefixes[ids] = member + "0"
                 prefixes[ids[admit]] = member + "1"
                 pending = pending[~admit]
@@ -300,15 +286,7 @@ def simulate_batch(tree, plan, size, scenario, n, seed, table, fixture):
         metrics["selected_false_preservation_boundary"][ids] = (boundary & preserving).astype(
             np.int32
         )
-        useful = (
-            not removed & (1 << position)
-            and fixture["masks"][str(removed)]["at_least_half_editable_removed"]
-        )
-        metrics["apparent_useful_success"][ids] = (preserving & useful).astype(np.int32)
-        metrics["useful_success"][ids] = (preserving & useful & ~bad & ~boundary).astype(np.int32)
-    metrics["preacceptance_failures"] = metrics["dispatched_attempts"] - metrics["provider_calls"]
     metrics["selected_mask"] = selected_mask
-    metrics["elapsed_slots"] = times
     if np.any(metrics["provider_calls"] > metrics["dispatched_attempts"]):
         raise AssertionError("valid acceptances exceed dispatched potential calls")
     if np.any(

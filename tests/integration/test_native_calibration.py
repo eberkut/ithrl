@@ -6,6 +6,7 @@ import asyncio
 import json
 import stat
 import subprocess
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -31,7 +32,7 @@ from ithrl.experiment import (
     SampledSearchPhase,
     SamplingArmTarget,
 )
-from ithrl.observations import ObservationStore
+from ithrl.observations import Observation, ObservationStore
 from ithrl.reduce.contracts import SampledCandidateTrial
 from ithrl.results import (
     CalibrationSnapshot,
@@ -289,11 +290,7 @@ def test_preflight_refusal_reports_probe_metadata_without_native_output(
     assert (protected_tree(scenario.case.root), protected_tree(scenario.original)) == protected
 
 
-def _assert_cleanup(scenario: Scenario, snapshot: CalibrationSnapshot) -> None:
-    observations = ObservationStore(scenario.database).list_for_experiment(
-        snapshot.experiment.digest
-    )
-    assert len(observations) == snapshot.summary.observations_recorded
+def _assert_cleanup(scenario: Scenario, observations: Sequence[Observation]) -> None:
     assert len({item.attempt_evidence.attempt_id for item in observations}) == len(observations)
     references = []
     for item in observations:
@@ -393,7 +390,11 @@ def test_native_cli_calibrates_and_reuses_independent_clean_attempts(
     assert snapshot.summary.actions_requested == (2 if target == "shell-action" else 0)
     assert snapshot.summary.actions_denied == snapshot.summary.actions_requested
     assert (snapshot.summary.usage is not None) == (harness == "codex")
-    _assert_cleanup(scenario, snapshot)
+    observations = ObservationStore(scenario.database).list_for_experiment(
+        snapshot.experiment.digest
+    )
+    assert len(observations) == snapshot.summary.observations_recorded
+    _assert_cleanup(scenario, observations)
     output_files = tuple((scenario.data / "ithrl/native-output").rglob("*"))
     second = CliRunner().invoke(app, scenario.arguments())
     assert second.exit_code == ExitCode.SUCCESS, second.output
@@ -535,25 +536,14 @@ def test_native_sampled_shrink_reduces_only_irrelevant_context_and_freshly_confi
     observations = store.list_for_experiment(experiment.digest)
     assert len(observations) == len(attempt_ids) + 1
     assert set(saved.calibration_attempt_ids).isdisjoint(attempt_ids)
-    assert len({o.attempt_evidence.attempt_id for o in observations}) == len(observations)
-    artifact_ids = []
+    _assert_cleanup(scenario, observations)
     runner_milliseconds = 0
     for observation in observations:
-        reference = observation.attempt_evidence.native_output
-        assert reference is not None
-        artifact_ids.append(reference.artifact_id)
         accounting = observation.attempt_evidence.accounting
         assert accounting is not None
         runner_milliseconds += accounting.elapsed_milliseconds
-        assert accounting.cleanup_outcome == "verified"
-        assert accounting.residual_disposable_state_bytes == 0
-        assert accounting.residual_disposable_state_entries == 0
-        assert accounting.source_store_effect == "unchanged"
-        assert accounting.original_workspace_effect == "unchanged"
-        assert accounting.actions_executed == accounting.tool_network_requests == 0
         if target == "shell-action":
             assert accounting.actions_denied == 1
-    assert len(set(artifact_ids)) == len(observations)
     assert len(workspaces) == len(children) == len(observations)
     assert all(child.poll() is not None for child in children)
     assert all(not path.exists() for path in workspaces)
@@ -578,8 +568,6 @@ def test_native_sampled_shrink_reduces_only_irrelevant_context_and_freshly_confi
         "visible" if target == "shell-action" else "not-applicable"
     )
     assert report["action_denial"] == "enforced"
-    assert not scenario.marker.exists()
-    assert not tuple((scenario.data / "ithrl/native-attempts").iterdir())
     native_outputs = tuple((scenario.data / "ithrl/native-output").rglob("*"))
     human = CliRunner().invoke(
         app,
@@ -723,7 +711,11 @@ def test_failed_or_interrupted_native_cli_saves_unknown_acceptance_without_retry
     assert report["next_command"] is None
     assert snapshot.summary.provider_calls_may_have_started >= 1
     assert snapshot.summary.provider_calls_possible >= 1
-    _assert_cleanup(scenario, snapshot)
+    observations = ObservationStore(scenario.database).list_for_experiment(
+        snapshot.experiment.digest
+    )
+    assert len(observations) == snapshot.summary.observations_recorded
+    _assert_cleanup(scenario, observations)
     assert children
     assert all(child.poll() is not None for child in children)
     count = len(children)

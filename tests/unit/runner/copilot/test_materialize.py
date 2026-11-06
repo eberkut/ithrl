@@ -7,8 +7,10 @@ from typing import Any
 import pytest
 
 from ithrl.adapters import enumerate_decisions, parse_session
+from ithrl.adapters.registry import editable_session_text
 from ithrl.case import CaseEvidence, CaseFormatError
-from ithrl.context import content_digest
+from ithrl.context import ContextGraph, content_digest
+from ithrl.decisions import DecisionEvidence
 from ithrl.execution import (
     CapabilityProfile,
     ResolvedExecutionPlan,
@@ -22,6 +24,7 @@ from ithrl.runner import PreparedAttempt, prepare_candidate
 from ithrl.runner.copilot.materialize import (
     CopilotMaterializationError,
     CopilotMaterializationErrorCode,
+    _materialize_session,
     materialize_copilot_attempt,
 )
 
@@ -586,3 +589,80 @@ def test_materialization_repr_hides_native_session_and_captured_system_content(
     assert "Private historical prompt" not in rendered
     assert "Private tool result" not in rendered
     assert "Private system guidance" not in rendered
+
+
+@pytest.mark.parametrize("mismatch", ["boundary", "turn"])
+def test_materialization_preserves_boundary_error_selection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mismatch: str
+) -> None:
+    evidence = _evidence(tmp_path, _direct_records())
+    attempt = _attempt(evidence)
+    decision = evidence.decision
+    assert decision is not None
+    update = {"context_before_line": 1} if mismatch == "boundary" else {"turn_id": "other-turn"}
+    changed = decision.model_copy(update={"selector": decision.selector.model_copy(update=update)})
+
+    def selected_decision(_evidence: CaseEvidence) -> DecisionEvidence:
+        return changed
+
+    monkeypatch.setattr(CaseEvidence, "decision", property(selected_decision))
+    session = parse_session(tmp_path / "events.jsonl")
+    with pytest.raises(CopilotMaterializationError) as captured:
+        _materialize_session(attempt, session)
+    assert captured.value.code is CopilotMaterializationErrorCode.AMBIGUOUS_BOUNDARY
+    assert str(captured.value) == (
+        "the Copilot context graph does not match the selected boundary"
+        if mismatch == "boundary"
+        else "the selected Copilot decision has no supported native input boundary"
+    )
+    assert captured.value.__cause__ is None
+
+
+@pytest.mark.parametrize("graph_change", ["reordered", "missing-earlier", "missing-input", "empty"])
+def test_partial_or_reordered_graph_preserves_text_discovery_and_native_refusal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, graph_change: str
+) -> None:
+    evidence = _evidence(tmp_path, _history_records())
+    attempt = _attempt(evidence)
+    decision = evidence.decision
+    assert decision is not None
+    session = parse_session(tmp_path / "events.jsonl")
+    nodes = evidence.context.nodes
+    input_line = decision.selector.context_before_line - 1
+    prior_user_ids = {
+        node.id
+        for node in nodes
+        if node.kind == "user.message"
+        and node.selector is not None
+        and node.selector.line != input_line
+    }
+    if graph_change == "reordered":
+        changed_nodes = tuple(reversed(nodes))
+    elif graph_change == "missing-earlier":
+        changed_nodes = nodes[1:]
+    elif graph_change == "missing-input":
+        changed_nodes = tuple(
+            node for node in nodes if node.selector is None or node.selector.line != input_line
+        )
+    else:
+        changed_nodes = ()
+    # model_copy deliberately bypasses graph ordering checks to exercise the native boundary.
+    changed_context = evidence.context.model_copy(update={"nodes": changed_nodes})
+    sites = editable_session_text(session, decision.selector, changed_context)
+    assert {site.context_id for site in sites} == (
+        set() if graph_change == "empty" else prior_user_ids
+    )
+
+    def selected_context(_evidence: CaseEvidence) -> ContextGraph:
+        return changed_context
+
+    monkeypatch.setattr(CaseEvidence, "context", property(selected_context))
+    with pytest.raises(CopilotMaterializationError) as captured:
+        _materialize_session(attempt, session)
+    assert captured.value.code is CopilotMaterializationErrorCode.AMBIGUOUS_BOUNDARY
+    assert str(captured.value) == (
+        "the Copilot context graph does not match its source records"
+        if graph_change == "reordered"
+        else "the Copilot context graph does not match the selected boundary"
+    )
+    assert captured.value.__cause__ is None

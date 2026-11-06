@@ -218,6 +218,19 @@ def evaluate(config, parent, *, pilot=False):
     tree = stationary.frozen_tree()
     table = stationary.reference().confirmation_table(plan.confirmation_n, 0.2)
     n = 64 if pilot else config["replicas_per_position_scenario_policy"]
+    budgets = {}
+
+    def budget_for(size):
+        # Retain first-use failure ordering after batch preparation.
+        if size not in budgets:
+            budgets[size] = max(
+                stationary.lazy_path_cost(tree, terminal, plan, size)[
+                    "required_workflow_attempt_budget"
+                ]
+                for terminal in tree["terminals"]
+            )
+        return budgets[size]
+
     rows = []
     for si, scenario in enumerate(config["scenarios"]):
         for position in config["instruction_positions"]:
@@ -239,7 +252,7 @@ def evaluate(config, parent, *, pilot=False):
                     if offset not in batch_cache:
                         batch_cache[offset] = {
                             size: stress.simulate_batch(
-                                tree, plan, size, settings, count, seed, table, fixture
+                                tree, plan, size, settings, count, seed, table
                             )
                             for size in config["policies"]
                         }
@@ -248,12 +261,7 @@ def evaluate(config, parent, *, pilot=False):
                         for size, raw in batch_cache[offset].items()
                     }
                     for size, result in results.items():
-                        budget = max(
-                            stationary.lazy_path_cost(tree, terminal, plan, size)[
-                                "required_workflow_attempt_budget"
-                            ]
-                            for terminal in tree["terminals"]
-                        )
+                        budget = budget_for(size)
                         if np.any(
                             result["provider_calls"] > result["dispatched_attempts"]
                         ) or np.any(result["dispatched_attempts"] > budget):
@@ -279,12 +287,7 @@ def evaluate(config, parent, *, pilot=False):
                         raise TimeoutError("frozen operational runtime ceiling reached")
                 pair = {}
                 for size in config["policies"]:
-                    budget = max(
-                        stationary.lazy_path_cost(tree, terminal, plan, size)[
-                            "required_workflow_attempt_budget"
-                        ]
-                        for terminal in tree["terminals"]
-                    )
+                    budget = budget_for(size)
                     row = summarize(totals[size], n, budget, alpha)
                     row.update(
                         policy=size, scenario=scenario["name"], position=position, workload=workload

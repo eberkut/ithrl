@@ -38,7 +38,6 @@ from ithrl.cli.sampled_output import (
     sampled_reduction_exit_code,
 )
 from ithrl.cli.sampled_session import (
-    SampledCliSession,
     SampledCliSessionError,
     load_cli_run_state,
     load_cli_session,
@@ -50,13 +49,13 @@ from ithrl.experiment import SampledExperimentDefinition
 from ithrl.extraction import load_extracted_case
 from ithrl.observations import (
     ObservationArm,
-    ObservationOutcome,
     ObservationRole,
     ObservationStore,
+    SamplingArmCounts,
     SamplingBlockEvidence,
     SamplingBudgetAllowance,
 )
-from ithrl.reduce import SampledConfirmation
+from ithrl.reduce import SampledConfirmation, classify_confirmation
 from ithrl.results import SampledReductionEvidence, validate_sampled_result
 from ithrl.run_state import (
     SampledRunState,
@@ -65,10 +64,9 @@ from ithrl.run_state import (
     SamplingBudgetApproval,
 )
 from ithrl.runner import prepare_candidate
+from ithrl.sampled_run_metadata import SampledRunMetadata
 from ithrl.statistics import (
-    BinomialSample,
     FixedSampleOutcome,
-    classify_fixed_sample,
     optimistic_attainability,
 )
 from ithrl.workflow import PreparedExperiment, prepare_experiment, run_sampled_phases
@@ -90,7 +88,7 @@ class SampledCommandLimits:
 def resume_sampled_shrink(
     source: Path,
     *,
-    select: Callable[[CaseWorkspace, CaseEvidence, SampledCliSession], NativeSelection],
+    select: Callable[[CaseWorkspace, CaseEvidence, SampledRunMetadata], NativeSelection],
     acknowledge_model_execution: bool,
     limits: SampledCommandLimits,
     original_workspace: Path | None,
@@ -162,7 +160,7 @@ def handle_sampled_reduction(
     experiment_path: Path | None,
     output_format: OutputFormat,
     verbose: bool = False,
-    session: SampledCliSession | None = None,
+    session: SampledRunMetadata | None = None,
 ) -> None:
     """Preflight, acknowledge, durably calibrate, search and independently confirm."""
     try:
@@ -269,7 +267,7 @@ def handle_sampled_reduction(
                     approval_id=f"approval-{uuid4().hex}", approved_at=now, allowance=allowance
                 ),
             )
-            session = SampledCliSession(
+            session = SampledRunMetadata(
                 run_id=run_id,
                 run_directory=state_file.path.parent,
                 source_case=workspace.root.absolute(),
@@ -400,7 +398,7 @@ def _reduction_preflight(
     store_path: Path,
     limits: SampledCommandLimits,
     experiment_path: Path | None,
-    session: SampledCliSession | None,
+    session: SampledRunMetadata | None,
     output_format: OutputFormat,
 ) -> SampledReductionOutput:
     experiment = prepared.experiment
@@ -820,6 +818,7 @@ def _run_report(
     else:
         search_result = "search-incomplete"
     values = preflight.model_dump(mode="python")
+    counts = SamplingArmCounts.from_observations(observations)
     values.update(
         status=status,
         phase="finished",
@@ -855,12 +854,7 @@ def _run_report(
         wall_time_seconds=usage.wall_time_seconds,
         known_tokens=usage.known_tokens,
         unknown_token_attempts=usage.unknown_token_attempts,
-        matches=sum(o.outcome is ObservationOutcome.MATCH for o in observations),
-        no_matches=sum(o.outcome is ObservationOutcome.NO_MATCH for o in observations),
-        invalid_observations=sum(
-            o.outcome is ObservationOutcome.INVALID_OBSERVATION for o in observations
-        ),
-        runner_errors=sum(o.outcome is ObservationOutcome.RUNNER_ERROR for o in observations),
+        **counts.model_dump(exclude={"dispatched", "valid"}),
         runner_error_category=runner_error_category,
         runner_error_reason_code=runner_error_reason_code,
         stop_reason=stop_reason,
@@ -878,15 +872,8 @@ def _run_report(
             confirmation_candidate=holdout.candidate_counts,
             confirmation_difference=holdout.point_difference,
         )
-        if holdout.complete and holdout.eligible:
-            classification = classify_fixed_sample(
-                BinomialSample(holdout.candidate_counts.matches, holdout.candidate_counts.valid),
-                BinomialSample(holdout.original_counts.matches, holdout.original_counts.valid),
-                required_candidate=holdout.plan.preservation.confirmation.candidate.required_valid,
-                required_original=holdout.plan.preservation.confirmation.original.required_valid,
-                confidence=holdout.plan.preservation.confirmation.one_sided_confidence,
-                margin=holdout.plan.preservation.margin,
-            )
+        classification = classify_confirmation(holdout)
+        if classification is not None and holdout.complete:
             if classification.interval is None:
                 raise ValueError("complete eligible confirmation lacks an interval")
             values.update(

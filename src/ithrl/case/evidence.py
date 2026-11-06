@@ -95,9 +95,14 @@ class CaseEvidence:
 
     @property
     def request(self) -> JsonObject:
+        return copy.deepcopy(self._exact_request())
+
+    def _exact_request(self) -> JsonObject:
+        """Borrow preserved input for internal operations that do not mutate it."""
+
         if self._request is None:
             raise CaseFormatError("case does not contain an exact provider request")
-        return copy.deepcopy(self._request)
+        return self._request
 
     @property
     def has_request(self) -> bool:
@@ -129,7 +134,7 @@ class CaseEvidence:
         removed = tuple(remove_ids)
         if mutation is not None and not mutation.is_empty and removed:
             raise MutationError("text mutation requires the unchanged original context")
-        request = self._context.materialize(self.request, removed)
+        request = self._context.materialize(self._exact_request(), removed)
         if mutation is not None:
             for edit in mutation.edits:
                 node = self._context.by_id.get(edit.context_id)
@@ -149,7 +154,7 @@ class CaseEvidence:
             from ithrl.extraction import editable_extracted_text
 
             return editable_extracted_text(self)
-        request = self.request
+        request = self._exact_request()
         found = []
         for node in self._context.nodes:
             try:

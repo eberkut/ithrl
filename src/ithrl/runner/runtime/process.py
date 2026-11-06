@@ -34,6 +34,7 @@ from ithrl.runner.runtime.output import (
     NativeOutputStoreError,
     ProtectedOutputStore,
 )
+from ithrl.runner.runtime.probes import process_group_exists
 from ithrl.runner.runtime.protection import (
     ProtectedPath,
     ProtectedPathError,
@@ -758,7 +759,7 @@ async def _terminate_group(
 ) -> tuple[ProcessOutcome, bool]:
     if not _signal_group(process.pid, signal.SIGTERM):
         await _await_process(process, _TERMINATION_GRACE_SECONDS)
-        return ("exited", False) if not _process_group_exists(process.pid) else ("unknown", False)
+        return ("exited", False) if not process_group_exists(process.pid) else ("unknown", False)
     if await _wait_group_gone(process, _TERMINATION_GRACE_SECONDS):
         return "terminated", False
     if not _signal_group(process.pid, signal.SIGKILL):
@@ -775,10 +776,10 @@ async def _wait_group_gone(
     deadline = time.monotonic() + grace_seconds
     while time.monotonic() < deadline:
         await _await_process(process, min(0.05, max(deadline - time.monotonic(), 0.001)))
-        if not _process_group_exists(process.pid):
+        if not process_group_exists(process.pid):
             return True
         await asyncio.sleep(0.01)
-    return not _process_group_exists(process.pid)
+    return not process_group_exists(process.pid)
 
 
 async def _await_process(
@@ -800,16 +801,6 @@ def _signal_group(process_group: int, selected_signal: signal.Signals) -> bool:
         return False
     except OSError:
         return False
-    return True
-
-
-def _process_group_exists(process_group: int) -> bool:
-    try:
-        os.killpg(process_group, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
     return True
 
 

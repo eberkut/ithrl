@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import stat
+from collections import Counter
 from collections.abc import Generator, Iterable
 from contextlib import closing, contextmanager
 from datetime import UTC, datetime, timedelta
@@ -386,6 +387,22 @@ class SamplingArmCounts(_SamplingContract):
     invalid_observations: Annotated[int, Field(ge=0)]
     runner_errors: Annotated[int, Field(ge=0)]
 
+    @classmethod
+    def from_observations(cls, observations: Iterable[Observation]) -> SamplingArmCounts:
+        """Count one selected observation set without interpreting errors as losses."""
+
+        counts = Counter(observation.outcome for observation in observations)
+        matches = counts[ObservationOutcome.MATCH]
+        no_matches = counts[ObservationOutcome.NO_MATCH]
+        return cls(
+            dispatched=counts.total(),
+            valid=matches + no_matches,
+            matches=matches,
+            no_matches=no_matches,
+            invalid_observations=counts[ObservationOutcome.INVALID_OBSERVATION],
+            runner_errors=counts[ObservationOutcome.RUNNER_ERROR],
+        )
+
     @model_validator(mode="after")
     def validate_counts(self) -> SamplingArmCounts:
         if self.valid != self.matches + self.no_matches:
@@ -462,22 +479,8 @@ class SamplingBlockEvidence(_SamplingContract):
         return tuple(item.observation.attempt_evidence.attempt_id for item in self.attempts)
 
     def counts_for(self, arm: SamplingArm) -> SamplingArmCounts:
-        observations = tuple(
+        return SamplingArmCounts.from_observations(
             item.observation for item in self.attempts if item.observation.arm.value == arm
-        )
-        matches = sum(item.outcome is ObservationOutcome.MATCH for item in observations)
-        no_matches = sum(item.outcome is ObservationOutcome.NO_MATCH for item in observations)
-        return SamplingArmCounts(
-            dispatched=len(observations),
-            valid=matches + no_matches,
-            matches=matches,
-            no_matches=no_matches,
-            invalid_observations=sum(
-                item.outcome is ObservationOutcome.INVALID_OBSERVATION for item in observations
-            ),
-            runner_errors=sum(
-                item.outcome is ObservationOutcome.RUNNER_ERROR for item in observations
-            ),
         )
 
     @property

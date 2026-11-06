@@ -12,12 +12,11 @@ import shutil
 import stat
 import tempfile
 from collections.abc import Mapping
-from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Any
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from pydantic import ValidationError
 
 from ithrl.case import CaseEvidence, CaseWorkspace
 from ithrl.case.filesystem import (
@@ -27,12 +26,12 @@ from ithrl.case.filesystem import (
     read_safe_text,
     validate_existing_root,
 )
-from ithrl.execution import ResourceLimits
 from ithrl.experiment import SampledExperimentDefinition
-from ithrl.observations import ObservationIdentity, ObservationStore, ObservationStoreError
+from ithrl.observations import ObservationStore, ObservationStoreError
 from ithrl.results import SampledReductionEvidence, write_sampling_snapshot
 from ithrl.results.validation import json_object, loads_json
 from ithrl.run_state import SampledRunState
+from ithrl.sampled_run_metadata import SampledRunMetadata
 
 _SESSION_FILE = "cli-session.json"
 _MAX_SESSION_BYTES = 1024 * 1024
@@ -46,51 +45,11 @@ class SampledCliSessionError(ValueError):
     """Private sampled CLI metadata or publication is unavailable or inconsistent."""
 
 
-class SampledCliSession(BaseModel):
-    """Frozen operator inputs for one exact sampled reduction run."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    run_id: Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")]
-    run_directory: Path = Field(repr=False)
-    source_case: Path = Field(repr=False)
-    original_workspace: Path = Field(repr=False)
-    observation_store: Path = Field(repr=False)
-    experiment: SampledExperimentDefinition = Field(repr=False)
-    resource_limits: ResourceLimits
-    original_identity: ObservationIdentity
-    started_at: datetime
-
-    @field_validator("run_directory", "source_case", "original_workspace", "observation_store")
-    @classmethod
-    def absolute_paths(cls, value: Path) -> Path:
-        if not value.is_absolute() or ".." in value.parts or len(str(value)) > 4096:
-            raise ValueError("session paths must be absolute and cannot contain '..'")
-        return value
-
-    @field_validator("started_at")
-    @classmethod
-    def utc_time(cls, value: datetime) -> datetime:
-        if value.tzinfo is None or value.utcoffset() is None:
-            raise ValueError("session start must include a UTC offset")
-        return value.astimezone(UTC)
-
-    @model_validator(mode="after")
-    def bound_run(self) -> SampledCliSession:
-        if self.run_directory != self.source_case / ".runs" / self.run_id:
-            raise ValueError("session run must belong to its canonical source case")
-        if self.experiment.reduction is None:
-            raise ValueError("session requires a sampled reduction plan")
-        if self.original_identity.experiment_digest != self.experiment.digest:
-            raise ValueError("session experiment must match its original identity")
-        return self
-
-
-def save_cli_session(run_root: Path, session: SampledCliSession) -> Path:
+def save_cli_session(run_root: Path, session: SampledRunMetadata) -> Path:
     """Create immutable private metadata inside the already-owned live run."""
 
     try:
-        validated = SampledCliSession.model_validate_json(session.model_dump_json())
+        validated = SampledRunMetadata.model_validate_json(session.model_dump_json())
         root = validate_existing_root(run_root.absolute())
         if root != validated.run_directory:
             raise SampledCliSessionError("session destination does not match the live run")
@@ -106,7 +65,7 @@ def save_cli_session(run_root: Path, session: SampledCliSession) -> Path:
         raise SampledCliSessionError("cannot save private sampled CLI session") from error
 
 
-def load_cli_session(source: Path) -> SampledCliSession:
+def load_cli_session(source: Path) -> SampledRunMetadata:
     """Load a canonical live run or a result pointing to that same live session.
 
     The result copy must match the still-present live metadata. Neither copy replaces
@@ -183,7 +142,7 @@ def save_cli_result(
     state: SampledRunState,
     store: ObservationStore,
     result: SampledReductionEvidence,
-    session: SampledCliSession,
+    session: SampledRunMetadata,
     summary: Mapping[str, Any],
 ) -> Path:
     """Publish a private immutable result after caller-side workflow validation.
@@ -258,11 +217,11 @@ def save_cli_result(
             shutil.rmtree(staging, ignore_errors=True)
 
 
-def _read_session(path: Path) -> SampledCliSession:
+def _read_session(path: Path) -> SampledRunMetadata:
     raw = _read_private(path, max_bytes=_MAX_SESSION_BYTES)
     loads_json(raw, label=_SESSION_FILE)
     try:
-        return SampledCliSession.model_validate_json(raw)
+        return SampledRunMetadata.model_validate_json(raw)
     except ValidationError:
         raise SampledCliSessionError("sampled CLI session metadata is invalid") from None
 
@@ -273,19 +232,8 @@ def _read_state(path: Path) -> SampledRunState:
     return SampledRunState.model_validate_json(raw)
 
 
-def _validate_state_session(state: SampledRunState, session: SampledCliSession) -> None:
-    if (
-        state.run_id != session.run_id
-        or Path(state.source_case) != session.source_case
-        or Path(state.observation_store) != session.observation_store
-        or state.started_at != session.started_at
-        or state.original_identity != session.original_identity
-        or (
-            state.checkpoint is not None
-            and state.checkpoint.reduction != session.experiment.reduction
-        )
-        or any(block.plan.procedure != session.experiment.reduction for block in state.blocks)
-    ):
+def _validate_state_session(state: SampledRunState, session: SampledRunMetadata) -> None:
+    if not session.matches_state(state):
         raise SampledCliSessionError("session metadata differs from its owned run state")
 
 
@@ -312,11 +260,7 @@ def _validate_result_state(result: SampledReductionEvidence, state: SampledRunSt
     references = () if not confirmation else confirmation[0].observations
     attempts = result.confirmation.evidence.attempts
     if len(references) != len(attempts) or any(
-        reference.observation_id != attempt.observation.observation_id
-        or reference.attempt_id != attempt.observation.attempt_evidence.attempt_id
-        or reference.attempt_digest != attempt.observation.attempt_evidence.attempt_digest
-        or reference.schedule_position != attempt.schedule_position
-        or reference.independence_evidence_digest != attempt.independence_evidence_digest
+        not reference.matches_attempt(attempt)
         for reference, attempt in zip(references, attempts, strict=True)
     ):
         raise SampledCliSessionError("result confirmation differs from its durable references")

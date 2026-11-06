@@ -69,10 +69,7 @@ def _runner(
 ) -> tuple[CopilotRunner, Path]:
     marker = tmp_path / "action-marker.txt"
     executable = tmp_path / f"copilot-{mode}"
-    executable.write_text(
-        _FAKE_COPILOT.replace("__MODE__", mode).replace("__MARKER__", json.dumps(str(marker))),
-        encoding="utf-8",
-    )
+    executable.write_text(_FAKE_COPILOT, encoding="utf-8")
     executable.chmod(0o700)
     original_workspace = tmp_path / "original-workspace"
     original_workspace.mkdir(exist_ok=True)

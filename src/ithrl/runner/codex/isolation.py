@@ -19,8 +19,7 @@ from ithrl.runner.codex.configuration import MAX_AUTH_BYTES, CodexProviderConfig
 from ithrl.runner.codex.protocol import MAX_WORKER_REQUEST_BYTES, SANDBOX_ROOT
 from ithrl.runner.runtime import OwnedAttemptState, ProcessSpec
 from ithrl.runner.runtime.certificates import snapshot_certificate_files
-
-_MAX_WORKER_BYTES = 1024 * 1024
+from ithrl.runner.runtime.programs import executable_digest, file_state, read_worker_program
 
 
 class CodexIsolationError(RuntimeError):
@@ -321,13 +320,13 @@ def _private_directory(path: Path) -> Path:
 def program_digest(source: Path) -> str:
     """Return the content identity of one bounded runner program."""
 
-    _, content = _read_private_program(source)
+    content = read_worker_program(source, harness="Codex", error_type=CodexIsolationError)
     return hashlib.sha256(content).hexdigest()
 
 
 def _copy_private_program(source: Path, destination: Path, *, expected_digest: str) -> Path:
     try:
-        _, content = _read_private_program(source)
+        content = read_worker_program(source, harness="Codex", error_type=CodexIsolationError)
         if hashlib.sha256(content).hexdigest() != expected_digest:
             raise CodexIsolationError("the Codex worker source changed")
         atomic_write_bytes(destination, content)
@@ -337,31 +336,6 @@ def _copy_private_program(source: Path, destination: Path, *, expected_digest: s
     except (CaseError, OSError) as error:
         raise CodexIsolationError("cannot prepare the private Codex worker") from error
     return destination
-
-
-def _read_private_program(source: Path) -> tuple[Path, bytes]:
-    try:
-        resolved = source.resolve(strict=True)
-        metadata = resolved.stat()
-        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > _MAX_WORKER_BYTES:
-            raise CodexIsolationError("the Codex worker source is invalid")
-        with resolved.open("rb") as stream:
-            opened = os.fstat(stream.fileno())
-            if _file_state(opened) != _file_state(metadata):
-                raise CodexIsolationError("the Codex worker source changed while opening")
-            content = stream.read(_MAX_WORKER_BYTES + 1)
-            finished = os.fstat(stream.fileno())
-        if (
-            len(content) != metadata.st_size
-            or _file_state(finished) != _file_state(metadata)
-            or _file_state(resolved.stat()) != _file_state(metadata)
-        ):
-            raise CodexIsolationError("the Codex worker source changed while it was read")
-    except CodexIsolationError:
-        raise
-    except OSError as error:
-        raise CodexIsolationError("cannot read the private Codex worker") from error
-    return resolved, content
 
 
 def _read_executable(path: Path) -> tuple[Path, str]:
@@ -374,30 +348,12 @@ def _read_executable(path: Path) -> tuple[Path, str]:
         raise CodexIsolationError("a required Codex runtime executable is unavailable") from error
     if not stat.S_ISREG(metadata.st_mode) or metadata.st_mode & 0o111 == 0:
         raise CodexIsolationError("a required Codex runtime executable is unavailable")
-    digest = hashlib.sha256()
     try:
-        with target.open("rb") as stream:
-            opened = os.fstat(stream.fileno())
-            if _file_state(opened) != _file_state(metadata):
-                raise CodexIsolationError("a required Codex runtime executable changed")
-            while chunk := stream.read(1024 * 1024):
-                digest.update(chunk)
-            finished = os.fstat(stream.fileno())
+        digest = executable_digest(
+            target, metadata, harness="Codex", error_type=CodexIsolationError
+        )
+        if file_state(target.stat()) != file_state(metadata):
+            raise CodexIsolationError("a required Codex runtime executable changed")
     except OSError as error:
         raise CodexIsolationError("a required Codex runtime executable is unavailable") from error
-    if _file_state(finished) != _file_state(metadata) or _file_state(target.stat()) != _file_state(
-        metadata
-    ):
-        raise CodexIsolationError("a required Codex runtime executable changed")
-    return target, digest.hexdigest()
-
-
-def _file_state(metadata: os.stat_result) -> tuple[int, int, int, int, int, int]:
-    return (
-        metadata.st_dev,
-        metadata.st_ino,
-        metadata.st_mode,
-        metadata.st_size,
-        metadata.st_mtime_ns,
-        metadata.st_ctime_ns,
-    )
+    return target, digest

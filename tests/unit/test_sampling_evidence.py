@@ -148,6 +148,29 @@ def test_frozen_block_schedule_and_json_round_trip() -> None:
     assert evidence.original_counts.valid == evidence.candidate_counts.valid == 2
 
 
+def test_outcome_counts_consume_one_shot_input_without_losing_operational_errors() -> None:
+    plan = _plan()
+    ordinary = _attempts(plan)[0].observation
+    observations = (
+        ordinary,
+        ordinary.model_copy(update={"outcome": ObservationOutcome.NO_MATCH}),
+        _attempts(plan, invalid=True)[0].observation,
+        _attempts(plan, failure=True)[0].observation,
+    )
+    counts = SamplingArmCounts.from_observations(iter(observations))
+    assert counts.model_dump() == {
+        "dispatched": 4,
+        "valid": 2,
+        "matches": 1,
+        "no_matches": 1,
+        "invalid_observations": 1,
+        "runner_errors": 1,
+    }
+    empty = SamplingArmCounts.from_observations(iter(()))
+    assert empty.dispatched == empty.valid == empty.matches == empty.no_matches == 0
+    assert empty.invalid_observations == empty.runner_errors == 0
+
+
 def test_safe_replacements_do_not_use_percentage_cutoff_or_bernoulli_denominator() -> None:
     plan = _plan()
     evidence = SamplingBlockEvidence(plan=plan, attempts=_attempts(plan, failure=True))

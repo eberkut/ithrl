@@ -14,6 +14,7 @@ from collections.abc import Callable, Iterator, Mapping
 from contextlib import suppress
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from textwrap import indent
 from types import MappingProxyType
 
 import pytest
@@ -105,6 +106,9 @@ def _fake_codex(
     *,
     version: str = "99.42.7",
     disabled_features: set[str] = _FEATURES,
+    startup_body: str = "",
+    version_body: str | None = None,
+    schema_body: str = "_write_schema(destination)",
 ) -> Path:
     executable = tmp_path / "codex"
     feature_lines = "\n".join(f"{name} stable false" for name in sorted(disabled_features))
@@ -113,6 +117,11 @@ def _fake_codex(
         for path in schema.rglob("*")
         if path.is_file()
     }
+    startup_source = startup_body + "\n" if startup_body else ""
+    version_source = indent(
+        f'print("codex-cli {version}")' if version_body is None else version_body, "    "
+    )
+    schema_source = indent(schema_body, "    ")
     source = f"""#!/usr/bin/python3
 import os
 import shutil
@@ -127,16 +136,16 @@ def _write_schema(destination):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(content)
 
-arguments = sys.argv[1:]
+{startup_source}arguments = sys.argv[1:]
 if arguments == ["--version"]:
-    print("codex-cli {version}")
+{version_source}
     raise SystemExit(0)
 if arguments == ["features", "list"]:
     print({feature_lines!r})
     raise SystemExit(0)
 if arguments[:2] == ["app-server", "generate-json-schema"]:
     destination = Path(arguments[arguments.index("--out") + 1])
-    _write_schema(destination)
+{schema_source}
     raise SystemExit(0)
 raise SystemExit(64)
 """
@@ -434,13 +443,9 @@ def test_refuses_unsupported_generated_protocol(tmp_path: Path) -> None:
 def test_refuses_invalid_version_output_without_exposing_probe_output(tmp_path: Path) -> None:
     schema = tmp_path / "fixture-schema"
     shutil.copytree(SCHEMA_FIXTURE, schema)
-    executable = _fake_codex(tmp_path, schema)
-    content = executable.read_text(encoding="utf-8").replace(
-        'print("codex-cli 99.42.7")',
-        'print("private invalid version output")',
+    executable = _fake_codex(
+        tmp_path, schema, version_body='print("private invalid version output")'
     )
-    executable.write_text(content, encoding="utf-8")
-    executable.chmod(stat.S_IRWXU)
 
     with pytest.raises(CodexCapabilityError) as refused:
         detect_codex_capability(_runtime(executable), _configuration())
@@ -467,7 +472,6 @@ def test_every_structural_probe_denies_host_writes_home_reads_and_network(
 ) -> None:
     schema = tmp_path / "fixture-schema"
     shutil.copytree(SCHEMA_FIXTURE, schema)
-    executable = _fake_codex(tmp_path, schema)
     hidden = tmp_path / "private-host-home"
     hidden.write_text("private-host-content", encoding="utf-8")
     with socket.socket() as listener:
@@ -500,12 +504,7 @@ with socket.socket() as connection:
 Path(os.environ['HOME']).joinpath('private-state-ok').write_bytes(b'ok')
 Path(os.environ['TMPDIR']).joinpath('private-scratch-ok').write_bytes(b'ok')
 """
-        executable.write_text(
-            executable.read_text().replace(
-                "arguments = sys.argv[1:]", adversarial + "\narguments = sys.argv[1:]"
-            ),
-            encoding="utf-8",
-        )
+        executable = _fake_codex(tmp_path, schema, startup_body=adversarial)
         before = executable.read_bytes()
         profile = detect_codex_capability(_runtime(executable), _configuration())
     assert executable.read_bytes() == before
@@ -531,19 +530,18 @@ def test_bounds_and_validates_all_private_structural_state(
     monkeypatch: pytest.MonkeyPatch,
     kind: str,
 ) -> None:
-    executable = _fake_codex(tmp_path, SCHEMA_FIXTURE)
     actions = {
         "oversized-home": "private.write_bytes(b'x' * 200_000)",
         "fifo": "os.mkfifo(private)",
     }
-    executable.write_text(
-        executable.read_text().replace(
-            'print("codex-cli 99.42.7")',
-            "private = Path(os.environ['HOME']) / 'probe-state'\n    "
+    executable = _fake_codex(
+        tmp_path,
+        SCHEMA_FIXTURE,
+        version_body=(
+            "private = Path(os.environ['HOME']) / 'probe-state'\n"
             + actions[kind]
-            + '\n    print("codex-cli 99.42.7")',
+            + '\nprint("codex-cli 99.42.7")'
         ),
-        encoding="utf-8",
     )
     monkeypatch.setattr(capability, "_MAX_SCHEMA_TOTAL_BYTES", 100_000)
     with pytest.raises(CodexCapabilityError) as refused:
@@ -553,7 +551,6 @@ def test_bounds_and_validates_all_private_structural_state(
 
 
 def test_structural_discovery_accepts_native_startup_symlinks(tmp_path: Path) -> None:
-    executable = _fake_codex(tmp_path, SCHEMA_FIXTURE)
     startup = """alias_root = Path(os.environ['CODEX_HOME']) / 'tmp/arg0/codex-arg0aB12cD'
 alias_root.mkdir(parents=True, exist_ok=True)
 for name in ('apply_patch', 'applypatch', 'codex-linux-sandbox', 'codex-execve-wrapper'):
@@ -561,12 +558,7 @@ for name in ('apply_patch', 'applypatch', 'codex-linux-sandbox', 'codex-execve-w
     if not alias.is_symlink():
         alias.symlink_to('/tmp/ithrl-state/runner/codex')
 """
-    executable.write_text(
-        executable.read_text().replace(
-            "arguments = sys.argv[1:]", startup + "\narguments = sys.argv[1:]"
-        ),
-        encoding="utf-8",
-    )
+    executable = _fake_codex(tmp_path, SCHEMA_FIXTURE, startup_body=startup)
     profile = detect_codex_capability(_runtime(executable), _configuration())
     assert profile.runtime_harness_version == "99.42.7"
 
@@ -656,17 +648,15 @@ def test_validation_root_must_be_a_real_directory(
 def test_native_schema_root_symlink_is_refused_before_schema_reading(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    executable = _fake_codex(tmp_path, SCHEMA_FIXTURE)
-    executable.write_text(
-        executable.read_text().replace(
-            "_write_schema(destination)\n    raise SystemExit(0)",
+    executable = _fake_codex(
+        tmp_path,
+        SCHEMA_FIXTURE,
+        schema_body=(
             "elsewhere = Path(os.environ['HOME']) / 'schema-copy'\n"
-            "    _write_schema(elsewhere)\n"
-            "    destination.rmdir()\n"
-            "    destination.symlink_to(elsewhere, target_is_directory=True)\n"
-            "    raise SystemExit(0)",
+            "_write_schema(elsewhere)\n"
+            "destination.rmdir()\n"
+            "destination.symlink_to(elsewhere, target_is_directory=True)"
         ),
-        encoding="utf-8",
     )
 
     def must_not_read_schema(root: Path) -> str:
@@ -726,17 +716,16 @@ def test_unreadable_native_state_refuses_and_cleans_disposable_root(
             pytest.skip("process privileges bypass directory read permissions")
     finally:
         permission_check.chmod(0o700)
-    executable = _fake_codex(tmp_path, SCHEMA_FIXTURE)
-    executable.write_text(
-        executable.read_text().replace(
-            'print("codex-cli 99.42.7")',
+    executable = _fake_codex(
+        tmp_path,
+        SCHEMA_FIXTURE,
+        version_body=(
             "private = Path(os.environ['HOME']) / 'unreadable-state'\n"
-            "    private.mkdir()\n"
-            "    (private / 'native-output').write_bytes(b'private')\n"
-            "    private.chmod(0)\n"
-            '    print("codex-cli 99.42.7")',
+            "private.mkdir()\n"
+            "(private / 'native-output').write_bytes(b'private')\n"
+            "private.chmod(0)\n"
+            'print("codex-cli 99.42.7")'
         ),
-        encoding="utf-8",
     )
     roots: list[Path] = []
     original_run_probe = capability._run_probe
@@ -773,11 +762,7 @@ def test_structural_timeout_stops_namespace_and_cleans_private_state(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    executable = _fake_codex(tmp_path, SCHEMA_FIXTURE)
-    executable.write_text(
-        executable.read_text().replace('print("codex-cli 99.42.7")', "time.sleep(60)"),
-        encoding="utf-8",
-    )
+    executable = _fake_codex(tmp_path, SCHEMA_FIXTURE, version_body="time.sleep(60)")
     monkeypatch.setattr(capability, "_PROBE_TIMEOUT_SECONDS", 0.1)
     processes: list[subprocess.Popen[bytes]] = []
     roots: list[Path] = []
@@ -800,14 +785,14 @@ def test_structural_timeout_stops_namespace_and_cleans_private_state(
 def test_stops_probe_when_output_exceeds_limit(tmp_path: Path) -> None:
     schema = tmp_path / "fixture-schema"
     shutil.copytree(SCHEMA_FIXTURE, schema)
-    executable = _fake_codex(tmp_path, schema)
-    content = executable.read_text(encoding="utf-8").replace(
-        'print("codex-cli 99.42.7")',
-        'sys.stdout.write("private-output" * 100_000); sys.stdout.flush(); '
-        "import time; time.sleep(60)",
+    executable = _fake_codex(
+        tmp_path,
+        schema,
+        version_body=(
+            'sys.stdout.write("private-output" * 100_000); sys.stdout.flush(); '
+            "import time; time.sleep(60)"
+        ),
     )
-    executable.write_text(content, encoding="utf-8")
-    executable.chmod(stat.S_IRWXU)
 
     with pytest.raises(CodexCapabilityError) as refused:
         detect_codex_capability(_runtime(executable), _configuration())
@@ -819,17 +804,17 @@ def test_stops_probe_when_output_exceeds_limit(tmp_path: Path) -> None:
 def test_stops_schema_probe_when_file_limit_is_exceeded(tmp_path: Path) -> None:
     schema = tmp_path / "fixture-schema"
     shutil.copytree(SCHEMA_FIXTURE, schema)
-    executable = _fake_codex(tmp_path, schema)
-    content = executable.read_text(encoding="utf-8").replace(
-        "    _write_schema(destination)",
-        "    destination.mkdir(parents=True, exist_ok=True)\n"
-        "    for index in range(2_100):\n"
-        '        (destination / f"{index}.json").write_text("{}")\n'
-        "    import time\n"
-        "    time.sleep(60)",
+    executable = _fake_codex(
+        tmp_path,
+        schema,
+        schema_body=(
+            "destination.mkdir(parents=True, exist_ok=True)\n"
+            "for index in range(2_100):\n"
+            '    (destination / f"{index}.json").write_text("{}")\n'
+            "import time\n"
+            "time.sleep(60)"
+        ),
     )
-    executable.write_text(content, encoding="utf-8")
-    executable.chmod(stat.S_IRWXU)
 
     with pytest.raises(CodexCapabilityError) as refused:
         detect_codex_capability(_runtime(executable), _configuration())
@@ -841,22 +826,22 @@ def test_stops_schema_probe_when_file_limit_is_exceeded(tmp_path: Path) -> None:
 def test_refuses_and_stops_probe_that_leaves_a_descendant(tmp_path: Path) -> None:
     schema = tmp_path / "fixture-schema"
     shutil.copytree(SCHEMA_FIXTURE, schema)
-    executable = _fake_codex(tmp_path, schema)
     child_pid_path = tmp_path / "child.pid"
-    content = executable.read_text(encoding="utf-8").replace(
-        '    print("codex-cli 99.42.7")',
-        "    child = os.fork()\n"
-        "    if child == 0:\n"
-        "        signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
-        f"        Path({str(child_pid_path)!r}).write_text(str(os.getpid()))\n"
-        "        time.sleep(60)\n"
-        "        raise SystemExit(0)\n"
-        f"    while not Path({str(child_pid_path)!r}).exists():\n"
-        "        time.sleep(0.01)\n"
-        '    print("codex-cli 99.42.7")',
+    executable = _fake_codex(
+        tmp_path,
+        schema,
+        version_body=(
+            "child = os.fork()\n"
+            "if child == 0:\n"
+            "    signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+            f"    Path({str(child_pid_path)!r}).write_text(str(os.getpid()))\n"
+            "    time.sleep(60)\n"
+            "    raise SystemExit(0)\n"
+            f"while not Path({str(child_pid_path)!r}).exists():\n"
+            "    time.sleep(0.01)\n"
+            'print("codex-cli 99.42.7")'
+        ),
     )
-    executable.write_text(content, encoding="utf-8")
-    executable.chmod(stat.S_IRWXU)
 
     child_pid: int | None = None
     try:

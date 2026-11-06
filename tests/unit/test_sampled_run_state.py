@@ -29,6 +29,7 @@ from ithrl.observations import (
     ObservationRole,
     ObservationStore,
     ObservationStoreBusyError,
+    SamplingAttempt,
     SamplingBlockPlan,
     SamplingBudgetAllowance,
     sampling_schedule,
@@ -44,6 +45,7 @@ from ithrl.run_state import (
     SamplingBlockProgress,
     SamplingBudgetApproval,
     SamplingDispatchReservation,
+    SamplingObservationReference,
 )
 from ithrl.runner import AttemptEvidence, ProviderAcceptanceState, RunAccounting, TokenUsage
 
@@ -1163,3 +1165,40 @@ def test_sampled_run_lock_rejects_hard_link_without_modifying_state(tmp_path: Pa
         pytest.fail("hard-linked sampled state was accepted as a lock")
 
     assert file.path.read_bytes() == lock_path.read_bytes() == original
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        None,
+        "observation_id",
+        "attempt_id",
+        "attempt_digest",
+        "schedule_position",
+        "independence_evidence_digest",
+    ],
+)
+def test_observation_reference_matches_all_persisted_attempt_fields(field: str | None) -> None:
+    plan = _plan()
+    reservation = _reservation(plan)
+    observation = _observation(plan, reservation, unknown=True)
+    attempt = SamplingAttempt(
+        observation=observation, schedule_position=0, independence_evidence_digest="a" * 64
+    )
+    reference = SamplingObservationReference(
+        observation_id=observation.observation_id,
+        attempt_id=reservation.attempt_id,
+        attempt_digest=reservation.attempt_digest,
+        schedule_position=0,
+        independence_evidence_digest="a" * 64,
+    )
+    if field is not None:
+        changed: object = {
+            "observation_id": "another-observation",
+            "attempt_id": "attempt-" + "f" * 32,
+            "attempt_digest": "f" * 64,
+            "schedule_position": 1,
+            "independence_evidence_digest": None,
+        }[field]
+        reference = reference.model_copy(update={field: changed})
+    assert reference.matches_attempt(attempt) is (field is None)

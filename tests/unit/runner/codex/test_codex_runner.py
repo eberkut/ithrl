@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import ssl
 import stat
 import subprocess
@@ -32,13 +33,14 @@ from ithrl.experiment import ExperimentDefinition
 from ithrl.mutation import TextAppend, TextMutation
 from ithrl.runner import (
     PreparedAttempt,
+    ProviderAcceptanceState,
     RunnerCancelled,
     RunnerError,
     RunnerErrorCode,
     prepare_candidate,
 )
 from ithrl.runner.codex import CodexProviderConfiguration, CodexRunner, CodexRuntime
-from ithrl.runner.codex.isolation import program_digest
+from ithrl.runner.codex.isolation import CodexIsolationError, program_digest
 from ithrl.runner.codex.materialize import (
     CodexMaterializationError,
     CodexMaterializationErrorCode,
@@ -705,6 +707,47 @@ def test_rejects_runtime_replacement_before_attempt_execution(tmp_path: Path) ->
         asyncio.run(runner.run(attempt))
 
     assert refused.value.code is RunnerErrorCode.PREPARATION
+    assert not (tmp_path / "attempts").exists()
+
+
+def test_final_runtime_stat_failure_is_preparation_before_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace, evidence = _case(tmp_path)
+    runner = _runner(tmp_path, workspace)
+    attempt = _attempt(evidence, runner)
+    executable = tmp_path / "codex-complete"
+    expected = executable.stat()
+    original_fstat = os.fstat
+    original_stat = Path.stat
+    descriptor_stats = 0
+
+    def record_fstat(descriptor: int) -> os.stat_result:
+        nonlocal descriptor_stats
+        metadata = original_fstat(descriptor)
+        if (metadata.st_dev, metadata.st_ino) == (expected.st_dev, expected.st_ino):
+            descriptor_stats += 1
+        return metadata
+
+    def refuse_final_stat(path: Path, *, follow_symlinks: bool = True) -> os.stat_result:
+        if path == executable and descriptor_stats == 2:
+            raise PermissionError("private final stat diagnostic")
+        return original_stat(path, follow_symlinks=follow_symlinks)
+
+    async def unexpected_dispatch(**_kwargs: Any) -> None:
+        raise AssertionError("preparation failure must not dispatch a process")
+
+    monkeypatch.setattr(os, "fstat", record_fstat)
+    monkeypatch.setattr(Path, "stat", refuse_final_stat)
+    monkeypatch.setattr(codex_runner_module, "run_isolated_process", unexpected_dispatch)
+    with pytest.raises(RunnerError, match="inputs changed after capability detection") as refused:
+        asyncio.run(runner.run(attempt))
+    assert refused.value.code is RunnerErrorCode.PREPARATION
+    assert refused.value.provider_acceptance_state is ProviderAcceptanceState.NOT_STARTED
+    assert isinstance(refused.value.__cause__, CodexIsolationError)
+    assert isinstance(refused.value.__cause__.__cause__, PermissionError)
+    assert "private final stat diagnostic" not in str(refused.value)
+    assert descriptor_stats == 2
     assert not (tmp_path / "attempts").exists()
 
 

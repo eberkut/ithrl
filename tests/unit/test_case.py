@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from ithrl.case import (
     CaptureFacts,
+    CaseEvidence,
     CaseExistsError,
     CaseFormatError,
     CaseManifest,
@@ -20,8 +21,9 @@ from ithrl.case import (
     case_digest,
 )
 from ithrl.case import storage as case_storage
-from ithrl.context import ContextNode, content_digest
+from ithrl.context import ContextGraph, ContextNode, content_digest
 from ithrl.experiment import SampledExperimentDefinition, parse_experiment_toml
+from ithrl.mutation import MutationError, TextAppend, TextMutation
 
 EXPERIMENT = """\
 schema_version = 1
@@ -140,6 +142,98 @@ def test_workspace_writes_expected_schema_versions(tmp_path: Path) -> None:
     assert len(records) == 3
     assert all('"schema_version":1' in record for record in records)
     assert (workspace.root / "experiments/default.toml").read_text() == EXPERIMENT
+
+
+@pytest.mark.parametrize("operation", ["unchanged", "removal", "mutation", "late-failure"])
+def test_materialization_preserves_nested_evidence_and_identity(operation: str) -> None:
+    request: dict[str, Any] = {
+        "input": [
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "original"}],
+                "opaque": {"items": [1]},
+            },
+            {"role": "user", "content": "current"},
+        ],
+        "opaque": {"items": [2]},
+    }
+    nodes = tuple(
+        ContextNode(
+            id=f"ctx-{index}",
+            kind="message",
+            path=f"/input/{index}",
+            mutable=True,
+            source="fixture",
+            digest=content_digest(item),
+        )
+        for index, item in enumerate(request["input"])
+    )
+    evidence = CaseEvidence(
+        manifest=_manifest(),
+        request=request,
+        context=ContextGraph(nodes=nodes),
+        default_experiment=EXPERIMENT,
+    )
+    preserved = evidence.request
+    digest = evidence.digest
+    request["opaque"]["items"].append(3)
+    request["input"][0]["content"][0]["text"] = "changed source"
+    edit = TextAppend(
+        context_id="ctx-0",
+        content_index=0,
+        original_text_digest=content_digest("original"),
+        text=" appended",
+    )
+    mutation = TextMutation(edits=(edit,))
+
+    if operation == "late-failure":
+        # Exercise a refusal after the first edit has already changed the candidate.
+        mutation = mutation.model_copy(
+            update={"edits": (edit, edit.model_copy(update={"context_id": "unknown"}))}
+        )
+        with pytest.raises(MutationError, match="unknown context node"):
+            evidence.materialize(mutation=mutation)
+    else:
+        result: Any = evidence.materialize(
+            ("ctx-0",) if operation == "removal" else (),
+            mutation=mutation if operation == "mutation" else None,
+        )
+        result["opaque"]["items"].append(4)
+        if operation != "removal":
+            result["input"][0]["opaque"]["items"].append(5)
+            result["input"][0]["content"][0]["text"] = "changed candidate"
+
+    assert evidence.request == preserved
+    assert evidence.digest == digest
+    assert [(item.context_id, item.original_text) for item in evidence.editable_text()] == [
+        ("ctx-0", "original")
+    ]
+
+
+def test_materialization_consumes_removals_before_rejecting_combined_mutation(
+    tmp_path: Path,
+) -> None:
+    evidence = _create_case(tmp_path / "case").load()
+    consumed = []
+
+    def removals():
+        consumed.append("started")
+        yield "unknown"
+        consumed.append("finished")
+
+    mutation = TextMutation(
+        edits=(
+            TextAppend(
+                context_id="unknown",
+                content_index=0,
+                original_text_digest="a" * 64,
+                text="append",
+            ),
+        )
+    )
+    with pytest.raises(MutationError, match="unchanged original context"):
+        evidence.materialize(removals(), mutation=mutation)
+    assert consumed == ["started", "finished"]
 
 
 def test_case_digest_includes_context_node_order() -> None:

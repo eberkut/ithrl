@@ -6,10 +6,19 @@ from pathlib import Path
 
 import pytest
 
-from ithrl.adapters import AdapterError, AdapterErrorCode, NativeSession, SourceFacts, parse_session
+from ithrl.adapters import (
+    AdapterError,
+    AdapterErrorCode,
+    NativeSession,
+    SourceFacts,
+    enumerate_decisions,
+    parse_session,
+    select_decision,
+)
 from ithrl.adapters._jsonl import JsonlDocument, read_jsonl
 from ithrl.adapters.contracts import ParsingLimits
-from ithrl.adapters.registry import NativeSessionParser, _parse_document
+from ithrl.adapters.registry import NativeSessionParser, _parse_document, decision_input_node_id
+from ithrl.context import JsonObject
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
 CASES = (
@@ -266,3 +275,50 @@ class _AlwaysMatches:
     def parse(self, document: JsonlDocument) -> NativeSession:
         del document
         raise AssertionError("ambiguous formats must be refused before parsing")
+
+
+@pytest.mark.parametrize(
+    ("fixture", "input_line"),
+    [(CASES[0][0], 9), (CASES[1][0], 14)],
+)
+def test_registered_decision_input_uses_existing_snapshot_without_changing_source(
+    fixture: Path, input_line: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session = parse_session(fixture)
+    decision = enumerate_decisions(session)[0]
+    selected = select_decision(
+        session, decision_id=decision.decision_id, target_id=decision.targets[0].target_id
+    )
+    records = session.records
+    before = session.records
+    native_bytes = session.native_bytes
+
+    def unexpected_snapshot(_session: NativeSession) -> tuple[JsonObject, ...]:
+        raise AssertionError("decision input discovery must reuse the supplied record snapshot")
+
+    with monkeypatch.context() as guarded:
+        guarded.setattr(NativeSession, "records", property(unexpected_snapshot))
+        fixed_input = decision_input_node_id(
+            session, selected.evidence.selector, selected.context, records=records
+        )
+    assert fixed_input == selected.context.nodes[input_line - 1].id
+    assert records == before
+    assert session.records == before
+    assert session.native_bytes == native_bytes
+
+
+def test_registered_decision_input_refuses_unknown_native_format() -> None:
+    session = parse_session(CASES[0][0])
+    decision = enumerate_decisions(session)[0]
+    selected = select_decision(
+        session, decision_id=decision.decision_id, target_id=decision.targets[0].target_id
+    )
+    session.metadata = session.metadata.model_copy(
+        update={"format": session.metadata.format.model_copy(update={"name": "unknown"})}
+    )
+    with pytest.raises(AdapterError) as captured:
+        decision_input_node_id(
+            session, selected.evidence.selector, selected.context, records=session.records
+        )
+    assert captured.value.code is AdapterErrorCode.UNSUPPORTED_FORMAT
+    assert str(captured.value) == "session format does not support decision input discovery"

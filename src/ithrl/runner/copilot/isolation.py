@@ -18,13 +18,13 @@ from ithrl.runner.copilot.policy import CopilotTarget, target_policy
 from ithrl.runner.copilot.sdk_runtime import SDKRuntime
 from ithrl.runner.runtime import OwnedAttemptState, ProcessSpec
 from ithrl.runner.runtime.certificates import snapshot_certificate_files
+from ithrl.runner.runtime.programs import executable_digest, file_state, read_worker_program
 
 SANDBOX_ROOT = "/tmp/ithrl-state"  # noqa: S108 - private tmpfs path inside Bubblewrap
 MAX_NATIVE_SESSION_BYTES = 64 * 1024 * 1024
 # Bundled tooling is extracted into each isolated cache before even --version.
 # Reserve room for those assets as well as the bounded semantic session and output.
 DEFAULT_DISPOSABLE_STATE_BYTES = 256 * 1024 * 1024
-_MAX_WORKER_BYTES = 1024 * 1024
 _MAX_MODEL_BYTES = 1024
 
 
@@ -320,13 +320,13 @@ def _private_directory(path: Path) -> Path:
 def program_digest(source: Path) -> str:
     """Return the content identity of one bounded Copilot worker."""
 
-    _, content = _read_program(source)
+    content = read_worker_program(source, harness="Copilot", error_type=CopilotIsolationError)
     return hashlib.sha256(content).hexdigest()
 
 
 def _copy_private_program(source: Path, destination: Path, *, expected_digest: str) -> Path:
     try:
-        _, content = _read_program(source)
+        content = read_worker_program(source, harness="Copilot", error_type=CopilotIsolationError)
         if hashlib.sha256(content).hexdigest() != expected_digest:
             raise CopilotIsolationError("the Copilot worker source changed")
         atomic_write_bytes(destination, content)
@@ -338,31 +338,6 @@ def _copy_private_program(source: Path, destination: Path, *, expected_digest: s
     return destination
 
 
-def _read_program(source: Path) -> tuple[Path, bytes]:
-    try:
-        resolved = source.resolve(strict=True)
-        metadata = resolved.stat()
-        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > _MAX_WORKER_BYTES:
-            raise CopilotIsolationError("the Copilot worker source is invalid")
-        with resolved.open("rb") as stream:
-            opened = os.fstat(stream.fileno())
-            if _file_state(opened) != _file_state(metadata):
-                raise CopilotIsolationError("the Copilot worker source changed while opening")
-            content = stream.read(_MAX_WORKER_BYTES + 1)
-            finished = os.fstat(stream.fileno())
-        if (
-            len(content) != metadata.st_size
-            or _file_state(finished) != _file_state(metadata)
-            or _file_state(resolved.stat()) != _file_state(metadata)
-        ):
-            raise CopilotIsolationError("the Copilot worker source changed while it was read")
-    except CopilotIsolationError:
-        raise
-    except OSError as error:
-        raise CopilotIsolationError("cannot read the private Copilot worker") from error
-    return resolved, content
-
-
 def _read_executable(path: Path) -> tuple[Path, str]:
     if not isinstance(path, Path) or not path.is_absolute() or ".." in path.parts:
         raise ValueError("Copilot runtime paths must be absolute")
@@ -371,17 +346,10 @@ def _read_executable(path: Path) -> tuple[Path, str]:
         metadata = target.stat()
         if not stat.S_ISREG(metadata.st_mode) or metadata.st_mode & 0o111 == 0:
             raise OSError
-        digest = hashlib.sha256()
-        with target.open("rb") as stream:
-            opened = os.fstat(stream.fileno())
-            if _file_state(opened) != _file_state(metadata):
-                raise CopilotIsolationError("a required Copilot runtime executable changed")
-            while chunk := stream.read(1024 * 1024):
-                digest.update(chunk)
-            finished = os.fstat(stream.fileno())
-        if _file_state(finished) != _file_state(metadata) or _file_state(
-            target.stat()
-        ) != _file_state(metadata):
+        digest = executable_digest(
+            target, metadata, harness="Copilot", error_type=CopilotIsolationError
+        )
+        if file_state(target.stat()) != file_state(metadata):
             raise CopilotIsolationError("a required Copilot runtime executable changed")
     except CopilotIsolationError:
         raise
@@ -389,18 +357,7 @@ def _read_executable(path: Path) -> tuple[Path, str]:
         raise CopilotIsolationError(
             "a required Copilot runtime executable is unavailable"
         ) from error
-    return target, digest.hexdigest()
-
-
-def _file_state(metadata: os.stat_result) -> tuple[int, int, int, int, int, int]:
-    return (
-        metadata.st_dev,
-        metadata.st_ino,
-        metadata.st_mode,
-        metadata.st_size,
-        metadata.st_mtime_ns,
-        metadata.st_ctime_ns,
-    )
+    return target, digest
 
 
 __all__ = [

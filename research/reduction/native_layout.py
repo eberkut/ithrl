@@ -94,7 +94,9 @@ class BranchNeeded(Exception):
         self.candidate_p = candidate_p
 
 
-async def replay(prefix: tuple[bool, ...], instruction: str):
+async def replay(
+    prefix: tuple[bool, ...], instruction: str, *, max_comparisons: int = MAX_COMPARISONS
+):
     sampled = 0
 
     async def classify(**arguments):
@@ -109,7 +111,7 @@ async def replay(prefix: tuple[bool, ...], instruction: str):
         effective = base | frozenset(requested)
         if "trigger" in effective:
             return Trial(key, tuple(sorted(base)), False)
-        if sampled >= MAX_COMPARISONS:
+        if sampled >= max_comparisons:
             return None
         if sampled >= len(prefix):
             raise BranchNeeded(P_REMOVED if instruction in effective else P_ORIGINAL)
@@ -129,7 +131,13 @@ async def replay(prefix: tuple[bool, ...], instruction: str):
     return outcome
 
 
-async def enumerate_position(position: int, failure: float, holdout_pass: float):
+async def enumerate_position(
+    position: int,
+    failure: float,
+    holdout_pass: float,
+    *,
+    max_comparisons: int = MAX_COMPARISONS,
+):
     instruction = GROUPS[position]
     block_complete = completion(4, 8, failure) * completion(5, 9, failure)
     stack = [((), 1.0)]
@@ -139,13 +147,13 @@ async def enumerate_position(position: int, failure: float, holdout_pass: float)
     search_incomplete = []
     ceiling_incomplete = []
     terminal_mass = []
-    max_comparisons = 0
+    maximum_sampled_comparisons = 0
     max_trials = 0
     branches = 0
     while stack:
         prefix, probability = stack.pop()
         try:
-            outcome = await replay(prefix, instruction)
+            outcome = await replay(prefix, instruction, max_comparisons=max_comparisons)
         except BranchNeeded as branch:
             branches += 1
             admission = ADMISSION[branch.candidate_p]
@@ -154,7 +162,7 @@ async def enumerate_position(position: int, failure: float, holdout_pass: float)
             stack.append(((*prefix, False), probability * block_complete * (1 - admission)))
             continue
         terminal_mass.append(probability)
-        max_comparisons = max(max_comparisons, len(prefix))
+        maximum_sampled_comparisons = max(maximum_sampled_comparisons, len(prefix))
         max_trials = max(max_trials, len(outcome.trials))
         if not outcome.complete:
             ceiling_incomplete.append(probability)
@@ -189,7 +197,7 @@ async def enumerate_position(position: int, failure: float, holdout_pass: float)
         * search_useful
         * holdout_complete
         * holdout_pass,
-        "maximum_sampled_comparisons_in_enumerated_paths": max_comparisons,
+        "maximum_sampled_comparisons_in_enumerated_paths": maximum_sampled_comparisons,
         "maximum_trials_in_enumerated_paths": max_trials,
         "enumerated_branch_points": branches,
     }

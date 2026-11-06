@@ -13,7 +13,7 @@ from ithrl.cli.output import ExitCode, OutputFormat, console, print_plain
 from ithrl.experiment import SampledCalibrationPhase
 from ithrl.fuzz.configuration import FuzzCommandLimits
 from ithrl.fuzz.contracts import FuzzConfirmation, FuzzScreening
-from ithrl.observations import Observation, ObservationOutcome
+from ithrl.observations import Observation, SamplingArmCounts
 from ithrl.run_state import SampledRunUsage
 
 type _Name = Annotated[str, Field(max_length=256, pattern=r"^[A-Za-z0-9._:/+-]+$")]
@@ -50,15 +50,8 @@ class FuzzCounts(BaseModel):
 
     @classmethod
     def observations(cls, observations: tuple[Observation, ...]) -> FuzzCounts:
-        return cls(
-            dispatched=len(observations),
-            matches=sum(o.outcome is ObservationOutcome.MATCH for o in observations),
-            no_matches=sum(o.outcome is ObservationOutcome.NO_MATCH for o in observations),
-            invalid_observations=sum(
-                o.outcome is ObservationOutcome.INVALID_OBSERVATION for o in observations
-            ),
-            runner_errors=sum(o.outcome is ObservationOutcome.RUNNER_ERROR for o in observations),
-        )
+        counts = SamplingArmCounts.from_observations(observations)
+        return cls(**counts.model_dump(exclude={"valid"}))
 
 
 class FuzzOutput(BaseModel):

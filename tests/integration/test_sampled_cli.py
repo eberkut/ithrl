@@ -59,6 +59,7 @@ from ithrl.runner import (
     RunResult,
     TokenUsage,
 )
+from ithrl.sampled_run_metadata import SampledRunMetadata
 
 _SOURCE = Path(__file__).parents[1] / "fixtures/codex-session/rollout.jsonl"
 _PRIVATE_CONTEXT = "PRIVATE_FIXTURE_CONTEXT_DO_NOT_DISPLAY"
@@ -1187,7 +1188,7 @@ def test_interruption_after_session_publication_can_resume_without_recreating_ru
 ) -> None:
     save_session = sampled_reduction.save_cli_session
 
-    def stop_after_publication(root: Path, session: sampled_session.SampledCliSession) -> None:
+    def stop_after_publication(root: Path, session: SampledRunMetadata) -> None:
         save_session(root, session)
         raise asyncio.CancelledError
 

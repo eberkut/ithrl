@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import signal
 import stat
 import subprocess
 import time
@@ -44,13 +43,13 @@ from ithrl.runner.codex.protocol_contracts import MAX_INFERENCE_REQUESTS
 from ithrl.runner.codex.runtime_configuration import validate_runner_configuration
 from ithrl.runner.codex.schema import CodexSchemaError, verify_schema_bundle
 from ithrl.runner.runtime import PROCESS_CANCELLATION_GRACE_SECONDS
+from ithrl.runner.runtime.probes import process_group_exists, stop_probe_group
 
 _PROBE_TIMEOUT_SECONDS = 15
 _MAX_PROBE_OUTPUT_BYTES = 1024 * 1024
 _MAX_SCHEMA_ENTRIES = 2_000
 _MAX_SCHEMA_TOTAL_BYTES = 64 * 1024 * 1024
 _PROBE_POLL_SECONDS = 0.05
-_PROBE_TERMINATION_GRACE_SECONDS = 1.0
 _VERSION = re.compile(r"^codex-cli (?P<version>[^\s]+)$")
 _ISOLATION_PROBE_RESULT = b"ithrl-isolation-ok\n"
 _ISOLATION_HOST_MARKER = b"ithrl-readable-host-marker\n"
@@ -505,14 +504,14 @@ def _run_probe(
                 state_root=state_root,
             )
         except CodexCapabilityError:
-            if process is not None and not _stop_probe_group(process):
+            if process is not None and not stop_probe_group(process):
                 raise CodexCapabilityError(
                     failure_code,
                     "Codex capability probe processes could not be stopped",
                 ) from None
             raise
         except TimeoutError:
-            if process is not None and not _stop_probe_group(process):
+            if process is not None and not stop_probe_group(process):
                 raise CodexCapabilityError(
                     failure_code,
                     "Codex capability probe processes could not be stopped",
@@ -521,7 +520,7 @@ def _run_probe(
                 failure_code, "Codex capability probe did not pass"
             ) from None
         except OSError as error:
-            if process is not None and not _stop_probe_group(process):
+            if process is not None and not stop_probe_group(process):
                 raise CodexCapabilityError(
                     failure_code,
                     "Codex capability probe processes could not be stopped",
@@ -531,10 +530,10 @@ def _run_probe(
             ) from error
         except BaseException:
             if process is not None:
-                _stop_probe_group(process)
+                stop_probe_group(process)
             raise
-        if _probe_group_exists(process.pid):
-            stopped = _stop_probe_group(process)
+        if process_group_exists(process.pid):
+            stopped = stop_probe_group(process)
             message = (
                 "Codex capability probe left a descendant process"
                 if stopped
@@ -586,44 +585,6 @@ def _require_bounded_probe_output(
             failure_code,
             "Codex capability probe output exceeds the byte limit",
         )
-
-
-def _stop_probe_group(process: subprocess.Popen[bytes]) -> bool:
-    """Stop every process in one probe group and confirm that the group is gone."""
-
-    _signal_probe_group(process.pid, signal.SIGTERM)
-    if _wait_probe_group_gone(process):
-        return True
-    _signal_probe_group(process.pid, signal.SIGKILL)
-    return _wait_probe_group_gone(process)
-
-
-def _wait_probe_group_gone(process: subprocess.Popen[bytes]) -> bool:
-    deadline = time.monotonic() + _PROBE_TERMINATION_GRACE_SECONDS
-    while time.monotonic() < deadline:
-        process.poll()
-        if not _probe_group_exists(process.pid):
-            return True
-        time.sleep(_PROBE_POLL_SECONDS)
-    process.poll()
-    return not _probe_group_exists(process.pid)
-
-
-def _signal_probe_group(process_group: int, selected_signal: signal.Signals) -> None:
-    try:
-        os.killpg(process_group, selected_signal)
-    except OSError:
-        return
-
-
-def _probe_group_exists(process_group: int) -> bool:
-    try:
-        os.killpg(process_group, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
 
 
 def _probe_environment(

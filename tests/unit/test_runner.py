@@ -501,6 +501,89 @@ def test_run_result_must_match_resolved_execution_identity(
 
 
 @pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        (
+            {"disposable_state_bytes": 1, "source_store_effect": "may-change"},
+            "runner reported disposable state that its capability excludes",
+        ),
+        (
+            {"actions_requested": 99, "source_store_effect": "may-change"},
+            "runner action count differs from normalized output",
+        ),
+        (
+            {"source_store_effect": "may-change", "original_workspace_effect": "may-change"},
+            "runner changed the preserved source session",
+        ),
+        (
+            {"original_workspace_effect": "may-change", "process_outcome": "unknown"},
+            "runner changed the original workspace",
+        ),
+        (
+            {"elapsed_milliseconds": 30_001, "native_output_bytes": 4},
+            "runner exceeded the wall-time limit",
+        ),
+    ],
+)
+def test_completed_result_keeps_first_failure_order(
+    tmp_path: Path, changes: dict[str, object], message: str
+) -> None:
+    runner, attempt = _attempt(_synthetic_evidence(tmp_path))
+    result = asyncio.run(runner.run(attempt))
+    changed = result.model_copy(update={"accounting": result.accounting.model_copy(update=changes)})
+
+    with pytest.raises(RunnerError) as caught:
+        validate_run_result(attempt, changed)
+
+    assert str(caught.value) == message
+    assert caught.value.__cause__ is None
+
+
+@pytest.mark.parametrize("size", [3, 4])
+def test_native_output_consistency_precedes_completed_only_requirement(
+    tmp_path: Path, size: int
+) -> None:
+    runner, attempt = _attempt(_synthetic_evidence(tmp_path))
+    result = asyncio.run(runner.run(attempt))
+    native = NativeOutputReference(
+        artifact_id="fixture-output",
+        sha256="a" * 64,
+        media_type="application/json",
+        size_bytes=size,
+        complete=False,
+    )
+    accounting = result.accounting.model_copy(update={"native_output_bytes": 4})
+    changed = result.model_copy(update={"accounting": accounting, "native_output": native})
+
+    with pytest.raises(RunnerError) as caught:
+        validate_run_result(attempt, changed)
+    message = (
+        "native output reference has the wrong size"
+        if size == 3
+        else "completed runner output must be complete"
+    )
+    assert str(caught.value) == message
+    assert caught.value.code is RunnerErrorCode.CONTRACT
+    assert caught.value.__cause__ is None
+
+    original = RunnerError(
+        RunnerErrorCode.PROTOCOL,
+        "original failure",
+        provider_acceptance_state=ProviderAcceptanceState.NOT_STARTED,
+        accounting=accounting,
+        native_output=native,
+    )
+    partial = validate_runner_error(attempt, original)
+    if size == 3:
+        assert partial.code is RunnerErrorCode.CONTRACT
+        assert str(partial) == "native output reference has the wrong size"
+        assert partial.accounting is accounting
+        assert partial.native_output is native
+    else:
+        assert partial is original
+
+
+@pytest.mark.parametrize(
     "changes",
     [
         {"attempt_id": "another-attempt"},
