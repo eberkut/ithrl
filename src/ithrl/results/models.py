@@ -246,9 +246,9 @@ class SampledReductionEvidence(_StrictImmutableModel):
     @model_validator(mode="after")
     def validate_sampled_claims(self) -> SampledReductionEvidence:
         checkpoint = self.checkpoint
-        expected = "search-reduced" if checkpoint.final_sweep_complete else "search-incomplete"
+        expected = "search-reduced" if checkpoint.search_complete else "search-incomplete"
         if self.search_result != expected:
-            raise ValueError("sampled search result must match the final sweep witness")
+            raise ValueError("sampled search result must match the recorded search coverage")
         if self.selected_candidate_digest != checkpoint.best_candidate_digest:
             raise ValueError("selected candidate must match the checkpoint best candidate")
         search_blocks = checkpoint.blocks

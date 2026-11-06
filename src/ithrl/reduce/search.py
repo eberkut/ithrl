@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Generator, Iterable, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -60,54 +60,18 @@ class _Search[Trial: _Trial]:
     trials: list[Trial]
 
     async def run(self) -> _SearchOutcome[Trial]:
-        removed, chunk_complete = await self._run_chunks()
-        if not chunk_complete:
-            return _SearchOutcome(removed, self.trials, False)
-        removed, final_complete = await self._run_final_sweep(removed)
-        return _SearchOutcome(removed, self.trials, final_complete)
-
-    async def _run_chunks(self) -> tuple[frozenset[str], bool]:
+        candidates = removal_candidates(self.removable)
         removed: frozenset[str] = frozenset()
-        granularity = min(2, len(self.removable))
-        while self.removable and granularity:
-            removed, reduced, complete = await self._try_chunks(removed, granularity)
-            if not complete:
-                return removed, False
-            if reduced:
-                granularity = min(max(granularity - 1, 2), len(self.removable))
-                continue
-            if granularity >= len(self.removable):
-                break
-            granularity = min(len(self.removable), granularity * 2)
-        return removed, True
-
-    async def _try_chunks(
-        self, removed: frozenset[str], granularity: int
-    ) -> tuple[frozenset[str], bool, bool]:
-        for chunk in _partition(self.removable, granularity):
-            trial = await self._run_trial(removed, chunk, "chunk")
-            if trial is None:
-                return removed, False, False
-            if trial.accepts_removal:
-                removed = frozenset(trial.effective_removals)
-                self._remove_effective(removed)
-                return removed, True, True
-        return removed, False, True
-
-    async def _run_final_sweep(self, removed: frozenset[str]) -> tuple[frozenset[str], bool]:
-        restart = True
-        while restart:
-            restart = False
-            for node_id in tuple(self.removable):
-                trial = await self._run_trial(removed, (node_id,), "final-sweep")
+        try:
+            base, requested, phase = next(candidates)
+            while True:
+                trial = await self._run_trial(base, requested, phase)
                 if trial is None:
-                    return removed, False
-                if trial.accepts_removal:
-                    removed = frozenset(trial.effective_removals)
-                    self._remove_effective(removed)
-                    restart = True
-                    break
-        return removed, True
+                    return _SearchOutcome(removed, self.trials, False)
+                removed = frozenset(trial.effective_removals) if trial.accepts_removal else base
+                base, requested, phase = candidates.send(removed)
+        except StopIteration:
+            return _SearchOutcome(removed, self.trials, True)
 
     async def _run_trial(
         self,
@@ -138,9 +102,6 @@ class _Search[Trial: _Trial]:
             checkpoint_removed = trial.effective_removals if trial.accepts_removal else removed
             self.publish_checkpoint(checkpoint_removed, self.trials, False)
         return trial if trial.allows_search_continuation else None
-
-    def _remove_effective(self, removed: frozenset[str]) -> None:
-        self.removable = [item for item in self.removable if item not in removed]
 
 
 async def run_search[Trial: _Trial](
@@ -176,3 +137,42 @@ def _partition(items: Sequence[str], count: int) -> Iterable[tuple[str, ...]]:
         if width:
             yield tuple(items[start : start + width])
         start += width
+
+
+def removal_candidates(
+    removable: Sequence[str],
+) -> Generator[tuple[frozenset[str], tuple[str, ...], SearchPhase], frozenset[str], None]:
+    """Pure candidate order, shared by execution and offline resume verification.
+
+    The caller sends the next accepted cumulative removal set after every trial.
+    Refused or non-admitted trials send their unchanged base.
+    """
+
+    remaining = list(removable)
+    removed: frozenset[str] = frozenset()
+    granularity = min(2, len(remaining))
+    while remaining and granularity:
+        reduced = False
+        for chunk in _partition(remaining, granularity):
+            updated = yield removed, chunk, "chunk"
+            if updated != removed:
+                removed = updated
+                remaining = [item for item in remaining if item not in removed]
+                reduced = True
+                break
+        if reduced:
+            granularity = min(max(granularity - 1, 2), len(remaining))
+        elif granularity >= len(remaining):
+            break
+        else:
+            granularity = min(len(remaining), granularity * 2)
+    restart = True
+    while restart:
+        restart = False
+        for item in tuple(remaining):
+            updated = yield removed, (item,), "final-sweep"
+            if updated != removed:
+                removed = updated
+                remaining = [item for item in remaining if item not in removed]
+                restart = True
+                break

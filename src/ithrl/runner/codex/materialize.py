@@ -12,14 +12,22 @@ from ithrl.adapters.registry import decision_input_node_id
 from ithrl.case import CaseFormatError
 from ithrl.context import JsonObject, JsonValue
 from ithrl.extraction import validate_extracted_case
-from ithrl.mutation import EditableText, MutationError, TextAppend, append_message_text
+from ithrl.mutation import (
+    EditableText,
+    MutationError,
+    TextAppend,
+    append_message_text,
+    message_text,
+    replace_message_text,
+)
 from ithrl.runner.codex.policy import (
     CAPTURE_TYPE,
     MATERIALIZATION,
     SOURCE_SCHEMA,
     TARGET_TYPE,
 )
-from ithrl.runner.contracts import PreparedAttempt
+from ithrl.runner.contracts import PreparedAttempt, _validate_attempt_identities
+from ithrl.text_sections import TextSectionError, TextSectionRemoval, remove_text_sections
 
 _SOURCE_PATH = "source/rollout.jsonl"
 _IGNORED_RECORD_TYPES = frozenset(
@@ -81,10 +89,13 @@ class CodexMaterialization:
 def materialize_codex_attempt(attempt: PreparedAttempt) -> CodexMaterialization:
     """Re-derive and materialize one selected Codex final-response attempt."""
 
-    if any(not isinstance(edit, TextAppend) for edit in attempt.candidate.mutation.edits):
+    if any(
+        not isinstance(edit, (TextAppend, TextSectionRemoval))
+        for edit in attempt.candidate.mutation.edits
+    ):
         raise CodexMaterializationError(
             CodexMaterializationErrorCode.UNSUPPORTED_CONTEXT,
-            "Codex reconstruction supports only append-text interventions",
+            "Codex reconstruction requires a supported text intervention",
         )
     evidence = attempt.evidence
     manifest = evidence.manifest
@@ -116,6 +127,14 @@ def materialize_codex_attempt(attempt: PreparedAttempt) -> CodexMaterialization:
             CodexMaterializationErrorCode.INCOMPATIBLE_CASE,
             "the case has no supported Codex source artifact",
         )
+    if any(isinstance(edit, TextSectionRemoval) for edit in attempt.candidate.mutation.edits):
+        try:
+            _validate_attempt_identities(attempt)
+        except ValueError:
+            raise CodexMaterializationError(
+                CodexMaterializationErrorCode.CHANGED_EVIDENCE,
+                "the Codex candidate does not match its evidence and execution plan",
+            ) from None
     return _materialize_session(attempt, session)
 
 
@@ -166,10 +185,10 @@ def _materialize_session(
         )
 
     edit = next(iter(attempt.candidate.mutation.edits), None)
-    if edit is not None and not isinstance(edit, TextAppend):
+    if edit is not None and not isinstance(edit, (TextAppend, TextSectionRemoval)):
         raise CodexMaterializationError(
             CodexMaterializationErrorCode.UNSUPPORTED_CONTEXT,
-            "Codex reconstruction supports only append-text interventions",
+            "Codex reconstruction requires a supported text intervention",
         )
     if edit is not None and edit.context_id == trigger_id:
         raise CodexMaterializationError(
@@ -189,8 +208,17 @@ def _materialize_session(
             else:
                 if edit is not None and node_id == edit.context_id:
                     try:
-                        payload = append_message_text(payload, edit)
-                    except MutationError as error:
+                        if isinstance(edit, TextAppend):
+                            payload = append_message_text(payload, edit)
+                        else:
+                            catalog = evidence.validate_text_sections(edit)
+                            retained_text = remove_text_sections(
+                                message_text(payload, edit.content_index), catalog, edit
+                            )
+                            payload = replace_message_text(
+                                payload, edit.content_index, retained_text
+                            )
+                    except (MutationError, TextSectionError) as error:
                         raise CodexMaterializationError(
                             CodexMaterializationErrorCode.UNSUPPORTED_CONTEXT, str(error)
                         ) from error

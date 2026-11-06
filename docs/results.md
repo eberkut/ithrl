@@ -8,7 +8,7 @@ counts and next action.
 | File | Contents |
 | --- | --- |
 | `summary.json` | Outcome, phase results, context counts, usage and continuation |
-| `retained-context.jsonl` | Retained context records, in order |
+| `retained-context.jsonl` | Retained source context records, in order; sampled section edits are recorded separately in `result.json` |
 | `request.json` | Original or reduced request when exact-request materialization is available |
 | `checkpoint.json` | Deterministic search checkpoint |
 | `result.json` | Sampled candidate selection, search checkpoint and confirmation evidence |
@@ -44,12 +44,16 @@ statistical baseline; the search parent is the context from which another remova
 | Invalid, incomplete, ineligible or untested work | No supported behavioral conclusion for that removal. |
 
 Eligible retained prior-user fields also include `text_section_fields`. An `available-untested`
-field has a source-bound paragraph catalog: its section IDs and ranges describe possible edits,
-not recorded section-removal trials. Whole-record trial outcomes do not establish that an individual
-section is needed. An `unavailable` field has no partial catalog; `section-policy-limit` identifies
-a field outside the paragraph policy's limits, while `inspection-section-limit` identifies the
-report's metadata allowance. See the [section contract](architecture.md#source-bound-text-sections)
-for boundaries and limits. Native section-removal execution remains planned work.
+field has a source-bound paragraph catalog: its section IDs and ranges describe possible edits, not
+recorded section-removal trials. `exploratory-tested` and `selected` distinguish fields with
+recorded fine trials and the selected edit. Whole-record trial outcomes do not establish that an
+individual section is needed. An `unavailable` field has no partial catalog; `section-policy-limit`
+identifies a field outside the paragraph policy's limits, while `inspection-section-limit`
+identifies the report's metadata allowance. See the
+[section contract](architecture.md#source-bound-text-sections) for boundaries and limits. A
+section-aware result also records fine trials and the selected section IDs. These exploratory
+screens apply to complete tested edits; they do not establish necessity of individual retained
+paragraphs. The final confirmation applies to the one selected candidate against the full original.
 
 Deterministic reports include `failed_candidate_observation_count` for recorded candidate-run
 failures. The checkpoint lacks their removal-set details, so failures cannot be attributed to
@@ -61,12 +65,13 @@ confirmation counts, margin and interval when available. Missing fields are `nul
 shown as unavailable in human output. Current sampled snapshots do not contain their full execution
 plan, so their reconstruction method and detailed runner policy remain unavailable.
 
-Inspection validates saved identities and consistency against the supplied case; it does not
-recheck observations in an external database or reproduce historical execution. Results concern
-the recorded reconstructed context and runner policy. Context byte counts measure canonical JSON
-encoded as UTF-8. In section catalogs, `original_utf8_bytes` and each section's `utf8_bytes` count
-the original text only; `start` and `end` are half-open Unicode code-point offsets. Neither byte
-measure establishes provider-token or monetary savings.
+Inspection validates saved identities and consistency against the supplied case; it does not recheck
+observations in an external database or reproduce historical execution. Results concern the recorded
+reconstructed context and runner policy. Context byte counts measure canonical JSON encoded as
+UTF-8. `canonical_json_scope` identifies original source records before section edits; these counts
+do not subtract text removals. In section catalogs, `original_utf8_bytes` and each section's
+`utf8_bytes` count the original text only; `start` and `end` are half-open Unicode code-point
+offsets. Neither byte measure establishes provider-token or monetary savings.
 
 For private troubleshooting, explicitly include retained content with a total display allowance:
 
@@ -75,10 +80,12 @@ ithrl inspect retained CASE --result RESULT --show-text --max-text-bytes 4096
 ithrl inspect retained CASE --result RESULT --show-text --text-node NODE_ID
 ```
 
-This displays serialized request values or native records, which may contain sensitive session
-content. Markup and terminal controls are escaped. The byte allowance applies across all displayed
-content after escaping, with a maximum of 65,536 bytes; truncation is explicit. Default output
-contains metadata only. Keep text-enabled output private.
+This displays serialized request values or native source records. For a section-edited node it
+displays only the selected field's exact retained text; `text_scope` and `text_content_index`
+identify that narrower view. Other blocks in that node are not displayed. This output may contain
+sensitive session content. Markup and terminal controls are escaped. The byte allowance applies
+across all displayed content after escaping, with a maximum of 65,536 bytes; truncation is explicit.
+Default output contains metadata only. Keep text-enabled output private.
 
 Use `--text-node` with a retained unit ID from the report to inspect a later unit without spending
 the allowance on earlier records. All unit metadata and trial evidence remain in the report;
@@ -121,6 +128,18 @@ and enough budget for complete fresh confirmation. Report both outcomes.
 
 A preservation verdict can also apply when the selected context is unchanged. Report actual
 removals and usage to establish whether the run produced a useful reduction.
+
+With `reduction.section_search`, results preserve the coarse candidate and stopping reason,
+coarse and fine comparison counts, fine coverage, and the selected one-field mutation. The summary's
+`additional_removed_utf8_bytes` counts only original editable text removed relative to the frozen
+coarse candidate. It excludes whole-record deletions and native envelope changes. The independent
+`additional_reduction_result` is `criterion-met`, `below-threshold`, `no-retained-fields`, or
+`not-assessed`; none is a behavioral verdict. A confirmed candidate below the byte criterion still
+fails that workload's additional-reduction gate. Debugging value requires its own interpretation.
+
+Both search stages can be incomplete at final selection. `search-reduced` requires complete coarse
+and fine coverage when fine search is configured; `coarse_final_sweep_complete` describes only the
+whole-record sweep. The fresh holdout cannot reopen either stage or select a different edit.
 
 The opt-in Codex `safe-provider-overload` policy permits a fresh attempt after a verified structured
 overload with no captured output, unchanged protected state and verified cleanup. Failed

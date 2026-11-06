@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from ithrl.case import CaseEvidence
 from ithrl.context import JsonValue, decode_pointer
 from ithrl.experiment import SampledReductionPlan
+from ithrl.mutation import TextMutation
 from ithrl.observations import SamplingArmCounts, SamplingBlockEvidence
 from ithrl.reduce import (
     CandidateTrial,
@@ -24,7 +25,13 @@ from ithrl.reduce import (
 )
 from ithrl.results.inspection import RetainedResult, load_retained_result
 from ithrl.runner import Candidate
-from ithrl.text_sections import TextSectionCatalog, TextSectionError, catalog_text_sections
+from ithrl.text_sections import (
+    TextSectionCatalog,
+    TextSectionError,
+    TextSectionRemoval,
+    catalog_text_sections,
+    remove_text_sections,
+)
 
 MAX_INSPECTION_TEXT_BYTES = 65_536
 MAX_INSPECTION_SECTION_UNITS = 4096
@@ -98,9 +105,50 @@ class TextSectionFieldInspection(_InspectionModel):
     """An available structural catalog is not evidence of section-level behavior."""
 
     content_index: int
-    status: Literal["available-untested", "unavailable"]
+    status: Literal["available-untested", "exploratory-tested", "selected", "unavailable"]
     catalog: TextSectionCatalog | None = None
     unavailable_reason: Literal["section-policy-limit", "inspection-section-limit"] | None = None
+    removed_section_ids: tuple[str, ...] = ()
+    retained_utf8_bytes: int | None = None
+    trial_indexes: tuple[int, ...] = ()
+
+
+class SectionTrialInspection(_InspectionModel):
+    """A one-field exploratory trial, distinct from whole-record removal evidence."""
+
+    index: int
+    phase: Literal["chunk", "final-sweep"]
+    context_id: str
+    content_index: int
+    base_section_ids: tuple[str, ...]
+    requested_section_ids: tuple[str, ...]
+    removed_section_ids: tuple[str, ...]
+    removed_utf8_bytes: int
+    outcome: TrialOutcome
+    candidate_digest: str | None
+    baseline_digest: str
+    original: SamplingArmCounts | None = None
+    candidate: SamplingArmCounts | None = None
+
+
+class SectionSearchInspection(_InspectionModel):
+    """Structural reduction and the frozen criterion, separate from confirmation."""
+
+    coarse_stopped: bool
+    coarse_candidate_digest: str | None
+    coarse_stop_reason: str | None
+    coarse_final_sweep_complete: bool
+    fine_complete: bool
+    max_coarse_comparisons: int
+    max_fine_comparisons: int
+    additional_removed_utf8_bytes: int
+    minimum_removed_utf8_bytes: int
+    additional_reduction_result: Literal[
+        "criterion-met", "below-threshold", "no-retained-fields", "not-assessed"
+    ]
+    selected_context_id: str | None = None
+    selected_content_index: int | None = None
+    removed_section_ids: tuple[str, ...] = ()
 
 
 class RetainedNodeInspection(_InspectionModel):
@@ -116,6 +164,8 @@ class RetainedNodeInspection(_InspectionModel):
     removal_evidence: RemovalEvidence
     text_section_fields: tuple[TextSectionFieldInspection, ...] = ()
     text: str | None = Field(default=None, repr=False)
+    text_scope: Literal["source-record", "retained-text-field"] = "source-record"
+    text_content_index: int | None = None
     text_truncated: bool = False
 
 
@@ -135,6 +185,9 @@ class RetainedInspection(_InspectionModel):
     byte_measure: Literal["canonical-json-utf8-not-provider-tokens"] = (
         "canonical-json-utf8-not-provider-tokens"
     )
+    canonical_json_scope: Literal["source-records-before-section-edits"] = (
+        "source-records-before-section-edits"
+    )
     target_type: Literal["final-response", "shell-action"]
     reconstruction_method: str | None
     safety_policy_digest: str | None
@@ -145,6 +198,8 @@ class RetainedInspection(_InspectionModel):
     confirmation: ConfirmationInspection
     nodes: tuple[RetainedNodeInspection, ...]
     trials: tuple[TrialInspection, ...]
+    section_search: SectionSearchInspection | None = None
+    section_trials: tuple[SectionTrialInspection, ...] = ()
     active_comparison: ActiveComparisonInspection | None = None
     limitations: tuple[str, ...]
     text_requested: bool = False
@@ -193,10 +248,23 @@ def build_retained_inspection(
             raise ValueError("text selector must identify a retained context unit")
     removed = frozenset(n.id for n in evidence.context.nodes if n.id not in retained)
     trials = _trials(loaded, removed)
+    section_trials = _section_trials(loaded)
+    selected_mutation = (
+        TextMutation() if loaded.sampled is None else loaded.sampled.checkpoint.selected_mutation
+    )
     values = _context_values(evidence)
     sizes = {key: len(value.encode("utf-8")) for key, value in values.items()}
     nodes, text_bytes, truncated = _nodes(
-        evidence, retained, trials, values, sizes, show_text, max_text_bytes, text_node_id
+        evidence,
+        retained,
+        trials,
+        values,
+        sizes,
+        show_text,
+        max_text_bytes,
+        text_node_id,
+        selected_mutation,
+        section_trials,
     )
     deterministic = loaded.deterministic
     sampled = loaded.sampled
@@ -230,7 +298,7 @@ def build_retained_inspection(
         _HISTORICAL_LIMIT,
         "Trial outcomes apply to their complete removals and tested search parent; "
         "joint removals do not explain each retained item.",
-        "Available text sections are source-bound structural units, not tested removals. "
+        "Available untested text sections are source-bound structural units, not tested removals. "
         "Whole-record trial outcomes do not establish section necessity or usefulness.",
         *loaded.validation_limits,
     )
@@ -242,6 +310,14 @@ def build_retained_inspection(
     if sampled is not None:
         limitations += (
             "Exploratory screens do not establish confirmed loss, necessity or sampled minimality.",
+        )
+    if not selected_mutation.is_empty:
+        limitations += (
+            "Canonical JSON byte counts describe source records before section edits. "
+            "Additional removed UTF-8 bytes count only the selected editable field; "
+            "neither measure establishes provider token or monetary savings.",
+            "Text display for an edited node contains its retained text field only; "
+            "other native fields are not projected by this offline report.",
         )
     return RetainedInspection(
         mode="deterministic" if deterministic is not None else "sampled",
@@ -263,6 +339,8 @@ def build_retained_inspection(
         confirmation=confirmation,
         nodes=nodes,
         trials=trials,
+        section_search=_section_search(loaded),
+        section_trials=section_trials,
         active_comparison=_active_comparison(loaded),
         limitations=limitations,
         text_requested=show_text,
@@ -298,6 +376,9 @@ def _trials(loaded: RetainedResult, removed: frozenset[str]) -> tuple[TrialInspe
     else:
         return ()
     baseline = _original_candidate_digest(loaded)
+    section_edited = (
+        loaded.sampled is not None and not loaded.sampled.checkpoint.selected_mutation.is_empty
+    )
     parents: dict[tuple[str, ...], str] = {(): baseline}
     output = []
     for index, trial in enumerate(source, start=1):
@@ -340,7 +421,7 @@ def _trials(loaded: RetainedResult, removed: frozenset[str]) -> tuple[TrialInspe
                 base_removals=trial.base_removals,
                 requested_removals=trial.requested_removals,
                 effective_removals=trial.effective_removals,
-                final_parent=set(trial.base_removals) == removed,
+                final_parent=not section_edited and set(trial.base_removals) == removed,
                 single_removal=len(delta) == 1,
                 original=original_counts,
                 candidate=candidate_counts,
@@ -349,6 +430,72 @@ def _trials(loaded: RetainedResult, removed: frozenset[str]) -> tuple[TrialInspe
         if trial.accepts_removal and candidate_digest is not None:
             parents[trial.effective_removals] = candidate_digest
     return tuple(output)
+
+
+def _section_trials(loaded: RetainedResult) -> tuple[SectionTrialInspection, ...]:
+    if loaded.sampled is None:
+        return ()
+    checkpoint = loaded.sampled.checkpoint
+    output = []
+    for index, trial in enumerate(checkpoint.fine_trials, start=1):
+        block = None if trial.comparison is None else trial.comparison.evidence
+        edit = trial.mutation.edits[0]
+        if not isinstance(edit, TextSectionRemoval):
+            raise ValueError("section trial requires a source-bound removal")
+        outcome: TrialOutcome = (
+            "invalid"
+            if block is None
+            else "ineligible"
+            if not block.eligible
+            else "incomplete"
+            if not block.complete
+            else "exploratory-screen-admitted"
+            if trial.accepts_removal
+            else "exploratory-screen-rejected"
+        )
+        output.append(
+            SectionTrialInspection(
+                index=index,
+                phase=trial.phase,
+                context_id=trial.field.context_id,
+                content_index=trial.field.content_index,
+                base_section_ids=trial.base_section_ids,
+                requested_section_ids=trial.requested_section_ids,
+                removed_section_ids=edit.section_ids,
+                removed_utf8_bytes=trial.removed_utf8_bytes,
+                outcome=outcome,
+                candidate_digest=None if block is None else block.plan.candidate_digest,
+                baseline_digest=checkpoint.original_candidate_digest,
+                original=None if block is None else block.original_counts,
+                candidate=None if block is None else block.candidate_counts,
+            )
+        )
+    return tuple(output)
+
+
+def _section_search(loaded: RetainedResult) -> SectionSearchInspection | None:
+    if loaded.sampled is None:
+        return None
+    checkpoint = loaded.sampled.checkpoint
+    plan = checkpoint.reduction.section_search
+    if plan is None:
+        return None
+    edit = checkpoint.selected_mutation.edits[0] if checkpoint.selected_mutation.edits else None
+    return SectionSearchInspection(
+        coarse_stopped=checkpoint.coarse_stopped,
+        coarse_candidate_digest=checkpoint.coarse_candidate_digest,
+        coarse_stop_reason=checkpoint.coarse_stop_reason,
+        coarse_final_sweep_complete=checkpoint.final_sweep_complete,
+        fine_complete=checkpoint.fine_complete,
+        max_coarse_comparisons=plan.max_coarse_comparisons,
+        max_fine_comparisons=plan.max_fine_comparisons,
+        additional_removed_utf8_bytes=checkpoint.additional_removed_utf8_bytes,
+        minimum_removed_utf8_bytes=plan.minimum_removed_utf8_bytes,
+        additional_reduction_result=checkpoint.additional_reduction_result,
+        selected_context_id=edit.context_id if isinstance(edit, TextSectionRemoval) else None,
+        selected_content_index=edit.content_index if isinstance(edit, TextSectionRemoval) else None,
+        removed_section_ids=edit.section_ids if isinstance(edit, TextSectionRemoval) else (),
+    )
 
 
 def _nodes(
@@ -360,8 +507,21 @@ def _nodes(
     show_text: bool,
     allowance: int,
     text_node_id: str | None,
+    selected_mutation: TextMutation,
+    section_trials: tuple[SectionTrialInspection, ...],
 ) -> tuple[tuple[RetainedNodeInspection, ...], int, bool]:
-    section_fields = _section_fields(evidence, retained)
+    section_fields = _section_fields(evidence, retained, selected_mutation, section_trials)
+    selected = selected_mutation.edits[0] if selected_mutation.edits else None
+    edited_text = None
+    if isinstance(selected, TextSectionRemoval):
+        catalog = evidence.validate_text_sections(selected)
+        site = next(
+            site
+            for site in evidence.editable_text()
+            if (site.context_id, site.content_index)
+            == (selected.context_id, selected.content_index)
+        )
+        edited_text = remove_text_sections(site.original_text, catalog, selected)
     required_by: dict[str, list[str]] = {node.id: [] for node in evidence.context.nodes}
     for node in evidence.context.nodes:
         if node.id in retained:
@@ -409,8 +569,17 @@ def _nodes(
         else:
             classification = "untested"
         text, cut = None, False
+        text_scope: Literal["source-record", "retained-text-field"] = "source-record"
+        text_content_index = None
         if show_text and (text_node_id is None or text_node_id == node.id):
-            text, cut = _bounded_text(values[node.id], remaining)
+            value = values[node.id]
+            if isinstance(selected, TextSectionRemoval) and selected.context_id == node.id:
+                if edited_text is None:
+                    raise ValueError("selected retained text is unavailable")
+                value = edited_text
+                text_scope = "retained-text-field"
+                text_content_index = selected.content_index
+            text, cut = _bounded_text(value, remaining)
             remaining -= len(text.encode("utf-8"))
             truncated |= cut
         nodes.append(
@@ -427,6 +596,8 @@ def _nodes(
                 removal_evidence=classification,
                 text_section_fields=section_fields.get(node.id, ()),
                 text=text,
+                text_scope=text_scope,
+                text_content_index=text_content_index,
                 text_truncated=cut,
             )
         )
@@ -434,13 +605,25 @@ def _nodes(
 
 
 def _section_fields(
-    evidence: CaseEvidence, retained: frozenset[str]
+    evidence: CaseEvidence,
+    retained: frozenset[str],
+    selected_mutation: TextMutation | None = None,
+    section_trials: tuple[SectionTrialInspection, ...] = (),
 ) -> dict[str, tuple[TextSectionFieldInspection, ...]]:
     """Bound metadata without truncating a source-bound field's section catalog."""
 
     fields: dict[str, list[TextSectionFieldInspection]] = {}
     nodes_by_id = evidence.context.by_id
     remaining = MAX_INSPECTION_SECTION_UNITS
+    selected = (
+        selected_mutation.edits[0]
+        if selected_mutation is not None and selected_mutation.edits
+        else None
+    )
+    selected_ids = set(selected.section_ids) if isinstance(selected, TextSectionRemoval) else set()
+    trial_indexes: dict[tuple[str, int], list[int]] = {}
+    for trial in section_trials:
+        trial_indexes.setdefault((trial.context_id, trial.content_index), []).append(trial.index)
     for site in evidence.editable_text():
         if site.context_id not in retained:
             continue
@@ -471,7 +654,30 @@ def _section_fields(
                     content_index=site.content_index,
                     status="available-untested",
                     catalog=catalog,
+                    retained_utf8_bytes=catalog.original_utf8_bytes,
                 )
+                related = tuple(trial_indexes.get((site.context_id, site.content_index), ()))
+                if related:
+                    inspection = inspection.model_copy(
+                        update={"status": "exploratory-tested", "trial_indexes": related}
+                    )
+                if isinstance(selected, TextSectionRemoval) and (
+                    selected.context_id,
+                    selected.content_index,
+                ) == (site.context_id, site.content_index):
+                    catalog.validate_removal(selected)
+                    removed_bytes = sum(
+                        section.utf8_bytes
+                        for section in catalog.sections
+                        if section.id in selected_ids
+                    )
+                    inspection = inspection.model_copy(
+                        update={
+                            "status": "selected",
+                            "removed_section_ids": selected.section_ids,
+                            "retained_utf8_bytes": catalog.original_utf8_bytes - removed_bytes,
+                        }
+                    )
         fields.setdefault(site.context_id, []).append(inspection)
     return {node_id: tuple(values) for node_id, values in fields.items()}
 

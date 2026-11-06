@@ -152,7 +152,7 @@ def test_detects_target_specific_capability_from_structural_contracts(
     assert profile.supported_capture_types == ("logical-session",)
     assert profile.supported_materializations == ("source-backed",)
     assert profile.supported_context_operations == (
-        ("dependency-closed-removal", "append-text")
+        ("dependency-closed-removal", "append-text", "remove-text-sections")
         if target == "final-response"
         else ("dependency-closed-removal",)
     )

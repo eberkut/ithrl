@@ -18,6 +18,7 @@ from ithrl.behavior import (
     parse_behavior_target,
 )
 from ithrl.context import content_digest
+from ithrl.text_sections import TextSectionRemoval
 
 
 class ExperimentFormatError(ValueError):
@@ -220,6 +221,28 @@ type SamplingEligibilityPolicy = Literal[
 ]
 
 
+class TextSectionSearchPlan(_ImmutableContract):
+    """Prospectively frozen fields, eligible units and separate stage ceilings.
+
+    Each field descriptor lists only removable units. Omitted units stay protected
+    during finer search; field and unit traversal follows this immutable order.
+    """
+
+    fields: Annotated[tuple[TextSectionRemoval, ...], Field(min_length=1, max_length=256)]
+    max_coarse_comparisons: Annotated[int, Field(ge=0, le=10_000)]
+    max_fine_comparisons: Annotated[int, Field(ge=1, le=10_000)]
+    minimum_removed_utf8_bytes: Annotated[int, Field(ge=1, le=1024 * 1024)] = 1
+
+    @model_validator(mode="after")
+    def validate_fields(self) -> TextSectionSearchPlan:
+        keys = tuple((field.context_id, field.content_index) for field in self.fields)
+        if len(set(keys)) != len(keys) or any(not field.section_ids for field in self.fields):
+            raise ValueError("section search requires distinct fields with eligible units")
+        if self.max_coarse_comparisons + self.max_fine_comparisons > 10_000:
+            raise ValueError("combined section search ceilings exceed the comparison limit")
+        return self
+
+
 class SampledReductionPlan(_ImmutableContract):
     """Complete strict sampled search and separate final-confirmation policy."""
 
@@ -231,6 +254,7 @@ class SampledReductionPlan(_ImmutableContract):
     eligibility_policy: SamplingEligibilityPolicy = "independent-safe-preaccept-only"
     schedule_policy: Literal["seeded-interleaving"] = "seeded-interleaving"
     freshness_seconds: Annotated[int, Field(ge=1, le=MAX_SAMPLING_FRESHNESS_SECONDS)]
+    section_search: TextSectionSearchPlan | None = None
 
 
 class SampledChangeConfirmation(_ImmutableContract):
@@ -312,6 +336,20 @@ def parse_experiment_toml(source: str) -> AnyExperimentDefinition:
 
 def _normalize_toml(raw: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(raw)
+    reduction = normalized.get("reduction")
+    if isinstance(reduction, dict) and isinstance(reduction.get("section_search"), dict):
+        reduction = dict(reduction)
+        sections = dict(reduction["section_search"])
+        fields = sections.get("fields")
+        if isinstance(fields, list):
+            sections["fields"] = tuple(
+                {**field, "section_ids": tuple(field["section_ids"])}
+                if isinstance(field, dict) and isinstance(field.get("section_ids"), list)
+                else field
+                for field in fields
+            )
+        reduction["section_search"] = sections
+        normalized["reduction"] = reduction
     target = normalized.get("target")
     if isinstance(target, dict):
         normalized["target"] = parse_behavior_target(target)
@@ -414,6 +452,28 @@ def _render_sampled_reduction(lines: list[str], reduction: SampledReductionPlan)
     for name in ("baseline_policy", "estimand", "eligibility_policy", "schedule_policy"):
         lines.append(f"{name} = {_toml_string(getattr(reduction, name))}")
     lines.append(f"freshness_seconds = {reduction.freshness_seconds}")
+    if reduction.section_search is not None:
+        sections = reduction.section_search
+        lines.extend(("", "[reduction.section_search]"))
+        for name in (
+            "max_coarse_comparisons",
+            "max_fine_comparisons",
+            "minimum_removed_utf8_bytes",
+        ):
+            lines.append(f"{name} = {getattr(sections, name)}")
+        for field in sections.fields:
+            lines.extend(("", "[[reduction.section_search.fields]]"))
+            for name, value in field.model_dump().items():
+                lines.append(
+                    f"{name} = "
+                    + (
+                        _toml_string(value)
+                        if isinstance(value, str)
+                        else _toml_value(value)
+                        if isinstance(value, tuple)
+                        else str(value)
+                    )
+                )
     for name, phase in (("search", reduction.search), ("confirmation", reduction.confirmation)):
         lines.extend(("", f"[reduction.{name}]", f"role = {_toml_string(phase.role)}"))
         if isinstance(phase, SampledSearchPhase):
@@ -465,6 +525,8 @@ def _format_error(error: Exception) -> str:
             SampledSearchPhase,
             SampledConfirmationPhase,
             SampledReductionPlan,
+            TextSectionSearchPlan,
+            TextSectionRemoval,
         ):
             known_fields.update(contract.model_fields)
         details = "; ".join(

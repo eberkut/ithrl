@@ -25,6 +25,7 @@ from ithrl.experiment import (
     SampledSearchPhase,
     SamplingArmTarget,
     StructuralOracleConfig,
+    TextSectionSearchPlan,
 )
 from ithrl.inspection import _confirmation, _section_fields, build_retained_inspection
 from ithrl.mutation import TextMutation
@@ -48,9 +49,9 @@ from ithrl.reduce import (
     SampledConfirmation,
     SampledReductionCheckpoint,
 )
-from ithrl.reduce.contracts import trial_key
+from ithrl.reduce.contracts import SampledSectionTrial, section_trial_key, trial_key
 from ithrl.results import ResultSnapshot, ResultSummary, SampledReductionEvidence
-from ithrl.results.inspection import RetainedResult
+from ithrl.results.inspection import RetainedResult, _candidate, _validate_sampled_trials
 from ithrl.runner import (
     AttemptEvidence,
     Candidate,
@@ -758,3 +759,261 @@ def test_text_payload_is_absent_from_json_by_default() -> None:
     result = build_retained_inspection(_deterministic()).model_dump(mode="json", exclude_none=True)
     assert all("text" not in node for node in result["nodes"])
     assert _PRIVATE not in json.dumps(result)
+
+
+def _fine_sampled(*, threshold_met: bool = True) -> RetainedResult:
+    """Freeze one eligible background paragraph and admit its exact removal."""
+
+    loaded, template = _sampled()
+    evidence = loaded.evidence
+    assert loaded.sampled is not None
+    assert isinstance(loaded.experiment, SampledExperimentDefinition)
+    (catalog,) = evidence.text_sections()
+    section = catalog.sections[1]
+    field = catalog.removal((section.id,))
+    mutation = TextMutation(edits=(field,))
+    reduction = SampledReductionPlan.model_validate(
+        {
+            **loaded.sampled.checkpoint.reduction.model_dump(),
+            "section_search": TextSectionSearchPlan(
+                fields=(field,),
+                max_coarse_comparisons=0,
+                max_fine_comparisons=1,
+                minimum_removed_utf8_bytes=section.utf8_bytes + (not threshold_met),
+            ),
+        }
+    )
+    experiment = loaded.experiment.model_copy(update={"reduction": reduction})
+    identity = template.plan.original_identity.model_copy(
+        update={"experiment_digest": experiment.digest}
+    )
+    original = _candidate(evidence, identity, ())
+    selected = _candidate(evidence, identity, (), mutation)
+    key = section_trial_key(field, "chunk", (), (section.id,))
+    seed = int(content_digest({"run_id": "run-fine", "trial_key": key})[:16], 16)
+    plan = SamplingBlockPlan(
+        block_id="search-" + key,
+        role="search",
+        procedure=reduction,
+        original_identity=identity,
+        candidate_identity=identity,
+        original_candidate_digest=original.digest,
+        candidate_digest=selected.digest,
+        frozen_at=_TIME,
+        schedule_seed=seed,
+        schedule=sampling_schedule(1, 1, seed),
+        provider_calls_per_attempt=1,
+    )
+    attempts = tuple(
+        SamplingAttempt(
+            schedule_position=position,
+            observation=Observation.model_validate(
+                {
+                    **template.attempts[position].observation.model_dump(),
+                    **identity.model_dump(),
+                    "arm": ObservationArm(arm),
+                    "candidate_digest": original.digest if arm == "baseline" else selected.digest,
+                    "outcome": ObservationOutcome.MATCH,
+                }
+            ),
+        )
+        for position, arm in enumerate(plan.schedule)
+    )
+    trial = SampledSectionTrial(
+        trial_key=key,
+        field=field,
+        base_section_ids=(),
+        requested_section_ids=(section.id,),
+        mutation=mutation,
+        removed_utf8_bytes=section.utf8_bytes,
+        phase="chunk",
+        comparison=SampledComparison.from_evidence(
+            SamplingBlockEvidence(plan=plan, attempts=attempts)
+        ),
+    )
+    checkpoint = SampledReductionCheckpoint(
+        reduction=reduction,
+        original_identity=identity,
+        original_candidate_digest=original.digest,
+        best_candidate_digest=selected.digest,
+        removed_context_ids=(),
+        coarse_stopped=True,
+        coarse_candidate_digest=original.digest,
+        coarse_stop_reason="candidate-limit",
+        selected_mutation=mutation,
+        additional_removed_utf8_bytes=section.utf8_bytes,
+        fine_trials=(trial,),
+        fine_complete=True,
+    )
+    result = SampledReductionEvidence(
+        checkpoint=checkpoint,
+        search_result="search-incomplete",
+        selected_candidate_digest=selected.digest,
+        selected_at=_TIME + timedelta(seconds=10),
+    )
+    return RetainedResult(
+        evidence=evidence,
+        experiment=experiment,
+        retained_ids=loaded.retained_ids,
+        sampled=result,
+    )
+
+
+@pytest.mark.parametrize("threshold_met", [False, True])
+def test_finer_report_separates_structural_criterion_from_exploration_and_confirmation(
+    threshold_met: bool,
+) -> None:
+    loaded = _fine_sampled(threshold_met=threshold_met)
+    assert loaded.sampled is not None
+    _validate_sampled_trials(loaded.sampled, loaded.evidence, "run-fine")
+    report = build_retained_inspection(loaded)
+    assert not report.trials
+    assert len(report.section_trials) == 1
+    trial = report.section_trials[0]
+    assert trial.outcome == "exploratory-screen-admitted"
+    assert trial.baseline_digest == report.original_candidate_digest
+    assert trial.candidate_digest == report.candidate_digest
+    assert report.section_search is not None
+    assert report.section_search.additional_reduction_result == (
+        "criterion-met" if threshold_met else "below-threshold"
+    )
+    assert report.section_search.fine_complete
+    assert not report.section_search.coarse_final_sweep_complete
+    assert report.confirmation.status == "not-run"
+    node = next(node for node in report.nodes if node.id == "ctx-a")
+    (field,) = node.text_section_fields
+    assert field.status == "selected"
+    assert field.removed_section_ids == trial.removed_section_ids
+    assert field.trial_indexes == (1,)
+    assert field.catalog is not None
+    assert field.retained_utf8_bytes == field.catalog.original_utf8_bytes - trial.removed_utf8_bytes
+    assert node.removal_evidence == "untested"
+    assert not node.trial_indexes
+    assert _PRIVATE not in report.model_dump_json()
+    assert "PRIVATE_PREDICATE" not in report.model_dump_json()
+
+
+@pytest.mark.parametrize("allowance", [0, 1, 16, 256])
+def test_finer_text_display_contains_only_retained_field_with_the_global_bound(
+    allowance: int,
+) -> None:
+    loaded = _fine_sampled()
+    report = build_retained_inspection(
+        loaded, show_text=True, text_node_id="ctx-a", max_text_bytes=allowance
+    )
+    node = next(node for node in report.nodes if node.id == "ctx-a")
+    assert node.text_scope == "retained-text-field"
+    assert node.text_content_index == 0
+    assert "Extra background." not in (node.text or "")
+    assert len((node.text or "").encode("utf-8")) == report.text_bytes <= allowance
+    assert all(other.text is None for other in report.nodes if other.id != "ctx-a")
+    assert report.canonical_json_scope == "source-records-before-section-edits"
+    plain = build_retained_inspection(loaded)
+    assert report.retained_canonical_json_bytes == plain.retained_canonical_json_bytes
+    assert report.retained_canonical_json_bytes == report.original_canonical_json_bytes
+    if allowance == 256:
+        assert _PRIVATE in (node.text or "")
+        assert "\\u005bred\\u005d" in (node.text or "")
+        assert not node.text_truncated
+
+
+def test_offline_section_candidate_refuses_source_and_whole_record_overlap() -> None:
+    loaded = _fine_sampled()
+    assert loaded.sampled is not None
+    checkpoint = loaded.sampled.checkpoint
+    (edit,) = checkpoint.selected_mutation.edits
+    assert isinstance(edit, TextSectionRemoval)
+    for changed, removed in (
+        (edit.model_copy(update={"original_text_digest": "a" * 64}), ()),
+        (edit, ("ctx-a", "ctx-d")),
+    ):
+        with pytest.raises(ValueError, match=r"original|retained"):
+            _candidate(
+                loaded.evidence,
+                checkpoint.original_identity,
+                removed,
+                TextMutation(edits=(changed,)),
+            )
+
+
+def test_offline_section_trial_refuses_changed_run_binding() -> None:
+    loaded = _fine_sampled()
+    assert loaded.sampled is not None
+    with pytest.raises(ValueError, match="frozen search block"):
+        _validate_sampled_trials(loaded.sampled, loaded.evidence, "another-run")
+
+
+@pytest.mark.parametrize("change", [None, "digest", "identity", "block-id", "seed", "complete"])
+def test_offline_active_fine_block_binds_next_candidate(change: str | None) -> None:
+    loaded = _fine_sampled()
+    assert loaded.sampled is not None
+    checkpoint = loaded.sampled.checkpoint
+    comparison = checkpoint.fine_trials[0].comparison
+    assert comparison is not None
+    plan = comparison.evidence.plan
+    if change == "digest":
+        plan = plan.model_copy(update={"candidate_digest": "a" * 64})
+    elif change == "identity":
+        plan = plan.model_copy(
+            update={
+                "candidate_identity": plan.candidate_identity.model_copy(
+                    update={"execution_plan_digest": "f" * 64}
+                )
+            }
+        )
+    elif change == "block-id":
+        plan = plan.model_copy(update={"block_id": "PRIVATE_WRONG_BLOCK"})
+    elif change == "seed":
+        seed = plan.schedule_seed + 1
+        plan = plan.model_copy(
+            update={"schedule_seed": seed, "schedule": sampling_schedule(1, 1, seed)}
+        )
+    active = SamplingBlockEvidence(plan=plan, attempts=())
+    checkpoint = SampledReductionCheckpoint.model_validate(
+        {
+            **checkpoint.model_dump(),
+            "fine_trials": (),
+            "fine_complete": change == "complete",
+            "selected_mutation": TextMutation(),
+            "best_candidate_digest": checkpoint.original_candidate_digest,
+            "additional_removed_utf8_bytes": 0,
+            "active_block": active,
+        }
+    )
+    result = loaded.sampled.model_copy(
+        update={
+            "checkpoint": checkpoint,
+            "selected_candidate_digest": checkpoint.original_candidate_digest,
+        }
+    )
+    if change is None:
+        _validate_sampled_trials(result, loaded.evidence, "run-fine")
+    else:
+        with pytest.raises(ValueError, match="section checkpoint") as error:
+            _validate_sampled_trials(result, loaded.evidence, "run-fine")
+        assert "PRIVATE" not in str(error.value)
+
+
+def test_coarse_trials_do_not_explain_the_final_section_edited_parent() -> None:
+    coarse, _ = _sampled()
+    fine = _fine_sampled()
+    assert coarse.sampled is not None
+    assert fine.sampled is not None
+    checkpoint = fine.sampled.checkpoint.model_copy(
+        update={"trials": coarse.sampled.checkpoint.trials}
+    )
+    # In-memory interpretation fixture: loader binding is tested independently.
+    result = fine.sampled.model_copy(update={"checkpoint": checkpoint})
+    report = build_retained_inspection(
+        RetainedResult(
+            evidence=fine.evidence,
+            experiment=fine.experiment,
+            retained_ids=fine.retained_ids,
+            sampled=result,
+        )
+    )
+    (trial,) = report.trials
+    assert not trial.final_parent
+    node = next(node for node in report.nodes if node.id == "ctx-c")
+    assert not node.final_single_removal_trial_indexes
+    assert node.removal_evidence == "joint-or-historical-only"

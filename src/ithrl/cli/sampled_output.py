@@ -142,6 +142,21 @@ class SampledReductionOutput(BaseModel):
     retained_context_count: int = Field(ge=0)
     removed_context_count: int = Field(ge=0)
     candidate_comparisons_used: int = Field(default=0, ge=0)
+    section_search_enabled: bool = False
+    max_coarse_comparisons: int | None = Field(default=None, ge=0)
+    max_fine_comparisons: int | None = Field(default=None, ge=1)
+    coarse_comparisons_used: int = Field(default=0, ge=0)
+    fine_comparisons_used: int = Field(default=0, ge=0)
+    coarse_search_stopped: bool = False
+    coarse_candidate_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    coarse_stop_reason: str | None = Field(default=None, max_length=128, pattern=r"^[a-z0-9-]+$")
+    coarse_final_sweep_complete: bool = False
+    fine_search_complete: bool = False
+    additional_removed_utf8_bytes: int = Field(default=0, ge=0)
+    minimum_removed_utf8_bytes: int | None = Field(default=None, ge=1)
+    additional_reduction_result: Literal[
+        "not-assessed", "no-retained-fields", "below-threshold", "criterion-met"
+    ] = "not-assessed"
     provider_call_accounting: Literal["not-started", "started-unknown", "accounted"]
     provider_calls: int | None = Field(default=None, ge=0)
     actual_provider_calls: int = Field(default=0, ge=0)
@@ -190,6 +205,27 @@ class SampledReductionOutput(BaseModel):
                 raise ValueError("fixed valid target exceeds its attempt bound")
         if self.retained_context_count + self.removed_context_count != self.original_context_count:
             raise ValueError("context counts must partition the original context")
+        if self.section_search_enabled:
+            if (
+                self.max_coarse_comparisons is None
+                or self.max_fine_comparisons is None
+                or self.minimum_removed_utf8_bytes is None
+            ):
+                raise ValueError("section search requires frozen stage ceilings and byte criterion")
+            if (
+                self.coarse_comparisons_used > self.max_coarse_comparisons
+                or self.fine_comparisons_used > self.max_fine_comparisons
+                or self.coarse_comparisons_used + self.fine_comparisons_used
+                != self.candidate_comparisons_used
+            ):
+                raise ValueError("section search counts must match admitted stage comparisons")
+            if self.additional_reduction_result == "criterion-met" and (
+                not self.coarse_search_stopped
+                or self.additional_removed_utf8_bytes < self.minimum_removed_utf8_bytes
+            ):
+                raise ValueError(
+                    "a met byte criterion requires a frozen coarse baseline and removal"
+                )
         if self.charged_provider_calls != (
             self.actual_provider_calls + self.possible_provider_calls + self.pending_provider_calls
         ):
@@ -352,6 +388,22 @@ def render_sampled_reduction(
         print_plain(
             console, f"  {label}: {value if value is not None else 'unknown'}", soft_wrap=True
         )
+    if report.section_search_enabled:
+        print_plain(
+            console,
+            f"  section-search comparison limits: {report.max_coarse_comparisons} coarse; "
+            f"{report.max_fine_comparisons} fine",
+        )
+        if report.coarse_search_stopped:
+            print_plain(
+                console,
+                f"  additional editable UTF-8 bytes removed: {report.additional_removed_utf8_bytes}",
+            )
+            print_plain(
+                console,
+                f"  additional reduction criterion: {report.additional_reduction_result}; "
+                f"minimum {report.minimum_removed_utf8_bytes} bytes",
+            )
     if report.runner_error_category is not None or report.runner_error_reason_code is not None:
         diagnostic = ": ".join(
             value

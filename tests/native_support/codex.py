@@ -170,7 +170,9 @@ def _case(tmp_path: Path, *, context_sensitive: bool = False) -> tuple[CaseWorks
         for record in records:
             payload = record["payload"]
             if payload.get("id") == "message-fixture-user-001":
-                payload["content"][0]["text"] = "ITHRL_REQUIRED_CONTEXT"
+                payload["content"][0]["text"] = (
+                    "ITHRL_REQUIRED_CONTEXT\n\nRemovable archived detail.\n"
+                )
         records.insert(
             3,
             {
@@ -251,7 +253,11 @@ def _capability(
         deterministic=False,
         supported_capture_types=("logical-session",),
         supported_materializations=("source-backed",),
-        supported_context_operations=("dependency-closed-removal", "append-text"),
+        supported_context_operations=(
+            "dependency-closed-removal",
+            "append-text",
+            "remove-text-sections",
+        ),
         reconstruction_method="codex-app-server-inject-items-v1",
         supported_targets=("final-response",),
         provider_transport="required",

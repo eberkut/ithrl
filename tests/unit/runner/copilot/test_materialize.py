@@ -19,7 +19,7 @@ from ithrl.execution import (
 )
 from ithrl.experiment import ExperimentDefinition
 from ithrl.extraction import extract_decision
-from ithrl.mutation import TextAppend, TextMutation
+from ithrl.mutation import MutationError, TextAppend, TextMutation
 from ithrl.runner import PreparedAttempt, prepare_candidate
 from ithrl.runner.copilot.materialize import (
     CopilotMaterializationError,
@@ -169,12 +169,16 @@ def _history_records() -> list[dict[str, Any]]:
 
 
 def _evidence(
-    tmp_path: Path, records: list[dict[str, Any]], *, decision_index: int = -1
+    tmp_path: Path,
+    records: list[dict[str, Any]],
+    *,
+    decision_index: int = -1,
+    line_ending: str = "\n",
 ) -> CaseEvidence:
     source = tmp_path / "events.jsonl"
     source.parent.mkdir(parents=True, exist_ok=True)
     source.write_text(
-        "".join(json.dumps(record, separators=(",", ":")) + "\n" for record in records),
+        "".join(json.dumps(record, separators=(",", ":")) + line_ending for record in records),
         encoding="utf-8",
     )
     session = parse_session(source)
@@ -201,7 +205,11 @@ def _attempt(
         deterministic=False,
         supported_capture_types=("logical-session",),
         supported_materializations=("source-backed",),
-        supported_context_operations=("dependency-closed-removal", "append-text"),
+        supported_context_operations=(
+            "dependency-closed-removal",
+            "append-text",
+            "remove-text-sections",
+        ),
         reconstruction_method="copilot-native-prefix-sdk-v1",
         supported_targets=("final-response", "shell-action"),
         provider_transport="required",
@@ -376,6 +384,141 @@ def test_append_changes_only_effective_prior_user_native_record_and_preserves_so
         i for i, (old, new) in enumerate(zip(old_lines, new_lines, strict=True)) if old != new
     ] == [1]
     assert (evidence.digest, source.read_bytes(), evidence.source_artifacts) == before
+
+
+@pytest.mark.parametrize("transformed", [False, True])
+@pytest.mark.parametrize("remove_all", [False, True])
+@pytest.mark.parametrize("coarse", [False, True])
+def test_section_removal_changes_only_effective_retained_field(
+    tmp_path: Path, transformed: bool, remove_all: bool, coarse: bool
+) -> None:
+    records = _history_records()
+    mixed = "Keep Ω and e\u0301.\r\n\r\nRemovable paragraph.\r\rFinal paragraph.\n"
+    data = records[1]["data"]
+    field = "transformedContent" if transformed else "content"
+    data[field] = mixed
+    data["opaqueMetadata"] = {"keep": [1, True]}
+    records.insert(1, _user(20, 1, "Earlier irrelevant context."))
+    records.insert(8, _record(21, "fixture.opaque", {"keep": [1, True]}))
+    evidence = _evidence(tmp_path, records)
+    before = evidence.digest, evidence.source_artifacts, (tmp_path / "events.jsonl").read_bytes()
+    original = _attempt(evidence)
+    baseline = materialize_copilot_attempt(original)
+    catalog = next(
+        c for c in evidence.text_sections() if c.original_text_digest == content_digest(mixed)
+    )
+    sections = catalog.sections if remove_all else catalog.sections[1:2]
+    mutation = TextMutation(edits=(catalog.removal(tuple(s.id for s in sections)),))
+    early_node = next(
+        n
+        for n in evidence.context.nodes
+        if n.selector and n.selector.identity_value == records[1]["id"]
+    )
+    changed = _attempt(evidence, *((early_node.id,) if coarse else ()), mutation=mutation)
+
+    result = materialize_copilot_attempt(changed)
+
+    expected = _native_records(baseline.native_session)
+    expected[2]["data"][field] = (
+        "" if remove_all else "Keep Ω and e\u0301.\r\n\r\nFinal paragraph.\n"
+    )
+    if coarse:
+        del expected[1]
+    assert _native_records(result.native_session) == expected
+    original_lines = baseline.native_session.splitlines(keepends=True)
+    actual_lines = result.native_session.splitlines(keepends=True)
+    selected_lines = original_lines[:1] + original_lines[2:] if coarse else original_lines
+    assert [
+        i for i, (a, b) in enumerate(zip(selected_lines, actual_lines, strict=True)) if a != b
+    ] == [1 if coarse else 2]
+    assert (
+        evidence.digest,
+        evidence.source_artifacts,
+        (tmp_path / "events.jsonl").read_bytes(),
+    ) == before
+    assert materialize_copilot_attempt(original) == baseline
+
+
+def test_section_empty_selection_and_forged_source_are_checked(tmp_path: Path) -> None:
+    evidence = _evidence(tmp_path, _history_records())
+    original = _attempt(evidence)
+    catalog = evidence.text_sections()[0]
+    empty = _attempt(evidence, mutation=TextMutation(edits=(catalog.removal(()),)))
+    assert empty.candidate == original.candidate
+    assert materialize_copilot_attempt(empty) == materialize_copilot_attempt(original)
+    mutation = TextMutation(edits=(catalog.removal((catalog.sections[0].id,)),))
+    for field, value in (("original_text_digest", "f" * 64), ("policy_digest", "0" * 64)):
+        stale = mutation.edits[0].model_copy(update={field: value})
+        with pytest.raises(MutationError):
+            prepare_candidate(
+                evidence, original.execution_plan, mutation=TextMutation(edits=(stale,))
+            )
+    changed = _attempt(evidence, mutation=mutation)
+    object.__setattr__(
+        changed,
+        "candidate",
+        changed.candidate.model_copy(update={"source_artifact_digests": ("0" * 64,)}),
+    )
+    with pytest.raises(CopilotMaterializationError) as caught:
+        materialize_copilot_attempt(changed)
+    assert caught.value.code is CopilotMaterializationErrorCode.CHANGED_EVIDENCE
+    assert "Private" not in str(caught.value)
+
+
+def test_section_removal_refuses_shell_target_even_with_forged_capability(tmp_path: Path) -> None:
+    records = _history_records()
+    records[-2]["data"].update(
+        content="",
+        toolRequests=[
+            {
+                "toolCallId": "80000000-0000-4000-8000-000000000099",
+                "name": "bash",
+                "arguments": {"command": "pwd"},
+            }
+        ],
+    )
+    records[-2]["data"].pop("phase")
+    evidence = _evidence(tmp_path, records)
+    original = _attempt(evidence)
+    assert original.target.type == "shell-action"
+    catalog = evidence.text_sections()[0]
+    mutation = TextMutation(edits=(catalog.removal((catalog.sections[0].id,)),))
+    with pytest.raises(CopilotMaterializationError, match="final-response target"):
+        materialize_copilot_attempt(_attempt(evidence, mutation=mutation))
+
+
+def test_sections_refuse_removed_parent_and_preserve_fixed_user_input(tmp_path: Path) -> None:
+    evidence = _evidence(tmp_path, _history_records())
+    original = _attempt(evidence)
+    catalog = evidence.text_sections()[0]
+    mutation = TextMutation(edits=(catalog.removal((catalog.sections[0].id,)),))
+    with pytest.raises(MutationError, match="whole-record dependency closure"):
+        prepare_candidate(
+            evidence, original.execution_plan, (catalog.context_id,), mutation=mutation
+        )
+    trigger = evidence.context.nodes[-1]
+    with pytest.raises(CopilotMaterializationError) as caught:
+        materialize_copilot_attempt(_attempt(evidence, trigger.id, mutation=mutation))
+    assert caught.value.code is CopilotMaterializationErrorCode.MISSING_TRIGGER
+
+
+@pytest.mark.parametrize("line_ending", ["\n", "\r\n"])
+def test_section_removal_preserves_native_record_line_endings(
+    tmp_path: Path, line_ending: str
+) -> None:
+    records = _history_records()
+    records[1]["data"]["content"] = "Keep.\n\nRemove."
+    evidence = _evidence(tmp_path, records, line_ending=line_ending)
+    catalog = evidence.text_sections()[0]
+    mutation = TextMutation(edits=(catalog.removal((catalog.sections[1].id,)),))
+
+    result = materialize_copilot_attempt(_attempt(evidence, mutation=mutation))
+
+    lines = result.native_session.splitlines(keepends=True)
+    assert evidence.decision is not None
+    assert len(lines) == evidence.decision.selector.context_before_line
+    assert all(line.endswith(line_ending.encode()) for line in lines)
+    assert _native_records(result.native_session)[1]["data"]["content"] == "Keep.\n\n"
 
 
 def test_post_tool_decision_uses_the_same_native_prefix_and_exposes_prior_user_text(

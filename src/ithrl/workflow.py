@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Literal
 
+from ithrl.behavior import FinalResponseTarget
 from ithrl.case import CaseEvidence, CaseFormatError
 from ithrl.context import content_digest
 from ithrl.execution import (
@@ -43,6 +44,7 @@ from ithrl.reduce import (
     SampledConfirmation,
     SampledReducer,
 )
+from ithrl.reduce.contracts import validate_section_search
 from ithrl.runner import (
     PreparedAttempt,
     Runner,
@@ -169,6 +171,32 @@ def prepare_experiment(
     )
     if not report.ready or report.plan is None:
         raise PreflightRefusedError(report)
+    if (
+        isinstance(experiment, SampledExperimentDefinition)
+        and experiment.reduction is not None
+        and experiment.reduction.section_search is not None
+    ):
+        try:
+            if (
+                not isinstance(experiment.target, FinalResponseTarget)
+                or "remove-text-sections"
+                not in runner.capability_profile.supported_context_operations
+            ):
+                raise ValueError("unsupported finer reduction profile")
+            validate_section_search(evidence, experiment.reduction)
+        except ValueError:
+            raise PreflightRefusedError(
+                PreflightReport(
+                    ready=False,
+                    plan=None,
+                    issues=(
+                        PreflightIssue(
+                            code="unsupported-materialization",
+                            message="the finer search configuration does not match eligible source fields",
+                        ),
+                    ),
+                )
+            ) from None
     if isinstance(runner, CandidateAdmission):
         attempt = PreparedAttempt(
             evidence=evidence,
@@ -204,7 +232,17 @@ def prepare_experiment(
         execution_plan_digest=report.plan.digest,
         target_digest=experiment.target.digest,
         algorithm_digest=(
-            SAMPLED_CALIBRATION_ALGORITHM_DIGEST
+            content_digest(
+                {
+                    "name": "sampled-coarse-fine-paragraph-search",
+                    "version": "1",
+                    "section_search": experiment.reduction.section_search.model_dump(mode="json"),
+                }
+            )
+            if isinstance(experiment, SampledExperimentDefinition)
+            and experiment.reduction is not None
+            and experiment.reduction.section_search is not None
+            else SAMPLED_CALIBRATION_ALGORITHM_DIGEST
             if isinstance(experiment, SampledExperimentDefinition)
             else ALGORITHM_DIGEST
         ),
@@ -544,6 +582,7 @@ async def run_sampled_phases(
                 original=prepared,
                 candidate=prepared,
                 removed_context_ids=state.checkpoint.removed_context_ids,
+                mutation=state.checkpoint.selected_mutation,
                 plan=selection.plan,
                 state_file=state_file,
                 store=store,
@@ -597,7 +636,7 @@ def _sampled_result(
     calibration = store.get_many(state.calibration_observation_ids)
     return SampledReductionEvidence(
         checkpoint=checkpoint,
-        search_result="search-reduced" if checkpoint.final_sweep_complete else "search-incomplete",
+        search_result="search-reduced" if checkpoint.search_complete else "search-incomplete",
         selected_candidate_digest=checkpoint.best_candidate_digest,
         selected_at=selected_at,
         calibration_observation_ids=state.calibration_observation_ids,

@@ -55,7 +55,7 @@ from ithrl.observations import (
     SamplingBlockEvidence,
     SamplingBudgetAllowance,
 )
-from ithrl.reduce import SampledConfirmation, classify_confirmation
+from ithrl.reduce import SampledCandidateTrial, SampledConfirmation, classify_confirmation
 from ithrl.results import SampledReductionEvidence, validate_sampled_result
 from ithrl.run_state import (
     SampledRunState,
@@ -199,8 +199,18 @@ def handle_sampled_reduction(
             ):
                 raise ValueError("budgets cannot decrease")
         elif limits.candidates is None:
+            experiment = prepared.experiment
+            if not isinstance(experiment, SampledExperimentDefinition):
+                raise ValueError("sampled reduction requires a sampled experiment")
+            reduction = experiment.reduction
+            sections = None if reduction is None else reduction.section_search
             limits = SampledCommandLimits(
-                limits.provider_calls, limits.wall_seconds, 100, limits.inter_attempt_delay_seconds
+                limits.provider_calls,
+                limits.wall_seconds,
+                100
+                if sections is None
+                else sections.max_coarse_comparisons + sections.max_fine_comparisons,
+                limits.inter_attempt_delay_seconds,
             )
         preflight = _reduction_preflight(
             workspace,
@@ -426,7 +436,7 @@ def _reduction_preflight(
             minimum_attempts = confirmation - (0 if block is None else len(block.observations))
         elif saved.checkpoint is not None:
             minimum_attempts = confirmation
-            if not saved.checkpoint.final_sweep_complete and len(saved.blocks) < limits.candidates:
+            if _search_pending(saved) and len(saved.blocks) < limits.candidates:
                 minimum_attempts += search
         else:
             minimum_attempts -= len(saved.calibration_observation_ids)
@@ -467,7 +477,13 @@ def _reduction_preflight(
             status="refused",
             provider_call_accounting="not-started",
         )
-    attempts = calibration + limits.candidates * search + confirmation
+    sections = reduction.section_search
+    comparison_capacity = limits.candidates
+    if sections is not None:
+        comparison_capacity = min(
+            comparison_capacity, sections.max_coarse_comparisons + sections.max_fine_comparisons
+        )
+    attempts = calibration + comparison_capacity * search + confirmation
     calls = (
         limits.provider_calls
         if limits.provider_calls is not None
@@ -481,7 +497,7 @@ def _reduction_preflight(
     capacity = max(
         0,
         min(
-            limits.candidates,
+            comparison_capacity,
             (calls - (calibration + confirmation) * cost.provider_calls)
             // (search * cost.provider_calls),
             (seconds - (calibration + confirmation) * wall_seconds_per_attempt)
@@ -585,6 +601,12 @@ def _reduction_preflight(
         original_context_count=len(evidence.context.nodes),
         retained_context_count=len(evidence.context.nodes),
         removed_context_count=0,
+        section_search_enabled=sections is not None,
+        max_coarse_comparisons=None if sections is None else sections.max_coarse_comparisons,
+        max_fine_comparisons=None if sections is None else sections.max_fine_comparisons,
+        minimum_removed_utf8_bytes=None
+        if sections is None
+        else sections.minimum_removed_utf8_bytes,
         attempts_used=0,
         provider_calls=0,
         next_action="Inspect the fixed plan and budget, then acknowledge model execution. Local overhead consumes the overall wall-time allowance.",
@@ -813,7 +835,7 @@ def _run_report(
         search_result = result.search_result
     elif state.checkpoint is None:
         search_result = "not-run"
-    elif state.checkpoint.final_sweep_complete:
+    elif state.checkpoint.search_complete:
         search_result = "search-reduced"
     else:
         search_result = "search-incomplete"
@@ -866,6 +888,28 @@ def _run_report(
         next_command=command,
         next_command_shell=shell,
     )
+    checkpoint = state.checkpoint
+    if checkpoint is not None and checkpoint.reduction.section_search is not None:
+        search_count = sum(block.plan.role == "search" for block in blocks)
+        # Before the boundary all dispatched blocks are coarse; afterward its
+        # complete frozen trials identify coarse blocks even after an interruption
+        # between observation persistence and fine-trial classification.
+        coarse_count = (
+            sum(isinstance(trial, SampledCandidateTrial) for trial in checkpoint.trials)
+            if checkpoint.coarse_stopped
+            else search_count
+        )
+        values.update(
+            coarse_comparisons_used=coarse_count,
+            fine_comparisons_used=search_count - coarse_count,
+            coarse_search_stopped=checkpoint.coarse_stopped,
+            coarse_candidate_digest=checkpoint.coarse_candidate_digest,
+            coarse_stop_reason=checkpoint.coarse_stop_reason,
+            coarse_final_sweep_complete=checkpoint.final_sweep_complete,
+            fine_search_complete=checkpoint.fine_complete,
+            additional_removed_utf8_bytes=checkpoint.additional_removed_utf8_bytes,
+            additional_reduction_result=checkpoint.additional_reduction_result,
+        )
     if holdout is not None:
         values.update(
             confirmation_original=holdout.original_counts,
@@ -915,9 +959,18 @@ def _continuation_budget(
             preflight.search_original_max_attempts + preflight.search_candidate_max_attempts
         )
         if state.checkpoint is None:
+            comparison_capacity = preflight.max_candidate_comparisons
+            if (
+                preflight.max_coarse_comparisons is not None
+                and preflight.max_fine_comparisons is not None
+            ):
+                comparison_capacity = min(
+                    comparison_capacity,
+                    preflight.max_coarse_comparisons + preflight.max_fine_comparisons,
+                )
             calibration_attempts = (
                 preflight.max_attempts
-                - preflight.max_candidate_comparisons * search_attempts
+                - comparison_capacity * search_attempts
                 - preflight.confirmation_original_max_attempts
                 - preflight.confirmation_candidate_max_attempts
             )
@@ -925,10 +978,7 @@ def _continuation_budget(
                 max(0, calibration_attempts - len(state.calibration_observation_ids))
                 + search_attempts
             )
-        elif (
-            not state.checkpoint.final_sweep_complete
-            and len(blocks) < state.allowance.max_candidate_comparisons
-        ):
+        elif _search_pending(state) and len(blocks) < state.allowance.max_candidate_comparisons:
             remaining = search_attempts
     per_attempt_seconds = preflight.confirmation_runner_seconds / (
         preflight.confirmation_original_max_attempts + preflight.confirmation_candidate_max_attempts
@@ -948,6 +998,17 @@ def _continuation_budget(
         math.ceil(usage.wall_time_seconds + future_seconds) + 1,
     )
     return calls, seconds
+
+
+def _search_pending(state: SampledRunState) -> bool:
+    """Whether the frozen search has work before durable final selection."""
+
+    checkpoint = state.checkpoint
+    if checkpoint is None:
+        return True
+    if checkpoint.reduction.section_search is not None:
+        return not checkpoint.fine_complete
+    return not checkpoint.final_sweep_complete
 
 
 def _recover_output(

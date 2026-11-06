@@ -16,7 +16,7 @@ from ithrl.execution.budget import (
 )
 from ithrl.experiment import SampledChangePlan, SampledExperimentDefinition
 from ithrl.measurement import RunnerExecutionError, observe_once
-from ithrl.mutation import MutationError, TextAppend, TextMutation
+from ithrl.mutation import MutationError, TextMutation
 from ithrl.observations import (
     Observation,
     ObservationArm,
@@ -33,6 +33,7 @@ from ithrl.run_state import (
     SamplingDispatchReservation,
 )
 from ithrl.runner import Candidate, PreparedAttempt, prepare_candidate
+from ithrl.text_sections import TextSectionRemoval
 
 if TYPE_CHECKING:
     from ithrl.workflow import PreparedExperiment
@@ -55,10 +56,23 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
-def _validate_sampling_mutation(mutation: TextMutation | None) -> None:
-    # Section-aware selection and durable payloads belong to finer reduction.
-    if mutation is not None and any(not isinstance(edit, TextAppend) for edit in mutation.edits):
-        raise MutationError("sampling does not yet support text-section removal")
+def _validate_sampling_mutation(mutation: TextMutation | None, plan: SamplingBlockPlan) -> None:
+    if mutation is None:
+        return
+    mutation = TextMutation.model_validate(mutation.model_dump())
+    for edit in mutation.edits:
+        if isinstance(edit, TextSectionRemoval):
+            procedure = plan.procedure
+            config = getattr(procedure, "section_search", None)
+            if config is None or not any(
+                edit.context_id == field.context_id
+                and edit.content_index == field.content_index
+                and edit.original_text_digest == field.original_text_digest
+                and edit.policy_digest == field.policy_digest
+                and set(edit.section_ids) <= set(field.section_ids)
+                for field in config.fields
+            ):
+                raise MutationError("sampling section removal is outside its frozen plan")
 
 
 def sampling_pacing_delay(state: SampledRunState, store: ObservationStore, now: datetime) -> float:
@@ -116,7 +130,7 @@ async def collect_sampling_block(
     Progress is reported before reservation or after durable observation reconciliation.
     """
 
-    _validate_sampling_mutation(mutation)
+    _validate_sampling_mutation(mutation, plan)
     with state_file.acquire_lock(store):
         return await _collect_sampling_block_owned(
             evidence=evidence,
@@ -149,7 +163,7 @@ async def _collect_sampling_block_owned(
 ) -> SamplingCollectionResult:
     """Collect while the caller owns run/store locks across the composed search."""
 
-    _validate_sampling_mutation(mutation)
+    _validate_sampling_mutation(mutation, plan)
     state_file._require_lock(store)
     originals = prepare_candidate(evidence, original.execution_plan)
     selected = prepare_candidate(

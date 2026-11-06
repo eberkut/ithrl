@@ -105,12 +105,13 @@ def _render(data: dict[str, Any]) -> None:
             "kind",
             "nodes",
             "trials",
+            "section_trials",
             "limitations",
             "provider_calls",
             "actions_executed",
         }:
             continue
-        if key == "active_comparison" and value is None:
+        if key in {"active_comparison", "section_search"} and value is None:
             continue
         if (
             key in {"text_requested", "text_node_id", "text_bytes", "text_truncated"}
@@ -124,7 +125,11 @@ def _render(data: dict[str, Any]) -> None:
                 print_plain(console, f"    {name.replace('_', ' ')}: {_display(detail)}")
         else:
             print_plain(console, f"  {label}: {_display(value)}")
-    for heading, key in (("Retained units", "nodes"), ("Removal trials", "trials")):
+    for heading, key in (
+        ("Retained units", "nodes"),
+        ("Removal trials", "trials"),
+        ("Text-section trials", "section_trials"),
+    ):
         print_plain(console, heading)
         rows = data.get(key, [])
         if not rows:
@@ -144,7 +149,8 @@ def _render(data: dict[str, Any]) -> None:
                 catalog = section_field["catalog"]
                 detail = (
                     f"{len(catalog['sections'])} units; "
-                    f"original UTF-8 bytes: {catalog['original_utf8_bytes']}"
+                    f"original UTF-8 bytes: {catalog['original_utf8_bytes']}; "
+                    f"retained UTF-8 bytes: {section_field['retained_utf8_bytes']}"
                     if catalog is not None
                     else section_field["unavailable_reason"]
                 )
@@ -153,6 +159,12 @@ def _render(data: dict[str, Any]) -> None:
                     f"    text block {section_field['content_index']}: "
                     f"{section_field['status']}; {detail}",
                 )
+                if section_field["removed_section_ids"]:
+                    print_plain(
+                        console,
+                        "      removed sections: "
+                        + ", ".join(section_field["removed_section_ids"]),
+                    )
     print_plain(console, "Interpretation limits")
     for note in data.get("limitations", []):
         print_plain(console, f"  {note}")

@@ -227,7 +227,14 @@ def _source_records(
     ]
     if context_sensitive:
         records[1:1] = [
-            _record(5, "user.message", {"content": "ITHRL_REQUIRED_CONTEXT", "turnId": "prior-1"}),
+            _record(
+                5,
+                "user.message",
+                {
+                    "content": "ITHRL_REQUIRED_CONTEXT\n\nRemovable archived detail.\n",
+                    "turnId": "prior-1",
+                },
+            ),
             _record(
                 6, "user.message", {"content": "Irrelevant removable context.", "turnId": "prior-2"}
             ),
