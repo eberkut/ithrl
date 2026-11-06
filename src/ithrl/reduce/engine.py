@@ -14,7 +14,7 @@ from ithrl.context import ContextGraphError, content_digest
 from ithrl.execution import ResolvedExecutionPlan, ResourceLimits, SafetyPolicy
 from ithrl.experiment import SampledExperimentDefinition
 from ithrl.measurement import RunnerExecutionError, observe_once
-from ithrl.mutation import TextMutation
+from ithrl.mutation import MutationError, TextMutation
 from ithrl.observations import (
     Observation,
     ObservationArm,
@@ -584,7 +584,7 @@ class SampledReducer:
             raise ResumeMismatchError("checkpoint uses another frozen reduction plan")
         validate_section_search(evidence, self._reduction)
         if checkpoint is not None:
-            validate_section_checkpoint(evidence, checkpoint)
+            validate_section_checkpoint(evidence, checkpoint, run_id=state.run_id)
         self._state = state
         self._resume = checkpoint
         self._active = None
@@ -738,6 +738,11 @@ class SampledReducer:
             ):
                 self._stop_reason = "candidate-limit"
                 break
+            if replay is None and publish:
+                usage = self._state_file.usage(self._store, now=self._clock())
+                if usage.wall_time_seconds > self._loaded_state.allowance.max_wall_time_seconds:
+                    self._stop_reason = "wall-time-exhausted"
+                    break
             selected = {*base, *requested}
             edit = field.model_copy(
                 update={
@@ -748,9 +753,12 @@ class SampledReducer:
             catalog = catalogs_by_field[(field.context_id, field.content_index)]
             size = sum(unit.utf8_bytes for unit in catalog.sections if unit.id in selected)
             try:
-                candidate = prepare_candidate(
-                    evidence, self._prepared.execution_plan, removed, mutation=mutation
-                )
+                try:
+                    candidate = prepare_candidate(
+                        evidence, self._prepared.execution_plan, removed, mutation=mutation
+                    )
+                except MutationError:
+                    raise CandidateInvalidError("candidate section removal refused") from None
                 self._validate_candidate_admission(evidence, candidate, arm="candidate")
             except CandidateInvalidError:
                 trial = SampledSectionTrial(

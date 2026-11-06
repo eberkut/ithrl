@@ -674,7 +674,7 @@ class SampledReductionCheckpoint(BaseModel):
 
 
 def validate_section_checkpoint(
-    evidence: CaseEvidence, checkpoint: SampledReductionCheckpoint
+    evidence: CaseEvidence, checkpoint: SampledReductionCheckpoint, *, run_id: str
 ) -> None:
     """Pure source binding and exact finer-path replay for resume and offline inspection."""
 
@@ -746,6 +746,24 @@ def validate_section_checkpoint(
         raise ResumeMismatchError("finer completion requires complete eligible comparisons")
     if checkpoint.fine_complete and next_candidate is not None:
         raise ResumeMismatchError("finer completion omits eligible generated candidates")
+    if checkpoint.coarse_stopped and checkpoint.active_block is not None:
+        if checkpoint.fine_complete or next_candidate is None:
+            raise ResumeMismatchError("active finer block has no next generated candidate")
+        field, base, requested, phase = next_candidate
+        selected = {*base, *requested}
+        edit = field.model_copy(
+            update={"section_ids": tuple(unit for unit in field.section_ids if unit in selected)}
+        )
+        key = section_trial_key(field, phase, base, requested)
+        seed = int(content_digest({"run_id": run_id, "trial_key": key})[:16], 16)
+        plan = checkpoint.active_block.plan
+        if (
+            plan.candidate_digest != candidate(TextMutation(edits=(edit,))).digest
+            or plan.candidate_identity != checkpoint.original_identity
+            or plan.block_id != "search-" + key
+            or plan.schedule_seed != seed
+        ):
+            raise ResumeMismatchError("active finer block differs from the next frozen candidate")
     if candidate(checkpoint.selected_mutation).digest != checkpoint.best_candidate_digest:
         raise ResumeMismatchError("selected finer candidate identity differs from immutable source")
 

@@ -943,6 +943,57 @@ def test_offline_section_trial_refuses_changed_run_binding() -> None:
         _validate_sampled_trials(loaded.sampled, loaded.evidence, "another-run")
 
 
+@pytest.mark.parametrize("change", [None, "digest", "identity", "block-id", "seed", "complete"])
+def test_offline_active_fine_block_binds_next_candidate(change: str | None) -> None:
+    loaded = _fine_sampled()
+    assert loaded.sampled is not None
+    checkpoint = loaded.sampled.checkpoint
+    comparison = checkpoint.fine_trials[0].comparison
+    assert comparison is not None
+    plan = comparison.evidence.plan
+    if change == "digest":
+        plan = plan.model_copy(update={"candidate_digest": "a" * 64})
+    elif change == "identity":
+        plan = plan.model_copy(
+            update={
+                "candidate_identity": plan.candidate_identity.model_copy(
+                    update={"execution_plan_digest": "f" * 64}
+                )
+            }
+        )
+    elif change == "block-id":
+        plan = plan.model_copy(update={"block_id": "PRIVATE_WRONG_BLOCK"})
+    elif change == "seed":
+        seed = plan.schedule_seed + 1
+        plan = plan.model_copy(
+            update={"schedule_seed": seed, "schedule": sampling_schedule(1, 1, seed)}
+        )
+    active = SamplingBlockEvidence(plan=plan, attempts=())
+    checkpoint = SampledReductionCheckpoint.model_validate(
+        {
+            **checkpoint.model_dump(),
+            "fine_trials": (),
+            "fine_complete": change == "complete",
+            "selected_mutation": TextMutation(),
+            "best_candidate_digest": checkpoint.original_candidate_digest,
+            "additional_removed_utf8_bytes": 0,
+            "active_block": active,
+        }
+    )
+    result = loaded.sampled.model_copy(
+        update={
+            "checkpoint": checkpoint,
+            "selected_candidate_digest": checkpoint.original_candidate_digest,
+        }
+    )
+    if change is None:
+        _validate_sampled_trials(result, loaded.evidence, "run-fine")
+    else:
+        with pytest.raises(ValueError, match="section checkpoint") as error:
+            _validate_sampled_trials(result, loaded.evidence, "run-fine")
+        assert "PRIVATE" not in str(error.value)
+
+
 def test_coarse_trials_do_not_explain_the_final_section_edited_parent() -> None:
     coarse, _ = _sampled()
     fine = _fine_sampled()

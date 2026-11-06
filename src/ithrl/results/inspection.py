@@ -18,7 +18,7 @@ from ithrl.experiment import ExperimentDefinition, SampledExperimentDefinition
 from ithrl.extraction import validate_experiment_target, validate_extracted_case
 from ithrl.mutation import TextMutation
 from ithrl.observations import ObservationIdentity
-from ithrl.reduce import SampledInvalidCandidateTrial
+from ithrl.reduce import ResumeMismatchError, SampledInvalidCandidateTrial
 from ithrl.results.models import ResultSnapshot, ResultSnapshotError, SampledReductionEvidence
 from ithrl.results.storage import load_result_snapshot
 from ithrl.results.validation import loads_json, validate_result_case
@@ -242,7 +242,10 @@ def _validate_sampled_trials(
 ) -> None:
     from ithrl.reduce.contracts import validate_section_checkpoint
 
-    validate_section_checkpoint(evidence, result.checkpoint)
+    try:
+        validate_section_checkpoint(evidence, result.checkpoint, run_id=run_id)
+    except ResumeMismatchError:
+        raise ValueError("section checkpoint differs from immutable source or search") from None
     for trial in result.checkpoint.fine_trials:
         if trial.comparison is None:
             continue

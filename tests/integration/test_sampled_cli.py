@@ -33,6 +33,7 @@ from ithrl.adapters import enumerate_decisions, parse_session
 from ithrl.case import CaseEvidence, CaseWorkspace
 from ithrl.cli import ExitCode, app
 from ithrl.cli.native import NativeSelection
+from ithrl.context import content_digest
 from ithrl.execution import CapabilityProfile, ResourceLimits, SafetyPolicy
 from ithrl.experiment import (
     ExperimentDefinition,
@@ -48,7 +49,7 @@ from ithrl.experiment import (
 from ithrl.extraction import extract_decision
 from ithrl.observations import ObservationStore
 from ithrl.results import SampledReductionEvidence, load_sampling_snapshot
-from ithrl.run_state import SampledRunStateFile
+from ithrl.run_state import SampledRunState, SampledRunStateFile
 from ithrl.runner import (
     NativeOutputReference,
     PreparedAttempt,
@@ -461,6 +462,48 @@ def test_section_search_cli_confirms_selected_edit_and_resumes_without_replay(
     )
     assert inspected.exit_code == ExitCode.SUCCESS, inspected.output
     _json(inspected)
+    operator_case.assert_sources_unchanged()
+
+
+def test_section_inspection_sanitizes_consistent_malformed_saved_checkpoints(
+    operator_case: OperatorCase,
+) -> None:
+    _enable_section_search(operator_case)
+    completed = _invoke(operator_case.command())
+    assert completed.exit_code == ExitCode.SUCCESS, completed.output
+    destination = Path(_json(completed)["result_path"])
+    for name in ("result.json", "sampling/sampling-state.json"):
+        path = destination / name
+        saved = json.loads(path.read_text())
+        checkpoint = saved["checkpoint"]
+        checkpoint["fine_trials"][0]["removed_utf8_bytes"] += 1
+        checkpoint["additional_removed_utf8_bytes"] += 1
+        if name == "sampling/sampling-state.json":
+            saved["selection"]["checkpoint_digest"] = content_digest(checkpoint)
+        path.write_text(json.dumps(saved))
+    # Both persisted models remain valid and agree; immutable source binding must refuse them.
+    saved_result = SampledReductionEvidence.model_validate_json(
+        (destination / "result.json").read_text()
+    )
+    saved_state = SampledRunState.model_validate_json(
+        (destination / "sampling/sampling-state.json").read_text()
+    )
+    assert saved_result.checkpoint == saved_state.checkpoint
+    inspected = _invoke(
+        [
+            "inspect",
+            "retained",
+            str(operator_case.workspace.root),
+            "--result",
+            str(destination),
+            "--format",
+            "json",
+        ]
+    )
+    assert inspected.exit_code == ExitCode.USAGE, inspected.output
+    assert _json(inspected)["error_code"] == "inspection-invalid"
+    assert _PRIVATE_CONTEXT not in inspected.output
+    assert "internal-error" not in inspected.output
     operator_case.assert_sources_unchanged()
 
 

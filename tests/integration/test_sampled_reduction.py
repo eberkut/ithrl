@@ -849,6 +849,67 @@ def test_fine_local_refusals_allocate_no_sampling_blocks(tmp_path: Path) -> None
     assert len(fixture.runner.calls) == 1
 
 
+def test_fine_mutation_refusal_after_coarse_removes_last_input(tmp_path: Path) -> None:
+    fixture = _fixture(
+        tmp_path,
+        markers="ABC",
+        section_texts=("keep\n\nbackground", "other", "last input"),
+        coarse_limit=8,
+    )
+    fixture.runner.section_behavior = lambda attempt: (
+        "ctx-a" not in attempt.candidate.removed_context_ids
+    )
+    result = fixture.run()
+    checkpoint = result.checkpoint
+    assert checkpoint.removed_context_ids == ("ctx-b", "ctx-c")
+    assert checkpoint.fine_complete
+    assert checkpoint.fine_trials
+    assert all(t.comparison is None for t in checkpoint.fine_trials)
+    assert checkpoint.selected_mutation.is_empty
+    assert not any(not call.candidate.mutation.is_empty for call in fixture.runner.calls)
+    calls = len(fixture.runner.calls)
+    assert fixture.run().checkpoint == checkpoint
+    assert len(fixture.runner.calls) == calls
+
+
+def test_fine_admission_mutation_error_remains_terminal(tmp_path: Path) -> None:
+    fixture = _section_fixture(tmp_path, coarse_limit=0)
+
+    def fail_sections(attempt: PreparedAttempt) -> None:
+        if not attempt.candidate.mutation.is_empty:
+            raise MutationError("synthetic terminal admission error")
+
+    fixture.runner.admission = fail_sections
+    with pytest.raises(MutationError, match="terminal admission error"):
+        fixture.run()
+    assert len(fixture.runner.calls) == 1
+
+
+def test_fine_refusals_stop_preparing_candidates_after_wall_expiry(tmp_path: Path) -> None:
+    fixture = _section_fixture(tmp_path, coarse_limit=0)
+    now = datetime.now(UTC)
+    refused = 0
+
+    def refuse_sections(attempt: PreparedAttempt) -> None:
+        nonlocal now, refused
+        if not attempt.candidate.mutation.is_empty:
+            refused += 1
+            now += timedelta(seconds=10_001)
+            raise CandidateInvalidError("synthetic section refusal")
+
+    fixture.runner.admission = refuse_sections
+    result = fixture.run(clock=lambda: now)
+    assert result.stop_reason == "wall-time-exhausted"
+    assert refused == 1
+    assert len(result.checkpoint.fine_trials) == 1
+    assert result.checkpoint.fine_trials[0].comparison is None
+    assert not result.checkpoint.fine_complete
+    assert result.checkpoint.blocks == ()
+    assert len(fixture.runner.calls) == 1
+    # Revalidate the saved refusal even though the current allowance has expired.
+    asyncio.run(fixture.reducer(clock=lambda: now).validate_resume(fixture.evidence))
+
+
 def test_fine_admission_reserves_fresh_confirmation_capacity(tmp_path: Path) -> None:
     fixture = _section_fixture(tmp_path, coarse_limit=0, calls=4)
     result = fixture.run()
@@ -895,7 +956,7 @@ def test_fine_checkpoint_refuses_tampered_source_byte_counts(tmp_path: Path) -> 
         }
     )
     with pytest.raises(ResumeMismatchError, match="byte count"):
-        validate_section_checkpoint(fixture.evidence, forged)
+        validate_section_checkpoint(fixture.evidence, forged, run_id="sampled-search")
 
 
 @pytest.mark.parametrize("change", ["source", "policy", "order", "shell-target"])

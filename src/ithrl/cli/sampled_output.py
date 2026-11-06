@@ -388,6 +388,22 @@ def render_sampled_reduction(
         print_plain(
             console, f"  {label}: {value if value is not None else 'unknown'}", soft_wrap=True
         )
+    if report.section_search_enabled:
+        print_plain(
+            console,
+            f"  section-search comparison limits: {report.max_coarse_comparisons} coarse; "
+            f"{report.max_fine_comparisons} fine",
+        )
+        if report.coarse_search_stopped:
+            print_plain(
+                console,
+                f"  additional editable UTF-8 bytes removed: {report.additional_removed_utf8_bytes}",
+            )
+            print_plain(
+                console,
+                f"  additional reduction criterion: {report.additional_reduction_result}; "
+                f"minimum {report.minimum_removed_utf8_bytes} bytes",
+            )
     if report.runner_error_category is not None or report.runner_error_reason_code is not None:
         diagnostic = ": ".join(
             value
