@@ -51,6 +51,8 @@ class CopilotMaterialization:
 def materialize_copilot_attempt(attempt: PreparedAttempt) -> CopilotMaterialization:
     """Overlay one candidate on the immutable prefix through its native turn start."""
 
+    if any(not isinstance(edit, TextAppend) for edit in attempt.candidate.mutation.edits):
+        _unsupported("Copilot reconstruction supports only append-text interventions")
     _validate_compatible_attempt(attempt)
     try:
         session = validate_extracted_case(attempt.evidence)
@@ -132,6 +134,8 @@ def _materialize_session(
             "the candidate removes the native input for the selected decision",
         )
     edit = next(iter(attempt.candidate.mutation.edits), None)
+    if edit is not None and not isinstance(edit, TextAppend):
+        _unsupported("Copilot reconstruction supports only append-text interventions")
     if edit is not None:
         if edit.context_id == fixed_input:
             raise CopilotMaterializationError(

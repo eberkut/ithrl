@@ -14,16 +14,28 @@ from ithrl.context import (
     ContextNode,
     JsonObject,
     content_digest,
+    decode_pointer,
     validate_json_limits,
 )
 from ithrl.decisions import DecisionEvidence
 from ithrl.mutation import (
     EditableText,
     MutationError,
+    TextAppend,
     TextMutation,
     append_message_text,
     editable_message_text,
+    message_text,
+    replace_message_text,
     request_text_item,
+)
+from ithrl.text_sections import (
+    TextSectionCatalog,
+    TextSectionError,
+    TextSectionLimitError,
+    TextSectionRemoval,
+    catalog_text_sections,
+    remove_text_sections,
 )
 
 
@@ -131,21 +143,67 @@ class CaseEvidence:
     def materialize(
         self, remove_ids: Iterable[str] = (), *, mutation: TextMutation | None = None
     ) -> JsonObject:
-        removed = tuple(remove_ids)
-        if mutation is not None and not mutation.is_empty and removed:
+        requested = tuple(remove_ids)
+        mutation = (
+            TextMutation()
+            if mutation is None
+            else TextMutation.model_validate(mutation.model_dump())
+        )
+        if any(isinstance(edit, TextAppend) for edit in mutation.edits) and requested:
             raise MutationError("text mutation requires the unchanged original context")
+        removed = self._context.dependency_closure(requested)
+        if any(isinstance(edit, TextSectionRemoval) for edit in mutation.edits):
+            self._protect_section_fixed_input(removed)
         request = self._context.materialize(self._exact_request(), removed)
-        if mutation is not None:
-            for edit in mutation.edits:
-                node = self._context.by_id.get(edit.context_id)
-                if node is None:
-                    raise MutationError("mutation addresses an unknown context node")
-                index, message = request_text_item(request, node)
-                inputs = request["input"]
-                if not isinstance(inputs, list):
-                    raise MutationError("mutation requires an input-message list")
-                inputs[index] = append_message_text(message, edit)
+        for edit in mutation.edits:
+            node = self._context.by_id.get(edit.context_id)
+            if node is None:
+                raise MutationError("mutation addresses an unknown context node")
+            if node.id in removed:
+                raise MutationError("section removal overlaps a whole-record dependency closure")
+            index, original = request_text_item(self._exact_request(), node)
+            inputs = request["input"]
+            if not isinstance(inputs, list):
+                raise MutationError("mutation requires an input-message list")
+            if isinstance(edit, TextAppend):
+                inputs[index] = append_message_text(original, edit)
+            else:
+                catalog = self.validate_text_sections(edit)
+                retained = remove_text_sections(
+                    message_text(original, edit.content_index), catalog, edit
+                )
+                # Graph paths refer to the immutable original. Whole earlier input
+                # removals shift the copied list, never the section's source identity.
+                prior_removed = sum(
+                    1
+                    for other in self._context.nodes
+                    if other.id in removed
+                    and other.path is not None
+                    and (tokens := decode_pointer(other.path))[:1] == ("input",)
+                    and len(tokens) == 2
+                    and tokens[1].isascii()
+                    and tokens[1].isdigit()
+                    and int(tokens[1]) < index
+                )
+                copied = inputs[index - prior_removed]
+                if not isinstance(copied, dict):
+                    raise MutationError("mutation requires an ordinary user message")
+                inputs[index - prior_removed] = replace_message_text(
+                    copied, edit.content_index, retained
+                )
         return request
+
+    def _protect_section_fixed_input(self, removed: frozenset[str]) -> None:
+        inputs = self._exact_request().get("input")
+        if not isinstance(inputs, list) or not inputs:
+            return
+        fixed = ("input", str(len(inputs) - 1))
+        for node in self._context.nodes:
+            if node.id not in removed or node.path is None:
+                continue
+            path = decode_pointer(node.path)
+            if path[: len(fixed)] == fixed or fixed[: len(path)] == path:
+                raise MutationError("section removal cannot change the current decision input")
 
     def editable_text(self) -> tuple[EditableText, ...]:
         """Discover prior-user text from preserved evidence without runtime operations."""
@@ -163,6 +221,42 @@ class CaseEvidence:
                 continue
             found.extend(editable_message_text(node, message))
         return tuple(found)
+
+    def text_sections(self) -> tuple[TextSectionCatalog, ...]:
+        """List complete catalogs for eligible fields within the paragraph policy limits."""
+
+        by_id = self._context.by_id
+        catalogs = []
+        for site in self.editable_text():
+            try:
+                catalogs.append(self._text_section_catalog(site, by_id[site.context_id]))
+            except TextSectionLimitError:
+                continue
+            except TextSectionError as error:
+                raise MutationError(str(error)) from None
+        return tuple(catalogs)
+
+    def _text_section_catalog(self, site: EditableText, node: ContextNode) -> TextSectionCatalog:
+        return catalog_text_sections(
+            case_digest=self.digest,
+            context_id=node.id,
+            context_digest=node.digest,
+            content_index=site.content_index,
+            text=site.original_text,
+        )
+
+    def validate_text_sections(self, edit: TextSectionRemoval) -> TextSectionCatalog:
+        """Re-derive eligibility and the selected units from the immutable case."""
+
+        for site in self.editable_text():
+            if (site.context_id, site.content_index) == (edit.context_id, edit.content_index):
+                try:
+                    catalog = self._text_section_catalog(site, self._context.by_id[site.context_id])
+                    catalog.validate_removal(edit)
+                except TextSectionError as error:
+                    raise MutationError(str(error)) from None
+                return catalog
+        raise MutationError("section removal requires an editable prior-user text field")
 
 
 def validate_case_inputs(

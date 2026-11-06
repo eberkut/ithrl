@@ -17,7 +17,7 @@ type CaptureType = Literal[
     "unknown",
 ]
 type CandidateMaterialization = Literal["exact-request", "source-backed"]
-type ContextOperation = Literal["dependency-closed-removal", "append-text"]
+type ContextOperation = Literal["dependency-closed-removal", "append-text", "remove-text-sections"]
 type ProviderTransport = Literal["forbidden", "required"]
 type ProviderTransportPolicy = Literal["forbidden", "allowed"]
 type ToolNetworkAccess = Literal["forbidden", "possible"]
@@ -122,7 +122,11 @@ class CapabilityProfile(_ImmutableContract):
             deterministic=True,
             supported_capture_types=("provider-request",),
             supported_materializations=("exact-request",),
-            supported_context_operations=("dependency-closed-removal", "append-text"),
+            supported_context_operations=(
+                "dependency-closed-removal",
+                "append-text",
+                "remove-text-sections",
+            ),
             reconstruction_method="exact-request-json-pointer-v1",
             supported_targets=("final-response", "shell-action"),
             provider_transport="forbidden",

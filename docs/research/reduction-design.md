@@ -329,6 +329,87 @@ argument. Preservation does not establish equal reliability or all-attempt match
 Accepted overloads were not modeled in the native-layout simulation, and the successful Codex
 qualification used **no overload replacement**.
 
+## Text-section workload preparation
+
+[#44](https://github.com/eberkut/ithrl/issues/44) prepares finer removal without collecting new
+model observations. The [shared section contract](../architecture.md#source-bound-text-sections)
+defines the deterministic `paragraph-v1` policy. Exact ordinary source text, identities, fixed
+input, predicates, section selections and the proposal digest remain in private evidence. The
+following criteria are prospective; they are not new native qualification or savings measurements.
+
+| Workload | Debugging question and predicate scope | Prepared surface | Minimum additional removal |
+| --- | --- | --- | ---: |
+| Ordinary Codex CI diagnosis | Which earlier context preserves an observed recommendation to change upstream authentication material? A fixed literal marker detects that recommendation, not the correctness of all advice or a unique cause. | A newly extracted source has mixed prior-user fields of 576 and 178 UTF-8 bytes, partitioned into four and two sections. No historical coarse result exists for this source. | 64 UTF-8 bytes |
+| Ordinary Copilot deployment diagnosis | Does the answer still mention the initial provisioning failure after generic troubleshooting preamble is removed? The fixed marker detects mention, not platform root cause or correctness of recovery advice. | A historical 181-to-111-record coarse candidate retains a 7,135-byte field with 28 sections. Its search was incomplete; its old confirmation does not qualify the current native-prefix profile. | 256 UTF-8 bytes |
+
+The Codex workload has an explicit eligibility gate: bounded coarse search must retain at least
+one selected field containing both relevant and potentially removable paragraphs. The previous
+ordinary Codex reductions retained only short single-purpose fields and were excluded. If neither
+selected mixed field survives, record a limiting outcome. Do not manufacture a finer workload by
+splitting words, substitute an easier source after seeing outcomes, or call the unchanged source an
+existing coarse reduction. Copilot also requires fresh current-profile controls and coarse search;
+its historical result supplies selection evidence only.
+
+Freeze the source, predicate, paragraph policy, eligible fields and traversal order before new model
+observations. Fine removal preserves the Codex task goal and no-mutation restriction when their
+parent survives coarse search; this does not impose extra whole-record protection on coarse search.
+After coarse search, save its exact dependency-valid candidate and stopping state before fine
+search. Each fine candidate edits one retained field, with multiple section removals permitted;
+edits are not accumulated across fields. Additional reduction counts only UTF-8 bytes removed
+from eligible fields relative to that
+coarse candidate; whole-record deletion, JSON-envelope changes and fixed input do not count. The
+64-byte Codex threshold admits removal of either 88/90-byte paragraph from its smaller mixed field;
+the 256-byte Copilot threshold requires substantive removal from its much larger mixed field.
+Neither threshold promises behavioral preservation.
+
+Debugging value is assessed separately: record the concrete conclusion a developer can draw from
+the smaller context, the next investigation it supports and what remains unresolved. A matching
+literal alone is insufficient evidence of a useful explanation. Report structural reduction,
+behavioral confirmation, debugging value and full-workflow cost separately. Measure final-versus-
+immutable-original provider input tokens only when returned by the actual profile; report a
+coarse/fine token difference only if both were measured within the allowance. Unknown usage remains
+unknown, and byte reduction does not establish token or monetary savings.
+
+The frozen cost proposal allocates eight coarse and eight fine comparison blocks per workload.
+Unused coarse comparisons do not enlarge the fine allowance. Coarse search stops at the first
+completed algorithm sweep, eight admitted complete comparisons, or refusal of the next whole block
+while protecting confirmation capacity. An unfinished sweep remains incomplete, without a
+minimality claim. Fine search makes one durable final selection, followed by one fresh independent
+confirmation against the full immutable original. It never uses the coarse candidate as the
+inferential baseline or uses holdout outcomes to resume search or select again.
+
+| Phase | Valid targets | Maximum attempts per workload |
+| --- | --- | ---: |
+| Controls | Two unchanged-original and two empty-edit round trips, with fixed input, action denial and safety verified | 4 |
+| Calibration | Three valid observations, at least two target matches | 3 |
+| Coarse and fine exploratory search | Two valid original and two valid candidate observations per comparison | 16 × (3 + 3) = 96 |
+| Fresh confirmation | Twenty valid observations per arm | 30 + 30 = 60 |
+| Total | Controls and calibration do not enter search or confirmation denominators | 163 |
+
+Exploratory admission uses candidate-minus-original point difference at least `-0.20` and makes no
+confidence claim. Confirmation uses the existing Newcombe method 10 with degradation margin `0.20`
+and nominal one-sided confidence `0.95`. Twenty observations per arm is a bounded proposal, not a
+promise of adequate power, uniform coverage or useful completion on these ordinary workloads.
+The default `independent-safe-preaccept-only` eligibility policy applies; overload replacement is
+not enabled. Failed controls, insufficient calibration, incomplete confirmation and limiting
+outcomes remain reportable; they do not authorize retries until a pass.
+
+The proposed physical-call ceilings are 16 per Codex attempt and one per Copilot attempt: 2,608
+and 163 calls respectively across the full workflow. These are conservative planning limits, not
+measured requirements for the selected sources. A profile unable to enforce its bound stops for
+reassessment. Each attempt allows 120 seconds plus three seconds cancellation grace, with five
+seconds pacing. This reserves at most 20,049 runner seconds and 815 pacing seconds per workload;
+the wall allowance is eight hours and the freshness horizon is 24 hours. Confirmation alone
+reserves 60 attempts, 7,380 runner seconds and 960 Codex or 60 Copilot calls, plus pacing. All
+controls, errors, incomplete work, actual calls, additional possible calls and pending reservations
+remain charged. Historical timings cannot guarantee current-profile completion.
+
+This proposal authorizes no native probes or provider calls. Before execution,
+[#46](https://github.com/eberkut/ithrl/issues/46) must bind the exact implementation, runtime,
+model, provider, reconstruction method and safety policy, verify the proposal remains enforceable
+and obtain separate live-run approval. A budget or criterion revision requires a recorded new freeze
+before collecting affected observations, preserving all earlier failures and limiting outcomes.
+
 ## Reproducibility and remaining limits
 
 The [reduction study package](https://github.com/eberkut/ithrl/tree/main/research/reduction)

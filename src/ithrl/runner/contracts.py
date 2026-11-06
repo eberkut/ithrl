@@ -29,7 +29,8 @@ from ithrl.execution import (
     ResourceLimits,
     SafetyPolicy,
 )
-from ithrl.mutation import MutationError, TextMutation
+from ithrl.mutation import MutationError, TextAppend, TextMutation
+from ithrl.text_sections import TextSectionRemoval
 
 type AttemptPhase = Literal["calibration", "search", "discovery", "simplification", "confirmation"]
 type AttemptArm = Literal["baseline", "candidate", "selected"]
@@ -73,7 +74,10 @@ class Candidate(_ImmutableContract):
             raise ValueError("removed_context_ids must not contain duplicates")
         if set(self.retained_context_ids) & set(self.removed_context_ids):
             raise ValueError("retained and removed context IDs must be disjoint")
-        if not self.mutation.is_empty and self.removed_context_ids:
+        if (
+            any(isinstance(edit, TextAppend) for edit in self.mutation.edits)
+            and self.removed_context_ids
+        ):
             raise ValueError("text mutation requires the unchanged original context partition")
         if any(edit.context_id not in self.retained_context_ids for edit in self.mutation.edits):
             raise ValueError("mutation must address a retained context node")
@@ -393,16 +397,22 @@ def prepare_candidate(
     mutation = (
         TextMutation() if mutation is None else TextMutation.model_validate(mutation.model_dump())
     )
+    removed = evidence.context.dependency_closure(remove_ids)
     if not mutation.is_empty:
-        if "append-text" not in execution_plan.capability.supported_context_operations:
-            raise ValueError("execution plan does not support text mutation")
         for edit in mutation.edits:
+            if edit.operation not in execution_plan.capability.supported_context_operations:
+                raise ValueError("execution plan does not support text mutation")
             node = evidence.context.by_id.get(edit.context_id)
             if node is None or not node.mutable or node.protected:
                 raise MutationError("mutation requires an editable context node")
+            if node.id in removed:
+                raise MutationError("section removal overlaps a whole-record dependency closure")
+            if isinstance(edit, TextSectionRemoval):
+                evidence.validate_text_sections(edit)
+            elif removed:
+                raise MutationError("text mutation requires the unchanged original context")
         if evidence.has_request:
-            evidence.materialize(mutation=mutation)
-    removed = evidence.context.dependency_closure(remove_ids)
+            evidence.materialize(removed, mutation=mutation)
     retained_ids = tuple(node.id for node in evidence.context.nodes if node.id not in removed)
     removed_ids = tuple(node.id for node in evidence.context.nodes if node.id in removed)
     materialization = "exact-request" if evidence.has_request else "source-backed"

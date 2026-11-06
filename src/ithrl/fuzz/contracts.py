@@ -14,9 +14,19 @@ from ithrl.experiment import (
     SamplingArmTarget,
     SamplingEligibilityPolicy,
 )
+from ithrl.mutation import MutationError, TextAppend, TextMutation
 from ithrl.runner.contracts import Candidate
 
 MAX_FUZZ_CANDIDATES = 10_000
+
+
+def require_fuzz_mutation(mutation: TextMutation) -> TextAppend | None:
+    """Keep fuzzing on its supported append surface before allocating observations."""
+
+    edit = next(iter(mutation.edits), None)
+    if edit is not None and not isinstance(edit, TextAppend):
+        raise MutationError("fuzzing supports only append-text interventions")
+    return edit
 
 
 class _Contract(BaseModel):

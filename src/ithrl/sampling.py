@@ -16,7 +16,7 @@ from ithrl.execution.budget import (
 )
 from ithrl.experiment import SampledChangePlan, SampledExperimentDefinition
 from ithrl.measurement import RunnerExecutionError, observe_once
-from ithrl.mutation import TextMutation
+from ithrl.mutation import MutationError, TextAppend, TextMutation
 from ithrl.observations import (
     Observation,
     ObservationArm,
@@ -53,6 +53,12 @@ class SamplingCollectionResult:
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def _validate_sampling_mutation(mutation: TextMutation | None) -> None:
+    # Section-aware selection and durable payloads belong to finer reduction.
+    if mutation is not None and any(not isinstance(edit, TextAppend) for edit in mutation.edits):
+        raise MutationError("sampling does not yet support text-section removal")
 
 
 def sampling_pacing_delay(state: SampledRunState, store: ObservationStore, now: datetime) -> float:
@@ -110,6 +116,7 @@ async def collect_sampling_block(
     Progress is reported before reservation or after durable observation reconciliation.
     """
 
+    _validate_sampling_mutation(mutation)
     with state_file.acquire_lock(store):
         return await _collect_sampling_block_owned(
             evidence=evidence,
@@ -142,6 +149,7 @@ async def _collect_sampling_block_owned(
 ) -> SamplingCollectionResult:
     """Collect while the caller owns run/store locks across the composed search."""
 
+    _validate_sampling_mutation(mutation)
     state_file._require_lock(store)
     originals = prepare_candidate(evidence, original.execution_plan)
     selected = prepare_candidate(

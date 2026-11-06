@@ -134,10 +134,25 @@ def _render(data: dict[str, Any]) -> None:
                 console,
                 "  "
                 + "; ".join(
-                    f"{name.replace('_', ' ')}: {_display(value)}" for name, value in row.items()
+                    f"{name.replace('_', ' ')}: {_display(value)}"
+                    for name, value in row.items()
+                    if name != "text_section_fields"
                 ),
                 soft_wrap=True,
             )
+            for section_field in row.get("text_section_fields", []):
+                catalog = section_field["catalog"]
+                detail = (
+                    f"{len(catalog['sections'])} units; "
+                    f"original UTF-8 bytes: {catalog['original_utf8_bytes']}"
+                    if catalog is not None
+                    else section_field["unavailable_reason"]
+                )
+                print_plain(
+                    console,
+                    f"    text block {section_field['content_index']}: "
+                    f"{section_field['status']}; {detail}",
+                )
     print_plain(console, "Interpretation limits")
     for note in data.get("limitations", []):
         print_plain(console, f"  {note}")

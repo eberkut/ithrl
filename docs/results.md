@@ -43,6 +43,14 @@ statistical baseline; the search parent is the context from which another remova
 | Joint or historical trial | An outcome for several removals or an earlier context; it cannot explain each retained item individually. |
 | Invalid, incomplete, ineligible or untested work | No supported behavioral conclusion for that removal. |
 
+Eligible retained prior-user fields also include `text_section_fields`. An `available-untested`
+field has a source-bound paragraph catalog: its section IDs and ranges describe possible edits,
+not recorded section-removal trials. Whole-record trial outcomes do not establish that an individual
+section is needed. An `unavailable` field has no partial catalog; `section-policy-limit` identifies
+a field outside the paragraph policy's limits, while `inspection-section-limit` identifies the
+report's metadata allowance. See the [section contract](architecture.md#source-bound-text-sections)
+for boundaries and limits. Native section-removal execution remains planned work.
+
 Deterministic reports include `failed_candidate_observation_count` for recorded candidate-run
 failures. The checkpoint lacks their removal-set details, so failures cannot be attributed to
 individual units or treated as behavioral losses. This count is unavailable for sampled results.
@@ -55,8 +63,10 @@ plan, so their reconstruction method and detailed runner policy remain unavailab
 
 Inspection validates saved identities and consistency against the supplied case; it does not
 recheck observations in an external database or reproduce historical execution. Results concern
-the recorded reconstructed context and runner policy. Byte counts measure canonical JSON encoded
-as UTF-8, not provider tokens or monetary savings.
+the recorded reconstructed context and runner policy. Context byte counts measure canonical JSON
+encoded as UTF-8. In section catalogs, `original_utf8_bytes` and each section's `utf8_bytes` count
+the original text only; `start` and `end` are half-open Unicode code-point offsets. Neither byte
+measure establishes provider-token or monetary savings.
 
 For private troubleshooting, explicitly include retained content with a total display allowance:
 

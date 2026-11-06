@@ -24,8 +24,10 @@ from ithrl.reduce import (
 )
 from ithrl.results.inspection import RetainedResult, load_retained_result
 from ithrl.runner import Candidate
+from ithrl.text_sections import TextSectionCatalog, TextSectionError, catalog_text_sections
 
 MAX_INSPECTION_TEXT_BYTES = 65_536
+MAX_INSPECTION_SECTION_UNITS = 4096
 type TrialOutcome = Literal[
     "deterministic-target-observed",
     "deterministic-target-not-observed",
@@ -92,6 +94,15 @@ class ActiveComparisonInspection(_InspectionModel):
     candidate: SamplingArmCounts
 
 
+class TextSectionFieldInspection(_InspectionModel):
+    """An available structural catalog is not evidence of section-level behavior."""
+
+    content_index: int
+    status: Literal["available-untested", "unavailable"]
+    catalog: TextSectionCatalog | None = None
+    unavailable_reason: Literal["section-policy-limit", "inspection-section-limit"] | None = None
+
+
 class RetainedNodeInspection(_InspectionModel):
     id: str
     kind: str
@@ -103,6 +114,7 @@ class RetainedNodeInspection(_InspectionModel):
     trial_indexes: tuple[int, ...]
     final_single_removal_trial_indexes: tuple[int, ...]
     removal_evidence: RemovalEvidence
+    text_section_fields: tuple[TextSectionFieldInspection, ...] = ()
     text: str | None = Field(default=None, repr=False)
     text_truncated: bool = False
 
@@ -218,6 +230,8 @@ def build_retained_inspection(
         _HISTORICAL_LIMIT,
         "Trial outcomes apply to their complete removals and tested search parent; "
         "joint removals do not explain each retained item.",
+        "Available text sections are source-bound structural units, not tested removals. "
+        "Whole-record trial outcomes do not establish section necessity or usefulness.",
         *loaded.validation_limits,
     )
     if failed_count:
@@ -347,6 +361,7 @@ def _nodes(
     allowance: int,
     text_node_id: str | None,
 ) -> tuple[tuple[RetainedNodeInspection, ...], int, bool]:
+    section_fields = _section_fields(evidence, retained)
     required_by: dict[str, list[str]] = {node.id: [] for node in evidence.context.nodes}
     for node in evidence.context.nodes:
         if node.id in retained:
@@ -410,11 +425,55 @@ def _nodes(
                 trial_indexes=relevant,
                 final_single_removal_trial_indexes=singles,
                 removal_evidence=classification,
+                text_section_fields=section_fields.get(node.id, ()),
                 text=text,
                 text_truncated=cut,
             )
         )
     return tuple(nodes), allowance - remaining, truncated
+
+
+def _section_fields(
+    evidence: CaseEvidence, retained: frozenset[str]
+) -> dict[str, tuple[TextSectionFieldInspection, ...]]:
+    """Bound metadata without truncating a source-bound field's section catalog."""
+
+    fields: dict[str, list[TextSectionFieldInspection]] = {}
+    nodes_by_id = evidence.context.by_id
+    remaining = MAX_INSPECTION_SECTION_UNITS
+    for site in evidence.editable_text():
+        if site.context_id not in retained:
+            continue
+        try:
+            catalog = catalog_text_sections(
+                case_digest=evidence.digest,
+                context_id=site.context_id,
+                context_digest=nodes_by_id[site.context_id].digest,
+                content_index=site.content_index,
+                text=site.original_text,
+            )
+        except TextSectionError:
+            inspection = TextSectionFieldInspection(
+                content_index=site.content_index,
+                status="unavailable",
+                unavailable_reason="section-policy-limit",
+            )
+        else:
+            if len(catalog.sections) > remaining:
+                inspection = TextSectionFieldInspection(
+                    content_index=site.content_index,
+                    status="unavailable",
+                    unavailable_reason="inspection-section-limit",
+                )
+            else:
+                remaining -= len(catalog.sections)
+                inspection = TextSectionFieldInspection(
+                    content_index=site.content_index,
+                    status="available-untested",
+                    catalog=catalog,
+                )
+        fields.setdefault(site.context_id, []).append(inspection)
+    return {node_id: tuple(values) for node_id, values in fields.items()}
 
 
 def _confirmation(

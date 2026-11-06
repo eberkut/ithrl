@@ -364,6 +364,7 @@ def test_append_changes_only_effective_prior_user_native_record_and_preserves_so
 
     expected = _native_records(baseline.native_session)
     field = "transformedContent" if transformed else "content"
+    assert isinstance(mutation.edits[0], TextAppend)
     expected[1]["data"][field] = site.original_text + mutation.edits[0].text
     assert _native_records(result.native_session) == expected
     old_lines, new_lines = (
