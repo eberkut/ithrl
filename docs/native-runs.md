@@ -136,6 +136,47 @@ on their behavior, variability and removable context. The earlier
 samples on a planted instruction. See [sampled results](results.md#sampled-results) for assumptions
 and error handling.
 
+### Section-removal preparation
+
+Finer final-response reduction has provider-free implementation tests for both harnesses. It
+awaits the ordinary-workflow qualification in [#46](https://github.com/eberkut/ithrl/issues/46);
+the README's supported-inputs table remains the public capability claim. Shell targets and fuzzing
+do not accept section removal.
+
+To prepare a private experiment, obtain source-bound catalogs with
+[`inspect retained`](results.md#inspect-retained-context). Choose the eligible fields, removable
+sections, traversal order, additional-byte criterion and stage budgets before collecting new
+observations. Add the following tables to the sampled experiment, replacing the field values with
+the catalog's exact metadata and `section_ids` with an ordered subset of its section IDs:
+
+```toml
+[reduction.section_search]
+max_coarse_comparisons = 8
+max_fine_comparisons = 8
+minimum_removed_utf8_bytes = 64
+
+[[reduction.section_search.fields]]
+operation = "remove-text-sections"
+context_id = "CONTEXT_ID"
+content_index = 0
+original_text_digest = "ORIGINAL_TEXT_DIGEST"
+policy_digest = "POLICY_DIGEST"
+section_ids = ["SECTION_ID"]
+```
+
+Repeat the field table for another eligible field. Omitted sections are protected during fine
+search. Each fine candidate edits one field; accepted edits do not accumulate across fields.
+Fields deleted by coarse search are skipped. If none survives, the report records
+`no-retained-fields`; it does not substitute another source or field. The
+[prepared workload criteria](research/reduction-design.md#text-section-workload-preparation) use a
+64-byte Codex threshold and a 256-byte Copilot threshold, assessed separately from debugging value.
+
+`--max-candidates` remains an administrative cap over both stages. Each stage also obeys its own
+frozen comparison ceiling; unused coarse capacity cannot enlarge fine search. Preflight reports both
+ceilings and caps its attempt estimate at their sum. Every comparison and final confirmation still
+uses the full immutable original as the baseline. A budget increase cannot change the frozen field
+selection, stage ceilings, criterion or sampling plan. Such a change requires a new experiment.
+
 ### 3. Inspect the complete plan and budget
 
 For the Codex configuration above:

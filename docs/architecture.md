@@ -123,12 +123,27 @@ over-budget fields have no partial catalog. [Results](results.md#inspect-retaine
 availability, byte measures and interpretation. Original text remains behind the existing bounded
 opt-in.
 
-This contract does not enable native section removal. Current Codex and Copilot materializers,
-fuzzing and sampled collection refuse that operation. The fake capability and pure exact-request
-materialization exercise the shared contract without a harness. Native reconstruction, coarse/fine
-search, selected-section result snapshots and recovery belong to
-[#45](https://github.com/eberkut/ithrl/issues/45); ordinary-workflow qualification belongs to
-[#46](https://github.com/eberkut/ithrl/issues/46). The
+Codex and Copilot final-response materializers apply section removals to copied native input.
+Codex changes only the selected prior-user text block. Copilot changes the effective
+`transformedContent` when present, otherwise `content`, preserving the surrounding event and
+unedited prefix records. Copilot shell targets and fuzzing refuse section removal.
+
+Sampled reduction opts in through `reduction.section_search`. Its ordered field descriptors list
+eligible original section IDs; omitted sections remain protected during fine search. Separate coarse
+and fine comparison ceilings do not transfer unused capacity. The checkpoint freezes the exact
+coarse candidate and stopping state before independent per-field searches. Each fine candidate
+combines that same coarse removal with one field's cumulative section selection. It never combines
+edits across fields. The largest admitted editable-byte removal wins, with the first candidate
+retained on a tie; the usefulness threshold is reported separately from selection and confirmation.
+
+Candidate, experiment and algorithm identities bind the source, policy and traversal. Resume
+reconstructs the recorded coarse and fine decisions without executing attempts. One final durable
+selection precedes fresh confirmation against the full immutable original, including when either
+search stage has incomplete coverage. Results retain both stages and the selected mutation;
+inspection revalidates its source bindings without loading a runner or observation database.
+
+These paths have provider-free implementation tests; ordinary-workflow qualification belongs to
+[#46](https://github.com/eberkut/ithrl/issues/46), before expanding public native support. The
 [workload criteria](research/reduction-design.md#text-section-workload-preparation) distinguish the
 frozen preparation proposal from measured support.
 

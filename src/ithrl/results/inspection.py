@@ -16,6 +16,7 @@ from ithrl.context import ContextGraphError, JsonValue, content_digest
 from ithrl.execution import ResolvedExecutionPlan
 from ithrl.experiment import ExperimentDefinition, SampledExperimentDefinition
 from ithrl.extraction import validate_experiment_target, validate_extracted_case
+from ithrl.mutation import TextMutation
 from ithrl.observations import ObservationIdentity
 from ithrl.reduce import SampledInvalidCandidateTrial
 from ithrl.results.models import ResultSnapshot, ResultSnapshotError, SampledReductionEvidence
@@ -24,6 +25,7 @@ from ithrl.results.validation import loads_json, validate_result_case
 from ithrl.run_state import SampledRunState
 from ithrl.runner import Candidate
 from ithrl.sampled_run_metadata import SampledRunMetadata
+from ithrl.text_sections import TextSectionRemoval
 
 _MAX_FILE_BYTES = 64 * 1024 * 1024
 _MAX_SESSION_BYTES = 1024 * 1024
@@ -108,11 +110,23 @@ def _read_object(path: Path, *, max_bytes: int = _MAX_FILE_BYTES) -> dict[str, A
 
 
 def _candidate(
-    evidence: CaseEvidence, identity: ObservationIdentity, removed: tuple[str, ...]
+    evidence: CaseEvidence,
+    identity: ObservationIdentity,
+    removed: tuple[str, ...],
+    mutation: TextMutation | None = None,
 ) -> Candidate:
     closure = evidence.context.dependency_closure(removed)
     if set(removed) != closure:
         raise ValueError("removals must be dependency-closed")
+    mutation = (
+        TextMutation() if mutation is None else TextMutation.model_validate(mutation.model_dump())
+    )
+    for edit in mutation.edits:
+        if not isinstance(edit, TextSectionRemoval) or edit.context_id in closure:
+            raise ValueError("saved section edit requires a retained original field")
+        evidence.validate_text_sections(edit)
+    if evidence.has_request and not mutation.is_empty:
+        evidence.materialize(closure, mutation=mutation)
     return Candidate(
         case_digest=evidence.digest,
         execution_plan_digest=identity.execution_plan_digest,
@@ -120,6 +134,7 @@ def _candidate(
         retained_context_ids=tuple(n.id for n in evidence.context.nodes if n.id not in closure),
         removed_context_ids=tuple(n.id for n in evidence.context.nodes if n.id in closure),
         materialization="exact-request" if evidence.has_request else "source-backed",
+        mutation=mutation,
     )
 
 
@@ -160,7 +175,10 @@ def _load_sampled(root: Path, evidence: CaseEvidence, summary: dict[str, Any]) -
         raise ValueError("immutable original candidate does not match the case")
     _validate_sampled_trials(result, evidence, state.run_id)
     selected = _candidate(
-        evidence, result.checkpoint.best_candidate_identity, result.checkpoint.removed_context_ids
+        evidence,
+        result.checkpoint.best_candidate_identity,
+        result.checkpoint.removed_context_ids,
+        result.checkpoint.selected_mutation,
     )
     if selected.digest != result.selected_candidate_digest:
         raise ValueError("selected candidate does not match the case")
@@ -222,6 +240,16 @@ def _validate_result_state(result: SampledReductionEvidence, state: SampledRunSt
 def _validate_sampled_trials(
     result: SampledReductionEvidence, evidence: CaseEvidence, run_id: str
 ) -> None:
+    from ithrl.reduce.contracts import validate_section_checkpoint
+
+    validate_section_checkpoint(evidence, result.checkpoint)
+    for trial in result.checkpoint.fine_trials:
+        if trial.comparison is None:
+            continue
+        plan = trial.comparison.evidence.plan
+        seed = int(content_digest({"run_id": run_id, "trial_key": trial.trial_key})[:16], 16)
+        if plan.block_id != "search-" + trial.trial_key or plan.schedule_seed != seed:
+            raise ValueError("section trial does not bind its frozen search block")
     for trial in result.checkpoint.trials:
         _candidate(evidence, result.checkpoint.original_identity, trial.base_removals)
         if not set(trial.requested_removals) <= evidence.context.by_id.keys():
@@ -299,7 +327,7 @@ def _validate_summary(
     experiment: SampledExperimentDefinition,
 ) -> None:
     removed = result.checkpoint.removed_context_ids
-    expected = {
+    expected: dict[str, object] = {
         "command": "shrink",
         "plan_digest": result.checkpoint.original_identity.execution_plan_digest,
         "target": experiment.target.type,
@@ -311,10 +339,41 @@ def _validate_summary(
         "margin": result.checkpoint.reduction.margin,
         "one_sided_confidence": result.checkpoint.reduction.confirmation.one_sided_confidence,
     }
+    checkpoint = result.checkpoint
+    sections = checkpoint.reduction.section_search
+    if sections is not None:
+        coarse_blocks = {
+            trial.comparison.evidence.plan.block_id
+            for trial in checkpoint.trials
+            if not isinstance(trial, SampledInvalidCandidateTrial)
+        }
+        fine_blocks = {
+            trial.comparison.evidence.plan.block_id
+            for trial in checkpoint.fine_trials
+            if trial.comparison is not None
+        }
+        if checkpoint.active_block is not None:
+            target = fine_blocks if checkpoint.coarse_stopped else coarse_blocks
+            target.add(checkpoint.active_block.plan.block_id)
+        expected.update(
+            section_search_enabled=True,
+            max_coarse_comparisons=sections.max_coarse_comparisons,
+            max_fine_comparisons=sections.max_fine_comparisons,
+            coarse_comparisons_used=len(coarse_blocks),
+            fine_comparisons_used=len(fine_blocks),
+            coarse_search_stopped=checkpoint.coarse_stopped,
+            coarse_candidate_digest=checkpoint.coarse_candidate_digest,
+            coarse_stop_reason=checkpoint.coarse_stop_reason,
+            coarse_final_sweep_complete=checkpoint.final_sweep_complete,
+            fine_search_complete=checkpoint.fine_complete,
+            additional_removed_utf8_bytes=checkpoint.additional_removed_utf8_bytes,
+            minimum_removed_utf8_bytes=sections.minimum_removed_utf8_bytes,
+            additional_reduction_result=checkpoint.additional_reduction_result,
+        )
     if any(
         summary.get(key) != value
-        or (isinstance(value, int) and type(summary.get(key)) is not int)
-        or (isinstance(value, float) and type(summary.get(key)) not in (int, float))
+        or (type(value) in (int, bool) and type(summary.get(key)) is not type(value))
+        or (type(value) is float and type(summary.get(key)) not in (int, float))
         for key, value in expected.items()
     ):
         raise ValueError("sampled summary differs from recorded evidence")

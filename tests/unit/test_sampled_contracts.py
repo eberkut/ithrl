@@ -473,7 +473,7 @@ def test_unsafe_search_forbids_confirmation_and_premature_search_claims() -> Non
         _result(checkpoint, confirmation=_confirmation(candidate_digest=ORIGINAL))
     data = _result(checkpoint).model_dump()
     data["search_result"] = "search-reduced"
-    with pytest.raises(ValidationError, match="final sweep witness"):
+    with pytest.raises(ValidationError, match="recorded search coverage"):
         SampledReductionEvidence.model_validate(data)
     data["search_result"] = "search-1-minimal"
     with pytest.raises(ValidationError, match="search-reduced"):

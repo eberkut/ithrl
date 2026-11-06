@@ -204,7 +204,11 @@ def test_detects_support_from_structure_without_version_allowlist(
     assert capability.provider == "fixture-provider"
     assert capability.endpoint == "https://provider.invalid/v1/responses"
     assert capability.supported_targets == ("final-response",)
-    assert capability.supported_context_operations == ("dependency-closed-removal", "append-text")
+    assert capability.supported_context_operations == (
+        "dependency-closed-removal",
+        "append-text",
+        "remove-text-sections",
+    )
     assert capability.action_execution == "denied"
     assert capability.provider_calls_per_attempt == (
         16 if selected_limit is None else selected_limit

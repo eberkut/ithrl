@@ -14,6 +14,7 @@ from ithrl.context import ContextGraphError, content_digest
 from ithrl.execution import ResolvedExecutionPlan, ResourceLimits, SafetyPolicy
 from ithrl.experiment import SampledExperimentDefinition
 from ithrl.measurement import RunnerExecutionError, observe_once
+from ithrl.mutation import TextMutation
 from ithrl.observations import (
     Observation,
     ObservationArm,
@@ -37,10 +38,15 @@ from ithrl.reduce.contracts import (
     SampledComparison,
     SampledInvalidCandidateTrial,
     SampledReductionCheckpoint,
+    SampledSectionTrial,
     SampledTrial,
     SearchPhase,
+    section_candidates,
+    section_trial_key,
     trial_key,
     validate_checkpoint_identity,
+    validate_section_checkpoint,
+    validate_section_search,
 )
 from ithrl.reduce.search import run_search
 from ithrl.runner import Candidate, PreparedAttempt, Runner, prepare_candidate
@@ -469,7 +475,7 @@ class SampledSearchResult:
 
     @property
     def status(self) -> Literal["search-reduced", "search-incomplete"]:
-        return "search-reduced" if self.checkpoint.final_sweep_complete else "search-incomplete"
+        return "search-reduced" if self.checkpoint.search_complete else "search-incomplete"
 
 
 class SampledReducer:
@@ -503,6 +509,10 @@ class SampledReducer:
         self._unclassified: SamplingBlockEvidence | None = None
         self._active: SamplingBlockEvidence | None = None
         self._stop_reason: str | None = None
+        self._fine_trials: list[SampledSectionTrial] = []
+        self._fine_complete = False
+        self._coarse_stopped = False
+        self._coarse_stop_reason: str | None = None
 
     async def validate_resume(self, evidence: CaseEvidence) -> None:
         """Validate authoritative membership and generator order without runner execution."""
@@ -566,16 +576,15 @@ class SampledReducer:
         published = (
             ()
             if checkpoint is None
-            else tuple(
-                trial.comparison.evidence
-                for trial in checkpoint.trials
-                if isinstance(trial, SampledCandidateTrial)
-            )
+            else tuple(block for block in checkpoint.blocks if block is not checkpoint.active_block)
         )
         if blocks[: len(published)] != published or len(blocks) > len(published) + 1:
             raise ResumeMismatchError("checkpoint omits or reorders authoritative search blocks")
         if checkpoint is not None and checkpoint.reduction != self._reduction:
             raise ResumeMismatchError("checkpoint uses another frozen reduction plan")
+        validate_section_search(evidence, self._reduction)
+        if checkpoint is not None:
+            validate_section_checkpoint(evidence, checkpoint)
         self._state = state
         self._resume = checkpoint
         self._active = None
@@ -584,7 +593,9 @@ class SampledReducer:
             raise ResumeMismatchError("unclassified search blocks cannot be archived or redrawn")
         outcome = await self._run_search(evidence, publish=False)
         if checkpoint is not None:
-            if checkpoint.final_sweep_complete and self._unclassified is not None:
+            if (
+                checkpoint.search_complete or checkpoint.fine_complete
+            ) and self._unclassified is not None:
                 raise ResumeMismatchError("completed search contains an unclassified block")
             expected = self._make_checkpoint(
                 outcome.removed, outcome.trials, outcome.complete, evidence=evidence
@@ -592,6 +603,10 @@ class SampledReducer:
             if (
                 checkpoint.removed_context_ids != expected.removed_context_ids
                 or checkpoint.best_candidate_digest != expected.best_candidate_digest
+                or checkpoint.selected_mutation != expected.selected_mutation
+                or checkpoint.fine_trials != expected.fine_trials
+                or (checkpoint.fine_complete and not expected.fine_complete)
+                or checkpoint.coarse_stopped != expected.coarse_stopped
                 or (
                     checkpoint.final_sweep_complete
                     and (
@@ -637,6 +652,10 @@ class SampledReducer:
             valid += item.valid
 
     async def _run_search(self, evidence: CaseEvidence, *, publish: bool):
+        self._fine_trials = []
+        self._fine_complete = False
+        self._coarse_stopped = False
+        self._coarse_stop_reason = None
         prior = deque(self._resume.trials if self._resume is not None else ())
         outcome = await run_search(
             evidence,
@@ -652,7 +671,141 @@ class SampledReducer:
         )
         if prior:
             raise ResumeMismatchError("sampled trials do not follow the existing candidate order")
+        config = self._reduction.section_search
+        if config is not None:
+            safe = self._stop_reason in {
+                None,
+                "candidate-limit",
+                "trial-limit",
+                "provider-call-budget",
+                "wall-time-budget",
+                "freshness-budget",
+                "attempt-limit",
+            }
+            stopped = (self._resume is not None and self._resume.coarse_stopped) or (
+                publish
+                and safe
+                and self._active is None
+                and self._unclassified is None
+                and all(trial.allows_search_continuation for trial in outcome.trials)
+            )
+            if stopped:
+                self._coarse_stopped = True
+                self._coarse_stop_reason = (
+                    self._resume.coarse_stop_reason
+                    if self._resume is not None and self._resume.coarse_stopped
+                    else self._stop_reason
+                )
+                if publish and not (self._resume is not None and self._resume.coarse_stopped):
+                    self._publish_checkpoint(
+                        outcome.removed, outcome.trials, outcome.complete, evidence=evidence
+                    )
+                self._stop_reason = None
+                await self._run_fine(
+                    evidence, outcome.removed, outcome.trials, outcome.complete, publish=publish
+                )
         return outcome
+
+    async def _run_fine(
+        self,
+        evidence: CaseEvidence,
+        removed: frozenset[str],
+        coarse_trials: Sequence[SampledTrial],
+        coarse_complete: bool,
+        *,
+        publish: bool,
+    ) -> None:
+        """Traverse each frozen retained field against the same full original."""
+
+        config = self._reduction.section_search
+        if config is None:
+            raise RuntimeError("finer search requires its frozen configuration")
+        catalogs = validate_section_search(evidence, self._reduction)
+        catalogs_by_field = {(c.context_id, c.content_index): c for c in catalogs}
+        prior = deque(self._resume.fine_trials if self._resume is not None else ())
+        candidates = section_candidates(self._reduction, tuple(sorted(removed)))
+        item = next(candidates, None)
+        while item is not None:
+            field, base, requested, phase = item
+            key = section_trial_key(field, phase, base, requested)
+            replay = prior.popleft() if prior else None
+            if replay is not None and replay.trial_key != key:
+                raise ResumeMismatchError("finer trials do not follow the frozen traversal")
+            if replay is None and (
+                len(coarse_trials) + len(self._fine_trials) >= MAX_CANDIDATE_RUNS
+                or sum(t.comparison is not None for t in self._fine_trials)
+                >= config.max_fine_comparisons
+            ):
+                self._stop_reason = "candidate-limit"
+                break
+            selected = {*base, *requested}
+            edit = field.model_copy(
+                update={
+                    "section_ids": tuple(unit for unit in field.section_ids if unit in selected)
+                }
+            )
+            mutation = TextMutation(edits=(edit,))
+            catalog = catalogs_by_field[(field.context_id, field.content_index)]
+            size = sum(unit.utf8_bytes for unit in catalog.sections if unit.id in selected)
+            try:
+                candidate = prepare_candidate(
+                    evidence, self._prepared.execution_plan, removed, mutation=mutation
+                )
+                self._validate_candidate_admission(evidence, candidate, arm="candidate")
+            except CandidateInvalidError:
+                trial = SampledSectionTrial(
+                    trial_key=key,
+                    field=field,
+                    base_section_ids=base,
+                    requested_section_ids=requested,
+                    phase=phase,
+                    mutation=mutation,
+                    removed_utf8_bytes=size,
+                )
+                if replay is not None and replay != trial:
+                    raise ResumeMismatchError(
+                        "finer refusal differs from current admission"
+                    ) from None
+                if replay is None and self._unclassified is not None:
+                    raise ResumeMismatchError(
+                        "finer block belongs to an inadmissible candidate"
+                    ) from None
+                if replay is None and not publish:
+                    break
+            else:
+                if replay is not None:
+                    if replay.comparison is None or replay.mutation != mutation:
+                        raise ResumeMismatchError("finer trial differs from source construction")
+                    self._validate_plan(replay.comparison.evidence.plan, key, candidate.digest)
+                    trial = replay
+                else:
+                    comparison = await self._collect_comparison(
+                        evidence, candidate, removed, key, mutation=mutation, publish=publish
+                    )
+                    if comparison is None:
+                        break
+                    trial = SampledSectionTrial(
+                        trial_key=key,
+                        field=field,
+                        base_section_ids=base,
+                        requested_section_ids=requested,
+                        phase=phase,
+                        mutation=mutation,
+                        removed_utf8_bytes=size,
+                        comparison=comparison,
+                    )
+            self._fine_trials.append(trial)
+            if publish and replay is None:
+                self._publish_checkpoint(removed, coarse_trials, coarse_complete, evidence=evidence)
+            if not trial.allows_search_continuation:
+                break
+            try:
+                item = candidates.send(trial)
+            except StopIteration:
+                item = None
+        if prior:
+            raise ResumeMismatchError("finer checkpoint contains trials outside the frozen path")
+        self._fine_complete = item is None
 
     async def _classify(
         self,
@@ -671,6 +824,15 @@ class SampledReducer:
             raise ResumeMismatchError("sampled trials do not follow the existing candidate order")
         base = tuple(sorted(base_removals))
         requested = tuple(requested_removals)
+        config = self._reduction.section_search
+        if prior is None and config is not None:
+            if self._resume is not None and self._resume.coarse_stopped:
+                self._stop_reason = self._resume.coarse_stop_reason
+                return None
+            comparisons = sum(isinstance(t, SampledCandidateTrial) for t in completed_trials)
+            if comparisons >= config.max_coarse_comparisons:
+                self._stop_reason = "candidate-limit"
+                return None
         if prior is None and publish and len(completed_trials) >= MAX_CANDIDATE_RUNS:
             self._stop_reason = "trial-limit"
             return None
@@ -719,6 +881,32 @@ class SampledReducer:
                 )
             self._validate_plan(prior.comparison.evidence.plan, key, candidate.digest)
             return prior
+        comparison = await self._collect_comparison(
+            evidence, candidate, effective, key, publish=publish
+        )
+        if comparison is None:
+            return None
+        return SampledCandidateTrial(
+            trial_key=key,
+            base_removals=base,
+            requested_removals=requested,
+            effective_removals=tuple(sorted(effective)),
+            phase=phase,
+            comparison=comparison,
+        )
+
+    async def _collect_comparison(
+        self,
+        evidence: CaseEvidence,
+        candidate: Candidate,
+        removed: frozenset[str],
+        key: str,
+        *,
+        mutation: TextMutation | None = None,
+        publish: bool,
+    ) -> SampledComparison | None:
+        """Validate or collect one original/candidate block with shared recovery policy."""
+
         plan = (
             self._unclassified.plan
             if self._unclassified is not None
@@ -735,7 +923,8 @@ class SampledReducer:
             evidence=evidence,
             original=self._prepared,
             candidate=self._prepared,
-            removed_context_ids=tuple(sorted(effective)),
+            removed_context_ids=tuple(sorted(removed)),
+            mutation=mutation,
             plan=plan,
             state_file=self._state_file,
             store=self._store,
@@ -754,14 +943,7 @@ class SampledReducer:
             ):
                 self._active = result.evidence
             return None
-        return SampledCandidateTrial(
-            trial_key=key,
-            base_removals=base,
-            requested_removals=requested,
-            effective_removals=tuple(sorted(effective)),
-            phase=phase,
-            comparison=SampledComparison.from_evidence(result.evidence),
-        )
+        return SampledComparison.from_evidence(result.evidence)
 
     def _validate_candidate_admission(
         self, evidence: CaseEvidence, candidate: Candidate, *, arm: Literal["baseline", "candidate"]
@@ -848,19 +1030,37 @@ class SampledReducer:
             if final_sweep_complete
             else ()
         )
+        coarse = prepare_candidate(evidence, self._prepared.execution_plan, removed_ids)
+        selected_mutation = TextMutation()
+        selected_digest = coarse.digest
+        selected_size = 0
+        for trial in self._fine_trials:
+            if (
+                trial.accepts_removal
+                and trial.removed_utf8_bytes > selected_size
+                and trial.comparison is not None
+            ):
+                selected_mutation = trial.mutation
+                selected_digest = trial.comparison.evidence.plan.candidate_digest
+                selected_size = trial.removed_utf8_bytes
         return SampledReductionCheckpoint(
             reduction=self._reduction,
             original_identity=state.original_identity,
             original_candidate_digest=state.original_candidate_digest,
-            best_candidate_digest=prepare_candidate(
-                evidence, self._prepared.execution_plan, removed_ids
-            ).digest,
+            best_candidate_digest=selected_digest,
             removed_context_ids=removed_ids,
             trials=trials,
             active_block=self._active,
             final_sweep_complete=final_sweep_complete,
             final_sweep_trial_keys=final_trials,
             expected_final_neighbors=neighbors,
+            coarse_stopped=self._coarse_stopped,
+            coarse_candidate_digest=coarse.digest if self._coarse_stopped else None,
+            coarse_stop_reason=self._coarse_stop_reason,
+            fine_trials=tuple(self._fine_trials),
+            selected_mutation=selected_mutation,
+            additional_removed_utf8_bytes=selected_size,
+            fine_complete=self._fine_complete,
         )
 
     def _publish_checkpoint(
@@ -889,10 +1089,10 @@ class SampledReducer:
             and state.blocks
             and not state.blocks[-1].archived
             and any(
-                isinstance(trial, SampledCandidateTrial)
-                and trial.comparison.evidence.plan.digest == state.blocks[-1].plan.digest
-                and trial.allows_search_continuation
-                for trial in checkpoint.trials
+                block.plan.digest == state.blocks[-1].plan.digest
+                and block.complete
+                and block.eligible
+                for block in checkpoint.blocks
             )
         ):
             self._state = self._state_file.archive_block(self._store)

@@ -14,7 +14,7 @@ import pytest
 from pydantic import ValidationError
 
 import ithrl.sampling as sampling_module
-from ithrl.behavior import ShellActionTarget
+from ithrl.behavior import FinalResponseTarget, ShellActionTarget
 from ithrl.case import (
     CaptureFacts,
     CaseEvidence,
@@ -34,8 +34,10 @@ from ithrl.experiment import (
     SampledSearchPhase,
     SamplingArmTarget,
     StructuralOracleConfig,
+    TextSectionSearchPlan,
 )
 from ithrl.measurement import observe_once
+from ithrl.mutation import MutationError
 from ithrl.observations import Observation, ObservationStore, SamplingBudgetAllowance
 from ithrl.reduce import (
     ReductionError,
@@ -67,6 +69,7 @@ from ithrl.runner import (
 )
 from ithrl.runner.contracts import CandidateInvalidError
 from ithrl.workflow import (
+    PreflightRefusedError,
     PreparedExperiment,
     SampledPhaseOutcome,
     prepare_experiment,
@@ -87,6 +90,8 @@ class ScreenRunner:
         self.calls: list[PreparedAttempt] = []
         self.counts: Counter[tuple[str, str, str]] = Counter()
         self.confirmation_matches: int | RunnerErrorCode | None = None
+        self.section_behavior: Callable[[PreparedAttempt], bool] | None = None
+        self.admission: Callable[[PreparedAttempt], None] | None = None
         self.capability_profile = CapabilityProfile.deterministic_fake().model_copy(
             update={
                 "runner_type": "codex",
@@ -102,6 +107,10 @@ class ScreenRunner:
     def fingerprint(self) -> str:
         return "credential-free-sampled-reduction"
 
+    def validate_candidate(self, attempt: PreparedAttempt) -> None:
+        if self.admission is not None:
+            self.admission(attempt)
+
     async def run(self, attempt: PreparedAttempt) -> RunResult:
         self.calls.append(attempt)
         key = (attempt.phase, attempt.arm, attempt.candidate.digest)
@@ -109,6 +118,8 @@ class ScreenRunner:
         self.counts[key] += 1
         removed = frozenset(attempt.candidate.removed_context_ids)
         matches = self.samples if not removed else self.behavior(removed, index // self.samples)
+        if self.section_behavior is not None:
+            matches = self.samples if self.section_behavior(attempt) else 0
         if (
             attempt.phase == "confirmation"
             and attempt.arm == "candidate"
@@ -126,8 +137,11 @@ class ScreenRunner:
                 endpoint=_ENDPOINT,
                 effective_policy_digest=attempt.safety_policy.digest,
             )
+        hit = index % self.samples < matches
         tools = (
-            (ToolCall(name="exec_command", arguments={}),) if index % self.samples < matches else ()
+            ((ToolCall(name="exec_command", arguments={}),) if hit else ())
+            if not isinstance(attempt.target, FinalResponseTarget)
+            else ()
         )
         return RunResult(
             attempt_id=attempt.attempt_id,
@@ -137,6 +151,9 @@ class ScreenRunner:
             provider=_PROVIDER,
             endpoint=_ENDPOINT,
             tool_calls=tools,
+            final_text=("kept" if hit else "dropped")
+            if isinstance(attempt.target, FinalResponseTarget)
+            else None,
             usage=TokenUsage(input_tokens=10, output_tokens=2),
             accounting=RunAccounting(
                 provider_calls_started=1,
@@ -195,12 +212,20 @@ def _fixture(
     protected: frozenset[str] = frozenset(),
     calibration: bool = True,
     run_id: str = "sampled-search",
+    section_texts: tuple[str, ...] | None = None,
+    coarse_limit: int = 1,
+    fine_limit: int = 8,
+    protected_section_indices: tuple[int, ...] = (),
 ) -> SearchFixture:
     runner = ScreenRunner(behavior or (lambda removed, _: int("ctx-a" not in removed)), samples)
     items: list[JsonValue] = [{"role": "user", "content": marker} for marker in markers]
+    if section_texts is not None:
+        items = [{"role": "user", "content": text} for text in section_texts]
     arm = SamplingArmTarget(required_valid=samples, max_attempts=samples)
     experiment = SampledExperimentDefinition(
-        target=ShellActionTarget(tool_name_equals="exec_command"),
+        target=FinalResponseTarget(text_contains="kept")
+        if section_texts is not None
+        else ShellActionTarget(tool_name_equals="exec_command"),
         oracle=StructuralOracleConfig(),
         runner=NativeRunnerConfig(
             type="codex", required_capability_digest=runner.capability_profile.digest
@@ -247,6 +272,38 @@ def _fixture(
         ),
         default_experiment=experiment.to_toml(),
     )
+    if section_texts is not None:
+        fields = tuple(
+            catalog.removal(
+                tuple(
+                    s.id
+                    for index, s in enumerate(catalog.sections)
+                    if index not in protected_section_indices
+                )
+            )
+            for catalog in evidence.text_sections()
+        )
+        reduction = experiment.reduction
+        assert reduction is not None
+        experiment = experiment.model_copy(
+            update={
+                "reduction": reduction.model_copy(
+                    update={
+                        "section_search": TextSectionSearchPlan(
+                            fields=fields,
+                            max_coarse_comparisons=coarse_limit,
+                            max_fine_comparisons=fine_limit,
+                        )
+                    }
+                )
+            }
+        )
+        evidence = CaseEvidence(
+            manifest=evidence.manifest,
+            request=evidence.request,
+            context=evidence.context,
+            default_experiment=experiment.to_toml(),
+        )
     prepared = prepare_experiment(
         evidence,
         registry=RunnerRegistry({"codex": lambda _config, _evidence: runner}),
@@ -604,6 +661,347 @@ def test_interruption_resumes_exact_partial_or_completed_unclassified_block(
     assert completed.checkpoint.blocks[0].attempts[:after] == block.attempts
     identities = [attempt.attempt_id for attempt in fixture.runner.calls]
     assert len(identities) == len(set(identities))
+
+
+def _section_fixture(tmp_path: Path, **kwargs: Any) -> SearchFixture:
+    fixture = _fixture(
+        tmp_path,
+        markers="ABC",
+        protected=frozenset("C"),
+        section_texts=(
+            "keep\n\nremovable \u03b1\r\n\r\nmore",
+            "other\n\nlarge removable field",
+            "fixed",
+        ),
+        **kwargs,
+    )
+    fixture.runner.section_behavior = lambda attempt: (
+        not attempt.candidate.mutation.is_empty
+        or "ctx-a" not in attempt.candidate.removed_context_ids
+    )
+    return fixture
+
+
+def _input_text(request: dict[str, JsonValue], position: int) -> str:
+    inputs = request["input"]
+    assert isinstance(inputs, list)
+    message = inputs[position]
+    assert isinstance(message, dict)
+    text = message["content"]
+    assert isinstance(text, str)
+    return text
+
+
+def test_fine_search_freezes_coarse_and_selects_best_one_field(tmp_path: Path) -> None:
+    fixture = _section_fixture(tmp_path, coarse_limit=1, fine_limit=8)
+    original = fixture.evidence.request
+    result = fixture.run()
+    checkpoint = result.checkpoint
+    assert checkpoint.coarse_stopped
+    assert len(checkpoint.trials) == 1
+    assert checkpoint.coarse_candidate_digest is not None
+    assert checkpoint.fine_trials
+    assert checkpoint.selected_mutation.edits[0].context_id == "ctx-b"
+    assert checkpoint.additional_removed_utf8_bytes == len(b"other\n\nlarge removable field")
+    assert all(len(trial.mutation.edits) == 1 for trial in checkpoint.fine_trials)
+    assert all(
+        block.plan.original_candidate_digest == checkpoint.original_candidate_digest
+        for block in checkpoint.blocks
+    )
+    assert fixture.evidence.request == original
+    assert _input_text(
+        fixture.evidence.materialize(
+            checkpoint.removed_context_ids, mutation=checkpoint.selected_mutation
+        ),
+        -1,
+    ) == _input_text(original, -1)
+    calls = len(fixture.runner.calls)
+    assert fixture.run().checkpoint == checkpoint
+    assert len(fixture.runner.calls) == calls
+
+
+def test_fine_independent_ceiling_does_not_borrow_coarse_capacity(tmp_path: Path) -> None:
+    fixture = _section_fixture(tmp_path, coarse_limit=8, fine_limit=1)
+    fixture.runner.section_behavior = lambda attempt: (
+        not attempt.candidate.mutation.is_empty or not attempt.candidate.removed_context_ids
+    )
+    result = fixture.run()
+    assert result.checkpoint.final_sweep_complete
+    assert result.checkpoint.coarse_stopped
+    assert not result.checkpoint.fine_complete
+    assert sum(t.comparison is not None for t in result.checkpoint.fine_trials) == 1
+    assert result.stop_reason == "candidate-limit"
+    calls = len(fixture.runner.calls)
+    assert fixture.run().checkpoint == result.checkpoint
+    assert len(fixture.runner.calls) == calls
+
+
+def test_completed_fine_search_refuses_extra_authoritative_block(
+    tmp_path: Path,
+) -> None:
+    fixture = _section_fixture(tmp_path, coarse_limit=0)
+    checkpoint = fixture.run().checkpoint
+    assert not checkpoint.final_sweep_complete
+    assert checkpoint.fine_complete
+    assert len(checkpoint.blocks) == 4
+    trial = checkpoint.fine_trials[-1]
+    assert trial.comparison is not None
+    extra = asyncio.run(
+        sampling_module.collect_sampling_block(
+            evidence=fixture.evidence,
+            original=fixture.prepared,
+            candidate=fixture.prepared,
+            removed_context_ids=checkpoint.removed_context_ids,
+            mutation=trial.mutation,
+            plan=trial.comparison.evidence.plan.model_copy(
+                update={
+                    "block_id": "search-unexpected-after-fine-completion",
+                    "frozen_at": datetime.now(UTC),
+                }
+            ),
+            state_file=fixture.state_file,
+            store=fixture.store,
+        )
+    )
+    assert extra.complete
+    with fixture.state_file.acquire_lock(fixture.store):
+        assert len(fixture.state_file.evidence(fixture.store)) == 5
+    calls = tuple(fixture.runner.calls)
+    with pytest.raises(
+        ResumeMismatchError, match="completed search contains an unclassified block"
+    ):
+        asyncio.run(fixture.reducer().validate_resume(fixture.evidence))
+    assert tuple(fixture.runner.calls) == calls
+
+
+@pytest.mark.parametrize("after", [1, 2])
+def test_fine_interruption_after_complete_coarse_resumes_exact_block(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    after: int,
+) -> None:
+    fixture = _section_fixture(tmp_path, coarse_limit=8, fine_limit=8)
+    fixture.runner.section_behavior = lambda attempt: (
+        not attempt.candidate.mutation.is_empty or not attempt.candidate.removed_context_ids
+    )
+    original = sampling_module.observe_once
+    count = 0
+
+    async def interrupted(**kwargs: Any):
+        nonlocal count
+        observed = await original(**kwargs)
+        if kwargs["attempt"].candidate.mutation.is_empty and kwargs["attempt"].arm == "candidate":
+            return observed
+        state = fixture.state_file.load(fixture.store)
+        if state.checkpoint is not None and state.checkpoint.coarse_stopped:
+            count += 1
+            if count == after:
+                raise asyncio.CancelledError
+        return observed
+
+    with monkeypatch.context() as patch:
+        patch.setattr(sampling_module, "observe_once", interrupted)
+        stopped = fixture.run()
+    assert stopped.stop_reason == "user-interrupt"
+    assert stopped.checkpoint.final_sweep_complete
+    assert stopped.checkpoint.active_block is not None or after == 2
+    resumed = fixture.run()
+    assert resumed.checkpoint.fine_complete
+    assert resumed.checkpoint.blocks[-1].complete
+    attempt_ids = [attempt.attempt_id for attempt in fixture.runner.calls]
+    assert len(attempt_ids) == len(set(attempt_ids))
+
+
+def test_fine_no_retained_field_records_limiting_criterion(tmp_path: Path) -> None:
+    fixture = _section_fixture(tmp_path, coarse_limit=8)
+    fixture.runner.section_behavior = lambda _attempt: True
+    result = fixture.run()
+    assert result.checkpoint.fine_complete
+    assert result.checkpoint.fine_trials == ()
+    assert result.checkpoint.additional_reduction_result == "no-retained-fields"
+
+
+def test_fine_protected_units_remain_in_each_single_field_candidate(tmp_path: Path) -> None:
+    fixture = _section_fixture(tmp_path, protected_section_indices=(0,))
+    result = fixture.run()
+    for trial in result.checkpoint.fine_trials:
+        request = fixture.evidence.materialize(
+            result.checkpoint.removed_context_ids, mutation=trial.mutation
+        )
+        assert _input_text(request, 0).startswith("keep\n\n")
+        assert _input_text(request, 1).startswith("other\n\n")
+        assert _input_text(request, -1) == "fixed"
+
+
+def test_fine_local_refusals_allocate_no_sampling_blocks(tmp_path: Path) -> None:
+    fixture = _section_fixture(tmp_path, coarse_limit=0)
+
+    def refuse_sections(attempt: PreparedAttempt) -> None:
+        if not attempt.candidate.mutation.is_empty:
+            raise CandidateInvalidError("synthetic section refusal")
+
+    fixture.runner.admission = refuse_sections
+    result = fixture.run()
+    assert result.checkpoint.fine_complete
+    assert result.checkpoint.fine_trials
+    assert all(t.comparison is None for t in result.checkpoint.fine_trials)
+    assert result.checkpoint.blocks == ()
+    assert len(fixture.runner.calls) == 1
+
+
+def test_fine_admission_reserves_fresh_confirmation_capacity(tmp_path: Path) -> None:
+    fixture = _section_fixture(tmp_path, coarse_limit=0, calls=4)
+    result = fixture.run()
+    assert result.stop_reason == "provider-call-budget"
+    assert result.checkpoint.coarse_stopped
+    assert not result.checkpoint.fine_complete
+    assert result.checkpoint.fine_trials == ()
+    assert result.checkpoint.active_block is None
+    assert len(fixture.runner.calls) == 1
+
+
+def test_fine_unresolved_dispatch_remains_charged_without_replay(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _section_fixture(tmp_path, coarse_limit=0)
+
+    async def unrecorded(**_kwargs: Any):
+        raise asyncio.CancelledError
+
+    with monkeypatch.context() as patch:
+        patch.setattr(sampling_module, "observe_once", unrecorded)
+        stopped = fixture.run()
+    assert stopped.checkpoint.coarse_stopped
+    assert stopped.usage.pending_provider_calls == 1
+    resumed = fixture.run()
+    assert resumed.stop_reason == "unresolved-dispatch"
+    assert resumed.usage.pending_provider_calls == 1
+    assert len(fixture.runner.calls) == 1
+
+
+def test_fine_checkpoint_refuses_tampered_source_byte_counts(tmp_path: Path) -> None:
+    from ithrl.reduce.contracts import validate_section_checkpoint
+
+    fixture = _section_fixture(tmp_path)
+    checkpoint = fixture.run().checkpoint
+    first, *rest = checkpoint.fine_trials
+    forged = checkpoint.model_copy(
+        update={
+            "fine_trials": (
+                first.model_copy(update={"removed_utf8_bytes": first.removed_utf8_bytes + 1}),
+                *rest,
+            )
+        }
+    )
+    with pytest.raises(ResumeMismatchError, match="byte count"):
+        validate_section_checkpoint(fixture.evidence, forged)
+
+
+@pytest.mark.parametrize("change", ["source", "policy", "order", "shell-target"])
+def test_fine_preflight_refuses_stale_or_unsupported_plan_before_execution(
+    tmp_path: Path,
+    change: str,
+) -> None:
+    fixture = _section_fixture(tmp_path)
+    experiment = fixture.prepared.experiment
+    assert isinstance(experiment, SampledExperimentDefinition)
+    reduction = experiment.reduction
+    assert reduction is not None
+    assert reduction.section_search is not None
+    config = reduction.section_search
+    field, *rest = config.fields
+    if change == "shell-target":
+        experiment = experiment.model_copy(
+            update={"target": ShellActionTarget(tool_name_equals="exec_command")}
+        )
+    else:
+        updated = field.model_copy(
+            update={
+                "original_text_digest": "0" * 64,
+            }
+            if change == "source"
+            else {
+                "policy_digest": "0" * 64,
+            }
+            if change == "policy"
+            else {"section_ids": tuple(reversed(field.section_ids))}
+        )
+        experiment = experiment.model_copy(
+            update={
+                "reduction": reduction.model_copy(
+                    update={
+                        "section_search": config.model_copy(update={"fields": (updated, *rest)})
+                    }
+                )
+            }
+        )
+    calls = len(fixture.runner.calls)
+    with pytest.raises(PreflightRefusedError):
+        prepare_experiment(
+            fixture.evidence,
+            experiment=experiment,
+            registry=RunnerRegistry({"codex": lambda _config, _evidence: fixture.runner}),
+            safety_policy=fixture.prepared.safety_policy,
+            resource_limits=fixture.prepared.resource_limits,
+        )
+    assert len(fixture.runner.calls) == calls
+
+
+def test_fine_experiment_toml_round_trip_binds_eligible_order_and_budget(tmp_path: Path) -> None:
+    fixture = _section_fixture(tmp_path, protected_section_indices=(0,))
+    experiment = fixture.prepared.experiment
+    assert isinstance(experiment, SampledExperimentDefinition)
+    assert SampledExperimentDefinition.from_toml(experiment.to_toml()) == experiment
+    reduction = experiment.reduction
+    assert reduction is not None
+    assert reduction.section_search is not None
+    config = reduction.section_search
+    changed = experiment.model_copy(
+        update={
+            "reduction": reduction.model_copy(
+                update={
+                    "section_search": config.model_copy(update={"max_fine_comparisons": 7}),
+                }
+            )
+        }
+    )
+    assert changed.digest != experiment.digest
+
+
+def test_unconfigured_section_collection_refuses_before_lock_or_dispatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _section_fixture(tmp_path)
+    checkpoint = fixture.run().checkpoint
+    trial = checkpoint.fine_trials[0]
+    assert trial.comparison is not None
+    plan = trial.comparison.evidence.plan.model_copy(
+        update={
+            "procedure": checkpoint.reduction.model_copy(update={"section_search": None}),
+        }
+    )
+
+    def no_lock(*_args: Any, **_kwargs: Any):
+        raise AssertionError("unconfigured sections must be refused before locking")
+
+    monkeypatch.setattr(fixture.state_file, "acquire_lock", no_lock)
+    calls = len(fixture.runner.calls)
+    with pytest.raises(MutationError, match="outside its frozen plan"):
+        asyncio.run(
+            sampling_module.collect_sampling_block(
+                evidence=fixture.evidence,
+                original=fixture.prepared,
+                candidate=fixture.prepared,
+                removed_context_ids=checkpoint.removed_context_ids,
+                mutation=trial.mutation,
+                plan=plan,
+                state_file=fixture.state_file,
+                store=fixture.store,
+            )
+        )
+    assert len(fixture.runner.calls) == calls
 
 
 def test_unrecorded_dispatch_remains_charged_and_is_never_replayed(

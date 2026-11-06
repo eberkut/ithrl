@@ -240,7 +240,8 @@ def test_sampled_reduction_round_trip_has_only_nested_phase_sections() -> None:
     assert raw["schema_version"] == 1
     assert raw["kind"] == "sampled"
     assert experiment.reduction is not None
-    assert raw["reduction"] == experiment.reduction.model_dump()
+    assert raw["reduction"] == experiment.reduction.model_dump(exclude_none=True)
+    assert "section_search" not in raw["reduction"]
     for phase_name in ("search", "confirmation"):
         assert f"[reduction.{phase_name}]" in rendered
         for arm_name in ("original", "candidate"):

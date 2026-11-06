@@ -43,6 +43,7 @@ from ithrl.experiment import (
     SampledReductionPlan,
     SampledSearchPhase,
     SamplingArmTarget,
+    TextSectionSearchPlan,
 )
 from ithrl.extraction import extract_decision
 from ithrl.observations import ObservationStore
@@ -361,6 +362,106 @@ def _install_wall_clock(monkeypatch: pytest.MonkeyPatch) -> Callable[[int], None
 def _write_operator_experiment(case: OperatorCase, experiment: SampledExperimentDefinition) -> None:
     case.experiment_path.write_text(experiment.to_toml(), encoding="utf-8")
     case.frozen_files[case.experiment_path] = case.experiment_path.read_bytes()
+
+
+def _enable_section_search(case: OperatorCase) -> None:
+    experiment = case.selection.experiment
+    assert experiment.reduction is not None
+    catalog = next(
+        field
+        for field in case.evidence.text_sections()
+        if field.context_id == case.runner.planted_id
+    )
+    sections = TextSectionSearchPlan(
+        fields=(catalog.removal(tuple(section.id for section in catalog.sections)),),
+        max_coarse_comparisons=1,
+        max_fine_comparisons=2,
+        minimum_removed_utf8_bytes=1,
+    )
+    _write_operator_experiment(
+        case,
+        experiment.model_copy(
+            update={
+                "reduction": experiment.reduction.model_copy(update={"section_search": sections})
+            }
+        ),
+    )
+
+
+def test_section_search_cli_freezes_caps_and_dry_run_has_no_dispatch(
+    operator_case: OperatorCase,
+) -> None:
+    _enable_section_search(operator_case)
+    dry = _invoke(operator_case.command("--dry-run"))
+    assert dry.exit_code == ExitCode.SUCCESS, dry.output
+    report = _json(dry)
+    assert report["section_search_enabled"] is True
+    assert (report["max_coarse_comparisons"], report["max_fine_comparisons"]) == (1, 2)
+    assert report["max_attempts"] == 1 + 3 * 2 + 8
+    assert report["additional_reduction_result"] == "not-assessed"
+    _assert_no_dispatch(operator_case)
+
+
+def test_section_search_cli_confirms_selected_edit_and_resumes_without_replay(
+    operator_case: OperatorCase,
+) -> None:
+    _enable_section_search(operator_case)
+    completed = _invoke(operator_case.command())
+    assert completed.exit_code == ExitCode.SUCCESS, completed.output
+    report = _json(completed)
+    assert report["confirmation_result"] == "confirmed-preserving"
+    assert report["coarse_search_stopped"] is True
+    assert report["coarse_comparisons_used"] == 1
+    assert report["fine_comparisons_used"] == 1
+    assert report["additional_reduction_result"] == "criterion-met"
+    assert report["additional_removed_utf8_bytes"] == len(_PRIVATE_CONTEXT.encode("utf-8"))
+    destination = Path(report["result_path"])
+    saved = SampledReductionEvidence.model_validate_json((destination / "result.json").read_text())
+    checkpoint = saved.checkpoint
+    assert not checkpoint.selected_mutation.is_empty
+    assert saved.confirmation is not None
+    assert saved.confirmation.evidence.plan.candidate_digest == checkpoint.best_candidate_digest
+    assert all(
+        block.plan.original_candidate_digest == checkpoint.original_candidate_digest
+        for block in checkpoint.blocks
+    )
+    assert all(
+        call.candidate.mutation == checkpoint.selected_mutation
+        for call in operator_case.runner.calls
+        if call.phase == "confirmation" and call.arm == "candidate"
+    )
+    calls_before = tuple(operator_case.runner.calls)
+    resumed = _invoke(
+        [
+            "shrink",
+            str(destination),
+            "--resume",
+            "--acknowledge-model-execution",
+            "--max-provider-calls-per-attempt",
+            "1",
+            "--format",
+            "json",
+        ]
+    )
+    assert resumed.exit_code == ExitCode.SUCCESS, resumed.output
+    assert (
+        _json(resumed)["additional_removed_utf8_bytes"] == report["additional_removed_utf8_bytes"]
+    )
+    assert tuple(operator_case.runner.calls) == calls_before
+    inspected = _invoke(
+        [
+            "inspect",
+            "retained",
+            str(operator_case.workspace.root),
+            "--result",
+            str(destination),
+            "--format",
+            "json",
+        ]
+    )
+    assert inspected.exit_code == ExitCode.SUCCESS, inspected.output
+    _json(inspected)
+    operator_case.assert_sources_unchanged()
 
 
 @pytest.mark.parametrize("phase", ["calibration", "search", "confirmation"])
@@ -1183,9 +1284,12 @@ def test_unavailable_resume_metadata_preserves_recorded_work_accounting(
     operator_case.assert_sources_unchanged()
 
 
+@pytest.mark.parametrize("section_search", [False, True])
 def test_interruption_after_session_publication_can_resume_without_recreating_run(
-    operator_case: OperatorCase, monkeypatch: pytest.MonkeyPatch
+    operator_case: OperatorCase, monkeypatch: pytest.MonkeyPatch, section_search: bool
 ) -> None:
+    if section_search:
+        _enable_section_search(operator_case)
     save_session = sampled_reduction.save_cli_session
 
     def stop_after_publication(root: Path, session: SampledRunMetadata) -> None:

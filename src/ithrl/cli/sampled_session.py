@@ -27,11 +27,13 @@ from ithrl.case.filesystem import (
     validate_existing_root,
 )
 from ithrl.experiment import SampledExperimentDefinition
+from ithrl.mutation import TextMutation
 from ithrl.observations import ObservationStore, ObservationStoreError
 from ithrl.results import SampledReductionEvidence, write_sampling_snapshot
 from ithrl.results.validation import json_object, loads_json
 from ithrl.run_state import SampledRunState
 from ithrl.sampled_run_metadata import SampledRunMetadata
+from ithrl.text_sections import TextSectionRemoval
 
 _SESSION_FILE = "cli-session.json"
 _MAX_SESSION_BYTES = 1024 * 1024
@@ -174,6 +176,13 @@ def save_cli_result(
         removed = frozenset(result.checkpoint.removed_context_ids)
         if evidence.context.dependency_closure(removed) != removed:
             raise SampledCliSessionError("retained context does not match a valid removal")
+        mutation = TextMutation.model_validate_json(
+            result.checkpoint.selected_mutation.model_dump_json()
+        )
+        for edit in mutation.edits:
+            if not isinstance(edit, TextSectionRemoval) or edit.context_id in removed:
+                raise SampledCliSessionError("selected sections do not belong to retained context")
+            evidence.validate_text_sections(edit)
         retained = "".join(
             node.model_dump_json() + "\n"
             for node in evidence.context.nodes

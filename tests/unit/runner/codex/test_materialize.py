@@ -19,7 +19,7 @@ from ithrl.execution import (
 )
 from ithrl.experiment import ExperimentDefinition
 from ithrl.extraction import extract_decision
-from ithrl.mutation import TextAppend, TextMutation
+from ithrl.mutation import MutationError, TextAppend, TextMutation
 from ithrl.runner import PreparedAttempt, prepare_candidate
 from ithrl.runner.codex.materialize import (
     CodexMaterializationError,
@@ -55,6 +55,10 @@ def _evidence_with_field(
     records = [json.loads(line) for line in source.read_text(encoding="utf-8").splitlines()]
     record = next(item for item in records if item["type"] == record_type)
     record["payload"][field_name] = value
+    return _evidence_from_records(tmp_path, records)
+
+
+def _evidence_from_records(tmp_path: Path, records: list[dict[str, object]]) -> CaseEvidence:
     modified = tmp_path / "rollout.jsonl"
     modified.write_text(
         "".join(json.dumps(item, separators=(",", ":")) + "\n" for item in records),
@@ -70,6 +74,117 @@ def _evidence_with_field(
     ).load()
 
 
+@pytest.mark.parametrize("remove_all", [False, True])
+@pytest.mark.parametrize("coarse", [False, True])
+def test_section_removal_preserves_exact_native_history_and_trigger(
+    tmp_path: Path, remove_all: bool, coarse: bool
+) -> None:
+    records = [
+        json.loads(line)
+        for line in (FIXTURES / "codex-session/rollout.jsonl").read_bytes().splitlines()
+    ]
+    mixed = "Keep Ω and e\u0301.\r\n\r\nRemovable paragraph.\r\rFinal paragraph.\n"
+    payload = records[3]["payload"]
+    payload["content"] = [
+        {"type": "input_text", "text": mixed, "opaque": {"keep": True}},
+        {"type": "fixture.opaque", "payload": ["unchanged"]},
+    ]
+    payload["opaqueMetadata"] = {"keep": [1, True]}
+    earlier = {
+        "type": "response_item",
+        "timestamp": "2026-01-01T00:00:02.500Z",
+        "payload": {
+            "type": "message",
+            "id": "earlier-user",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "Earlier irrelevant context."}],
+        },
+    }
+    records.insert(3, earlier)
+    evidence = _evidence_from_records(tmp_path, records)
+    before = evidence.digest, evidence.source_artifacts, (tmp_path / "rollout.jsonl").read_bytes()
+    original = _attempt(evidence)
+    baseline = materialize_codex_attempt(original)
+    catalog = next(
+        c for c in evidence.text_sections() if c.original_text_digest == content_digest(mixed)
+    )
+    sections = catalog.sections if remove_all else catalog.sections[1:2]
+    mutation = TextMutation(edits=(catalog.removal(tuple(s.id for s in sections)),))
+    early_node = next(n for n in evidence.context.nodes if n.selector and n.selector.line == 4)
+    candidate = prepare_candidate(
+        evidence, original.execution_plan, (early_node.id,) if coarse else (), mutation=mutation
+    )
+
+    result = materialize_codex_attempt(replace(original, candidate=candidate))
+
+    expected_history = list(baseline.history)
+    edited = json.loads(json.dumps(payload))
+    edited["content"][0]["text"] = (
+        "" if remove_all else "Keep Ω and e\u0301.\r\n\r\nFinal paragraph.\n"
+    )
+    expected_history[1] = edited
+    if coarse:
+        del expected_history[0]
+    assert result == replace(baseline, history=tuple(expected_history))
+    assert (
+        evidence.digest,
+        evidence.source_artifacts,
+        (tmp_path / "rollout.jsonl").read_bytes(),
+    ) == before
+    assert materialize_codex_attempt(original) == baseline
+
+
+def test_section_empty_selection_is_identical_and_tampered_identity_is_terminal(
+    tmp_path: Path,
+) -> None:
+    original = _attempt(_evidence(tmp_path))
+    catalog = original.evidence.text_sections()[0]
+    empty = _with_mutation(original, TextMutation(edits=(catalog.removal(()),)))
+    assert empty.candidate == original.candidate
+    assert materialize_codex_attempt(empty) == materialize_codex_attempt(original)
+    mutation = TextMutation(edits=(catalog.removal((catalog.sections[0].id,)),))
+    changed = _with_mutation(original, mutation)
+    for field, value in (("original_text_digest", "f" * 64), ("policy_digest", "0" * 64)):
+        stale = mutation.edits[0].model_copy(update={field: value})
+        with pytest.raises(MutationError):
+            prepare_candidate(
+                original.evidence, original.execution_plan, mutation=TextMutation(edits=(stale,))
+            )
+    object.__setattr__(
+        changed,
+        "candidate",
+        changed.candidate.model_copy(update={"source_artifact_digests": ("0" * 64,)}),
+    )
+    with pytest.raises(CodexMaterializationError) as caught:
+        materialize_codex_attempt(changed)
+    assert caught.value.code is CodexMaterializationErrorCode.CHANGED_EVIDENCE
+    assert "Inspect" not in str(caught.value)
+
+
+def test_sections_refuse_removed_parent_and_preserve_fixed_tool_input(tmp_path: Path) -> None:
+    original = _attempt(_evidence(tmp_path))
+    catalog = original.evidence.text_sections()[0]
+    mutation = TextMutation(edits=(catalog.removal((catalog.sections[0].id,)),))
+    with pytest.raises(MutationError, match="whole-record dependency closure"):
+        prepare_candidate(
+            original.evidence,
+            original.execution_plan,
+            (catalog.context_id,),
+            mutation=mutation,
+        )
+    trigger = next(
+        node
+        for node in original.evidence.context.nodes
+        if node.kind == "response_item.custom_tool_call_output"
+    )
+    removed_trigger = prepare_candidate(
+        original.evidence, original.execution_plan, (trigger.id,), mutation=mutation
+    )
+    with pytest.raises(CodexMaterializationError) as caught:
+        materialize_codex_attempt(replace(original, candidate=removed_trigger))
+    assert caught.value.code is CodexMaterializationErrorCode.MISSING_TRIGGER
+
+
 def _attempt(evidence: CaseEvidence, *remove_ids: str) -> PreparedAttempt:
     experiment = ExperimentDefinition.from_toml(evidence.default_experiment)
     capability = CapabilityProfile(
@@ -82,7 +197,11 @@ def _attempt(evidence: CaseEvidence, *remove_ids: str) -> PreparedAttempt:
         deterministic=False,
         supported_capture_types=("logical-session",),
         supported_materializations=("source-backed",),
-        supported_context_operations=("dependency-closed-removal", "append-text"),
+        supported_context_operations=(
+            "dependency-closed-removal",
+            "append-text",
+            "remove-text-sections",
+        ),
         reconstruction_method="codex-app-server-inject-items-v1",
         supported_targets=("final-response",),
         provider_transport="required",

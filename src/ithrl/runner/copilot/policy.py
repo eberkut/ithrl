@@ -42,7 +42,7 @@ def target_policy(target: CopilotTarget) -> CopilotTargetPolicy:
             command_flags=(),
             action_visibility="not-applicable",
             action_denial="enforced",
-            context_operations=(CONTEXT_OPERATION, "append-text"),
+            context_operations=(CONTEXT_OPERATION, "append-text", "remove-text-sections"),
         )
     if target == "shell-action":
         return CopilotTargetPolicy(

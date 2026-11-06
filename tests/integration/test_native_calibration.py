@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import stat
 import subprocess
@@ -31,6 +32,7 @@ from ithrl.experiment import (
     SampledReductionPlan,
     SampledSearchPhase,
     SamplingArmTarget,
+    TextSectionSearchPlan,
 )
 from ithrl.observations import Observation, ObservationStore
 from ithrl.reduce.contracts import SampledCandidateTrial
@@ -45,7 +47,8 @@ from ithrl.runner.codex.protocol_contracts import MAX_INFERENCE_REQUESTS
 from ithrl.runner.copilot import CopilotRuntime, DetectedCopilotCapability
 from ithrl.runner.copilot.capability import CopilotCapabilityError, CopilotCapabilityErrorCode
 from ithrl.runner.copilot.isolation import program_digest
-from ithrl.runner.runtime import ProcessSpec
+from ithrl.runner.runtime import ProcessSpec, ProtectedOutputStore
+from ithrl.text_sections import TextSectionRemoval
 from live.test_native_smoke import test_native_smoke as run_smoke
 from native_support import codex, copilot
 from native_support.smoke import Profile, SmokeOptions, protected_tree
@@ -451,14 +454,21 @@ def _sampled_arguments(
 
 
 @pytest.mark.parametrize(
-    ("harness", "target"),
-    [("codex", "final-response"), ("copilot", "final-response"), ("copilot", "shell-action")],
+    ("harness", "target", "finer"),
+    [
+        ("codex", "final-response", False),
+        ("copilot", "final-response", False),
+        ("copilot", "shell-action", False),
+        ("codex", "final-response", True),
+        ("copilot", "final-response", True),
+    ],
 )
 def test_native_sampled_shrink_reduces_only_irrelevant_context_and_freshly_confirms(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     harness: Harness,
     target: Target,
+    finer: bool,
 ) -> None:
     scenario = _scenario(tmp_path, monkeypatch, harness, target, mode="context-sensitive")
     args, experiment, experiment_path = _sampled_arguments(scenario)
@@ -470,6 +480,26 @@ def test_native_sampled_shrink_reduces_only_irrelevant_context_and_freshly_confi
         if node.selector is not None
         and "ITHRL_REQUIRED_CONTEXT" in source_lines[node.selector.line - 1]
     )
+    catalog = None
+    if finer:
+        catalog = next(c for c in evidence.text_sections() if c.context_id == required)
+        assert len(catalog.sections) == 2
+        assert experiment.reduction is not None
+        experiment = experiment.model_copy(
+            update={
+                "reduction": experiment.reduction.model_copy(
+                    update={
+                        "section_search": TextSectionSearchPlan(
+                            fields=(catalog.removal(tuple(s.id for s in catalog.sections)),),
+                            max_coarse_comparisons=8,
+                            max_fine_comparisons=8,
+                            minimum_removed_utf8_bytes=16,
+                        )
+                    }
+                )
+            }
+        )
+        experiment_path.write_text(experiment.to_toml())
     protected = (
         protected_tree(scenario.case.root, allow_case_results=True),
         protected_tree(scenario.original),
@@ -526,7 +556,7 @@ def test_native_sampled_shrink_reduces_only_irrelevant_context_and_freshly_confi
     assert snapshot.checkpoint == saved.checkpoint
     assert snapshot.selection is not None
     assert required not in saved.checkpoint.removed_context_ids
-    blocks = [trial.comparison.evidence for trial in trials] + [saved.confirmation.evidence]
+    blocks = [*saved.checkpoint.blocks, saved.confirmation.evidence]
     attempt_ids = [
         a.observation.attempt_evidence.attempt_id for block in blocks for a in block.attempts
     ]
@@ -536,6 +566,78 @@ def test_native_sampled_shrink_reduces_only_irrelevant_context_and_freshly_confi
     observations = store.list_for_experiment(experiment.digest)
     assert len(observations) == len(attempt_ids) + 1
     assert set(saved.calibration_attempt_ids).isdisjoint(attempt_ids)
+    if finer:
+        assert report["additional_reduction_result"] == "criterion-met"
+        assert report["additional_removed_utf8_bytes"] == len(b"Removable archived detail.\n")
+        assert report["coarse_comparisons_used"] <= 8
+        assert report["fine_comparisons_used"] <= 8
+        assert report["fine_search_complete"]
+        edit = saved.checkpoint.selected_mutation.edits[0]
+        assert isinstance(edit, TextSectionRemoval)
+        assert catalog is not None
+        assert edit.context_id == required
+        assert edit.section_ids == (catalog.sections[1].id,)
+        assert saved.checkpoint.coarse_candidate_digest != saved.checkpoint.best_candidate_digest
+        assert all(
+            block.plan.original_candidate_digest == saved.checkpoint.original_candidate_digest
+            for block in blocks
+        )
+        assert any(
+            trial.comparison is not None
+            and trial.comparison.action == "retain"
+            and trial.comparison.evidence.candidate_counts.no_matches == 1
+            for trial in saved.checkpoint.fine_trials
+        )
+        outputs = ProtectedOutputStore.open(scenario.data / "ithrl/native-output")
+        for attempt in saved.confirmation.evidence.attempts:
+            observation = attempt.observation
+            reference = observation.attempt_evidence.native_output
+            assert reference is not None
+            native_output = outputs.read(reference)
+            records = [json.loads(line) for line in native_output.stdout.splitlines()]
+            if harness == "codex":
+                request = next(
+                    row["value"]["params"]
+                    for row in records
+                    if row.get("kind") == "client"
+                    and row["value"].get("method") == "fixture/request"
+                )
+                expected_text = "ITHRL_REQUIRED_CONTEXT\n\n"
+                if observation.arm.value == "baseline":
+                    expected_text += "Removable archived detail.\n"
+                required_item = next(
+                    item
+                    for item in request["history"]
+                    if item.get("id") == "message-fixture-user-001"
+                )
+                assert required_item["content"][0]["text"] == expected_text
+                assert request["toolOutput"]["output"] == [
+                    {"type": "input_text", "text": "Fixture result."}
+                ]
+            else:
+                # The worker receipt authenticates the exact copied prefix, including its edit.
+                raw_lines = scenario.source.read_bytes().splitlines(keepends=True)
+                expected_lines = []
+                for node, raw in zip(evidence.context.nodes, raw_lines, strict=False):
+                    if observation.arm.value != "baseline":
+                        if node.id in saved.checkpoint.removed_context_ids:
+                            continue
+                        if node.id == required:
+                            record = json.loads(raw)
+                            record["data"]["content"] = "ITHRL_REQUIRED_CONTEXT\n\n"
+                            raw = (
+                                json.dumps(
+                                    record, ensure_ascii=False, separators=(",", ":")
+                                ).encode()
+                                + b"\n"
+                            )
+                    expected_lines.append(raw)
+                assert evidence.decision is not None
+                expected_lines.append(raw_lines[evidence.decision.selector.context_before_line - 1])
+                assert (
+                    records[0]["native_session_sha256"]
+                    == hashlib.sha256(b"".join(expected_lines)).hexdigest()
+                )
     _assert_cleanup(scenario, observations)
     runner_milliseconds = 0
     for observation in observations:
