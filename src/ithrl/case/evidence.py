@@ -32,6 +32,7 @@ from ithrl.mutation import (
 from ithrl.text_sections import (
     TextSectionCatalog,
     TextSectionError,
+    TextSectionLimitError,
     TextSectionRemoval,
     catalog_text_sections,
     remove_text_sections,
@@ -222,33 +223,35 @@ class CaseEvidence:
         return tuple(found)
 
     def text_sections(self) -> tuple[TextSectionCatalog, ...]:
-        """List bounded source-bound units in eligible immutable prior-user fields."""
+        """List complete catalogs for eligible fields within the paragraph policy limits."""
 
         by_id = self._context.by_id
-        return tuple(
-            self._text_section_catalog(site, by_id[site.context_id])
-            for site in self.editable_text()
-        )
+        catalogs = []
+        for site in self.editable_text():
+            try:
+                catalogs.append(self._text_section_catalog(site, by_id[site.context_id]))
+            except TextSectionLimitError:
+                continue
+            except TextSectionError as error:
+                raise MutationError(str(error)) from None
+        return tuple(catalogs)
 
     def _text_section_catalog(self, site: EditableText, node: ContextNode) -> TextSectionCatalog:
-        try:
-            return catalog_text_sections(
-                case_digest=self.digest,
-                context_id=node.id,
-                context_digest=node.digest,
-                content_index=site.content_index,
-                text=site.original_text,
-            )
-        except TextSectionError as error:
-            raise MutationError(str(error)) from None
+        return catalog_text_sections(
+            case_digest=self.digest,
+            context_id=node.id,
+            context_digest=node.digest,
+            content_index=site.content_index,
+            text=site.original_text,
+        )
 
     def validate_text_sections(self, edit: TextSectionRemoval) -> TextSectionCatalog:
         """Re-derive eligibility and the selected units from the immutable case."""
 
         for site in self.editable_text():
             if (site.context_id, site.content_index) == (edit.context_id, edit.content_index):
-                catalog = self._text_section_catalog(site, self._context.by_id[site.context_id])
                 try:
+                    catalog = self._text_section_catalog(site, self._context.by_id[site.context_id])
                     catalog.validate_removal(edit)
                 except TextSectionError as error:
                     raise MutationError(str(error)) from None

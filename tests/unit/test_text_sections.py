@@ -17,6 +17,7 @@ from ithrl.text_sections import (
     MAX_TEXT_SECTIONS,
     TextSectionCatalog,
     TextSectionError,
+    TextSectionLimitError,
     TextSectionRemoval,
     catalog_text_sections,
     remove_text_sections,
@@ -125,12 +126,12 @@ def test_selection_refuses_unknown_repeated_reordered_and_forged_ranges() -> Non
 def test_limits_refuse_whole_field_instead_of_truncating_units() -> None:
     boundary = "é" * (MAX_TEXT_SECTION_BYTES // 2)
     assert _catalog(boundary).original_utf8_bytes == MAX_TEXT_SECTION_BYTES
-    with pytest.raises(TextSectionError, match="byte limit"):
+    with pytest.raises(TextSectionLimitError, match="byte limit"):
         _catalog(boundary + "é")
     with pytest.raises(TextSectionError, match="Unicode"):
         _catalog("\ud800")
     assert len(_catalog("A\n\n" * MAX_TEXT_SECTIONS).sections) == MAX_TEXT_SECTIONS
-    with pytest.raises(TextSectionError, match="section-count"):
+    with pytest.raises(TextSectionLimitError, match="section-count"):
         _catalog("A\n\n" * (MAX_TEXT_SECTIONS + 1))
 
 

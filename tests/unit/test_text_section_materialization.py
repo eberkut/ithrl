@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import json
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -15,12 +17,19 @@ from ithrl.adapters import enumerate_decisions
 from ithrl.adapters.registry import parse_session_bytes
 from ithrl.case import CaseEvidence
 from ithrl.context import ContextGraph, ContextNode, JsonValue, content_digest
-from ithrl.experiment import StructuralOracleConfig, parse_experiment_toml
+from ithrl.experiment import FakeRunnerConfig, StructuralOracleConfig, parse_experiment_toml
 from ithrl.extraction import extract_decision
 from ithrl.mutation import MutationError, TextMutation, replace_message_text
 from ithrl.runner import Candidate, PreparedAttempt, prepare_candidate
 from ithrl.synthetic import extract_inference
-from ithrl.text_sections import TextSectionRemoval, remove_text_sections
+from ithrl.text_sections import (
+    MAX_TEXT_SECTION_BYTES,
+    MAX_TEXT_SECTIONS,
+    TEXT_SECTION_POLICY_DIGEST,
+    TextSectionError,
+    TextSectionRemoval,
+    remove_text_sections,
+)
 from ithrl.workflow import prepare_experiment
 from native_support.copilot import _source_records
 
@@ -65,6 +74,80 @@ def _edit(evidence: CaseEvidence) -> TextSectionRemoval:
         c for c in evidence.text_sections() if c.original_utf8_bytes == len(_MIXED.encode())
     )
     return catalog.removal((catalog.sections[1].id,))
+
+
+@pytest.mark.parametrize("limited_by", ["bytes", "sections"])
+@pytest.mark.parametrize("oversized_first", [False, True])
+def test_catalog_discovery_skips_only_complete_fields_beyond_policy_limits(
+    tmp_path: Path, limited_by: str, oversized_first: bool
+) -> None:
+    evidence = _evidence(tmp_path)
+    request = evidence.request
+    inputs = request["input"]
+    assert isinstance(inputs, list)
+    assert isinstance(inputs[2], dict)
+    oversized = (
+        "x" * (MAX_TEXT_SECTION_BYTES + 1)
+        if limited_by == "bytes"
+        else "paragraph\n\n" * (MAX_TEXT_SECTIONS + 1)
+    )
+    texts = [oversized, _MIXED] if oversized_first else [_MIXED, oversized]
+    inputs[2]["content"] = [{"type": "input_text", "text": text} for text in texts]
+    evidence = CaseEvidence(
+        manifest=evidence.manifest,
+        request=request,
+        context=ContextGraph(
+            nodes=tuple(
+                node.model_copy(update={"digest": content_digest(inputs[2])})
+                if node.path == "/input/2"
+                else node
+                for node in evidence.context.nodes
+            )
+        ),
+        default_experiment=evidence.default_experiment,
+    )
+    parent = next(node for node in evidence.context.nodes if node.path == "/input/2")
+    before = evidence.request, evidence.digest
+    catalogs = tuple(c for c in evidence.text_sections() if c.context_id == parent.id)
+    assert len(catalogs) == 1
+    (catalog,) = catalogs
+    assert catalog.content_index == int(oversized_first)
+    assert catalog.original_utf8_bytes == len(_MIXED.encode())
+    assert len(catalog.sections) == 2
+    edit = catalog.removal((catalog.sections[1].id,))
+    assert evidence.validate_text_sections(edit) == catalog
+    actual = evidence.materialize(mutation=TextMutation(edits=(edit,)))
+    expected = copy.deepcopy(request)
+    expected_inputs = expected["input"]
+    assert isinstance(expected_inputs, list)
+    assert isinstance(expected_inputs[2], dict)
+    expected_inputs[2] = replace_message_text(
+        expected_inputs[2], catalog.content_index, "Keep the debugging constraint.\r\n\r\n"
+    )
+    assert actual == expected
+    unsupported = TextSectionRemoval(
+        context_id=parent.id,
+        content_index=1 - catalog.content_index,
+        original_text_digest=content_digest(oversized),
+        policy_digest=TEXT_SECTION_POLICY_DIGEST,
+        section_ids=("section-" + "f" * 64,),
+    )
+    with pytest.raises(MutationError, match="limit"):
+        evidence.validate_text_sections(unsupported)
+    assert (evidence.request, evidence.digest) == before
+
+
+def test_catalog_discovery_propagates_non_limit_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    evidence = _evidence(tmp_path)
+
+    def invalid(**_kwargs: object) -> None:
+        raise TextSectionError("invalid original text")
+
+    monkeypatch.setattr("ithrl.case.evidence.catalog_text_sections", invalid)
+    with pytest.raises(MutationError, match="invalid original text"):
+        evidence.text_sections()
 
 
 def test_cataloguing_many_fields_builds_the_context_index_once(
@@ -118,8 +201,15 @@ def test_cataloguing_many_fields_builds_the_context_index_once(
     assert index_reads == 1
 
 
+@pytest.mark.parametrize(
+    ("marker", "expected_match"),
+    [("A", False), ("Keep the debugging constraint.\r\n\r\n", True)],
+    ids=["record-removal", "section-removal"],
+)
 def test_section_and_whole_record_removal_use_original_indices_and_preserve_envelopes(
     tmp_path: Path,
+    marker: str,
+    expected_match: bool,
 ) -> None:
     evidence = _evidence(tmp_path)
     before, digest = evidence.request, evidence.digest
@@ -136,13 +226,19 @@ def test_section_and_whole_record_removal_use_original_indices_and_preserve_enve
     assert actual == expected
     assert evidence.request == before
     assert evidence.digest == digest
-    prepared = prepare_experiment(evidence)
+    experiment = parse_experiment_toml(evidence.default_experiment)
+    assert isinstance(experiment.runner, FakeRunnerConfig)
+    experiment = experiment.model_copy(
+        update={"runner": experiment.runner.model_copy(update={"required_markers": (marker,)})}
+    )
+    prepared = prepare_experiment(evidence, experiment=experiment)
     candidate = prepare_candidate(evidence, prepared.execution_plan, removed, mutation=mutation)
     assert candidate.removed_context_ids == removed
-    assert Candidate.model_validate_json(candidate.model_dump_json()) == candidate
+    persisted = Candidate.model_validate_json(candidate.model_dump_json())
+    assert persisted == candidate
     attempt = PreparedAttempt(
         evidence=evidence,
-        candidate=candidate,
+        candidate=persisted,
         target=prepared.experiment.target,
         execution_plan=prepared.execution_plan,
         safety_policy=prepared.safety_policy,
@@ -151,9 +247,16 @@ def test_section_and_whole_record_removal_use_original_indices_and_preserve_enve
         arm="candidate",
     )
     assert attempt.candidate == candidate
+    original = replace(
+        attempt, candidate=prepare_candidate(evidence, prepared.execution_plan), arm="baseline"
+    )
+    assert bool(asyncio.run(prepared.runner.run(original)).tool_calls) is not expected_match
+    result = asyncio.run(prepared.runner.run(attempt))
+    assert bool(result.tool_calls) is expected_match
+    assert result.accounting.provider_calls_started == result.accounting.actions_executed == 0
     data = candidate.model_dump()
     data["mutation"]["edits"][0]["section_ids"] = ("section-" + "f" * 64,)
-    tampered = Candidate.model_validate(data)
+    tampered = Candidate.model_validate_json(json.dumps(data))
     with pytest.raises(MutationError, match="known units"):
         PreparedAttempt(
             evidence=evidence,

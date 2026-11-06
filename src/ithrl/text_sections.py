@@ -40,6 +40,10 @@ class TextSectionError(ValueError):
     """A section catalog or selection does not match its immutable text."""
 
 
+class TextSectionLimitError(TextSectionError):
+    """A complete field exceeds the paragraph policy's size or section-count limit."""
+
+
 class _Contract(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True, hide_input_in_errors=True)
 
@@ -144,7 +148,7 @@ def _paragraph_ranges(text: str) -> tuple[tuple[int, int], ...]:
             ranges.append((start, line.start()))
             start = line.start()
             if len(ranges) >= MAX_TEXT_SECTIONS:
-                raise TextSectionError("text field exceeds the section-count limit")
+                raise TextSectionLimitError("text field exceeds the section-count limit")
         previous_blank = blank
     if text:
         ranges.append((start, len(text)))
@@ -162,13 +166,13 @@ def catalog_text_sections(
     """Partition exact text without reading a harness, filesystem or provider."""
 
     if len(text) > MAX_TEXT_SECTION_BYTES:
-        raise TextSectionError("text field exceeds the UTF-8 byte limit")
+        raise TextSectionLimitError("text field exceeds the UTF-8 byte limit")
     try:
         size = len(text.encode("utf-8"))
     except UnicodeError:
         raise TextSectionError("text field is not valid Unicode") from None
     if size > MAX_TEXT_SECTION_BYTES:
-        raise TextSectionError("text field exceeds the UTF-8 byte limit")
+        raise TextSectionLimitError("text field exceeds the UTF-8 byte limit")
     binding = {
         "case_digest": case_digest,
         "context_id": context_id,

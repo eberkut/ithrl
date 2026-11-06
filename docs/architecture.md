@@ -102,6 +102,8 @@ ordered section IDs rather than caller-supplied ranges. Validation re-derives th
 immutable eligible field, refusing stale or foreign IDs, duplicates and noncanonical order. Fields
 are limited to 1 MiB of UTF-8 text and 1,024 sections; a field exceeding either limit is unavailable
 under this policy rather than partially catalogued.
+Case-level discovery omits fields beyond these limits while preserving complete catalogs for
+other eligible fields. Explicit validation still refuses an edit to an unavailable field.
 
 The candidate's existing mutation envelope distinguishes `append-text` from `remove-text-sections`.
 Empty and append-only candidates retain their existing serialization and identities. A section edit
@@ -111,8 +113,10 @@ context. Exact-request materialization addresses the immutable original message 
 for removed input positions and changes a defensive copy. A combined section edit refuses any
 dependency-closed removal intersecting the original last input, including a nested field, even
 when graph flags would allow coarse removal. The fixed input remains unchanged.
-Persisted candidate descriptors are revalidated against case evidence, not trusted because their
-JSON or digest is well formed. Project-owned schema tags remain `1` during pre-1.0 development.
+Loading `Candidate` JSON validates its shape. Binding it to a `PreparedAttempt` invokes
+`prepare_candidate`, which re-derives its source bindings against immutable case evidence;
+well-formed JSON and digests alone do not authorize an edit. Project-owned schema tags remain `1`
+during pre-1.0 development.
 
 Retained-context inspection exposes metadata-only catalogs with a 4,096-unit report allowance;
 over-budget fields have no partial catalog. [Results](results.md#inspect-retained-context) explains
