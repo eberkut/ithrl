@@ -12,7 +12,7 @@ from ithrl.adapters.registry import decision_input_node_id
 from ithrl.case import CaseFormatError
 from ithrl.context import JsonObject, JsonValue
 from ithrl.extraction import validate_extracted_case
-from ithrl.mutation import EditableText, MutationError, append_message_text
+from ithrl.mutation import EditableText, MutationError, TextAppend, append_message_text
 from ithrl.runner.codex.policy import (
     CAPTURE_TYPE,
     MATERIALIZATION,
@@ -81,6 +81,11 @@ class CodexMaterialization:
 def materialize_codex_attempt(attempt: PreparedAttempt) -> CodexMaterialization:
     """Re-derive and materialize one selected Codex final-response attempt."""
 
+    if any(not isinstance(edit, TextAppend) for edit in attempt.candidate.mutation.edits):
+        raise CodexMaterializationError(
+            CodexMaterializationErrorCode.UNSUPPORTED_CONTEXT,
+            "Codex reconstruction supports only append-text interventions",
+        )
     evidence = attempt.evidence
     manifest = evidence.manifest
     decision = evidence.decision
@@ -161,6 +166,11 @@ def _materialize_session(
         )
 
     edit = next(iter(attempt.candidate.mutation.edits), None)
+    if edit is not None and not isinstance(edit, TextAppend):
+        raise CodexMaterializationError(
+            CodexMaterializationErrorCode.UNSUPPORTED_CONTEXT,
+            "Codex reconstruction supports only append-text interventions",
+        )
     if edit is not None and edit.context_id == trigger_id:
         raise CodexMaterializationError(
             CodexMaterializationErrorCode.MISSING_TRIGGER,

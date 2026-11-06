@@ -16,6 +16,7 @@ from ithrl.cli.output import OutputFormat, error_console, last_runner_error, she
 from ithrl.cli.progress import calibration_status, progress_display, sampling_status
 from ithrl.execution.budget import sampling_attempt_cost
 from ithrl.fuzz.campaign import _initialize_fuzz_campaign_owned, _run_fuzz_campaign_owned
+from ithrl.fuzz.contracts import require_fuzz_mutation
 from ithrl.fuzz.sampling import confirm_fuzz_evidence, fuzz_budget_bounds
 from ithrl.observations import ObservationStore, SamplingBlockEvidence, SamplingBudgetAllowance
 from ithrl.run_state import SampledRunStateFile, SamplingBudgetApproval
@@ -216,6 +217,7 @@ def _report(
     ):
         status = "inconclusive"
     selected = progress.selected_mutation if progress else None
+    selected_append = require_fuzz_mutation(selected) if selected else None
     safe_resume = (
         terminal is None
         and state.pending is None
@@ -294,7 +296,9 @@ def _report(
             "confirmation_result": confirmation.outcome.value if confirmation else "not-run",
             "difference": confirmation.difference if confirmation else None,
             "lower_bound": confirmation.lower_bound if confirmation else None,
-            "selected_mutation_bytes": sum(len(e.text.encode()) for e in selected.edits)
+            "selected_mutation_bytes": (
+                len(selected_append.text.encode()) if selected_append else 0
+            )
             if selected
             else None,
             "selected_mutation_digest": selected.digest if selected else None,

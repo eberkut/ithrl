@@ -9,6 +9,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ithrl.context import MAX_JSON_ITEMS, ContextNode, JsonObject, content_digest, decode_pointer
+from ithrl.text_sections import TextSectionRemoval
 
 MAX_MUTATION_TEXT_BYTES = 64 * 1024
 
@@ -54,9 +55,9 @@ class TextAppend(BaseModel):
 
 
 class TextMutation(BaseModel):
-    """One bounded text append, or the canonical empty intervention.
+    """One bounded text-field intervention, or the canonical empty intervention.
 
-    Empty appends normalize away. Whitespace, Unicode and line endings remain
+    Empty selections and appends normalize away. Whitespace, Unicode and line endings remain
     exact: they can affect behavior. Multiple operations are deliberately not
     supported by this first one-field mutation contract.
     """
@@ -64,12 +65,21 @@ class TextMutation(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True, hide_input_in_errors=True)
 
     schema_version: Literal[1] = 1
-    edits: Annotated[tuple[TextAppend, ...], Field(max_length=1)] = ()
+    edits: Annotated[
+        tuple[Annotated[TextAppend | TextSectionRemoval, Field(discriminator="operation")], ...],
+        Field(max_length=1),
+    ] = ()
 
     @field_validator("edits")
     @classmethod
-    def normalize_empty(cls, value: tuple[TextAppend, ...]) -> tuple[TextAppend, ...]:
-        return tuple(edit for edit in value if edit.text)
+    def normalize_empty(
+        cls, value: tuple[TextAppend | TextSectionRemoval, ...]
+    ) -> tuple[TextAppend | TextSectionRemoval, ...]:
+        return tuple(
+            edit
+            for edit in value
+            if (edit.text if isinstance(edit, TextAppend) else edit.section_ids)
+        )
 
     @property
     def is_empty(self) -> bool:
@@ -105,15 +115,26 @@ def append_message_text(message: JsonObject, edit: TextAppend) -> JsonObject:
     original = message_text(message, edit.content_index)
     if content_digest(original) != edit.original_text_digest:
         raise MutationError("mutation original text digest does not match")
+    return replace_message_text(message, edit.content_index, original + edit.text)
+
+
+def replace_message_text(message: JsonObject, content_index: int, text: str) -> JsonObject:
+    """Copy a known ordinary user message, preserving every surrounding native field.
+
+    Source binding and eligibility belong to the caller. This helper only writes the
+    supported text location; it never interprets or changes opaque blocks.
+    """
+
+    message_text(message, content_index)
     result = copy.deepcopy(message)
     content = result["content"]
     if isinstance(content, str):
-        result["content"] = original + edit.text
+        result["content"] = text
     elif isinstance(content, list):
-        block = content[edit.content_index]
+        block = content[content_index]
         if not isinstance(block, dict):
             raise MutationError("mutation requires an existing input-text block")
-        block["text"] = original + edit.text
+        block["text"] = text
     else:
         raise MutationError("mutation requires ordinary user text")
     return result

@@ -63,6 +63,7 @@ def test_round_trip_preserves_exact_unicode_and_candidate_binding(text: str) -> 
     assert Candidate.model_validate_json(candidate.model_dump_json()) == candidate
     assert (candidate.digest != _candidate().digest) == bool(text)
     if text:
+        assert isinstance(mutation.edits[0], TextAppend)
         assert mutation.edits[0].text == text
 
 

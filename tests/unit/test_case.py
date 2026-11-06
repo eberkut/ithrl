@@ -144,7 +144,9 @@ def test_workspace_writes_expected_schema_versions(tmp_path: Path) -> None:
     assert (workspace.root / "experiments/default.toml").read_text() == EXPERIMENT
 
 
-@pytest.mark.parametrize("operation", ["unchanged", "removal", "mutation", "late-failure"])
+@pytest.mark.parametrize(
+    "operation", ["unchanged", "removal", "mutation", "late-failure", "invalid-mutation"]
+)
 def test_materialization_preserves_nested_evidence_and_identity(operation: str) -> None:
     request: dict[str, Any] = {
         "input": [
@@ -186,12 +188,17 @@ def test_materialization_preserves_nested_evidence_and_identity(operation: str) 
     )
     mutation = TextMutation(edits=(edit,))
 
-    if operation == "late-failure":
-        # Exercise a refusal after the first edit has already changed the candidate.
+    if operation == "invalid-mutation":
+        # A forged model copy must be revalidated before applying any edit.
         mutation = mutation.model_copy(
             update={"edits": (edit, edit.model_copy(update={"context_id": "unknown"}))}
         )
-        with pytest.raises(MutationError, match="unknown context node"):
+        with pytest.raises(ValidationError, match="at most 1 item"):
+            evidence.materialize(mutation=mutation)
+    elif operation == "late-failure":
+        # Exercise a valid-shaped refusal after the defensive request copy exists.
+        mutation = TextMutation(edits=(edit.model_copy(update={"original_text_digest": "a" * 64}),))
+        with pytest.raises(MutationError, match="original text digest"):
             evidence.materialize(mutation=mutation)
     else:
         result: Any = evidence.materialize(

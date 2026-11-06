@@ -22,6 +22,7 @@ from ithrl.experiment import (
 from ithrl.extraction import extract_decision
 from ithrl.fuzz.configuration import FuzzConfiguration
 from ithrl.fuzz.generation import generate_mutations
+from ithrl.mutation import TextAppend
 from ithrl.runner import PreparedAttempt, RunnerRegistry, prepare_candidate
 from ithrl.runner.codex.materialize import materialize_codex_attempt
 from ithrl.runner.codex.policy import RECONSTRUCTION_METHOD as CODEX_RECONSTRUCTION_METHOD
@@ -104,6 +105,7 @@ def test_public_fuzz_inputs_extract_and_preserve_unedited_input(
     batch = generate_mutations(sites, campaign, stale_text=config.stale_text)
     assert batch.proposals_examined == len(batch.mutations) == 1
     mutation = batch.mutations[0]
+    assert isinstance(mutation.edits[0], TextAppend)
     assert mutation.edits[0].text == "\n\n" + config.stale_text
 
     attempt = PreparedAttempt(

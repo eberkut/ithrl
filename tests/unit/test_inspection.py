@@ -26,7 +26,8 @@ from ithrl.experiment import (
     SamplingArmTarget,
     StructuralOracleConfig,
 )
-from ithrl.inspection import _confirmation, build_retained_inspection
+from ithrl.inspection import _confirmation, _section_fields, build_retained_inspection
+from ithrl.mutation import TextMutation
 from ithrl.observations import (
     Observation,
     ObservationArm,
@@ -50,7 +51,14 @@ from ithrl.reduce import (
 from ithrl.reduce.contracts import trial_key
 from ithrl.results import ResultSnapshot, ResultSummary, SampledReductionEvidence
 from ithrl.results.inspection import RetainedResult
-from ithrl.runner import AttemptEvidence, Candidate, ProviderAcceptanceState, RunAccounting
+from ithrl.runner import (
+    AttemptEvidence,
+    Candidate,
+    ProviderAcceptanceState,
+    RunAccounting,
+    prepare_candidate,
+)
+from ithrl.text_sections import MAX_TEXT_SECTION_BYTES, TextSectionRemoval
 
 _TIME = datetime(2026, 10, 4, tzinfo=UTC)
 _PRIVATE = "PRIVATE_CONTEXT_NOT_FOR_DEFAULT_OUTPUT"
@@ -67,7 +75,7 @@ def _case() -> tuple[CaseEvidence, ExperimentDefinition]:
     )
     ids = ("ctx-a", "ctx-b", "ctx-c", "ctx-d", "ctx-frozen", "ctx-protected", "ctx-untested")
     values: list[JsonValue] = [
-        {"text": _PRIVATE + "[red] café\u202e\x1b[31m"},
+        {"role": "user", "content": _PRIVATE + "[red] café\u202e\x1b[31m\n\nExtra background."},
         *({"text": i} for i in ids[1:]),
     ]
     evidence = CaseEvidence(
@@ -268,6 +276,144 @@ def test_default_report_omits_content_and_predicate() -> None:
     assert report.retained_canonical_json_bytes < report.original_canonical_json_bytes
     assert report.byte_measure == "canonical-json-utf8-not-provider-tokens"
     assert report.provider_calls == report.actions_executed == 0
+
+
+def test_inspected_section_ids_agree_with_source_validated_persisted_candidate() -> None:
+    loaded = _deterministic()
+    evidence = loaded.evidence
+    before = evidence.request, evidence.digest
+    report = build_retained_inspection(loaded)
+    node = next(node for node in report.nodes if node.id == "ctx-a")
+    (section_field,) = node.text_section_fields
+    assert section_field.status == "available-untested"
+    assert section_field.unavailable_reason is None
+    (catalog,) = evidence.text_sections()
+    assert section_field.catalog == catalog
+    assert len(catalog.sections) == 2
+    assert node.removal_evidence == "joint-or-historical-only"
+    assert node.trial_indexes
+    assert any("do not establish section necessity" in line for line in report.limitations)
+
+    assert loaded.execution_plan is not None
+    candidate = prepare_candidate(
+        evidence,
+        loaded.execution_plan,
+        remove_ids=("ctx-b",),
+        mutation=TextMutation(edits=(catalog.removal((catalog.sections[1].id,)),)),
+    )
+    persisted = Candidate.model_validate_json(candidate.model_dump_json())
+    (edit,) = persisted.mutation.edits
+    assert isinstance(edit, TextSectionRemoval)
+    assert evidence.validate_text_sections(edit) == section_field.catalog
+    assert persisted.digest == candidate.digest
+    assert (evidence.request, evidence.digest) == before
+    assert _PRIVATE not in report.model_dump_json()
+    assert _PRIVATE not in repr(report)
+
+
+def test_inspection_catalogs_only_eligible_retained_prior_user_text() -> None:
+    evidence, _ = _case()
+    values: list[JsonValue] = [
+        {"role": "user", "content": "Eligible.\n\nBackground."},
+        {"role": "user", "content": "Removed."},
+        {"role": "assistant", "content": "Opaque assistant text."},
+        {"role": "user", "content": [{"type": "input_image", "image_url": "opaque"}]},
+        {"role": "user", "content": "Frozen."},
+        {"role": "user", "content": "Protected."},
+        {"role": "user", "content": "Fixed triggering input."},
+    ]
+    changed = CaseEvidence(
+        manifest=evidence.manifest,
+        request={"input": values},
+        context=ContextGraph(
+            nodes=tuple(
+                node.model_copy(update={"digest": content_digest(value)})
+                for node, value in zip(evidence.context.nodes, values, strict=True)
+            )
+        ),
+        default_experiment=evidence.default_experiment,
+    )
+    retained = frozenset(node.id for node in changed.context.nodes if node.id != "ctx-b")
+    before = changed.request, changed.digest
+    fields = _section_fields(changed, retained)
+    assert tuple(fields) == ("ctx-a",)
+    assert fields["ctx-a"][0].status == "available-untested"
+    assert (changed.request, changed.digest) == before
+
+
+def test_section_inspection_indexes_context_once_for_multiple_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evidence, _ = _case()
+    request = evidence.request
+    inputs = request["input"]
+    assert isinstance(inputs, list)
+    inputs[0] = {
+        "role": "user",
+        "content": [
+            {"type": "input_text", "text": "First field.\n\nBackground."},
+            {"type": "input_text", "text": "Second field.\n\nOther background."},
+        ],
+    }
+    evidence = CaseEvidence(
+        manifest=evidence.manifest,
+        request=request,
+        context=ContextGraph(
+            nodes=tuple(
+                node.model_copy(update={"digest": content_digest(inputs[0])})
+                if node.id == "ctx-a"
+                else node
+                for node in evidence.context.nodes
+            )
+        ),
+        default_experiment=evidence.default_experiment,
+    )
+    retained = frozenset(node.id for node in evidence.context.nodes)
+    expected = _section_fields(evidence, retained)
+    assert len(expected["ctx-a"]) == 2
+    index_builds = 0
+
+    def counted_index(graph: ContextGraph) -> dict[str, ContextNode]:
+        nonlocal index_builds
+        index_builds += 1
+        return {node.id: node for node in graph.nodes}
+
+    monkeypatch.setattr(ContextGraph, "by_id", property(counted_index))
+    assert _section_fields(evidence, retained) == expected
+    assert index_builds == 1
+
+
+@pytest.mark.parametrize("limited_by", ["policy", "inspection"])
+def test_unavailable_section_fields_have_no_partial_catalog(
+    limited_by: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    evidence, _ = _case()
+    if limited_by == "policy":
+        request = evidence.request
+        inputs = request["input"]
+        assert isinstance(inputs, list)
+        inputs[0] = {"role": "user", "content": "x" * (MAX_TEXT_SECTION_BYTES + 1)}
+        nodes = tuple(
+            node.model_copy(update={"digest": content_digest(inputs[0])})
+            if node.id == "ctx-a"
+            else node
+            for node in evidence.context.nodes
+        )
+        evidence = CaseEvidence(
+            manifest=evidence.manifest,
+            request=request,
+            context=ContextGraph(nodes=nodes),
+            default_experiment=evidence.default_experiment,
+        )
+    else:
+        monkeypatch.setattr("ithrl.inspection.MAX_INSPECTION_SECTION_UNITS", 1)
+    fields = _section_fields(evidence, frozenset(node.id for node in evidence.context.nodes))
+    (field,) = fields["ctx-a"]
+    assert field.status == "unavailable"
+    assert field.catalog is None
+    assert field.unavailable_reason == (
+        "section-policy-limit" if limited_by == "policy" else "inspection-section-limit"
+    )
 
 
 @pytest.mark.parametrize("allowance", [0, 1, 6, 80, 512])

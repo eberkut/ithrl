@@ -49,11 +49,17 @@ def test_inspect_is_offline_and_leaves_all_inputs_unchanged(
     assert report["confirmation"]["status"] == "confirmed-preserving"
     assert report["nodes"]
     assert all("text" not in n for n in report["nodes"])
+    fields = [field for node in report["nodes"] for field in node["text_section_fields"]]
+    assert fields
+    assert all(field["status"] == "available-untested" for field in fields)
+    assert all(field["catalog"]["sections"] for field in fields)
     assert report["limitations"]
     human = CliRunner().invoke(app, args)
     assert human.exit_code == 0, human.output
     assert "Retained context inspection" in human.stdout
     assert "Interpretation limits" in human.stdout
+    assert "available-untested" in human.stdout
+    assert "original UTF-8 bytes" in human.stdout
     assert before == {p: (p.read_bytes(), p.stat().st_mode) for p in case.rglob("*") if p.is_file()}
 
 

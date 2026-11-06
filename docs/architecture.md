@@ -81,6 +81,53 @@ run allowance leaves sample targets, freshness, effective policy and per-attempt
 Observation reuse requires compatible identities and roles; a matching candidate digest alone
 is insufficient.
 
+## Source-bound text sections
+
+The shared `text_sections.py` contract describes removal from one eligible prior-user text field.
+It is separate from native reconstruction and from search. Field discovery uses the existing
+adapter-owned editable-text surface: fixed decision input, instructions, protected nodes and opaque
+records remain outside it. A content block is a field; sections never cross block boundaries.
+
+`paragraph-v1` partitions the original string using physical LF, CRLF or CR line endings. A blank
+line contains only ASCII spaces or tabs before its ending. Each run of nonblank lines owns its
+following blank lines; leading blank lines form their own section. A whitespace-only field has one
+section, and an empty field has none. Other Unicode line separators are ordinary text. Offsets are
+half-open Python Unicode code-point positions; UTF-8 byte counts are reported separately. No
+trimming, newline conversion, separator insertion or Markdown interpretation occurs. Removing all
+sections leaves the existing field empty and preserves its enclosing record and content block.
+
+Catalogs contain metadata, not the original text. Section identities bind the immutable case,
+context node, content-block index, original-text digest, policy and exact range. A removal stores
+ordered section IDs rather than caller-supplied ranges. Validation re-derives the catalog from the
+immutable eligible field, refusing stale or foreign IDs, duplicates and noncanonical order. Fields
+are limited to 1 MiB of UTF-8 text and 1,024 sections; a field exceeding either limit is unavailable
+under this policy rather than partially catalogued.
+
+The candidate's existing mutation envelope distinguishes `append-text` from `remove-text-sections`.
+Empty and append-only candidates retain their existing serialization and identities. A section edit
+can accompany dependency-closed whole-record removal only when its parent survives; removing the
+same field through its parent or dependencies is refused. Appending still requires unchanged
+context. Exact-request materialization addresses the immutable original message before accounting
+for removed input positions and changes a defensive copy. A combined section edit refuses any
+dependency-closed removal intersecting the original last input, including a nested field, even
+when graph flags would allow coarse removal. The fixed input remains unchanged.
+Persisted candidate descriptors are revalidated against case evidence, not trusted because their
+JSON or digest is well formed. Project-owned schema tags remain `1` during pre-1.0 development.
+
+Retained-context inspection exposes metadata-only catalogs with a 4,096-unit report allowance;
+over-budget fields have no partial catalog. [Results](results.md#inspect-retained-context) explains
+availability, byte measures and interpretation. Original text remains behind the existing bounded
+opt-in.
+
+This contract does not enable native section removal. Current Codex and Copilot materializers,
+fuzzing and sampled collection refuse that operation. The fake capability and pure exact-request
+materialization exercise the shared contract without a harness. Native reconstruction, coarse/fine
+search, selected-section result snapshots and recovery belong to
+[#45](https://github.com/eberkut/ithrl/issues/45); ordinary-workflow qualification belongs to
+[#46](https://github.com/eberkut/ithrl/issues/46). The
+[workload criteria](research/reduction-design.md#text-section-workload-preparation) distinguish the
+frozen preparation proposal from measured support.
+
 ## Measurement, search and confirmation
 
 `measurement.py` invokes one prepared attempt, validates its returned evidence, evaluates the

@@ -44,6 +44,12 @@ def _mutation(text: str) -> TextMutation:
     )
 
 
+def _added_text(mutation: TextMutation) -> str:
+    edit = mutation.edits[0]
+    assert isinstance(edit, TextAppend)
+    return edit.text
+
+
 def _config(original: Candidate, **changes: Any) -> FuzzCampaignConfig:
     return FuzzCampaignConfig.model_validate(
         {
@@ -110,7 +116,7 @@ def test_fake_runner_discovers_and_simplifies_a_change_with_source_unchanged(
         assert selected is not None
         result = await simplify_mutation(selected, evaluator.evaluate, max_trials=10)
         assert result.complete
-        assert len(result.mutation.edits[0].text) < len(selected.edits[0].text) / 2
+        assert len(_added_text(result.mutation)) < len(_added_text(selected)) / 2
         assert await evaluator.evaluate(result.mutation) is MutationDecision.CHANGED
         replay = DeterministicMutationEvaluator(evidence, prepared)
         assert await replay.evaluate(result.mutation) is MutationDecision.CHANGED
@@ -174,7 +180,7 @@ def test_simplification_keeps_joint_effect_and_never_redraws_candidate(
         async def evaluate(mutation: TextMutation) -> MutationDecision:
             assert mutation.digest not in visited
             visited.append(mutation.digest)
-            text = mutation.edits[0].text
+            text = _added_text(mutation)
             return (
                 MutationDecision.CHANGED
                 if all(token in text for token in required)
@@ -184,7 +190,7 @@ def test_simplification_keeps_joint_effect_and_never_redraws_candidate(
         initial = _mutation(separator + separator.join(("noise", "ONE", "TWO", "other")))
         result = await simplify_mutation(initial, evaluate, max_trials=10)
         assert result.complete
-        assert result.mutation.edits[0].text == "".join(separator + token for token in required)
+        assert _added_text(result.mutation) == "".join(separator + token for token in required)
         assert result.evaluations <= 10
         assert len(visited) == result.evaluations + 1
 
@@ -241,7 +247,7 @@ def test_simplification_refuses_invalid_start_and_retains_best_at_work_limit() -
         result = await simplify_mutation(initial, changed, max_trials=1)
         assert not result.complete
         assert result.proposals == 1
-        assert result.mutation.edits[0].text == "\n\nTWO\n\nTHREE"
+        assert _added_text(result.mutation) == "\n\nTWO\n\nTHREE"
         with pytest.raises(ValueError, match="finite positive"):
             await simplify_mutation(initial, changed, max_trials=True)
 
@@ -311,7 +317,7 @@ def test_ordering_interaction_runner_end_to_end_and_errors_do_not_count_as_chang
         )
         result = await simplify_mutation(initial, evaluator.evaluate, max_trials=10)
         assert result.complete
-        assert result.mutation.edits[0].text == "\n\nONE\n\nTWO"
+        assert _added_text(result.mutation) == "\n\nONE\n\nTWO"
         reverse = TextMutation(
             edits=(initial.edits[0].model_copy(update={"text": "\n\nTWO\n\nONE"}),)
         )

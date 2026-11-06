@@ -20,7 +20,7 @@ from ithrl.experiment import (
     SampledExperimentDefinition,
     SampledSearchPhase,
 )
-from ithrl.fuzz.contracts import FuzzCampaignConfig, FuzzOutcome
+from ithrl.fuzz.contracts import FuzzCampaignConfig, FuzzOutcome, require_fuzz_mutation
 from ithrl.fuzz.simplify import MutationDecision
 from ithrl.fuzz.statistics import (
     ChangeConfirmation,
@@ -93,6 +93,7 @@ def fuzz_block_plan(
 ) -> SamplingBlockPlan:
     """Pure admission and a frozen role/arm/payload identity before budget allocation."""
 
+    require_fuzz_mutation(mutation)
     bound = prepare_fuzz_sampling(evidence, prepared, campaign)
     if bound.identity != prepared.identity:
         raise ValueError("prepare campaign-bound sampling identities before creating blocks")

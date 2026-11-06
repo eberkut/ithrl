@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from itertools import pairwise
 
-from ithrl.fuzz.contracts import MAX_FUZZ_CANDIDATES
+from ithrl.fuzz.contracts import MAX_FUZZ_CANDIDATES, require_fuzz_mutation
 from ithrl.mutation import TextAppend, TextMutation
 
 
@@ -56,9 +56,9 @@ def simplification_steps(
 
     if type(max_trials) is not int or not 1 <= max_trials <= MAX_FUZZ_CANDIDATES:
         raise ValueError("simplification requires a finite positive trial bound")
-    if mutation.is_empty or (yield mutation) is not MutationDecision.CHANGED:
+    edit = require_fuzz_mutation(mutation)
+    if edit is None or (yield mutation) is not MutationDecision.CHANGED:
         raise ValueError("simplification requires an observed changed-behavior mutation")
-    edit = mutation.edits[0]
     boundaries = sorted(
         {0, len(edit.text), *(m.start() for m in re.finditer(r"\r?\n\r?\n", edit.text))}
     )

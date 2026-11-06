@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from ithrl.behavior import evaluate_target
 from ithrl.case import CaseEvidence
+from ithrl.fuzz.contracts import require_fuzz_mutation
 from ithrl.fuzz.simplify import MutationDecision
 from ithrl.measurement import normalize_run_result
 from ithrl.mutation import MutationError, TextMutation
@@ -61,6 +62,7 @@ class DeterministicMutationEvaluator:
         return evaluate_target(self.prepared.experiment.target, normalize_run_result(result))
 
     async def evaluate(self, mutation: TextMutation) -> MutationDecision:
+        require_fuzz_mutation(mutation)
         async with self._lock:
             return await self._evaluate_owned(mutation)
 
