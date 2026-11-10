@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -694,6 +695,112 @@ def _input_text(request: dict[str, JsonValue], position: int) -> str:
     text = message["content"]
     assert isinstance(text, str)
     return text
+
+
+@pytest.fixture(scope="module")
+def completed_section_checkpoint(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> SampledReductionCheckpoint:
+    fixture = _section_fixture(
+        tmp_path_factory.mktemp("section-contract"), coarse_limit=1, fine_limit=8
+    )
+    return fixture.run().checkpoint
+
+
+@pytest.mark.parametrize(
+    ("corruption", "message"),
+    [
+        ("coarse-identity-missing", "immutable candidate identity"),
+        ("coarse-identity-changed", "frozen coarse candidate"),
+        ("coarse-not-frozen", "durably stopped coarse stage"),
+        ("duplicate-fine-trial", "distinct frozen-field identities"),
+        ("byte-total", "maximize admitted bytes"),
+        ("selected-mutation", "maximize admitted bytes"),
+        ("coarse-ceiling", "coarse stage exceeds"),
+        ("fine-ceiling", "fine stage exceeds"),
+        ("coarse-only", "coarse-only checkpoints"),
+        ("changed-original", "frozen reduction and original"),
+        ("completed-active-block", "active block must be partial"),
+        ("unearned-final-witness", "incomplete final sweeps"),
+    ],
+)
+def test_serialized_section_checkpoint_refuses_altered_search_claims(
+    completed_section_checkpoint: SampledReductionCheckpoint, corruption: str, message: str
+) -> None:
+    payload = json.loads(completed_section_checkpoint.model_dump_json())
+    if corruption == "coarse-identity-missing":
+        payload["coarse_candidate_digest"] = None
+    elif corruption == "coarse-identity-changed":
+        payload["coarse_candidate_digest"] = "f" * 64
+    elif corruption == "coarse-not-frozen":
+        payload.update(coarse_stopped=False, coarse_candidate_digest=None)
+    elif corruption == "duplicate-fine-trial":
+        payload["fine_trials"].append(payload["fine_trials"][0])
+    elif corruption == "byte-total":
+        payload["additional_removed_utf8_bytes"] += 1
+    elif corruption == "selected-mutation":
+        payload["selected_mutation"] = {"edits": []}
+    elif corruption == "coarse-ceiling":
+        payload["reduction"]["section_search"]["max_coarse_comparisons"] = 0
+    elif corruption == "fine-ceiling":
+        payload["reduction"]["section_search"]["max_fine_comparisons"] = 1
+    elif corruption == "coarse-only":
+        payload["reduction"]["section_search"] = None
+        payload["best_candidate_digest"] = payload["coarse_candidate_digest"]
+    elif corruption == "changed-original":
+        payload["original_identity"]["case_digest"] = "f" * 64
+    elif corruption == "completed-active-block":
+        payload["active_block"] = next(
+            trial["comparison"]["evidence"]
+            for trial in reversed(payload["fine_trials"])
+            if trial["comparison"] is not None
+        )
+    else:
+        payload["expected_final_neighbors"] = [["ctx-a"]]
+    with pytest.raises(ValidationError, match=message):
+        SampledReductionCheckpoint.model_validate_json(json.dumps(payload))
+
+
+@pytest.mark.parametrize("corruption", ["unremoved-request", "forged-action"])
+def test_serialized_comparison_cannot_change_the_edit_or_the_screening_verdict(
+    completed_section_checkpoint: SampledReductionCheckpoint, corruption: str
+) -> None:
+    trial = completed_section_checkpoint.trials[0]
+    assert isinstance(trial, SampledCandidateTrial)
+    payload = json.loads(trial.model_dump_json())
+    if corruption == "unremoved-request":
+        payload["effective_removals"] = payload["base_removals"]
+        message = "include base and requested removals"
+    else:
+        payload["comparison"]["action"] = (
+            "admit" if trial.comparison.action == "retain" else "retain"
+        )
+        message = "screen action"
+    with pytest.raises(ValidationError, match=message):
+        SampledCandidateTrial.model_validate_json(json.dumps(payload))
+
+
+@pytest.mark.parametrize(
+    ("corruption", "message"),
+    [
+        ("duplicate-units", "canonical eligible original units"),
+        ("mutation", "mutation differs from its field and removals"),
+        ("key", "key differs from its frozen inputs"),
+    ],
+)
+def test_serialized_fine_trial_cannot_change_its_source_bound_units(
+    completed_section_checkpoint: SampledReductionCheckpoint, corruption: str, message: str
+) -> None:
+    trial = completed_section_checkpoint.fine_trials[0]
+    payload = json.loads(trial.model_dump_json())
+    if corruption == "duplicate-units":
+        payload["requested_section_ids"] *= 2
+    elif corruption == "mutation":
+        payload["mutation"] = {"edits": []}
+    else:
+        payload["trial_key"] = "f" * 64
+    with pytest.raises(ValidationError, match=message):
+        type(trial).model_validate_json(json.dumps(payload))
 
 
 def test_fine_search_freezes_coarse_and_selects_best_one_field(tmp_path: Path) -> None:

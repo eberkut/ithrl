@@ -8,6 +8,7 @@ import sqlite3
 import tracemalloc
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -144,6 +145,208 @@ def _reservation(
         provider_calls=plan.provider_calls_per_attempt,
         runner_seconds=10,
     )
+
+
+def _checkpoint_and_selection(
+    plan: SamplingBlockPlan,
+) -> tuple[SampledReductionCheckpoint, SampledFinalSelection]:
+    checkpoint = SampledReductionCheckpoint(
+        reduction=plan.preservation,
+        original_identity=plan.original_identity,
+        original_candidate_digest=plan.original_candidate_digest,
+        best_candidate_digest=plan.original_candidate_digest,
+        removed_context_ids=(),
+    )
+    holdout = content_digest({"run_id": "run-1", "role": "confirmation"})
+    seed = int(holdout[:16], 16)
+    confirmation = _plan(
+        block_id=f"confirmation-{holdout}",
+        role="confirmation",
+        candidate_identity=plan.original_identity,
+        candidate_digest=plan.original_candidate_digest,
+        frozen_at=_TIME + timedelta(seconds=2),
+        schedule_seed=seed,
+        schedule=sampling_schedule(3, 3, seed),
+    )
+    return checkpoint, SampledFinalSelection(
+        checkpoint_digest=content_digest(checkpoint.model_dump(mode="json")),
+        selected_at=_TIME + timedelta(seconds=1),
+        plan=confirmation,
+    )
+
+
+@pytest.mark.parametrize("operation", ["archive", "checkpoint", "selection", "admission"])
+def test_pending_dispatch_blocks_later_state_transitions_without_releasing_its_charge(
+    tmp_path: Path, operation: str
+) -> None:
+    file, store, plan = _create(tmp_path)
+    checkpoint, selection = _checkpoint_and_selection(plan)
+    invoke = {
+        "archive": partial(file.archive_block, store),
+        "checkpoint": partial(file.save_checkpoint, store, checkpoint),
+        "selection": partial(file.select_candidate, store, selection),
+        "admission": partial(file.admit_block, store, _plan(block_id="next-block")),
+    }[operation]
+    with file.acquire_lock(store):
+        file.reserve_dispatch(store, _reservation(plan))
+        before = file.path.read_bytes()
+        with pytest.raises(RunStateError):
+            invoke()
+        assert file.path.read_bytes() == before
+        assert file.usage(store, now=_TIME + timedelta(seconds=2)).pending_provider_calls == 2
+
+
+@pytest.mark.parametrize("admit_block", [False, True])
+def test_only_an_active_unarchived_block_can_be_archived(tmp_path: Path, admit_block: bool) -> None:
+    file, store, _ = _create(tmp_path, admit_block=admit_block)
+    with file.acquire_lock(store):
+        if admit_block:
+            archived = file.archive_block(store)
+            assert archived.blocks[-1].archived
+        before = file.path.read_bytes()
+        with pytest.raises(RunStateError, match="reconciled active block"):
+            file.archive_block(store)
+        assert file.path.read_bytes() == before
+
+
+def test_final_selection_cannot_be_repeated_or_replaced(tmp_path: Path) -> None:
+    file, store, plan = _create(tmp_path, admit_block=False)
+    checkpoint, selection = _checkpoint_and_selection(plan)
+    with file.acquire_lock(store):
+        file.save_checkpoint(store, checkpoint)
+        selected = file.select_candidate(store, selection)
+        before = file.path.read_bytes()
+        with pytest.raises(RunStateError, match="cannot be repeated"):
+            file.select_candidate(store, selection)
+        assert file.path.read_bytes() == before
+        assert file.load(store) == selected
+
+
+@pytest.mark.parametrize(
+    ("corruption", "message"),
+    [
+        ("holdout", "single frozen run holdout"),
+        ("checkpoint", "selected search checkpoint cannot change"),
+        ("candidate", "bind the selected candidate and original"),
+    ],
+)
+def test_persisted_final_selection_keeps_the_exact_holdout_and_candidate(
+    tmp_path: Path, corruption: str, message: str
+) -> None:
+    file, store, plan = _create(tmp_path, admit_block=False)
+    checkpoint, selection = _checkpoint_and_selection(plan)
+    with file.acquire_lock(store):
+        file.save_checkpoint(store, checkpoint)
+        state = file.select_candidate(store, selection)
+    payload = json.loads(state.model_dump_json())
+    if corruption == "holdout":
+        payload["selection"]["plan"]["block_id"] = "another-holdout"
+    elif corruption == "checkpoint":
+        payload["selection"]["checkpoint_digest"] = "f" * 64
+    else:
+        payload["selection"]["plan"]["candidate_digest"] = "f" * 64
+    with pytest.raises(ValidationError, match=message):
+        SampledRunState.model_validate_json(json.dumps(payload))
+
+
+@pytest.mark.parametrize(
+    ("corruption", "message"),
+    [
+        ("owner", "must belong to this run"),
+        ("time", "chronological order"),
+        ("unbounded-tokens", "unbounded token allowance"),
+        ("fewer-tokens", "token allowance cannot decrease"),
+        ("pacing", "preserve confirmation reserves and accounting"),
+        ("naive-time", "UTC offset"),
+    ],
+)
+def test_sampling_approvals_cannot_rewrite_the_owner_time_or_frozen_cost_policy(
+    tmp_path: Path, corruption: str, message: str
+) -> None:
+    file, store, _ = _create(tmp_path, admit_block=False)
+    with file.acquire_lock(store):
+        state = file.load(store)
+    payload = json.loads(state.model_dump_json())
+    extension = json.loads(json.dumps(payload["approvals"][0]))
+    extension["approval_id"] = "extension"
+    payload["approvals"].append(extension)
+    if corruption == "owner":
+        extension["allowance"]["run_id"] = "another-run"
+    elif corruption == "time":
+        extension["approved_at"] = (_TIME - timedelta(seconds=1)).isoformat()
+    elif corruption == "unbounded-tokens":
+        payload["approvals"][0]["allowance"]["max_tokens"] = None
+    elif corruption == "fewer-tokens":
+        extension["allowance"]["max_tokens"] = 1
+    elif corruption == "pacing":
+        extension["allowance"]["inter_attempt_delay_seconds"] = 1
+    else:
+        payload["started_at"] = "2026-10-04T00:00:00"
+    with pytest.raises(ValidationError, match=message):
+        SampledRunState.model_validate_json(json.dumps(payload))
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        "duplicate-approval",
+        "future-approval",
+        "duplicate-block",
+        "changed-original",
+        "changed-materialization",
+        "earlier-block",
+        "active-predecessor",
+        "wrong-block",
+        "wrong-arm",
+        "wrong-charge",
+        "expired-dispatch",
+        "schedule-overrun",
+        "no-active-block",
+    ],
+)
+def test_persisted_sampling_history_rejects_inconsistent_approvals_and_dispatches(
+    tmp_path: Path, corruption: str
+) -> None:
+    file, store, plan = _create(tmp_path)
+    with file.acquire_lock(store):
+        file.reserve_dispatch(store, _reservation(plan))
+        state = file.load(store)
+    payload = json.loads(state.model_dump_json())
+    block = payload["blocks"][0]
+    if corruption == "duplicate-approval":
+        payload["approvals"].append(payload["approvals"][0])
+    elif corruption == "future-approval":
+        payload["approvals"][0]["approved_at"] = (_TIME + timedelta(seconds=1)).isoformat()
+    elif corruption == "duplicate-block":
+        payload["blocks"].append(block)
+    elif corruption == "changed-original":
+        for identity in ("original_identity", "candidate_identity"):
+            block["plan"][identity]["case_digest"] = "f" * 64
+    elif corruption == "changed-materialization":
+        block["plan"]["original_candidate_digest"] = "f" * 64
+    elif corruption == "earlier-block":
+        block["plan"]["frozen_at"] = (_TIME - timedelta(seconds=1)).isoformat()
+    elif corruption == "active-predecessor":
+        other = json.loads(json.dumps(block))
+        other["plan"]["block_id"] = "next-block"
+        payload["blocks"].append(other)
+    elif corruption == "wrong-block":
+        payload["pending"]["block_digest"] = "f" * 64
+    elif corruption == "wrong-arm":
+        payload["pending"]["arm"] = "candidate" if plan.schedule[0] == "baseline" else "baseline"
+    elif corruption == "wrong-charge":
+        payload["pending"]["provider_calls"] = 1
+    elif corruption == "expired-dispatch":
+        payload["pending"]["reserved_at"] = plan.expires_at.isoformat()
+    elif corruption == "schedule-overrun":
+        payload["pending"]["schedule_position"] = len(plan.schedule)
+    else:
+        block["archived"] = True
+
+    with pytest.raises(ValidationError):
+        SampledRunState.model_validate_json(json.dumps(payload))
+    with file.acquire_lock(store):
+        assert file.load(store) == state
 
 
 def _observation(

@@ -37,6 +37,7 @@ from ithrl.results import (
     write_calibration_snapshot,
     write_result_snapshot,
 )
+from ithrl.results.validation import validate_result_case
 from ithrl.runner import (
     AttemptEvidence,
     Candidate,
@@ -834,6 +835,8 @@ def test_calibration_aggregate_rejects_mismatched_or_unordered_observations() ->
         ("measurable", (ObservationOutcome.MATCH, ObservationOutcome.NO_MATCH), False),
         ("not-measurable", (ObservationOutcome.MATCH, ObservationOutcome.NO_MATCH), False),
         ("incomplete", (ObservationOutcome.MATCH, ObservationOutcome.MATCH), False),
+        ("inconclusive", (ObservationOutcome.MATCH, ObservationOutcome.MATCH), False),
+        ("inconclusive", (ObservationOutcome.NO_MATCH, ObservationOutcome.NO_MATCH), False),
     ],
 )
 def test_calibration_outcome_uses_sampled_experiment_thresholds(
@@ -864,6 +867,52 @@ def test_calibration_outcome_uses_sampled_experiment_thresholds(
     else:
         with pytest.raises(ResultSnapshotError, match="outcome"):
             _write_calibration(destination, summary)
+
+
+def test_calibration_snapshot_cannot_claim_more_attempts_than_the_frozen_plan(
+    tmp_path: Path,
+) -> None:
+    observations = tuple(
+        _calibration_observation(index, ObservationOutcome.RUNNER_ERROR) for index in range(1, 5)
+    )
+    summary = calibration_summary_from_observations(
+        base=_calibration_base(),
+        observations=observations,
+        expected_policy_digest=_sampled_plan().safety_policy.digest,
+        max_provider_calls_per_attempt=1,
+    )
+    with pytest.raises(ResultSnapshotError, match="observations exceed max_attempts"):
+        _write_calibration(tmp_path / "result", summary)
+
+
+@pytest.mark.parametrize("corruption", ["record", "experiment", "order"])
+def test_calibration_loader_refuses_malformed_or_reordered_original_context(
+    tmp_path: Path, corruption: str
+) -> None:
+    summary = calibration_summary_from_observations(
+        base=_calibration_base(),
+        observations=(),
+        expected_policy_digest=_sampled_plan().safety_policy.digest,
+        max_provider_calls_per_attempt=1,
+    )
+    destination = tmp_path / "calibration"
+    _write_calibration(destination, summary)
+    if corruption == "experiment":
+        (destination / "experiment.toml").write_text("this is not TOML")
+        message = "invalid calibration snapshot content"
+    elif corruption == "record":
+        (destination / "retained-context.jsonl").write_text("{}\n")
+        message = "invalid retained-context"
+    else:
+        path = destination / "retained-context.jsonl"
+        lines = list(reversed(path.read_text().splitlines()))
+        path.write_text("\n".join(lines) + "\n")
+        data = json.loads((destination / "summary.json").read_text())
+        data["retained_context_digest"] = content_digest([json.loads(line) for line in lines])
+        _rewrite_json(destination / "summary.json", data)
+        message = "IDs or order"
+    with pytest.raises(ResultSnapshotError, match=message):
+        load_calibration_snapshot(destination)
 
 
 def test_result_snapshot_round_trip_is_complete_and_immutable(tmp_path: Path) -> None:
@@ -988,7 +1037,34 @@ def test_result_snapshot_uses_and_requires_private_permissions(tmp_path: Path) -
     ("overrides", "message"),
     [
         ({"original_context_count": 2}, "original_context_count"),
+        ({"original_context_ids": ("ctx-a", "ctx-a", "ctx-c")}, "duplicates"),
         ({"retained_context_ids": ("ctx-a", "ctx-a")}, "duplicates"),
+        ({"removed_context_ids": ("ctx-b", "ctx-b")}, "duplicates"),
+        ({"retained_context_count": 1}, "retained_context_count"),
+        ({"original_context_ids": ("ctx-a", "ctx-b", "ctx-d")}, "partition"),
+        ({"candidate_materialization": "source-backed"}, "only exact-request"),
+        (
+            {"confirmation_observation_ids": ("obs-confirmation-1", "obs-confirmation-1")},
+            "duplicates",
+        ),
+        ({"confirmation_observation_ids": ("obs-calibration-1",)}, "must be disjoint"),
+        ({"next_command": "ithrl shrink case"}, "must be set together"),
+        ({"observations_recorded": 3}, "every candidate run"),
+        (
+            {"status": "failed", "confirmation_result": "not-run"},
+            "confirmation observation IDs require",
+        ),
+        (
+            {
+                "status": "failed",
+                "calibration_result": "not-run",
+                "search_result": "not-run",
+                "candidate_runs_used": 0,
+                "confirmation_result": "not-run",
+                "confirmation_observation_ids": (),
+            },
+            "calibration observation IDs require",
+        ),
         ({"removed_context_ids": ("ctx-a", "ctx-b")}, "disjoint"),
         ({"candidate_runs_used": 11}, "must not exceed"),
         ({"resume_of": "run-001"}, "earlier run"),
@@ -1074,6 +1150,42 @@ def test_result_summary_rejects_inconsistent_claims(
 ) -> None:
     with pytest.raises(ValidationError, match=message):
         _summary(**overrides)
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"outcome": "refused"}, "refused calibration requires"),
+        ({"stop_reason": "valid-sample-limit"}, "incomplete calibration requires"),
+        ({"original_context_ids": ["ctx-a", "ctx-a", "ctx-c"]}, "must not contain duplicates"),
+        ({"retained_context_ids": ["ctx-a", "ctx-c"]}, "complete original context"),
+        ({"request_digest": None}, "only exact-request"),
+        ({"calibration_observation_ids": ["obs-1", "obs-1"]}, "must not contain duplicates"),
+        ({"observations_recorded": 1}, "equal calibration observation IDs"),
+        ({"matches": 1}, "outcome counts must equal"),
+        ({"terminal_error_category": "transport"}, "requires a failed observation"),
+        ({"provider_calls_completed": 1}, "cannot exceed started calls"),
+        ({"provider_calls_started": None}, "must have equal availability"),
+        ({"actions_requested": None}, "must have equal availability"),
+        ({"actions_denied": 1}, "cannot exceed requested actions"),
+        ({"provider_calls_possible": 1}, "conservative bound"),
+        ({"resume_of": "calibration-001"}, "earlier run"),
+        ({"next_command": "ithrl calibrate case"}, "must be set together"),
+    ],
+)
+def test_calibration_summary_refuses_contradictory_outcomes_and_accounting(
+    changes: dict[str, object], message: str
+) -> None:
+    summary = calibration_summary_from_observations(
+        base=_calibration_base(),
+        observations=(),
+        expected_policy_digest=_sampled_plan().safety_policy.digest,
+        max_provider_calls_per_attempt=1,
+    )
+    payload = json.loads(summary.model_dump_json())
+    payload.update(changes)
+    with pytest.raises(ValidationError, match=message):
+        CalibrationSummary.model_validate_json(json.dumps(payload))
 
 
 def test_interrupted_summary_records_exact_continuation_and_parent() -> None:
@@ -1181,6 +1293,8 @@ def test_writer_binds_execution_plan_target_to_experiment(
     [
         ({"model": "fake", "input": ("not", "json")}, "unsupported tuple"),
         ({"model": "fake", 1: "not-json"}, "non-string key"),
+        ({"model": "fake", "input": [float("nan")]}, "non-finite number"),
+        ({"model": "fake", "input": [float("inf")]}, "non-finite number"),
     ],
 )
 def test_writer_rejects_non_json_request_values_before_writing(
@@ -1326,17 +1440,51 @@ def test_loader_rejects_symlinked_snapshot_directory(tmp_path: Path) -> None:
         load_result_snapshot(linked)
 
 
-def test_loader_rejects_tampered_cross_file_identity(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("runner_fingerprint", "different-runner", "runner identities differ"),
+        ("case_digest", "f" * 64, "case identities differ"),
+        ("experiment_digest", "f" * 64, "experiment_digest"),
+        ("target_digest", "f" * 64, "target identities differ"),
+    ],
+)
+def test_loader_rejects_tampered_cross_file_identity(
+    tmp_path: Path, field: str, value: str, message: str
+) -> None:
     destination = tmp_path / "results" / "result-test"
     _write(destination)
     summary_path = destination / "summary.json"
     summary = json.loads(summary_path.read_text())
-    summary["runner_fingerprint"] = "different-runner"
-    summary_path.write_text(json.dumps(summary), encoding="utf-8")
-    if os.name == "posix":
-        summary_path.chmod(0o600)
+    summary[field] = value
+    _rewrite_json(summary_path, summary)
 
-    with pytest.raises(ResultSnapshotError, match="runner identities differ"):
+    with pytest.raises(ResultSnapshotError, match=message):
+        load_result_snapshot(destination)
+
+
+@pytest.mark.parametrize(
+    ("field", "message"),
+    [
+        ("experiment_digest", "experiment identities differ"),
+        ("runner_fingerprint", "runner identities differ"),
+    ],
+)
+def test_result_plan_cannot_rebind_its_experiment_or_runner_after_rehashing(
+    tmp_path: Path, field: str, message: str
+) -> None:
+    destination = tmp_path / "result"
+    _write(destination)
+    path = destination / "execution-plan.json"
+    data = json.loads(path.read_text())
+    data[field] = "f" * 64
+    plan = ResolvedExecutionPlan.model_validate(data)
+    _rewrite_json(path, plan.model_dump(mode="json"))
+    summary_path = destination / "summary.json"
+    summary = json.loads(summary_path.read_text())
+    summary["execution_plan_digest"] = plan.digest
+    _rewrite_json(summary_path, summary)
+    with pytest.raises(ResultSnapshotError, match=message):
         load_result_snapshot(destination)
 
 
@@ -1349,6 +1497,15 @@ def test_loader_rejects_tampered_reduced_request(tmp_path: Path) -> None:
     _rewrite_json(request_path, request)
 
     with pytest.raises(ResultSnapshotError, match="reduced_request_digest"):
+        load_result_snapshot(destination)
+
+
+@pytest.mark.parametrize("value", [False, 1, 1.5, []])
+def test_result_request_must_be_a_json_object(tmp_path: Path, value: object) -> None:
+    destination = tmp_path / "result"
+    _write(destination)
+    _rewrite_json(destination / "request.json", value)
+    with pytest.raises(ResultSnapshotError, match="must contain a JSON object"):
         load_result_snapshot(destination)
 
 
@@ -1483,6 +1640,222 @@ def test_loader_rejects_fabricated_invalid_final_sweep_proof(tmp_path: Path) -> 
 
     with pytest.raises(ResultSnapshotError, match="does not prove a losing removal"):
         load_result_snapshot(destination)
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["retained_context_digest", "provenance_digest", "effective_policy_digest", "request_digest"],
+)
+def test_calibration_loader_rejects_tampered_file_and_policy_bindings(
+    tmp_path: Path, field: str
+) -> None:
+    summary = calibration_summary_from_observations(
+        base=_calibration_base(),
+        observations=(),
+        expected_policy_digest=_sampled_plan().safety_policy.digest,
+        max_provider_calls_per_attempt=1,
+    )
+    destination = tmp_path / "calibration"
+    _write_calibration(destination, summary)
+    summary_path = destination / "summary.json"
+    data = json.loads(summary_path.read_text())
+    data[field] = "f" * 64
+    _rewrite_json(summary_path, data)
+
+    with pytest.raises(
+        ResultSnapshotError,
+        match="effective policy" if field == "effective_policy_digest" else field,
+    ):
+        load_calibration_snapshot(destination)
+
+
+@pytest.mark.parametrize(
+    ("line", "message"),
+    [
+        (" ", "must not be blank"),
+        ("[]", "must be a JSON object"),
+        ("{}", "invalid retained-context"),
+        ('{"value":NaN}', "non-finite number"),
+    ],
+)
+def test_loader_rejects_invalid_retained_context_records(
+    tmp_path: Path, line: str, message: str
+) -> None:
+    destination = tmp_path / "result"
+    _write(destination)
+    context_path = destination / "retained-context.jsonl"
+    lines = context_path.read_text().splitlines()
+    lines[0] = line
+    context_path.write_text("\n".join(lines) + "\n")
+
+    with pytest.raises(ResultSnapshotError, match=message):
+        load_result_snapshot(destination)
+
+
+@pytest.mark.parametrize("duplicate", [False, True])
+def test_loader_rejects_rehashed_context_with_wrong_ids_or_order(
+    tmp_path: Path, duplicate: bool
+) -> None:
+    destination = tmp_path / "result"
+    _write(destination)
+    context_path = destination / "retained-context.jsonl"
+    lines = context_path.read_text().splitlines()
+    lines = [lines[0], lines[0]] if duplicate else list(reversed(lines))
+    context_path.write_text("\n".join(lines) + "\n")
+    summary_path = destination / "summary.json"
+    summary = json.loads(summary_path.read_text())
+    summary["retained_context_digest"] = content_digest([json.loads(line) for line in lines])
+    _rewrite_json(summary_path, summary)
+
+    with pytest.raises(
+        ResultSnapshotError, match="duplicate context IDs" if duplicate else "IDs or order"
+    ):
+        load_result_snapshot(destination)
+
+
+@pytest.mark.parametrize("failed", [False, True])
+@pytest.mark.parametrize("phase", ["calibration", "confirmation"])
+def test_loader_rejects_search_observations_reused_from_another_phase(
+    tmp_path: Path, failed: bool, phase: str
+) -> None:
+    destination = tmp_path / "result"
+    _write(destination)
+    checkpoint_path = destination / "checkpoint.json"
+    checkpoint = json.loads(checkpoint_path.read_text())
+    if failed:
+        checkpoint["trials"].pop(0)
+        checkpoint["failed_candidate_observation_ids"] = [f"obs-{phase}-1"]
+    else:
+        checkpoint["trials"][0]["observation_id"] = f"obs-{phase}-1"
+    summary_path = destination / "summary.json"
+    summary = json.loads(summary_path.read_text())
+    summary["checkpoint_digest"] = content_digest(checkpoint)
+    _rewrite_json(checkpoint_path, checkpoint)
+    _rewrite_json(summary_path, summary)
+
+    with pytest.raises(
+        ResultSnapshotError, match="checkpoint and phase observation IDs must be disjoint"
+    ):
+        load_result_snapshot(destination)
+
+
+def test_loader_rejects_search_observation_counted_as_both_successful_and_failed(
+    tmp_path: Path,
+) -> None:
+    destination = tmp_path / "result"
+    _write(destination)
+    checkpoint_path = destination / "checkpoint.json"
+    checkpoint = json.loads(checkpoint_path.read_text())
+    checkpoint["trials"].pop(0)
+    checkpoint["failed_candidate_observation_ids"] = [checkpoint["trials"][0]["observation_id"]]
+    summary_path = destination / "summary.json"
+    summary = json.loads(summary_path.read_text())
+    summary["checkpoint_digest"] = content_digest(checkpoint)
+    _rewrite_json(checkpoint_path, checkpoint)
+    _rewrite_json(summary_path, summary)
+
+    with pytest.raises(
+        ResultSnapshotError, match="successful and failed observation IDs must be disjoint"
+    ):
+        load_result_snapshot(destination)
+
+
+@pytest.mark.parametrize(
+    ("corruption", "message"),
+    [
+        ("none", None),
+        ("wrong-case", "does not match its source case"),
+        ("protected-removal", "removals are invalid"),
+        ("dependency-closure", "not dependency-closed"),
+        ("source-artifacts", "candidate does not match"),
+        ("request", "request does not match"),
+        ("context", "retained context does not match"),
+    ],
+)
+def test_self_consistent_result_files_must_also_match_the_actual_source_case(
+    tmp_path: Path, corruption: str, message: str | None
+) -> None:
+    original_request: JsonObject = {
+        "model": "fake",
+        "input": [{"marker": f"ctx-{letter}"} for letter in "abc"],
+    }
+    nodes = [_node(f"ctx-{letter}", f"/input/{index}") for index, letter in enumerate("abc")]
+    if corruption == "protected-removal":
+        nodes[1] = ContextNode.model_validate({**nodes[1].model_dump(), "protected": True})
+    elif corruption == "dependency-closure":
+        nodes[2] = ContextNode.model_validate({**nodes[2].model_dump(), "depends_on": ("ctx-b",)})
+    evidence = CaseEvidence(
+        manifest=_evidence().manifest,
+        request=original_request,
+        context=ContextGraph(nodes=tuple(nodes)),
+        default_experiment=_EXPERIMENT,
+    )
+    plan = ResolvedExecutionPlan.model_validate(
+        {**_plan().model_dump(), "case_digest": evidence.digest}
+    )
+    partial = corruption == "dependency-closure"
+    checkpoint = _checkpoint(plan, final_sweep_complete=not partial)
+    candidate = Candidate(
+        case_digest=evidence.digest,
+        execution_plan_digest=plan.digest,
+        source_artifact_digests=("f" * 64,) if corruption == "source-artifacts" else (),
+        retained_context_ids=("ctx-a", "ctx-c"),
+        removed_context_ids=("ctx-b",),
+        materialization="exact-request",
+    )
+    request: JsonObject = {
+        "model": "other" if corruption == "request" else "fake",
+        "input": [{"marker": "ctx-a"}, {"marker": "ctx-c"}],
+    }
+    retained = [nodes[0], nodes[2]]
+    if corruption == "context":
+        retained[0] = ContextNode.model_validate(
+            {**retained[0].model_dump(), "source": "other.json"}
+        )
+    changes: dict[str, object] = {}
+    if partial:
+        changes.update(
+            status="stopped",
+            search_result="search-incomplete",
+            confirmation_result="not-run",
+            confirmation_observation_ids=(),
+            next_action="Resume the search.",
+        )
+    summary = _summary(
+        plan,
+        checkpoint,
+        candidate_digest=candidate.digest,
+        source_artifact_digests=candidate.source_artifact_digests,
+        reduced_request_digest=content_digest(request),
+        retained_context_digest=content_digest([node.model_dump(mode="json") for node in retained]),
+        **changes,
+    )
+    experiment_path = tmp_path / "experiment.toml"
+    experiment_path.write_text(_EXPERIMENT)
+    destination = tmp_path / "result"
+    write_result_snapshot(
+        destination=destination,
+        summary=summary,
+        request=request,
+        retained_context_lines=tuple(node.model_dump_json() for node in retained),
+        experiment_source=experiment_path,
+        provenance=evidence.manifest.provenance.model_dump(),
+        execution_plan=plan,
+        checkpoint=checkpoint,
+    )
+    snapshot = load_result_snapshot(destination)
+    if corruption == "wrong-case":
+        evidence = CaseEvidence(
+            manifest=evidence.manifest,
+            request={**original_request, "model": "different"},
+            context=evidence.context,
+            default_experiment=_EXPERIMENT,
+        )
+    if message is None:
+        validate_result_case(snapshot, evidence)
+    else:
+        with pytest.raises(ResultSnapshotError, match=message):
+            validate_result_case(snapshot, evidence)
 
 
 def _rewrite_json(path: Path, value: object) -> None:

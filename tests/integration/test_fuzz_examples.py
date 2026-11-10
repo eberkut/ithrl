@@ -134,7 +134,7 @@ def test_public_fuzz_inputs_extract_and_preserve_unedited_input(
         assert asdict(materialize_codex_attempt(mutant)) == expected
         assert before["turn_input"] == {
             "items": ({"type": "text", "text": TRIGGER},),
-            "tool_output": None,
+            "checkpoint_continuation": False,
         }
     else:
         before_copilot = materialize_copilot_attempt(attempt)

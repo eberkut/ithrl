@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -215,6 +216,81 @@ def test_partial_block_is_eligible_but_has_no_point_difference() -> None:
     assert evidence.eligible
     assert not evidence.complete
     assert evidence.point_difference is None
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"provider_calls_per_attempt": 0}, "zero-call collection"),
+        ({"role": "discovery"}, "role does not belong"),
+        ({"selected_at": _TIME}, "selection time belongs only"),
+    ],
+)
+def test_preservation_blocks_cannot_claim_fuzz_or_selection_permissions(
+    changes: dict[str, object], message: str
+) -> None:
+    payload = json.loads(_plan().model_dump_json())
+    payload.update(
+        {
+            key: value.isoformat() if isinstance(value, datetime) else value
+            for key, value in changes.items()
+        }
+    )
+    with pytest.raises(ValidationError, match=message):
+        SamplingBlockPlan.model_validate_json(json.dumps(payload))
+
+
+def test_valid_observation_cannot_be_excluded_from_the_behavior_denominator() -> None:
+    attempt = _attempts(_plan())[0]
+    with pytest.raises(ValidationError, match="valid observations cannot carry exclusion evidence"):
+        SamplingAttempt(
+            schedule_position=attempt.schedule_position,
+            observation=attempt.observation,
+            independence_evidence_digest="f" * 64,
+        )
+
+
+def test_dispatch_count_must_include_operational_errors() -> None:
+    with pytest.raises(ValidationError, match="dispatched count must include"):
+        SamplingArmCounts(
+            dispatched=2, valid=1, matches=1, no_matches=0, invalid_observations=0, runner_errors=0
+        )
+
+
+def test_block_rejects_an_observation_recorded_before_its_predecessor() -> None:
+    plan = _plan()
+    payload = json.loads(
+        SamplingBlockEvidence(plan=plan, attempts=_attempts(plan)).model_dump_json()
+    )
+    payload["attempts"][1]["observation"]["recorded_at"] = (
+        _TIME - timedelta(seconds=1)
+    ).isoformat()
+    with pytest.raises(ValidationError, match="dispatch time order"):
+        SamplingBlockEvidence.model_validate_json(json.dumps(payload))
+
+
+def test_block_refuses_additional_work_after_an_arm_reaches_its_valid_target() -> None:
+    plan = _plan()
+    attempts = list(_attempts(plan))
+    used = {attempt.schedule_position for attempt in attempts}
+    position = next(position for position in range(len(plan.schedule)) if position not in used)
+    arm = plan.schedule[position]
+    preceding = [attempt for attempt in attempts if attempt.observation.arm.value == arm]
+    payload = json.loads(preceding[-1].model_dump_json())
+    payload["schedule_position"] = position
+    payload["observation"].update(
+        observation_id="extra-observation",
+        attempt=3,
+        recorded_at=(_TIME + timedelta(seconds=position)).isoformat(),
+    )
+    payload["observation"]["attempt_evidence"].update(
+        attempt_id="attempt-" + "f" * 32, attempt_digest="f" * 64
+    )
+    extra = SamplingAttempt.model_validate_json(json.dumps(payload))
+    attempts.append(extra)
+    attempts.sort(key=lambda item: item.schedule_position)
+    with pytest.raises(ValidationError, match="completed arms cannot dispatch"):
+        SamplingBlockEvidence(plan=plan, attempts=tuple(attempts))
 
 
 @pytest.mark.parametrize(

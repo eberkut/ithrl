@@ -54,6 +54,46 @@ def _shell_experiment() -> ExperimentDefinition:
     )
 
 
+@pytest.mark.parametrize(
+    ("values", "message"),
+    [
+        (
+            {"provider_transport": "allowed", "allowed_provider": "fixture"},
+            "requires a provider and endpoint",
+        ),
+        (
+            {
+                "provider_transport": "forbidden",
+                "allowed_provider": "fixture",
+                "allowed_endpoint": "https://provider.invalid",
+            },
+            "requires allowed provider transport",
+        ),
+    ],
+)
+def test_provider_destination_and_transport_permission_must_agree(
+    values: dict[str, object], message: str
+) -> None:
+    with pytest.raises(ValidationError, match=message):
+        SafetyPolicy.model_validate(values)
+
+
+@pytest.mark.parametrize(
+    ("values", "message"),
+    [
+        ({"action_execution": "possible", "action_denial": "enforced"}, "enforced action denial"),
+        ({"runtime_harness_version": "1"}, "requires harness"),
+    ],
+)
+def test_capability_cannot_advertise_contradictory_native_safety_guarantees(
+    values: dict[str, object], message: str
+) -> None:
+    with pytest.raises(ValidationError, match=message):
+        CapabilityProfile.model_validate(
+            {**CapabilityProfile.deterministic_fake().model_dump(), **values}
+        )
+
+
 def _evidence(tmp_path: Path):
     return extract_inference(
         FIXTURE,

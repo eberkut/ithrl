@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import os
 import sqlite3
+from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import closing
+from contextlib import closing, contextmanager
 from datetime import UTC, datetime, timedelta, timezone
+from functools import partial
 from pathlib import Path
 from threading import Barrier
 
@@ -92,6 +94,172 @@ def _reusable(
         role=ObservationRole.SEARCH,
         arm=ObservationArm.CANDIDATE,
     )
+
+
+@pytest.mark.parametrize("resolver", ["get", "get_many", "get_attempt"])
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [("recorded_at", "not-a-timestamp"), ("attempt_evidence", '{"termination_reason":"unknown"}')],
+)
+def test_authoritative_resolvers_reject_corrupt_rows(
+    tmp_path: Path, resolver: str, column: str, value: str
+) -> None:
+    store = ObservationStore(tmp_path / "observations.sqlite")
+    observation = _observation(attempt=1)
+    store.append(observation)
+    with closing(sqlite3.connect(store.path)) as connection, connection:
+        trigger = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE name = 'observations_no_update'"
+        ).fetchone()[0]
+        connection.execute("DROP TRIGGER observations_no_update")
+        # The two column names are fixed test parameters; row content stays bound.
+        connection.execute(
+            f"UPDATE observations SET {column} = ? WHERE observation_id = ?",  # noqa: S608
+            (value, observation.observation_id),
+        )
+        connection.execute(trigger)
+
+    resolve = {
+        "get": partial(store.get, observation.observation_id),
+        "get_many": partial(store.get_many, (observation.observation_id,)),
+        "get_attempt": partial(
+            store.get_attempt,
+            _identity(),
+            candidate_digest="candidate",
+            role=ObservationRole.SEARCH,
+            arm=ObservationArm.CANDIDATE,
+            attempt=1,
+        ),
+    }[resolver]
+    with pytest.raises(ObservationStoreError, match="stored observation is invalid"):
+        resolve()
+
+
+@pytest.mark.parametrize("query", ["get", "get_many", "attempt_counts", "record_attempt"])
+def test_sqlite_failure_after_schema_validation_preserves_existing_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, query: str
+) -> None:
+    store = ObservationStore(tmp_path / "observations.sqlite")
+    observation = _observation(attempt=1)
+    store.append(observation)
+    initialize = store.initialize
+    invoke = {
+        "get": partial(store.get, observation.observation_id),
+        "get_many": partial(store.get_many, (observation.observation_id,)),
+        "attempt_counts": partial(
+            store.attempt_counts,
+            _identity(),
+            candidate_digest="candidate",
+            role=ObservationRole.SEARCH,
+            arm=ObservationArm.CANDIDATE,
+        ),
+        "record_attempt": partial(
+            store.record_attempt,
+            identity=_identity(),
+            candidate_digest="candidate",
+            role=ObservationRole.SEARCH,
+            arm=ObservationArm.CANDIDATE,
+            outcome=ObservationOutcome.MATCH,
+            attempt_evidence=observation.attempt_evidence,
+        ),
+    }[query]
+
+    @contextmanager
+    def unavailable() -> Generator[sqlite3.Connection, None, None]:
+        raise sqlite3.OperationalError("injected storage failure")
+        yield
+
+    with monkeypatch.context() as patch:
+
+        def initialize_then_fail() -> None:
+            initialize()
+            patch.setattr(store, "_connection", unavailable)
+
+        patch.setattr(store, "initialize", initialize_then_fail)
+        with pytest.raises(ObservationStoreError) as caught:
+            invoke()
+        assert isinstance(caught.value.__cause__, sqlite3.OperationalError)
+    assert store.get(observation.observation_id) == observation
+    assert _reusable(store) == (observation,)
+
+
+@pytest.mark.parametrize("outcome", [ObservationOutcome.MATCH, ObservationOutcome.RUNNER_ERROR])
+def test_behavior_verdict_and_attempt_completion_cannot_disagree(
+    outcome: ObservationOutcome,
+) -> None:
+    opposite = _observation(
+        attempt=1,
+        outcome=ObservationOutcome.RUNNER_ERROR
+        if outcome is ObservationOutcome.MATCH
+        else ObservationOutcome.MATCH,
+        error_category="transport" if outcome is ObservationOutcome.MATCH else None,
+    ).attempt_evidence
+    with pytest.raises(ValidationError, match="attempt evidence"):
+        _observation(
+            attempt=1,
+            outcome=outcome,
+            error_category="transport" if outcome is ObservationOutcome.RUNNER_ERROR else None,
+            attempt_evidence=opposite,
+        )
+
+
+def test_database_directory_is_refused_without_changing_it(tmp_path: Path) -> None:
+    path = tmp_path / "observations.sqlite"
+    path.mkdir()
+    marker = path / "evidence"
+    marker.write_bytes(b"preserved")
+    with pytest.raises(ObservationStoreError):
+        ObservationStore(path).initialize()
+    assert marker.read_bytes() == b"preserved"
+
+
+@pytest.mark.parametrize(
+    "operation", ["get", "experiment", "compatible", "attempt", "counts", "record"]
+)
+def test_empty_evidence_selectors_are_rejected_before_creating_a_database(
+    tmp_path: Path, operation: str
+) -> None:
+    store = ObservationStore(tmp_path / "missing.sqlite")
+    identity = _identity()
+    evidence = _observation(attempt=1).attempt_evidence
+    invoke = {
+        "get": partial(store.get, ""),
+        "experiment": partial(store.list_for_experiment, ""),
+        "compatible": partial(
+            store.list_compatible,
+            identity,
+            candidate_digest="",
+            role=ObservationRole.SEARCH,
+            arm=ObservationArm.CANDIDATE,
+        ),
+        "attempt": partial(
+            store.get_attempt,
+            identity,
+            candidate_digest="",
+            role=ObservationRole.SEARCH,
+            arm=ObservationArm.CANDIDATE,
+            attempt=1,
+        ),
+        "counts": partial(
+            store.attempt_counts,
+            identity,
+            candidate_digest="",
+            role=ObservationRole.SEARCH,
+            arm=ObservationArm.CANDIDATE,
+        ),
+        "record": partial(
+            store.record_attempt,
+            identity=identity,
+            candidate_digest="",
+            role=ObservationRole.SEARCH,
+            arm=ObservationArm.CANDIDATE,
+            outcome=ObservationOutcome.MATCH,
+            attempt_evidence=evidence,
+        ),
+    }[operation]
+    with pytest.raises(ValueError, match="must not be empty"):
+        invoke()
+    assert not store.path.exists()
 
 
 def test_store_appends_repeated_candidate_observations(tmp_path: Path) -> None:

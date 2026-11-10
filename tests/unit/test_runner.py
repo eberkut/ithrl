@@ -141,6 +141,61 @@ def test_runner_package_preserves_the_previous_public_imports() -> None:
 
 
 @pytest.mark.parametrize(
+    ("changes", "code", "message"),
+    [
+        ({"effective_policy_digest": "f" * 64}, RunnerErrorCode.SAFETY, "resolved safety policy"),
+        ({"provider": "other"}, RunnerErrorCode.SAFETY, "destination differs"),
+        ({"endpoint": "https://other.invalid"}, RunnerErrorCode.SAFETY, "destination differs"),
+        ({"model_requested": "other"}, RunnerErrorCode.CONTRACT, "requested model differs"),
+    ],
+)
+def test_failed_runner_cannot_change_the_prepared_identity_or_policy(
+    tmp_path: Path, changes: dict[str, str], code: RunnerErrorCode, message: str
+) -> None:
+    _, attempt = _attempt(_synthetic_evidence(tmp_path))
+    error = RunnerError(
+        RunnerErrorCode.STARTUP,
+        "original failure",
+        effective_policy_digest=changes.get("effective_policy_digest"),
+        provider=changes.get("provider"),
+        endpoint=changes.get("endpoint"),
+        model_requested=changes.get("model_requested"),
+    )
+    classified = validate_runner_error(attempt, error)
+    assert classified.code is code
+    assert message in str(classified)
+    evidence = AttemptEvidence.from_error(attempt, classified)
+    assert evidence.attempt_id == attempt.attempt_id
+    assert not evidence.automatic_retry_safe
+
+
+@pytest.mark.parametrize(
+    ("counts", "code", "message"),
+    [
+        ({"actions_requested": 1}, RunnerErrorCode.SAFETY, "every requested action as denied"),
+        ({"source_store_effect": "may-change"}, RunnerErrorCode.SAFETY, "preserved source session"),
+        ({"original_workspace_effect": "may-change"}, RunnerErrorCode.SAFETY, "original workspace"),
+        ({"process_outcome": "exited"}, RunnerErrorCode.SAFETY, "omitted cleanup evidence"),
+        ({"elapsed_milliseconds": 10**9}, RunnerErrorCode.TIMEOUT, "wall-time limit"),
+        ({"native_output_bytes": 10**9}, RunnerErrorCode.OUTPUT_LIMIT, "native-output limit"),
+        ({"native_output_bytes": 1}, RunnerErrorCode.CONTRACT, "reference and byte count disagree"),
+    ],
+)
+def test_failed_runner_with_unsafe_or_over_budget_accounting_cannot_be_retried(
+    tmp_path: Path, counts: dict[str, object], code: RunnerErrorCode, message: str
+) -> None:
+    _, attempt = _attempt(_synthetic_evidence(tmp_path))
+    error = RunnerError(
+        RunnerErrorCode.STARTUP, "original failure", accounting=RunAccounting.model_validate(counts)
+    )
+    classified = validate_runner_error(attempt, error)
+    assert classified.code is code
+    assert message in str(classified)
+    assert classified.accounting == error.accounting
+    assert not AttemptEvidence.from_error(attempt, classified).automatic_retry_safe
+
+
+@pytest.mark.parametrize(
     ("code", "expected"),
     [
         (RunnerErrorCode.PREPARATION, ProviderAcceptanceState.NOT_STARTED),

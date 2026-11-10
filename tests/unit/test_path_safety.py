@@ -10,7 +10,101 @@ import pytest
 from filelock import Timeout
 
 import ithrl.path_safety as path_safety
-from ithrl.path_safety import UnsafePathError, private_file_lock
+from ithrl.path_safety import UnsafePathError, private_file_lock, validate_directory_chain
+
+
+def test_directory_chain_rejects_parent_traversal() -> None:
+    with pytest.raises(UnsafePathError, match="cannot contain"):
+        validate_directory_chain(Path("private/../evidence"))
+
+
+@pytest.mark.parametrize("component", ["file", "symlink", "dangling-symlink"])
+def test_directory_chain_rejects_nondirectory_or_symlink_components(
+    tmp_path: Path, component: str
+) -> None:
+    parent = tmp_path / "parent"
+    target = tmp_path / "target"
+    if component == "file":
+        parent.write_text("existing evidence")
+    else:
+        if component == "symlink":
+            target.mkdir()
+        parent.symlink_to(target, target_is_directory=True)
+
+    with pytest.raises(UnsafePathError, match=r"not a directory|symlink"):
+        validate_directory_chain(parent / "new-evidence")
+
+    assert not (target / "new-evidence").exists()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX directory ownership contract")
+@pytest.mark.parametrize("mode", [0o770, 0o777])
+def test_directory_chain_rejects_writable_parent_despite_private_child(
+    tmp_path: Path, mode: int
+) -> None:
+    parent = tmp_path / "shared"
+    child = parent / "private"
+    child.mkdir(parents=True, mode=0o700)
+    parent.chmod(mode)
+
+    with pytest.raises(UnsafePathError, match="writable by other users"):
+        validate_directory_chain(child / "evidence")
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX sticky-directory contract")
+@pytest.mark.parametrize("private_child", [False, True])
+def test_sticky_shared_directory_requires_an_existing_private_descendant(
+    tmp_path: Path, private_child: bool
+) -> None:
+    parent = tmp_path / "shared"
+    parent.mkdir(mode=0o700)
+    parent.chmod(0o1777)
+    child = parent / "private"
+    if private_child:
+        child.mkdir(mode=0o700)
+        validate_directory_chain(child / "evidence")
+    else:
+        with pytest.raises(UnsafePathError, match="writable by other users"):
+            validate_directory_chain(child / "evidence")
+    assert not (child / "evidence").exists()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX directory ownership contract")
+def test_directory_chain_rejects_a_foreign_owner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parent = tmp_path / "private"
+    parent.mkdir(mode=0o700)
+    foreign_uid = max(os.geteuid(), Path(parent.anchor).stat().st_uid) + 1
+    lstat = Path.lstat
+
+    def foreign_owner(path: Path) -> os.stat_result:
+        metadata = lstat(path)
+        if path == parent:
+            return os.stat_result((*metadata[:4], foreign_uid, *metadata[5:]))
+        return metadata
+
+    monkeypatch.setattr(Path, "lstat", foreign_owner)
+    with pytest.raises(UnsafePathError, match="controlled by another user"):
+        validate_directory_chain(parent / "evidence")
+
+
+def test_directory_chain_hides_unavailable_component_diagnostics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parent = tmp_path / "private"
+    parent.mkdir(mode=0o700)
+    lstat = Path.lstat
+
+    def unavailable(path: Path) -> os.stat_result:
+        if path == parent:
+            raise PermissionError("private diagnostic")
+        return lstat(path)
+
+    monkeypatch.setattr(Path, "lstat", unavailable)
+    with pytest.raises(UnsafePathError) as caught:
+        validate_directory_chain(parent / "evidence")
+    assert str(caught.value) == "path directory is unavailable"
 
 
 @pytest.mark.parametrize("existing", [False, True])
