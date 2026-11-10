@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling==1.32.4"]
+requires = ["hatchling==1.33.0"]
 build-backend = "hatchling.build"
 
 [project]
@@ -70,8 +70,8 @@ dev = [
   "pytest-github-actions-annotate-failures>=0.4.2",
   "PyYAML>=6",
   "radon==6.0.1",
-  "ruff==0.17.2",
-  "rumdl==0.3.0",
+  "ruff==0.17.3",
+  "rumdl==0.3.2",
   "scipy-stubs>=1.18",
   "types-jsonschema>=4.25",
   "types-PyYAML>=6",

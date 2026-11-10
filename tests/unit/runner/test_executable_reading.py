@@ -68,10 +68,12 @@ def test_executable_read_races_preserve_error_and_final_stat_order(
                 source.unlink()
         return original_fstat(descriptor)
 
-    monkeypatch.setattr(Path, "stat", selected_stat)
-    monkeypatch.setattr(os, "fstat", changed_fstat)
-    with pytest.raises(error_type) as captured:
-        reader(source)
+    # Pytest's FD capture also calls fstat; restore the fault before capture resumes.
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "stat", selected_stat)
+        patch.setattr(os, "fstat", changed_fstat)
+        with pytest.raises(error_type) as captured:
+            reader(source)
     if when == "io-error":
         assert "unavailable" in str(captured.value)
         assert isinstance(captured.value.__cause__, PermissionError)
