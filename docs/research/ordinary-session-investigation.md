@@ -57,8 +57,8 @@ minimality, necessity, unique cause or global optimum.
 
 ## What the developer can do with the result
 
-The useful distinction is between two questions in the original discussion: which administrative
-approval or pinning policy to apply, and how the installer action selects the CLI used by a caller.
+The original discussion raised two questions: which administrative approval or pinning policy to
+apply, and how the installer action selects the CLI used by a caller.
 The selected context still elicited the Databricks topic after the first question's paragraphs were
 removed. The developer can inspect the retained technical question and its code/documentation
 evidence without treating the administrative discussion as required for this particular topic

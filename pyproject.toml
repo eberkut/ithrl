@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ithrl"
-version = "0.2.0"
+version = "0.3.0"
 description = "Find smaller agent contexts that preserve a selected model behavior"
 readme = "README.md"
 authors = [
@@ -81,6 +81,9 @@ branding = [
     "resvg-py==0.5.0",
 ]
 
+[tool.uv]
+required-version = "==0.13.4"
+
 [tool.semantic_release]
 allow_zero_version = true
 major_on_zero = false
@@ -98,10 +101,12 @@ ignore_token_for_push = true
 
 [tool.semantic_release.changelog]
 mode = "init"
+template_dir = ".github/changelog"
 exclude_commit_patterns = ['^(?:build|chore|ci|docs|style|test)(?:\([^)]*\))?!?: ']
 
-[tool.semantic_release.changelog.default_templates]
-mask_initial_release = false
+[tool.semantic_release.changelog.environment]
+trim_blocks = true
+lstrip_blocks = true
 
 [tool.hatch.build.targets.sdist]
 include = [
@@ -177,6 +182,8 @@ skip_covered = true
 line-length = 100
 
 [tool.rumdl.per-file-ignores]
+# Semantic Release keeps each generated entry and its links on one line.
+"CHANGELOG.md" = ["MD013"]
 # Typer owns usage prompts, aligned option descriptions and prose wrapping.
 "docs/cli.md" = ["MD013", "MD014", "MD064"]
 
