@@ -105,9 +105,11 @@ def test_program_digest_refuses_source_races_and_preserves_error_causes(
                 source.unlink()
         return original_fstat(descriptor)
 
-    monkeypatch.setattr(os, "fstat", changed_fstat)
-    with pytest.raises(error_type) as captured:
-        reader(source)
+    # Pytest's FD capture also calls fstat; restore the fault before capture resumes.
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "fstat", changed_fstat)
+        with pytest.raises(error_type) as captured:
+            reader(source)
     if when == "opening":
         assert str(captured.value) == f"the {harness} worker source changed while opening"
         assert captured.value.__cause__ is None
