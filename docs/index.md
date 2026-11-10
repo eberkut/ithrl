@@ -11,16 +11,24 @@
 that preserves its behavior. Context fuzzing explores text appends to prior user input for Codex
 and Copilot final-response targets.
 
-Start with
-[installation and the bundled example](https://github.com/eberkut/ithrl/blob/main/README.md#install).
-The example runs locally without an agent installation or model access.
+## Start here
 
-- [Native runs](native-runs.md): select a saved decision, configure a reduction experiment and
-  inspect its provider, safety controls and budget before execution. The page also covers native
-  fuzzing and a provider-free walkthrough.
-- [Results and privacy](results.md): inspect retained context, interpret preservation and usage,
-  and keep private session data out of public reports.
+- **Learn the workflow:**
+    [install ithrl](https://github.com/eberkut/ithrl/blob/main/README.md#install) and
+    [run the bundled example](https://github.com/eberkut/ithrl/blob/main/README.md#try-it). It needs
+    no agent installation or model access and shows the expected output.
+- **Use your own session:** [select a saved decision](native-runs.md#select-a-saved-decision),
+  configure a reduction experiment and review its provider, safety controls and budget. The
+  [fuzzing walkthrough](native-runs.md#context-fuzzing) covers text appends.
+- **Investigate a result:** [inspect retained context](results.md#inspect-retained-context) and
+  read the [worked investigation](research/ordinary-session-investigation.md) for an example of
+  what the reduced context can tell you.
+
+## Reference and background
+
 - [CLI reference](cli.md): commands, arguments, options and defaults generated from the CLI.
+- [Results and privacy](results.md): saved files, preservation, resource usage, resume and private
+  data handling.
 - [Troubleshooting](troubleshooting.md): selection, setup, refusal and resume problems.
 - [Measurements](measurements.md): benchmark construction, outcomes and costs.
 

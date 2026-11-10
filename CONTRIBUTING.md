@@ -26,8 +26,9 @@ For task-specific instructions, see [documentation](#documentation),
 
 ## Development setup
 
-Use [uv](https://docs.astral.sh/uv/) and Python 3.12, 3.13 or 3.14. Python 3.14 is the primary
-development version. From the repository root:
+Use [uv](https://docs.astral.sh/uv/) at the version required by `tool.uv.required-version` in
+`pyproject.toml`, and Python 3.12, 3.13 or 3.14. CI reads the same uv pin through `setup-uv`'s
+`version-file` input. Python 3.14 is the primary development version. From the repository root:
 
 ```bash
 uv sync --locked --all-groups --all-extras
@@ -130,12 +131,20 @@ Use `uv run rumdl fmt .` to format Markdown, then `uv run rumdl check .` to lint
 version and `pyproject.toml` configuration apply to pre-commit and CI. Prose wraps at 100
 characters; commands and tables retain their layout. MkDocs syntax is recognized within `docs/`. The
 generated CLI reference has narrow exceptions for Typer's prompts, option alignment and wrapping;
-its byte-for-byte generation check remains enforced. The generated changelog is checked under the
-shared rules.
+its byte-for-byte generation check remains enforced. The generated changelog keeps each entry on
+one source line, with a line-length exception.
 
 Keep installation and first-use instructions in README, and detailed user guides and reference in
 `docs/`. Support, security and conduct policies live at the repository root. Keep private sessions,
 cases and credentials out of documentation and generated output.
+
+Use [Diátaxis](https://diataxis.fr/) to match a section to the reader's need. A tutorial guides
+learning through a reproducible example with expected results. A how-to gives prerequisites,
+actions and a success check for a specific task. Reference describes commands and contracts;
+explanation covers rationale, evidence and limits. Link between these when the reader needs more
+detail. Apply the distinction within existing pages; add a page when it has a separate purpose.
+Use concrete instructions and claims supported by evidence. Remove filler, promotional language
+and repeated explanations.
 
 [ROADMAP.md](ROADMAP.md) describes future direction. GitHub issues own actionable scope,
 dependencies, acceptance criteria and status; release milestones group scope and the public
@@ -302,8 +311,13 @@ justified and documented before release.
 Python Semantic Release, pinned in the `release` dependency group, calculates versions from
 Conventional Commits. `pyproject.toml` is the version source; installed CLI and Codex client
 metadata read that distribution version. The tool generates `CHANGELOG.md` from the full release
-history, omitting routine build, CI, documentation, style and test commits. Do not edit the
-generated changelog by hand; review its contents before approving a release.
+history, omitting routine build, CI, documentation, style and test commits. Its
+[template](.github/changelog/CHANGELOG.md.j2) keeps lists compact, with one entry per source line.
+Change the template to adjust formatting; do not edit generated entries by hand.
+
+A maintainer starts preparation; Semantic Release chooses the version and writes the notes.
+Review and merge the generated files through a PR so CI tests the prepared version before the
+publication workflow builds it. The publication workflow uses that committed version.
 
 Use `main` with complete history and all existing release tags available. Preview the next version
 without changing files, the index, commits, tags or remote state:
@@ -341,9 +355,9 @@ ownership and the following repository/index settings:
 
 - PyPI and TestPyPI Trusted Publishers bind `eberkut/ithrl`, `release.yml` and their respective
   `pypi` / `testpypi` environments. Publishing uses OIDC, without a stored PyPI API token.
-- Both environments admit only `main`. `pypi` requires the maintainer's approval, permits
-  self-review and disallows administrative approval bypass. Environment declarations in YAML
-  do not configure these protections; verify the actual settings before dispatch.
+- Both environments admit only `main`, require the maintainer's approval, permit self-review and
+  disallow administrative approval bypass. Environment declarations in YAML do not configure these
+  protections; verify the actual settings before dispatch.
 - Release-tag rules permit the maintainer's signed-tag creation and prevent unapproved tag
   replacement or deletion. The workflow never creates a tag.
 
@@ -355,10 +369,12 @@ gh workflow run release.yml --repo eberkut/ithrl --ref main \
   -f version=X.Y.Z -f source-sha=FULL_APPROVED_COMMIT_SHA
 ```
 
-1. Inspect that run's checks and successful **Publish TestPyPI rehearsal** job. Its summary records
+1. After source verification and validation pass, approve the `testpypi` deployment on the run's
+   GitHub page. This authorizes the public TestPyPI upload.
+2. Inspect the successful **Publish TestPyPI rehearsal** job. Its summary records
    the source, version, immutable artifact ID and checksum-manifest digest. The production job
    waits at the `pypi` environment. TestPyPI files, logs and artifacts are public.
-2. Download that run's `release-distributions` artifact into a new review directory. For example:
+3. Download that run's `release-distributions` artifact into a new review directory. For example:
 
    ```bash
    gh run download RUN_ID --repo eberkut/ithrl \
@@ -369,7 +385,7 @@ gh workflow run release.yml --repo eberkut/ithrl --ref main \
    from the review directory. Inspect the release notes and confirm TestPyPI serves the same
    distribution hashes. Complete a clean TestPyPI installation/example rehearsal before approval;
    resolve dependencies only from the normal PyPI index, without mixing indexes.
-3. After the rehearsal passes and tag creation is approved, create and verify the signed tag at
+4. After the rehearsal passes and tag creation is approved, create and verify the signed tag at
    the frozen source commit, then push only that tag through the permitted tag-rules path:
 
    ```bash
@@ -378,12 +394,12 @@ gh workflow run release.yml --repo eberkut/ithrl --ref main \
    git push origin refs/tags/vX.Y.Z
    ```
 
-4. Review and approve the `pypi` deployment on the run's GitHub page. The job verifies the existing
+5. Review and approve the `pypi` deployment on the run's GitHub page. The job verifies the existing
    annotated tag targets the frozen source, rechecks the files, and uploads to PyPI. The final job
    rechecks the tag/files and creates the GitHub Release with those distributions, notes and
    checksums. Signature verification belongs to the preceding maintainer tag check; the workflow
    checks the tag object and target commit.
-5. Verify the published versions, hashes, attestations and installed example. A successful upload
+6. Verify the published versions, hashes, attestations and installed example. A successful upload
    alone does not complete release acceptance.
 
 Complete review within 30 days: release artifacts are retained for 30 days, and GitHub limits the

@@ -1,0 +1,40 @@
+{% macro description(commit, text) -%}
+{% if commit.scope %}**{{ commit.scope }}**: {% endif %}{{ text[0] | upper }}{{ text[1:] }}
+{%- endmacro %}
+{% macro changes(elements) -%}
+{% for type, commits in elements | dictsort if type != "unknown" %}
+
+### {{ type | title }}
+
+{% for commit in commits | sort(attribute="scope,descriptions.0") %}
+- {{ description(commit, commit.descriptions[0]) }} ({% if commit.linked_merge_request %}[{{ commit.linked_merge_request }}]({{ commit.linked_merge_request | pull_request_url }}), {% endif %}[`{{ commit.short_hash }}`]({{ commit.hexsha | commit_hash_url }}))
+{% endfor %}
+{% endfor %}
+{% set commits = elements.values() | sum(start=[]) | rejectattr("error", "defined") | list %}
+{% for attribute, title in [("breaking_descriptions", "Breaking Changes"), ("release_notices", "Additional Release Information")] %}
+{% set details = commits | selectattr(attribute ~ ".0") | list %}
+{% if details %}
+
+### {{ title }}
+
+{% for commit in details | sort(attribute="scope," ~ attribute ~ ".0") %}
+{% for text in commit | attr(attribute) %}
+- {{ description(commit, text) }}
+{% endfor %}
+{% endfor %}
+{% endif %}
+{% endfor %}
+{%- endmacro %}
+# CHANGELOG
+{% if ctx.history.unreleased %}
+
+## Unreleased
+
+{{ changes(ctx.history.unreleased) | trim }}
+{% endif %}
+{% for release in ctx.history.released.values() %}
+
+## {{ release.version.as_semver_tag() }} ({{ release.tagged_date.strftime("%Y-%m-%d") }})
+
+{{ changes(release["elements"]) | trim }}
+{% endfor %}
