@@ -190,7 +190,12 @@ def test_pending_dispatch_blocks_later_state_transitions_without_releasing_its_c
     with file.acquire_lock(store):
         file.reserve_dispatch(store, _reservation(plan))
         before = file.path.read_bytes()
-        with pytest.raises(RunStateError):
+        message = (
+            "selection requires reconciled search and cannot be repeated"
+            if operation == "selection"
+            else None
+        )
+        with pytest.raises(RunStateError, match=message):
             invoke()
         assert file.path.read_bytes() == before
         assert file.usage(store, now=_TIME + timedelta(seconds=2)).pending_provider_calls == 2
@@ -287,25 +292,25 @@ def test_sampling_approvals_cannot_rewrite_the_owner_time_or_frozen_cost_policy(
 
 
 @pytest.mark.parametrize(
-    "corruption",
+    ("corruption", "message"),
     [
-        "duplicate-approval",
-        "future-approval",
-        "duplicate-block",
-        "changed-original",
-        "changed-materialization",
-        "earlier-block",
-        "active-predecessor",
-        "wrong-block",
-        "wrong-arm",
-        "wrong-charge",
-        "expired-dispatch",
-        "schedule-overrun",
-        "no-active-block",
+        ("duplicate-approval", "budget approval IDs must be unique"),
+        ("future-approval", "initial allowance must precede run start"),
+        ("duplicate-block", "block IDs must be unique"),
+        ("changed-original", "block original identity must match the run"),
+        ("changed-materialization", "block original materialization must match the run"),
+        ("earlier-block", "blocks must follow run chronology"),
+        ("active-predecessor", "only the final block may remain active"),
+        ("wrong-block", "dispatch must reference the exact frozen block"),
+        ("wrong-arm", "dispatch arm must match the frozen schedule"),
+        ("wrong-charge", "dispatch charge must match the exact profile bound"),
+        ("expired-dispatch", "dispatch must be reserved within frozen freshness"),
+        ("schedule-overrun", "dispatch exceeds the frozen schedule"),
+        ("no-active-block", "dispatch requires an active block"),
     ],
 )
 def test_persisted_sampling_history_rejects_inconsistent_approvals_and_dispatches(
-    tmp_path: Path, corruption: str
+    tmp_path: Path, corruption: str, message: str
 ) -> None:
     file, store, plan = _create(tmp_path)
     with file.acquire_lock(store):
@@ -343,7 +348,7 @@ def test_persisted_sampling_history_rejects_inconsistent_approvals_and_dispatche
     else:
         block["archived"] = True
 
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match=message):
         SampledRunState.model_validate_json(json.dumps(payload))
     with file.acquire_lock(store):
         assert file.load(store) == state
