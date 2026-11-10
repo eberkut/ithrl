@@ -219,7 +219,7 @@ def mock_native(
                 "supported_capture_types": ("logical-session",),
                 "supported_materializations": ("source-backed",),
                 "reconstruction_method": (
-                    "codex-app-server-inject-items-v1"
+                    "codex-app-server-inject-checkpoint-v1"
                     if harness == "codex"
                     else COPILOT_RECONSTRUCTION_METHOD
                 ),

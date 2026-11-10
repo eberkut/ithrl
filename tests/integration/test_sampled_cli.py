@@ -27,6 +27,7 @@ import ithrl.cli.sampled as sampled
 import ithrl.cli.sampled_reduction as sampled_reduction
 import ithrl.cli.sampled_session as sampled_session
 import ithrl.observations as observations
+import ithrl.reduce.engine as reduction_engine
 import ithrl.sampling as sampling
 import ithrl.workflow as workflow
 from ithrl.adapters import enumerate_decisions, parse_session
@@ -88,7 +89,7 @@ class OperatorRunner:
                 "deterministic": False,
                 "supported_capture_types": ("logical-session",),
                 "supported_materializations": ("source-backed",),
-                "reconstruction_method": "codex-app-server-inject-items-v1",
+                "reconstruction_method": "codex-app-server-inject-checkpoint-v1",
                 "supported_targets": ("final-response",),
                 "provider_transport": "required",
                 "provider_calls_per_attempt": 1,
@@ -179,14 +180,33 @@ class OperatorCase:
 
 
 @pytest.fixture
-def operator_case(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> OperatorCase:
+def operator_case(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
+) -> OperatorCase:
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     # Native source is synthetic and credential-free, but passes actual adapter/extraction checks.
     source = tmp_path / "rollout.jsonl"
-    source.write_text(
-        _SOURCE.read_text().replace("Inspect the fixture context.", _PRIVATE_CONTEXT),
-        encoding="utf-8",
-    )
+    source_text = _SOURCE.read_text().replace("Inspect the fixture context.", _PRIVATE_CONTEXT)
+    if getattr(request, "param", None) == "extra-assistant-context":
+        records = [json.loads(line) for line in source_text.splitlines()]
+        records[4:4] = [
+            {
+                "type": "response_item",
+                "timestamp": records[3]["timestamp"],
+                "payload": {
+                    "type": "message",
+                    "id": f"message-fixture-prior-{index}",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Prior fixture context."}],
+                    "phase": "commentary",
+                },
+            }
+            for index in range(2)
+        ]
+        for ordinal, record in enumerate(records):
+            record["ordinal"] = ordinal
+        source_text = "\n".join(json.dumps(record) for record in records) + "\n"
+    source.write_text(source_text, encoding="utf-8")
     session = parse_session(source)
     decision = enumerate_decisions(session)[0]
     workspace = extract_decision(
@@ -365,7 +385,14 @@ def _write_operator_experiment(case: OperatorCase, experiment: SampledExperiment
     case.frozen_files[case.experiment_path] = case.experiment_path.read_bytes()
 
 
-def _enable_section_search(case: OperatorCase) -> None:
+def _enable_section_search(
+    case: OperatorCase,
+    *,
+    require_criterion: bool = False,
+    minimum_bytes: int = 1,
+    coarse_limit: int = 1,
+    stop_when_no_retained_fields: bool = False,
+) -> None:
     experiment = case.selection.experiment
     assert experiment.reduction is not None
     catalog = next(
@@ -375,9 +402,11 @@ def _enable_section_search(case: OperatorCase) -> None:
     )
     sections = TextSectionSearchPlan(
         fields=(catalog.removal(tuple(section.id for section in catalog.sections)),),
-        max_coarse_comparisons=1,
+        max_coarse_comparisons=coarse_limit,
         max_fine_comparisons=2,
-        minimum_removed_utf8_bytes=1,
+        minimum_removed_utf8_bytes=minimum_bytes,
+        require_criterion_for_confirmation=require_criterion,
+        stop_when_no_retained_fields=stop_when_no_retained_fields,
     )
     _write_operator_experiment(
         case,
@@ -403,10 +432,16 @@ def test_section_search_cli_freezes_caps_and_dry_run_has_no_dispatch(
     _assert_no_dispatch(operator_case)
 
 
+@pytest.mark.parametrize("require_criterion", [False, True])
 def test_section_search_cli_confirms_selected_edit_and_resumes_without_replay(
     operator_case: OperatorCase,
+    require_criterion: bool,
 ) -> None:
-    _enable_section_search(operator_case)
+    _enable_section_search(
+        operator_case,
+        require_criterion=require_criterion,
+        minimum_bytes=len(_PRIVATE_CONTEXT.encode("utf-8")),
+    )
     completed = _invoke(operator_case.command())
     assert completed.exit_code == ExitCode.SUCCESS, completed.output
     report = _json(completed)
@@ -462,6 +497,197 @@ def test_section_search_cli_confirms_selected_edit_and_resumes_without_replay(
     )
     assert inspected.exit_code == ExitCode.SUCCESS, inspected.output
     _json(inspected)
+    operator_case.assert_sources_unchanged()
+
+
+@pytest.mark.parametrize("result", ["below-threshold", "no-retained-fields"])
+@pytest.mark.parametrize("require_criterion", [False, True])
+def test_section_criterion_controls_selection_and_confirmation(
+    operator_case: OperatorCase,
+    result: str,
+    require_criterion: bool,
+) -> None:
+    _enable_section_search(
+        operator_case,
+        require_criterion=require_criterion,
+        minimum_bytes=len(_PRIVATE_CONTEXT.encode("utf-8")) + 1,
+    )
+    if result == "no-retained-fields":
+        # Context-independent behavior lets coarse search remove the selected field.
+        operator_case.runner.planted_id = "fixture-behavior-independent-of-context"
+    completed = _invoke(operator_case.command())
+    report = _json(completed)
+    assert report["require_criterion_for_confirmation"] is require_criterion
+    assert report["additional_reduction_result"] == result
+    if not require_criterion:
+        assert completed.exit_code == ExitCode.SUCCESS, completed.output
+        assert report["confirmation_result"] == "confirmed-preserving"
+        assert any(call.phase == "confirmation" for call in operator_case.runner.calls)
+        operator_case.assert_sources_unchanged()
+        return
+    assert completed.exit_code != ExitCode.SUCCESS, completed.output
+    assert report["stop_reason"] == "section-criterion-not-met"
+    assert report["confirmation_result"] == "not-run"
+    assert report["next_command"] is None
+    assert "confirmation was not started" in report["next_action"]
+    destination = Path(report["result_path"])
+    saved = SampledReductionEvidence.model_validate_json((destination / "result.json").read_text())
+    assert saved.confirmation is None
+    state = load_sampling_snapshot(
+        destination / "sampling", store=ObservationStore(operator_case.store_path)
+    )
+    assert state.selection is None
+    assert all(call.phase != "confirmation" for call in operator_case.runner.calls)
+    assert not any(block.plan.role == "confirmation" for block in saved.checkpoint.blocks)
+    calls_before = tuple(operator_case.runner.calls)
+    resumed = _invoke(
+        [
+            "shrink",
+            str(destination),
+            "--resume",
+            "--acknowledge-model-execution",
+            "--max-provider-calls-per-attempt",
+            "1",
+            "--format",
+            "json",
+        ]
+    )
+    assert _json(resumed)["stop_reason"] == "section-criterion-not-met"
+    assert tuple(operator_case.runner.calls) == calls_before
+    operator_case.assert_sources_unchanged()
+
+
+def test_unmet_section_criterion_preserves_budget_resume_without_replay(
+    operator_case: OperatorCase,
+) -> None:
+    _enable_section_search(operator_case, require_criterion=True, coarse_limit=1)
+    stopped = _invoke(operator_case.command("--max-provider-calls", "11"))
+    report = _json(stopped)
+    assert report["stop_reason"] == "provider-call-budget"
+    assert report["confirmation_result"] == "not-run"
+    assert report["fine_search_complete"] is False
+    assert report["fine_comparisons_used"] == 0
+    assert report["next_command"] is not None
+    prior_ids = [call.attempt_id for call in operator_case.runner.calls]
+    assert len(prior_ids) == 3  # Calibration and coarse pair; confirmation stays reserved.
+    resumed = _invoke(
+        [
+            *shlex.split(report["next_command"])[1:],
+            "--max-provider-calls",
+            "100",
+            "--format",
+            "json",
+        ]
+    )
+    assert resumed.exit_code == ExitCode.SUCCESS, resumed.output
+    after = _json(resumed)
+    assert after["additional_reduction_result"] == "criterion-met"
+    assert after["confirmation_result"] == "confirmed-preserving"
+    ids = [call.attempt_id for call in operator_case.runner.calls]
+    assert ids[: len(prior_ids)] == prior_ids
+    assert len(ids) == len(set(ids))
+    assert sum(call.phase == "calibration" for call in operator_case.runner.calls) == 1
+    operator_case.assert_sources_unchanged()
+
+
+@pytest.mark.parametrize("stop_early", [False, True])
+@pytest.mark.parametrize("operator_case", ["extra-assistant-context"], indirect=True)
+def test_section_field_loss_stops_before_another_dispatch_when_frozen(
+    operator_case: OperatorCase, stop_early: bool
+) -> None:
+    _enable_section_search(
+        operator_case,
+        require_criterion=True,
+        coarse_limit=8,
+        stop_when_no_retained_fields=stop_early,
+    )
+    field_id = operator_case.runner.planted_id
+    operator_case.runner.planted_id = "fixture-behavior-independent-of-context"
+    completed = _invoke(operator_case.command())
+    report = _json(completed)
+    assert report["stop_when_no_retained_fields"] is stop_early
+    assert report["stop_reason"] == "section-criterion-not-met"
+    assert report["additional_reduction_result"] == "no-retained-fields"
+    assert report["fine_comparisons_used"] == 0
+    assert report["confirmation_result"] == "not-run"
+    destination = Path(report["result_path"])
+    saved = SampledReductionEvidence.model_validate_json((destination / "result.json").read_text())
+    checkpoint = saved.checkpoint
+    assert field_id in checkpoint.removed_context_ids
+    assert checkpoint.coarse_stopped
+    assert checkpoint.fine_complete
+    if stop_early:
+        assert len(checkpoint.trials) == 1
+        assert checkpoint.coarse_stop_reason == "no-retained-fields"
+        assert not checkpoint.final_sweep_complete
+        assert len(operator_case.runner.calls) == 3  # Calibration and one complete paired block.
+    else:
+        assert len(checkpoint.trials) > 1
+    assert checkpoint.active_block is None
+    state = load_sampling_snapshot(
+        destination / "sampling", store=ObservationStore(operator_case.store_path)
+    )
+    assert state.pending is None
+    assert state.selection is None
+    assert len(state.blocks) == len(checkpoint.trials)
+    calls = tuple(operator_case.runner.calls)
+    resumed = _invoke(
+        [
+            "shrink",
+            str(destination),
+            "--resume",
+            "--acknowledge-model-execution",
+            "--format",
+            "json",
+        ]
+    )
+    assert _json(resumed)["stop_reason"] == "section-criterion-not-met"
+    assert tuple(operator_case.runner.calls) == calls
+    operator_case.assert_sources_unchanged()
+
+
+@pytest.mark.parametrize("operator_case", ["extra-assistant-context"], indirect=True)
+def test_field_loss_recovers_after_completed_block_before_checkpoint(
+    operator_case: OperatorCase, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _enable_section_search(
+        operator_case,
+        require_criterion=True,
+        coarse_limit=8,
+        stop_when_no_retained_fields=True,
+    )
+    field_id = operator_case.runner.planted_id
+    operator_case.runner.planted_id = "fixture-behavior-independent-of-context"
+    publish = reduction_engine.SampledReducer._publish_checkpoint
+
+    def interrupt(self: Any, removed: Any, trials: Any, complete: bool, **kwargs: Any):
+        if field_id in removed:
+            raise OSError("synthetic checkpoint interruption")
+        return publish(self, removed, trials, complete, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(reduction_engine.SampledReducer, "_publish_checkpoint", interrupt)
+        interrupted = _invoke(operator_case.command())
+    assert interrupted.exit_code != ExitCode.SUCCESS
+    calls = tuple(operator_case.runner.calls)
+    assert len(calls) == 3
+    run_directory = next((operator_case.workspace.root / ".runs").iterdir())
+    resumed = _invoke(
+        [
+            "shrink",
+            str(run_directory),
+            "--resume",
+            "--acknowledge-model-execution",
+            "--format",
+            "json",
+        ]
+    )
+    report = _json(resumed)
+    assert report["stop_reason"] == "section-criterion-not-met"
+    assert report["coarse_stop_reason"] == "no-retained-fields"
+    assert report["coarse_comparisons_used"] == 1
+    assert report["fine_comparisons_used"] == 0
+    assert tuple(operator_case.runner.calls) == calls
     operator_case.assert_sources_unchanged()
 
 

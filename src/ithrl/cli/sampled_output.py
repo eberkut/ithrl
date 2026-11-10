@@ -154,6 +154,8 @@ class SampledReductionOutput(BaseModel):
     fine_search_complete: bool = False
     additional_removed_utf8_bytes: int = Field(default=0, ge=0)
     minimum_removed_utf8_bytes: int | None = Field(default=None, ge=1)
+    require_criterion_for_confirmation: bool = False
+    stop_when_no_retained_fields: bool = False
     additional_reduction_result: Literal[
         "not-assessed", "no-retained-fields", "below-threshold", "criterion-met"
     ] = "not-assessed"
@@ -394,6 +396,10 @@ def render_sampled_reduction(
             f"  section-search comparison limits: {report.max_coarse_comparisons} coarse; "
             f"{report.max_fine_comparisons} fine",
         )
+        if report.require_criterion_for_confirmation:
+            print_plain(console, "  confirmation requires the additional reduction criterion")
+        if report.stop_when_no_retained_fields:
+            print_plain(console, "  coarse search stops when no selected fine-search fields remain")
         if report.coarse_search_stopped:
             print_plain(
                 console,

@@ -183,6 +183,93 @@ def test_native_usage_is_preserved_and_optional_counts_remain_unknown() -> None:
     assert _parse(events).usage is None
 
 
+@pytest.mark.parametrize("matching", [False, True])
+def test_call_finished_usage_must_agree_with_earlier_native_usage(matching: bool) -> None:
+    events = _events(usage=True)
+    usage_index = next(i for i, event in enumerate(events) if event["type"] == "assistant.usage")
+    usage_event = events.pop(usage_index)
+    finish_index = next(
+        i for i, event in enumerate(events) if event["type"] == "model.call_finished"
+    )
+    events[finish_index]["data"]["usage"] = {
+        "inputTokens": 100,
+        "outputTokens": 12 if matching else 13,
+        "cacheReadTokens": 3,
+    }
+    events.insert(finish_index, usage_event)
+
+    if matching:
+        assert _parse(events).usage == TokenUsage(
+            input_tokens=100, output_tokens=12, cached_input_tokens=3
+        )
+    else:
+        with pytest.raises(CopilotProtocolError) as caught:
+            _parse(events)
+        assert caught.value.code == "usage-mismatch"
+
+
+def test_usage_without_counts_does_not_mask_a_later_token_report() -> None:
+    events = _events(usage=True)
+    usage_index = next(i for i, event in enumerate(events) if event["type"] == "assistant.usage")
+    events.insert(usage_index, _event("assistant.usage", model=MODEL))
+
+    assert _parse(events).usage == TokenUsage(
+        input_tokens=100, output_tokens=12, cached_input_tokens=3
+    )
+
+
+@pytest.mark.parametrize("malformed_tail", [False, True])
+def test_truncated_native_output_preserves_the_recorded_provider_charge(
+    malformed_tail: bool,
+) -> None:
+    events = _events()[:7] if malformed_tail else _events()[:-1]
+    raw = b"".join(json.dumps(event).encode() + b"\n" for event in events)
+    if malformed_tail:
+        raw += b'{"truncated\n'
+
+    with pytest.raises(CopilotProtocolError) as caught:
+        parse_output(raw, expected="final-response", native_session=NATIVE, system_message=SYSTEM)
+    assert caught.value.code == ("invalid-json" if malformed_tail else "missing-receipt")
+    assert physical_forward_count(raw) == 1
+
+
+def test_denied_action_can_drain_shutdown_events_without_another_dispatch() -> None:
+    events = _events(shell_target=True)
+    events[-1:-1] = [
+        _event("assistant.turn_end", turnId=TURN),
+        _event("assistant.turn_start", turnId="shutdown-turn"),
+        _event("assistant.idle"),
+        _event("session.idle"),
+        _event("session.usage_checkpoint"),
+        _event("session.background_tasks_changed"),
+        _event("assistant.usage", model=MODEL, inputTokens=5, outputTokens=2),
+    ]
+
+    outcome = _parse(events, shell_target=True)
+    assert outcome.actions_requested == outcome.actions_denied == 1
+    assert outcome.actions_executed == 0
+    assert outcome.provider_calls_started == outcome.provider_calls_completed == 1
+    assert outcome.usage == TokenUsage(input_tokens=5, output_tokens=2)
+
+
+@pytest.mark.parametrize(
+    "followup",
+    [
+        _event("session.background_tasks_changed", tasks=["unexpected"]),
+        _event(
+            "assistant.message", messageId="after-denial", turnId=TURN, model=MODEL, content="extra"
+        ),
+        _event("model.call_start", turnId="next-turn", model=MODEL),
+    ],
+)
+def test_denied_action_refuses_further_work(followup: dict[str, Any]) -> None:
+    events = _events(shell_target=True)
+    events.insert(-1, followup)
+    with pytest.raises(CopilotProtocolError) as caught:
+        _parse(events, shell_target=True)
+    assert caught.value.code == "continued-after-denial"
+
+
 @pytest.mark.parametrize("blocked_followups", [0, 1])
 def test_visible_native_denial_proves_no_action_execution(blocked_followups: int) -> None:
     events = _events(shell_target=True)
@@ -304,10 +391,11 @@ def test_missing_dispatch_or_native_completion_fails_closed(kind: str) -> None:
         "model.call_finished",
         "assistant.message",
         "assistant.turn_start",
+        "assistant.usage",
     ],
 )
 def test_duplicate_physical_or_native_dispatch_cannot_be_accepted(kind: str) -> None:
-    events = _events()
+    events = _events(usage=kind == "assistant.usage")
     index = next(i for i, e in enumerate(events) if e["type"] == kind)
     events.insert(index, events[index])
     with pytest.raises(CopilotProtocolError):

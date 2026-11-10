@@ -161,6 +161,7 @@ def test_human_section_search_shows_limits_and_additional_byte_result(
         max_coarse_comparisons=1,
         max_fine_comparisons=2,
         minimum_removed_utf8_bytes=64,
+        require_criterion_for_confirmation=True,
         coarse_search_stopped=coarse_stopped,
         additional_removed_utf8_bytes=80 if coarse_stopped else 0,
         additional_reduction_result="criterion-met" if coarse_stopped else "not-assessed",
@@ -168,6 +169,7 @@ def test_human_section_search_shows_limits_and_additional_byte_result(
     render_sampled_reduction(report, OutputFormat.HUMAN, verbose=verbose)
     human = capsys.readouterr().out
     assert "section-search comparison limits: 1 coarse; 2 fine" in human
+    assert "confirmation requires the additional reduction criterion" in human
     if coarse_stopped:
         assert "additional editable UTF-8 bytes removed: 80" in human
         assert "additional reduction criterion: criterion-met; minimum 64 bytes" in human

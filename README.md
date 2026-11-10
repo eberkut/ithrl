@@ -77,8 +77,8 @@ Returned actions are observed and denied. Cases contain copied session content; 
 | Input | Extracted decisions | Reduction | Fuzzing |
 | --- | --- | --- | --- |
 | Bundled synthetic example | Synthetic tool request | Deterministic local runner | Local fake runner |
-| Codex CLI rollouts | Final responses | Experimental native runner | Experimental prior-user text appends |
-| Copilot CLI session events | Final responses and shell requests | Experimental final-response and denied `bash` runner | Experimental prior-user text appends for final-response targets |
+| Codex CLI rollouts | Final responses | Experimental native runner; [paragraph-removal measurements](https://github.com/eberkut/ithrl/blob/main/docs/measurements.md#ordinary-session-paragraph-removal) | Experimental prior-user text appends |
+| Copilot CLI session events | Final responses and shell requests | Experimental final-response paragraph removal and denied `bash` runner | Experimental prior-user text appends for final-response targets |
 
 Native Codex and Copilot final-response fuzzing supports appending text to eligible prior user
 input while preserving the fixed triggering input. The
@@ -86,9 +86,12 @@ input while preserving the fixed triggering input. The
 starts with a local example and covers native execution.
 
 [Saved-session measurements](https://github.com/eberkut/ithrl/blob/main/docs/measurements.md#saved-session-experiments)
-include a confirmed reduction for one Codex session and its chosen predicate: 50.17% lower mean
-input tokens per confirmation observation, using a 20-percentage-point preservation margin.
-The measurements report resource usage and unsuccessful outcomes alongside completed runs. Check
+include ordinary Codex and Copilot final-response experiments that removed paragraphs from retained
+prior-user text and passed fresh confirmation at a 20-percentage-point preservation margin. The
+[worked investigation](https://github.com/eberkut/ithrl/blob/main/docs/research/ordinary-session-investigation.md)
+explains what the smaller Codex context helped a developer inspect and what remains unresolved.
+The measurements distinguish private runtime qualification from integrated support and report
+resource usage and unsuccessful outcomes alongside completed runs. Check
 [native compatibility](https://github.com/eberkut/ithrl/blob/main/docs/native-runs.md#compatibility-and-measurements)
 for the installed harness's requirements.
 

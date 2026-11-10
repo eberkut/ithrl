@@ -10,6 +10,7 @@ capabilities. A research result can precede a supported integration.
 | [Feasibility and portability](feasibility.md) | Historical evidence and reconstruction mechanisms across four harnesses, including negative and unassessed paths |
 | [Reduction design](reduction-design.md) | Statistical choices, failed cost/usefulness combinations, fresh confirmation, baseline-sharing alternatives and remaining measurement limits |
 | [Native measurements](../measurements.md) | Synthetic qualification, saved-session outcomes, confirmation, execution failures and measured costs |
+| [Ordinary-session investigation](ordinary-session-investigation.md) | A sanitized Codex debugging question, paragraph intervention, fresh confirmation, cost and limits of interpretation |
 | [Context fuzzing](context-fuzzing.md) | A bounded synthetic discovery/simplification/confirmation design, exact inference and validity sensitivities |
 
 ## Reproduce the synthetic studies

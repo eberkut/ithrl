@@ -23,8 +23,10 @@ from ithrl.experiment import (
     SampledSearchPhase,
     SamplingArmTarget,
     StructuralOracleConfig,
+    TextSectionSearchPlan,
     parse_experiment_toml,
 )
+from ithrl.text_sections import catalog_text_sections
 
 
 def _shell_experiment() -> ExperimentDefinition:
@@ -74,6 +76,46 @@ def _sampled_reduction() -> SampledReductionPlan:
 
 def _sampled_reduction_experiment() -> SampledExperimentDefinition:
     return _sampled_experiment().model_copy(update={"reduction": _sampled_reduction()})
+
+
+@pytest.mark.parametrize(
+    ("require_criterion", "stop_early"), [(False, False), (True, False), (True, True)]
+)
+def test_section_stop_policy_round_trips_and_binds_the_experiment(
+    require_criterion: bool, stop_early: bool
+) -> None:
+    catalog = catalog_text_sections(
+        case_digest="a" * 64,
+        context_id="ctx-prior",
+        context_digest="b" * 64,
+        content_index=0,
+        text="Relevant.\n\nBackground.",
+    )
+    config = TextSectionSearchPlan(
+        fields=(catalog.removal(tuple(section.id for section in catalog.sections)),),
+        max_coarse_comparisons=8,
+        max_fine_comparisons=8,
+        require_criterion_for_confirmation=require_criterion,
+        stop_when_no_retained_fields=stop_early,
+    )
+    experiment = _sampled_reduction_experiment()
+    reduction = experiment.reduction
+    assert reduction is not None
+    experiment = experiment.model_copy(
+        update={"reduction": reduction.model_copy(update={"section_search": config})}
+    )
+    restored = SampledExperimentDefinition.from_toml(experiment.to_toml())
+    assert restored == experiment
+    assert restored.digest == experiment.digest
+    altered = config.model_copy(update={"stop_when_no_retained_fields": not stop_early})
+    altered_experiment = experiment.model_copy(
+        update={"reduction": reduction.model_copy(update={"section_search": altered})}
+    )
+    assert altered_experiment.digest != experiment.digest
+    if require_criterion:
+        return
+    with pytest.raises(ValidationError, match="requires the confirmation criterion gate"):
+        TextSectionSearchPlan.model_validate(altered.model_dump())
 
 
 def test_experiment_toml_round_trip_is_canonical_and_digest_stable() -> None:

@@ -611,7 +611,11 @@ def test_native_sampled_shrink_reduces_only_irrelevant_context_and_freshly_confi
                     if item.get("id") == "message-fixture-user-001"
                 )
                 assert required_item["content"][0]["text"] == expected_text
-                assert request["toolOutput"]["output"] == [
+                assert "toolOutput" not in request
+                assert request["checkpointContinuation"] is True
+                assert request["input"] == []
+                assert request["history"][-1]["call_id"] == "call-fixture-001"
+                assert request["history"][-1]["output"] == [
                     {"type": "input_text", "text": "Fixture result."}
                 ]
             else:

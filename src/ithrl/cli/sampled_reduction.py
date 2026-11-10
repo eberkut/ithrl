@@ -607,6 +607,12 @@ def _reduction_preflight(
         minimum_removed_utf8_bytes=None
         if sections is None
         else sections.minimum_removed_utf8_bytes,
+        require_criterion_for_confirmation=(
+            sections is not None and sections.require_criterion_for_confirmation
+        ),
+        stop_when_no_retained_fields=(
+            sections is not None and sections.stop_when_no_retained_fields
+        ),
         attempts_used=0,
         provider_calls=0,
         next_action="Inspect the fixed plan and budget, then acknowledge model execution. Local overhead consumes the overall wall-time allowance.",
@@ -785,7 +791,8 @@ def _run_report(
         eligible
         and status in {"interrupted", "incomplete"}
         and _continuation_refusal(state, blocks, datetime.now(UTC)) is None
-        and stop_reason not in {"attempt-limit", "unsafe-retry", "safety-refusal"}
+        and stop_reason
+        not in {"attempt-limit", "unsafe-retry", "safety-refusal", "section-criterion-not-met"}
     )
     next_action = (
         "Resume this exact run; administrative budgets may be increased."
@@ -799,6 +806,11 @@ def _run_report(
     elif calibration == "refused":
         next_action = (
             "Inspect the private safety evidence and resolve the refusal before starting a new run."
+        )
+    elif stop_reason == "section-criterion-not-met":
+        next_action = (
+            "Inspect the section-reduction result; confirmation was not started. "
+            "Changing the frozen criterion or fields requires a new experiment."
         )
     if runner_error_category == "provider-call-limit":
         safe_resume = False

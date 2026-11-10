@@ -155,7 +155,6 @@ def test_rejects_non_boolean_read_only_network_policy(tmp_path: Path) -> None:
         ("TurnStartParams", "input", {"type": "string"}),
         ("TurnStartParams", "personality", {"type": "number"}),
         ("TurnStartParams", "threadId", {"type": "number"}),
-        ("TurnStartParams", "toolOutput", {"type": "string"}),
     ],
 )
 def test_rejects_request_value_shape_changes(
@@ -213,23 +212,14 @@ def test_rejects_new_required_optional_request_field(
         verify_schema_bundle(schema)
 
 
-@pytest.mark.parametrize("output_type", ["array", "string"])
-def test_rejects_tool_output_that_only_accepts_one_content_shape(
-    tmp_path: Path,
-    output_type: str,
-) -> None:
+def test_unused_tool_output_api_is_not_required(tmp_path: Path) -> None:
     schema = _bundle(tmp_path)
     client_path = schema / "ClientRequest.json"
     client = _load(client_path)
-    client["definitions"]["TurnStartParams"]["properties"]["toolOutput"] = {
-        "type": "object",
-        "required": ["output"],
-        "properties": {"output": {"type": output_type}},
-    }
+    del client["definitions"]["TurnStartParams"]["properties"]["toolOutput"]
     _write(client_path, client)
 
-    with pytest.raises(CodexSchemaError, match="turn/start request shape"):
-        verify_schema_bundle(schema)
+    verify_schema_bundle(schema)
 
 
 def test_rejects_missing_or_linked_schema_file(tmp_path: Path) -> None:

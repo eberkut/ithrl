@@ -427,7 +427,7 @@ def section_candidates(
     for field in config.fields:
         if field.context_id in removed_context_ids:
             continue
-        candidates = removal_candidates(field.section_ids)
+        candidates = removal_candidates(field.section_ids, start_with_all=True)
         try:
             base, requested, phase = next(candidates)
             while True:
@@ -670,6 +670,17 @@ class SampledReductionCheckpoint(BaseModel):
             "criterion-met"
             if self.additional_removed_utf8_bytes >= config.minimum_removed_utf8_bytes
             else "below-threshold"
+        )
+
+    @property
+    def confirmation_criterion_satisfied(self) -> bool:
+        """Whether the optional frozen byte criterion permits final confirmation."""
+
+        config = self.reduction.section_search
+        return (
+            config is None
+            or not config.require_criterion_for_confirmation
+            or self.additional_reduction_result == "criterion-met"
         )
 
 

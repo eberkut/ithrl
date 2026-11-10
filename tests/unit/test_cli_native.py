@@ -60,7 +60,7 @@ def profile() -> CapabilityProfile:
         supported_capture_types=("logical-session",),
         supported_materializations=("source-backed",),
         supported_context_operations=("dependency-closed-removal",),
-        reconstruction_method="codex-app-server-inject-items-v1",
+        reconstruction_method="codex-app-server-inject-checkpoint-v1",
         supported_targets=("final-response",),
         provider_transport="required",
         provider_calls_per_attempt=2,

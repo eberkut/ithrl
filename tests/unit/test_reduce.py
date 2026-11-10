@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -32,6 +33,7 @@ from ithrl.measurement import RunnerExecutionError
 from ithrl.observations import ObservationIdentity, ObservationStore
 from ithrl.reduce import (
     ALGORITHM_DIGEST,
+    CandidateTrial,
     DeterministicReducer,
     ReductionCheckpoint,
     ResumeMismatchError,
@@ -46,6 +48,83 @@ from ithrl.runner import (
     RunResult,
     ToolCall,
 )
+
+
+@pytest.fixture(scope="module")
+def recorded_trial(tmp_path_factory: pytest.TempPathFactory) -> str:
+    evidence = _evidence()
+    store = ObservationStore(tmp_path_factory.mktemp("trial-contract") / "observations.sqlite")
+    result = asyncio.run(_reducer(evidence, store, maximum=1).reduce(evidence))
+    return result.checkpoint.trials[0].model_dump_json()
+
+
+@pytest.mark.parametrize(
+    ("update", "message"),
+    [
+        ({"base_removals": ["ctx-b", "ctx-a"]}, "base_removals must contain sorted unique"),
+        (
+            {"requested_removals": ["ctx-a", "ctx-a"]},
+            "requested_removals must not contain duplicates",
+        ),
+        (
+            {"effective_removals": ["ctx-b", "ctx-a"]},
+            "effective_removals must contain sorted unique",
+        ),
+        ({"base_removals": ["ctx-z"]}, "effective_removals must include base_removals"),
+        ({"trial_key": "f" * 64}, "trial_key does not match"),
+        ({"candidate_digest": None}, "valid trials require a candidate observation"),
+        ({"target_observed": None}, "valid trials require a candidate observation"),
+        ({"observation_id": None}, "valid trials require a candidate observation"),
+        ({"observation_attempt": None}, "valid trials require a candidate observation"),
+        ({"runner_executed": False}, "observed trials must record runner execution"),
+    ],
+)
+def test_serialized_observed_trial_rejects_inconsistent_removals_and_evidence(
+    recorded_trial: str, update: dict[str, object], message: str
+) -> None:
+    payload = json.loads(recorded_trial)
+    payload.update(update)
+    with pytest.raises(ValidationError, match=message):
+        CandidateTrial.model_validate_json(json.dumps(payload))
+
+
+def test_serialized_trial_verdict_must_agree_with_the_recorded_observation(
+    recorded_trial: str,
+) -> None:
+    payload = json.loads(recorded_trial)
+    payload["classification"] = "loses" if payload["target_observed"] else "preserves"
+    with pytest.raises(ValidationError, match="classification must match target_observed"):
+        CandidateTrial.model_validate_json(json.dumps(payload))
+
+
+@pytest.mark.parametrize(
+    "update",
+    [
+        {"candidate_digest": "f" * 64},
+        {"target_observed": False},
+        {"observation_id": "invented"},
+        {"observation_attempt": 1},
+        {"runner_executed": True},
+        {"effective_removals": ["ctx-z"]},
+    ],
+)
+def test_serialized_invalid_trial_cannot_claim_execution_or_removal(
+    recorded_trial: str, update: dict[str, object]
+) -> None:
+    payload = json.loads(recorded_trial)
+    payload.update(
+        classification="invalid",
+        candidate_digest=None,
+        target_observed=None,
+        observation_id=None,
+        observation_attempt=None,
+        runner_executed=False,
+        effective_removals=payload["base_removals"],
+    )
+    CandidateTrial.model_validate_json(json.dumps(payload))
+    payload.update(update)
+    with pytest.raises(ValidationError, match="invalid trials cannot"):
+        CandidateTrial.model_validate_json(json.dumps(payload))
 
 
 def _evidence(markers: str = "ABCDEFG") -> CaseEvidence:

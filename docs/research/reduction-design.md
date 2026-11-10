@@ -331,11 +331,13 @@ qualification used **no overload replacement**.
 
 ## Text-section workload preparation
 
-[#44](https://github.com/eberkut/ithrl/issues/44) prepares finer removal without collecting new
-model observations. The [shared section contract](../architecture.md#source-bound-text-sections)
-defines the deterministic `paragraph-v1` policy. Exact ordinary source text, identities, fixed
-input, predicates, section selections and the proposal digest remain in private evidence. The
-following criteria are prospective; they are not new native qualification or savings measurements.
+The original [#44](https://github.com/eberkut/ithrl/issues/44) proposal prepared finer removal
+without collecting new model observations. The
+[shared section contract](../architecture.md#source-bound-text-sections) defines the deterministic
+`paragraph-v1` policy. Exact ordinary source text, identities, fixed input, predicates, section
+selections and the proposal digest remain in private evidence. The following table preserves that
+original proposal; it is not the current execution package or native qualification.
+[#46](https://github.com/eberkut/ithrl/issues/46) owns subsequent workload decisions.
 
 | Workload | Debugging question and predicate scope | Prepared surface | Minimum additional removal |
 | --- | --- | --- | ---: |
@@ -409,6 +411,43 @@ This proposal authorizes no native probes or provider calls. Before execution,
 model, provider, reconstruction method and safety policy, verify the proposal remains enforceable
 and obtain separate live-run approval. A budget or criterion revision requires a recorded new freeze
 before collecting affected observations, preserving all earlier failures and limiting outcomes.
+
+### Input auditing and limits of attribution
+
+Audit the reconstructed history, instructions and fixed input separately from source records.
+An event-log duplicate that survives as metadata need not enter native history. Identify visible
+information carriers, opaque items, editable prior-user fields and protected inputs at each accepted
+coarse checkpoint. This provider-free audit establishes what the runner constructs; it does not
+establish what the provider accepts, renders or uses internally.
+
+[ContextCite (Cohen-Wang et al., NeurIPS 2024)](https://papers.nips.cc/paper_files/paper/2024/file/adbea136219b64db96a9941e4249a857-Paper-Conference.pdf)
+studies attribution through context ablations. It distinguishes information that contributes to
+a generation from information that merely supports the statement, and discusses pretraining,
+redundant sources and dependencies between sources. These limits motivate checking alternative
+information carriers before interpreting a deletion. A preserved predicate after removing one
+field does not establish that its information is absent, that the advice is correct or that the
+field was necessary in the historical generation.
+
+[Zeller and Hildebrandt (2002)](https://www.cs.columbia.edu/~junfeng/08fa-e6998/sched/readings/delta-debug-input.pdf)
+make decomposition into removable units part of the debugging method and distinguish unresolved
+tests from passing and failing outcomes. Here, conclusions remain conditional on the supported edit
+domain and eligible observations. Exploratory sampled admissions establish neither necessity nor
+minimality; interruptions and runner errors remain unresolved evidence.
+
+The [OpenAI reasoning guide](https://developers.openai.com/api/docs/guides/reasoning) documents
+opaque reasoning items that can carry state between requests under supported model and context
+settings. Presence in a reconstructed payload alone cannot establish compatible acceptance,
+rendering or influence for a captured native profile. Record opaque items without inferring their
+contents or treating an absent visible marker as proof that the information is unavailable.
+
+Before proposing another workload, identify a concrete debugging question, a fixed behavioral
+specification and mixed prior-user fields within the supported edit domain. Record alternative
+visible carriers and opaque-state uncertainty. This screening cannot prove coarse retention; that
+eligibility gate still requires observation. If useful retained information lies outside the edit
+domain, report a scope question. Do not protect the selected field artificially, lower the frozen
+threshold or silently substitute another source. The optional
+[field-loss stopping rule](../native-runs.md#prepare-native-reduction) can avoid further comparisons
+once all selected fields are removed; it supplies no positive qualification evidence.
 
 ## Reproducibility and remaining limits
 
