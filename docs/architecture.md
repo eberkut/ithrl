@@ -151,10 +151,11 @@ selection precedes fresh confirmation against the full immutable original, inclu
 search stage has incomplete coverage. Results retain both stages and the selected mutation;
 inspection revalidates its source bindings without loading a runner or observation database.
 
-These paths have provider-free implementation tests; ordinary-workflow qualification belongs to
-[#46](https://github.com/eberkut/ithrl/issues/46), before expanding public native support. The
-[workload criteria](research/reduction-design.md#text-section-workload-preparation) distinguish the
-frozen preparation proposal from measured support.
+Provider-free tests cover these implementation contracts. The
+[ordinary-session measurements](measurements.md#ordinary-session-paragraph-removal) record completed
+qualification for the tested native profiles and their integration limits. The
+[workload criteria](research/reduction-design.md#text-section-workload-preparation) preserve the
+original preparation proposal separately from those measurements.
 
 ## Measurement, search and confirmation
 

@@ -42,10 +42,11 @@ reduction** was declared separately from the behavioral criterion; the 580-byte 
 
 After durable selection, fresh confirmation compared the selected **coarse-plus-fine** candidate
 with the **full immutable original**. Both arms matched **11/11**. At a 20-percentage-point
-preservation margin and nominal 95% one-sided confidence, Newcombe method 10 gave a
-candidate-minus-original lower bound of **−19.7405 percentage points**, above the −20-point
-boundary. The reduced allocation was approved and frozen before these observations. No earlier
-pilot, control or search observations entered the confirmation sample.
+preservation margin and nominal 95% one-sided confidence, the result passed the frozen Newcombe
+method 10 preservation rule. The reduced allocation was approved before these observations. No
+earlier pilot, control or search observations entered the confirmation sample. The
+[measurements](../measurements.md#ordinary-session-paragraph-removal) record the exact interval and
+the associated Copilot result.
 
 This supports preservation of the chosen topic predicate within that declared margin and the
 method's assumptions. Eleven successes in each arm do not prove equal response distributions,
@@ -76,32 +77,26 @@ Removing a visible paragraph cannot establish that the model lacks its informati
 
 ## Execution evidence and cost
 
-The completed workflow used **29 valid observations**, **37 actual and charged provider requests**,
-**3,334,167 known input-plus-output tokens**, and **870.634 seconds** from durable workflow start to
-result. There were zero additional possible or pending calls in this run. Mean confirmation input
-tokens fell from **126,911 to 104,911.91**, a **17.334% decrease**. This comparison includes both
-whole-record and paragraph removal and all contributing physical requests. There was no separately
-confirmed coarse-versus-fine token measurement, so the decrease cannot be attributed to the
-580-byte edit alone. Monetary cost and monetary savings are unknown.
+The completed workflow used **29 valid observations** and **37 actual and charged provider
+requests**, with zero additional possible or pending calls. The **17.334% decrease** in mean
+confirmation input tokens includes both whole-record and paragraph removal. It cannot be attributed
+to the 580-byte edit alone: no separate coarse-versus-fine token comparison was confirmed. The
+[measurement record](../measurements.md#ordinary-session-paragraph-removal) gives the full token,
+duration and request counts. Monetary cost and monetary savings are unknown.
 
-A private wire auditor checked every external request, including continuations, for source-bound
-history, the selected edit, fixed trigger and settings under explicit native normalizations. This
-is stronger evidence than inspecting a proposed payload alone, but it proves neither complete
-historical request equivalence nor provider-internal rendering or reasoning. The auditor belonged
-to the private qualification package; this account does not imply that public runner output
-provides that instrumentation. The uncompacted workload does not qualify compaction on `0.167.0`.
+A private wire auditor checked every external request and continuation against the source-bound
+history, selected edit, fixed trigger and settings under explicit native normalizations. It proves
+neither complete historical request equivalence nor provider-internal rendering or reasoning. The
+auditor is not part of the shipped runner, and the uncompacted workload does not qualify compaction
+on `0.167.0`.
 
 All attempts verified unchanged source/workspace and cleanup; zero actions executed or tool-side
 network effects occurred. Active interruption/resume was exercised. Resuming a completed result
-added no observations or provider calls, although it republished a summary snapshot. A surrounding
-wrapper initially treated the changed summary path as a failure; the saved result and sampling state
-were subsequently checked as unchanged. Earlier controls, failures and incomplete work remain part
-of the [investigation cost record](../measurements.md#investigation-cost-and-unsuccessful-work), not
-additional confirmation samples. The current Codex selection consumed **75 known plus one possible
-request**, conservatively charged as **76**, including this final 37-request run. That subtotal
-excludes separately approved earlier investigations. Full historical token/time totals and an exact
-all-investigation call total remain unresolved; the ledger explicitly preserves earlier failures,
-incomplete usage and observer uncertainty rather than treating them as zero.
+added no observations or provider calls, although it republished a summary snapshot. The
+[investigation cost record](../measurements.md#investigation-cost-and-unsuccessful-work) includes
+earlier controls, failures and incomplete work. Those attempts are not confirmation samples.
+Historical accounting remains incomplete; the ledger preserves unknown
+usage and observer uncertainty rather than treating them as zero.
 
 ## Sanitization and scope
 
@@ -114,6 +109,4 @@ case with which to reproduce those observations.
 The experiment qualifies one target, workload, runtime and policy. It provides a worked
 interpretation of that experiment; broader support remains governed by the
 [public capability table](https://github.com/eberkut/ithrl/blob/main/README.md#supported-inputs) and
-[native compatibility guidance](../native-runs.md#compatibility-and-measurements). The associated
-Copilot experiment and aggregate resource measurements are recorded in
-[measurements](../measurements.md#ordinary-session-paragraph-removal).
+[native compatibility guidance](../native-runs.md#compatibility-and-measurements).

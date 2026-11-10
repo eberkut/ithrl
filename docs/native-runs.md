@@ -152,10 +152,10 @@ and error handling.
 
 ### Section-removal preparation
 
-Finer final-response reduction has provider-free implementation tests for both harnesses. It
-awaits the ordinary-workflow qualification in [#46](https://github.com/eberkut/ithrl/issues/46);
-the README's supported-inputs table remains the public capability claim. Shell targets and fuzzing
-do not accept section removal.
+Finer final-response reduction has provider-free implementation tests and
+[ordinary-session qualification measurements](measurements.md#ordinary-session-paragraph-removal)
+for both harnesses. The README's supported-inputs table remains the public capability claim. Shell
+targets and fuzzing do not accept section removal.
 
 To prepare a private experiment, obtain source-bound catalogs with
 [`inspect retained`](results.md#inspect-retained-context). Choose the eligible fields, removable
