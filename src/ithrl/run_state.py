@@ -498,6 +498,8 @@ class SampledRunState(_SampledStateContract):
                 or plan.candidate_digest != checkpoint.best_candidate_digest
             ):
                 raise ValueError("confirmation must bind the selected candidate and original")
+            if checkpoint is not None and not checkpoint.confirmation_criterion_satisfied:
+                raise ValueError("confirmation requires the frozen section criterion")
             if confirmations and confirmations[0].plan != plan:
                 raise ValueError("selection permits only its single final confirmation block")
 

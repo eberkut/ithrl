@@ -642,6 +642,48 @@ def test_rejects_old_removal_only_capability(tmp_path: Path) -> None:
     assert not (tmp_path / "attempts").exists()
 
 
+@pytest.mark.parametrize("assignment", [b"", b"tool_output_token_limit = 1\n"])
+def test_output_limit_refuses_reconstruction_before_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, assignment: bytes
+) -> None:
+    workspace, evidence = _case(tmp_path)
+    configuration = _configuration()
+    configuration = replace(
+        configuration,
+        rendered_config=configuration.rendered_config.replace(
+            b"tool_output_token_limit = 65536\n", assignment
+        ),
+    )
+    runner = _runner(tmp_path, workspace, configuration=configuration)
+    attempt = _attempt(evidence, runner)
+
+    async def no_runtime(**_kwargs: Any) -> None:
+        pytest.fail("output admission must precede native execution")
+
+    monkeypatch.setattr(codex_runner_module, "run_isolated_process", no_runtime)
+    with pytest.raises(CodexMaterializationError, match="explicit adequate"):
+        runner.validate_candidate(attempt)
+    with pytest.raises(RunnerError, match="explicit adequate") as caught:
+        asyncio.run(runner.run(attempt))
+    assert caught.value.code is RunnerErrorCode.PREPARATION
+    assert caught.value.provider_acceptance_state is ProviderAcceptanceState.NOT_STARTED
+    assert not (tmp_path / "attempts").exists()
+
+
+def test_output_limit_change_invalidates_pinned_provider_configuration(tmp_path: Path) -> None:
+    workspace, _ = _case(tmp_path)
+    original = _configuration()
+    changed = replace(
+        original,
+        rendered_config=original.rendered_config.replace(
+            b"tool_output_token_limit = 65536", b"tool_output_token_limit = 65535"
+        ),
+    )
+    assert original.public_digest != changed.public_digest
+    with pytest.raises(ValueError, match="does not match"):
+        _runner(tmp_path, workspace, configuration=changed, capability_configuration=original)
+
+
 def test_rejects_action_request_before_any_action_loop(tmp_path: Path) -> None:
     workspace, evidence = _case(tmp_path)
     runner = _runner(tmp_path, workspace, mode="action")

@@ -9,7 +9,7 @@ import pytest
 from ithrl.adapters import enumerate_decisions, parse_session
 from ithrl.adapters.contracts import NativeSession
 from ithrl.case import CaseEvidence
-from ithrl.context import JsonObject, content_digest
+from ithrl.context import JsonObject, JsonValue, content_digest
 from ithrl.decisions import DecisionEvidence
 from ithrl.execution import (
     CapabilityProfile,
@@ -24,9 +24,12 @@ from ithrl.runner import PreparedAttempt, prepare_candidate
 from ithrl.runner.codex.materialize import (
     CodexMaterializationError,
     CodexMaterializationErrorCode,
+    CodexTurnInput,
     _materialize_session,
+    _turn_input,
     editable_codex_text,
     materialize_codex_attempt,
+    validate_codex_output_limit,
 )
 
 FIXTURES = Path(__file__).parents[3] / "fixtures"
@@ -202,7 +205,7 @@ def _attempt(evidence: CaseEvidence, *remove_ids: str) -> PreparedAttempt:
             "append-text",
             "remove-text-sections",
         ),
-        reconstruction_method="codex-app-server-inject-items-v1",
+        reconstruction_method="codex-app-server-inject-checkpoint-v1",
         supported_targets=("final-response",),
         provider_transport="required",
         provider_calls_per_attempt=1,
@@ -263,7 +266,7 @@ def _attempt(evidence: CaseEvidence, *remove_ids: str) -> PreparedAttempt:
     )
 
 
-def test_materializes_verified_history_and_separates_tool_output_trigger(
+def test_materializes_verified_history_with_preserved_tool_output_checkpoint(
     tmp_path: Path,
 ) -> None:
     result = materialize_codex_attempt(_attempt(_evidence(tmp_path)))
@@ -278,13 +281,157 @@ def test_materializes_verified_history_and_separates_tool_output_trigger(
         "message",
         "reasoning",
         "custom_tool_call",
+        "custom_tool_call_output",
     ]
     assert result.turn_input.items == ()
-    assert result.turn_input.tool_output == {
-        "name": "exec",
-        "namespace": None,
+    assert result.turn_input.checkpoint_continuation is True
+    assert result.history[-1] == {
+        "type": "custom_tool_call_output",
+        "id": "item-fixture-output-001",
+        "call_id": "call-fixture-001",
         "output": [{"type": "input_text", "text": "Fixture result."}],
+        "internal_chat_message_metadata_passthrough": {},
     }
+
+
+@pytest.mark.parametrize("call_type", ["custom_tool_call", "function_call"])
+@pytest.mark.parametrize("output", ["Result Ω.\r\n", [{"type": "input_text", "text": "Result."}]])
+def test_tool_checkpoint_preserves_exact_native_identity_and_payload(
+    tmp_path: Path, call_type: str, output: object
+) -> None:
+    records = [
+        json.loads(line)
+        for line in (FIXTURES / "codex-session/rollout.jsonl").read_bytes().splitlines()
+    ]
+    call = records[5]["payload"]
+    call.update(type=call_type, name="fixture_tool", namespace="fixture_namespace")
+    if call_type == "function_call":
+        call["arguments"] = call.pop("input")
+    trigger = records[8]["payload"]
+    trigger.update(type=call_type + "_output", output=output, opaque={"keep": [True, None]})
+    # IDs are intentionally unrelated to fixture IDs or any private case identity.
+    call["call_id"] = trigger["call_id"] = "arbitrary-captured-call-id"
+    evidence = _evidence_from_records(tmp_path, records)
+    before = evidence.digest, evidence.source_artifacts
+
+    result = materialize_codex_attempt(_attempt(evidence))
+
+    expected = tuple(
+        record["payload"] for record in records[:9] if record["type"] == "response_item"
+    )
+    assert result.history == expected
+    assert result.turn_input == CodexTurnInput(items=(), checkpoint_continuation=True)
+    assert (evidence.digest, evidence.source_artifacts) == before
+    assert result.history[-1] is not trigger
+    trigger["opaque"]["keep"].append("changed source object")
+    assert result.history[-1]["opaque"] == {"keep": [True, None]}
+
+
+@pytest.mark.parametrize("unsupported", ["compacted", "fixture.unknown_record"])
+def test_uninterpreted_record_before_checkpoint_refuses_reconstruction(
+    tmp_path: Path, unsupported: str
+) -> None:
+    records = [
+        json.loads(line)
+        for line in (FIXTURES / "codex-session/rollout.jsonl").read_bytes().splitlines()
+    ]
+    records.insert(
+        4,
+        {
+            "type": unsupported,
+            "timestamp": "2026-01-01T00:00:03.500Z",
+            "payload": {"private": "fixture-only"},
+        },
+    )
+    evidence = _evidence_from_records(tmp_path, records)
+    before = evidence.digest, evidence.source_artifacts
+    with pytest.raises(CodexMaterializationError) as caught:
+        materialize_codex_attempt(_attempt(evidence))
+    assert caught.value.code is CodexMaterializationErrorCode.UNSUPPORTED_CONTEXT
+    assert "fixture-only" not in str(caught.value)
+    assert (evidence.digest, evidence.source_artifacts) == before
+
+
+@pytest.mark.parametrize("change", ["missing-call", "wrong-kind", "duplicate-call", "bad-output"])
+def test_tool_checkpoint_requires_unique_matching_native_call(change: str) -> None:
+    records = [
+        json.loads(line)
+        for line in (FIXTURES / "codex-session/rollout.jsonl").read_bytes().splitlines()
+    ]
+    if change == "missing-call":
+        del records[5]
+    elif change == "wrong-kind":
+        records[5]["payload"]["type"] = "function_call"
+    elif change == "duplicate-call":
+        records.insert(6, json.loads(json.dumps(records[5])))
+    else:
+        records[8]["payload"]["output"] = {"private": "unsupported-output"}
+    trigger = next(
+        record["payload"]
+        for record in records
+        if record["type"] == "response_item"
+        and record["payload"]["type"] == "custom_tool_call_output"
+    )
+    history = [
+        record["payload"]
+        for record in records
+        if record["type"] == "response_item" and record["payload"] is not trigger
+    ]
+    with pytest.raises(CodexMaterializationError) as caught:
+        _turn_input(trigger, history)
+    expected = (
+        CodexMaterializationErrorCode.UNSUPPORTED_CONTEXT
+        if change == "bad-output"
+        else CodexMaterializationErrorCode.MISSING_TRIGGER
+    )
+    assert caught.value.code is expected
+    assert "unsupported-output" not in str(caught.value)
+
+
+@pytest.mark.parametrize("limit", [None, 5])
+@pytest.mark.parametrize("output_position", [0, -1])
+def test_every_retained_tool_output_requires_an_explicit_adequate_limit(
+    tmp_path: Path, limit: int | None, output_position: int
+) -> None:
+    baseline = materialize_codex_attempt(_attempt(_evidence(tmp_path)))
+    output: JsonObject = {"type": "function_call_output", "call_id": "prior", "output": "1234"}
+    history: tuple[JsonObject, ...] = ({"type": "message"},)
+    history = (output, *history) if output_position == 0 else (*history, output)
+    materialized = replace(baseline, history=history)
+    with pytest.raises(
+        CodexMaterializationError, match="explicit adequate tool_output_token_limit"
+    ):
+        validate_codex_output_limit(materialized, limit)
+    validate_codex_output_limit(materialized, 6)
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        [{"type": "input_image", "image_url": "fixture-only"}],
+        [{"type": "input_audio", "audio": "fixture-only"}],
+        [{"type": "fixture.unknown", "text": "fixture-only"}],
+        [{"type": "input_text", "text": None}],
+    ],
+)
+def test_unproven_tool_output_carriers_are_refused(tmp_path: Path, output: JsonValue) -> None:
+    baseline = materialize_codex_attempt(_attempt(_evidence(tmp_path)))
+    changed: JsonObject = {**baseline.history[-1], "output": output}
+    materialized = replace(baseline, history=(changed, *baseline.history))
+    with pytest.raises(CodexMaterializationError, match="unsupported content shape") as caught:
+        validate_codex_output_limit(materialized, 65536)
+    assert "fixture-only" not in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    ("items", "continuation"),
+    [((), False), (({"type": "text", "text": "Prompt."},), True), ((), "true")],
+)
+def test_turn_input_requires_one_explicit_mode(
+    items: tuple[JsonObject, ...], continuation: bool
+) -> None:
+    with pytest.raises(ValueError, match="checkpoint continuation"):
+        CodexTurnInput(items=items, checkpoint_continuation=continuation)
 
 
 def test_materializes_dependency_valid_removal_without_reordering(tmp_path: Path) -> None:
@@ -295,7 +442,11 @@ def test_materializes_dependency_valid_removal_without_reordering(tmp_path: Path
 
     result = materialize_codex_attempt(_attempt(evidence, user_message.id))
 
-    assert [item["type"] for item in result.history] == ["reasoning", "custom_tool_call"]
+    assert [item["type"] for item in result.history] == [
+        "reasoning",
+        "custom_tool_call",
+        "custom_tool_call_output",
+    ]
 
 
 def _with_mutation(attempt: PreparedAttempt, mutation: TextMutation) -> PreparedAttempt:
@@ -503,6 +654,8 @@ def test_materializes_direct_user_trigger_without_history(tmp_path: Path) -> Non
     assert materialized.turn_input.items == (
         {"type": "text", "text": "Inspect the fixture context."},
     )
+    assert materialized.turn_input.checkpoint_continuation is False
+    validate_codex_output_limit(materialized, None)
     assert editable_codex_text(_attempt(evidence)) == ()
 
 

@@ -68,6 +68,7 @@ from ithrl.runner import (
     prepare_candidate,
 )
 from ithrl.runner.contracts import CandidateInvalidError
+from ithrl.text_sections import TextSectionRemoval
 from ithrl.workflow import (
     PreflightRefusedError,
     PreparedExperiment,
@@ -216,6 +217,7 @@ def _fixture(
     coarse_limit: int = 1,
     fine_limit: int = 8,
     protected_section_indices: tuple[int, ...] = (),
+    stop_when_no_retained_fields: bool = False,
 ) -> SearchFixture:
     runner = ScreenRunner(behavior or (lambda removed, _: int("ctx-a" not in removed)), samples)
     items: list[JsonValue] = [{"role": "user", "content": marker} for marker in markers]
@@ -293,6 +295,8 @@ def _fixture(
                             fields=fields,
                             max_coarse_comparisons=coarse_limit,
                             max_fine_comparisons=fine_limit,
+                            require_criterion_for_confirmation=stop_when_no_retained_fields,
+                            stop_when_no_retained_fields=stop_when_no_retained_fields,
                         )
                     }
                 )
@@ -743,7 +747,7 @@ def test_completed_fine_search_refuses_extra_authoritative_block(
     checkpoint = fixture.run().checkpoint
     assert not checkpoint.final_sweep_complete
     assert checkpoint.fine_complete
-    assert len(checkpoint.blocks) == 4
+    assert len(checkpoint.blocks) == 2
     trial = checkpoint.fine_trials[-1]
     assert trial.comparison is not None
     extra = asyncio.run(
@@ -765,7 +769,7 @@ def test_completed_fine_search_refuses_extra_authoritative_block(
     )
     assert extra.complete
     with fixture.state_file.acquire_lock(fixture.store):
-        assert len(fixture.state_file.evidence(fixture.store)) == 5
+        assert len(fixture.state_file.evidence(fixture.store)) == 3
     calls = tuple(fixture.runner.calls)
     with pytest.raises(
         ResumeMismatchError, match="completed search contains an unclassified block"
@@ -821,6 +825,20 @@ def test_fine_no_retained_field_records_limiting_criterion(tmp_path: Path) -> No
     assert result.checkpoint.additional_reduction_result == "no-retained-fields"
 
 
+def test_field_loss_stop_keeps_searching_while_another_selected_field_survives(
+    tmp_path: Path,
+) -> None:
+    fixture = _section_fixture(tmp_path, coarse_limit=8, stop_when_no_retained_fields=True)
+    result = fixture.run()
+    checkpoint = result.checkpoint
+    assert "ctx-b" in checkpoint.removed_context_ids
+    assert "ctx-a" not in checkpoint.removed_context_ids
+    assert len(checkpoint.trials) > 1
+    assert checkpoint.coarse_stop_reason != "no-retained-fields"
+    assert checkpoint.fine_trials
+    assert all(trial.field.context_id == "ctx-a" for trial in checkpoint.fine_trials)
+
+
 def test_fine_protected_units_remain_in_each_single_field_candidate(tmp_path: Path) -> None:
     fixture = _section_fixture(tmp_path, protected_section_indices=(0,))
     result = fixture.run()
@@ -831,6 +849,34 @@ def test_fine_protected_units_remain_in_each_single_field_candidate(tmp_path: Pa
         assert _input_text(request, 0).startswith("keep\n\n")
         assert _input_text(request, 1).startswith("other\n\n")
         assert _input_text(request, -1) == "fixed"
+
+
+def test_fine_search_tries_all_eligible_sections_before_smaller_groups(tmp_path: Path) -> None:
+    fixture = _section_fixture(tmp_path, coarse_limit=0, protected_section_indices=(0,))
+    fixture.runner.section_behavior = lambda attempt: (
+        attempt.candidate.mutation.is_empty
+        or (
+            isinstance(attempt.candidate.mutation.edits[0], TextSectionRemoval)
+            and len(attempt.candidate.mutation.edits[0].section_ids) == 1
+        )
+    )
+    checkpoint = fixture.run().checkpoint
+    config = checkpoint.reduction.section_search
+    assert config is not None
+    first_field = config.fields[0]
+    trials = [trial for trial in checkpoint.fine_trials if trial.field == first_field]
+    assert len(first_field.section_ids) == 2
+    full_edit = trials[0].mutation.edits[0]
+    smaller_edit = trials[1].mutation.edits[0]
+    assert isinstance(full_edit, TextSectionRemoval)
+    assert isinstance(smaller_edit, TextSectionRemoval)
+    assert full_edit.section_ids == first_field.section_ids
+    assert not trials[0].accepts_removal
+    assert len(smaller_edit.section_ids) == 1
+    assert trials[1].accepts_removal
+    for trial in trials:
+        request = fixture.evidence.materialize((), mutation=trial.mutation)
+        assert _input_text(request, 0).startswith("keep\n\n")
 
 
 def test_fine_local_refusals_allocate_no_sampling_blocks(tmp_path: Path) -> None:

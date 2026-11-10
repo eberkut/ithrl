@@ -135,6 +135,15 @@ coarse candidate and stopping state before independent per-field searches. Each 
 combines that same coarse removal with one field's cumulative section selection. It never combines
 edits across fields. The largest admitted editable-byte removal wins, with the first candidate
 retained on a tie; the usefulness threshold is reported separately from selection and confirmation.
+Fine search first tests removal of all declared eligible sections in a field. If that candidate
+is refused or rejected, search partitions that same selection into smaller removals. Protected
+sections remain untouched, and whole-record candidate order is unchanged.
+An optional frozen `require_criterion_for_confirmation` gate stops before durable selection and
+confirmation when the additional-byte criterion is unmet. Run-state validation also rejects a
+selection that violates that gate; disabling it preserves independent threshold reporting.
+The frozen `stop_when_no_retained_fields` setting additionally ends coarse search at a completed
+comparison boundary if all selected fields have been removed. It requires the confirmation gate,
+preserves the accepted coarse edit and makes no new sampling reservation.
 
 Candidate, experiment and algorithm identities bind the source, policy and traversal. Resume
 reconstructs the recorded coarse and fine decisions without executing attempts. One final durable
@@ -209,13 +218,19 @@ before sampling resources are committed. An original reconstruction refusal is t
 candidate-local refusal during search consumes no provider calls. Admission starts no process or
 provider request; execution still validates the reconstructed candidate.
 
-Codex reconstructs copied history through the installed CLI's app-server protocol. A bounded
-Responses relay forwards to the fixed configured destination and records physical request counts.
-Native request and stream retries are disabled; a completed turn can still require several
-Responses requests. The caller selects a per-attempt cap from 1 to 16 (default 16). Capability,
-plan and saved-run identities retain this administrative limit. The relay rejects requests beyond
-the cap and records a `provider-call-limit` error. A completed HTTP response alone does not
-establish model acceptance or a completed native turn.
+Codex reconstructs copied history through the installed CLI's app-server protocol. A tool-output
+checkpoint includes the original output record and its captured call identity in the injected
+history, then continues with empty new input. User-message triggers remain new user input. The
+`codex-app-server-inject-checkpoint-v1` method binds this reconstruction contract; older
+reconstruction identities cannot resume under it. Compacted source prefixes remain unsupported. An
+explicit configuration-bound tool-output limit and conservative text-output admission prevent
+reliance on a model-specific truncation default. Non-text tool-output content remains unsupported. A
+bounded Responses relay forwards to the fixed configured destination and records physical request
+counts. Native request and stream retries are disabled; a completed turn can still require several
+Responses requests. The caller selects a per-attempt cap from 1 to 16 (default 16). Capability, plan
+and saved-run identities retain this administrative limit. The relay rejects requests beyond the cap
+and records a `provider-call-limit` error. A completed HTTP response alone does not establish model
+acceptance or a completed native turn.
 
 Copilot's Python SDK drives the installed CLI over stdio. It resumes the copied native prefix at
 the selected model-turn boundary without injecting a user message, including decisions after tool

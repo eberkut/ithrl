@@ -35,7 +35,7 @@ RUNNER_VERSION = "1"
 CAPTURE_TYPE = "logical-session"
 CONTEXT_OPERATIONS = ("dependency-closed-removal", "append-text", "remove-text-sections")
 MATERIALIZATION = "source-backed"
-RECONSTRUCTION_METHOD = "codex-app-server-inject-items-v1"
+RECONSTRUCTION_METHOD = "codex-app-server-inject-checkpoint-v1"
 SOURCE_SCHEMA = "codex-rollout-jsonl"
 TARGET_TYPE = "final-response"
 

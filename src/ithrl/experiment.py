@@ -232,9 +232,13 @@ class TextSectionSearchPlan(_ImmutableContract):
     max_coarse_comparisons: Annotated[int, Field(ge=0, le=10_000)]
     max_fine_comparisons: Annotated[int, Field(ge=1, le=10_000)]
     minimum_removed_utf8_bytes: Annotated[int, Field(ge=1, le=1024 * 1024)] = 1
+    require_criterion_for_confirmation: bool = False
+    stop_when_no_retained_fields: bool = False
 
     @model_validator(mode="after")
     def validate_fields(self) -> TextSectionSearchPlan:
+        if self.stop_when_no_retained_fields and not self.require_criterion_for_confirmation:
+            raise ValueError("stopping on field loss requires the confirmation criterion gate")
         keys = tuple((field.context_id, field.content_index) for field in self.fields)
         if len(set(keys)) != len(keys) or any(not field.section_ids for field in self.fields):
             raise ValueError("section search requires distinct fields with eligible units")
@@ -461,6 +465,8 @@ def _render_sampled_reduction(lines: list[str], reduction: SampledReductionPlan)
             "minimum_removed_utf8_bytes",
         ):
             lines.append(f"{name} = {getattr(sections, name)}")
+        for name in ("require_criterion_for_confirmation", "stop_when_no_retained_fields"):
+            lines.append(f"{name} = {str(getattr(sections, name)).lower()}")
         for field in sections.fields:
             lines.extend(("", "[[reduction.section_search.fields]]"))
             for name, value in field.model_dump().items():

@@ -61,6 +61,20 @@ The model and provider come from captured evidence and supported local harness c
 There is no `--model` override. Returned actions are observed and denied; they never execute.
 Tool-side network access, hosted tools and MCP are disabled for the current runner profiles.
 
+For Codex history containing tool outputs, set an explicit `tool_output_token_limit` in the root
+of the configuration selected by `--codex-config`, before any TOML tables. For example:
+
+```toml
+tool_output_token_limit = 65536
+```
+
+Choose a value large enough for every retained text output. Admission conservatively bounds each
+output by its serialized ASCII JSON size and refuses a missing or inadequate limit before dispatch;
+the native model's default may truncate injected history. Values must be positive integers no larger
+than the worker-request byte limit (64 MiB). The rendered setting is bound into the configuration
+and capability identities, so changing it requires a new experiment. This is a history-truncation
+setting, not an input-token or cost cap. Image/audio tool outputs are unsupported.
+
 ### 1. Inspect the local capabilities
 
 ```bash
@@ -154,6 +168,8 @@ the catalog's exact metadata and `section_ids` with an ordered subset of its sec
 max_coarse_comparisons = 8
 max_fine_comparisons = 8
 minimum_removed_utf8_bytes = 64
+require_criterion_for_confirmation = true
+stop_when_no_retained_fields = true
 
 [[reduction.section_search.fields]]
 operation = "remove-text-sections"
@@ -166,10 +182,34 @@ section_ids = ["SECTION_ID"]
 
 Repeat the field table for another eligible field. Omitted sections are protected during fine
 search. Each fine candidate edits one field; accepted edits do not accumulate across fields.
+The first fine candidate removes all declared eligible sections in that field. If it cannot be
+admitted or fails screening, search tries smaller groups. This does not remove protected sections
+or change whole-record search order.
+This traversal has a new algorithm identity. Earlier partition-first experimental results require
+their original build for inspection and cannot resume under the current implementation.
 Fields deleted by coarse search are skipped. If none survives, the report records
 `no-retained-fields`; it does not substitute another source or field. The
-[prepared workload criteria](research/reduction-design.md#text-section-workload-preparation) use a
+[original workload proposal](research/reduction-design.md#text-section-workload-preparation) used a
 64-byte Codex threshold and a 256-byte Copilot threshold, assessed separately from debugging value.
+Use the exact frozen criterion from the approved execution package for a qualification run.
+
+Set `require_criterion_for_confirmation = true` to stop before final selection or confirmation
+unless the selected fine candidate meets the frozen additional-byte criterion. The report records
+`section-criterion-not-met` when no field survives or removal falls below the minimum; no
+confirmation attempts are dispatched. The setting defaults to `false`, which allows confirmation
+independently of the byte criterion. It is part of the frozen experiment and cannot change on
+resume. Meeting the byte criterion alone establishes neither behavioral preservation nor
+debugging value.
+An administrative budget stop remains resumable while fine search has frozen comparison capacity;
+the gate still prevents selection or confirmation before the criterion is met.
+
+Set `stop_when_no_retained_fields = true` to stop coarse search when accepted removals leave none
+of the selected fields available. This requires `require_criterion_for_confirmation = true`.
+The decision is made at a completed comparison boundary, before reserving another sampling block;
+the accepted removal is kept. When this rule ends coarse search, the report records
+`coarse_stop_reason = "no-retained-fields"`.
+No fine search or confirmation follows. Both the early-stop setting and its default `false` are
+part of the frozen experiment; enabling it does not protect a field from coarse removal.
 
 `--max-candidates` remains an administrative cap over both stages. Each stage also obeys its own
 frozen comparison ceiling; unused coarse capacity cannot enlarge fine search. Preflight reports both
@@ -452,7 +492,14 @@ by their initial `session_meta` record; they have no record-schema version field
 adapter reads event schema `1`. Both adapters preserve unknown records without interpreting them.
 
 Codex `compacted` rollout records are preserved as evidence. The Codex runner refuses decisions
-whose retained context includes those records.
+whose source prefix includes those records, even if a candidate removes the record. Removing a
+compaction marker does not reconstruct the history it replaced. The ordinary paragraph-removal
+measurement used an uncompacted source and does not establish compaction support.
+
+For a tool-output trigger, Codex injects the captured output with its original call identity and
+continues without duplicating it as new input. Current preflight reports
+`codex-app-server-inject-checkpoint-v1`; older saved reconstruction profiles require a new
+experiment. The private qualification auditor is not part of the shipped runner.
 
 Native runners check the installed harness's required operations, permissions, isolation and action
 denial locally. These checks and calibration determine whether the configured run can proceed.

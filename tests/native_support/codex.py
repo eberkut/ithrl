@@ -217,6 +217,7 @@ approval_policy = "never"
 sandbox_mode = "read-only"
 web_search = "disabled"
 cli_auth_credentials_store = "file"
+tool_output_token_limit = 65536
 
 [model_providers.ithrl]
 name = "fixture"
@@ -258,7 +259,7 @@ def _capability(
             "append-text",
             "remove-text-sections",
         ),
-        reconstruction_method="codex-app-server-inject-items-v1",
+        reconstruction_method="codex-app-server-inject-checkpoint-v1",
         supported_targets=("final-response",),
         provider_transport="required",
         provider_calls_per_attempt=max_provider_calls_per_attempt,

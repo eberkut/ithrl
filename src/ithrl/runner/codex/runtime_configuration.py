@@ -10,8 +10,10 @@ from typing import Never
 from urllib.parse import SplitResult, urlsplit, urlunsplit
 
 from ithrl.runner.codex.policy import DISABLED_FEATURES
+from ithrl.runner.codex.protocol_contracts import MAX_WORKER_REQUEST_BYTES
 
 RUNTIME_PROVIDER_ID = "ithrl"
+MAX_TOOL_OUTPUT_TOKEN_LIMIT = MAX_WORKER_REQUEST_BYTES
 PROXY_ENVIRONMENT_NAMES = frozenset(
     {
         "HTTP_PROXY",
@@ -94,6 +96,7 @@ def render_runner_configuration(
     env_http_headers: Mapping[str, str],
     requires_openai_auth: bool,
     stream_idle_timeout_ms: int | None,
+    tool_output_token_limit: int | None = None,
 ) -> bytes:
     """Render the complete configuration accepted by the isolated runner."""
 
@@ -103,17 +106,23 @@ def render_runner_configuration(
         'sandbox_mode = "read-only"',
         'web_search = "disabled"',
         'cli_auth_credentials_store = "file"',
-        "",
-        f"[model_providers.{RUNTIME_PROVIDER_ID}]",
-        'name = "ithrl isolated provider"',
-        f"base_url = {_toml_string(base_url)}",
-        'wire_api = "responses"',
-        f"requires_openai_auth = {str(requires_openai_auth).lower()}",
-        "request_max_retries = 0",
-        "stream_max_retries = 0",
-        "supports_websockets = false",
-        "supports_standalone_web_search = false",
     ]
+    if tool_output_token_limit is not None:
+        lines.append(f"tool_output_token_limit = {tool_output_token_limit}")
+    lines.extend(
+        [
+            "",
+            f"[model_providers.{RUNTIME_PROVIDER_ID}]",
+            'name = "ithrl isolated provider"',
+            f"base_url = {_toml_string(base_url)}",
+            'wire_api = "responses"',
+            f"requires_openai_auth = {str(requires_openai_auth).lower()}",
+            "request_max_retries = 0",
+            "stream_max_retries = 0",
+            "supports_websockets = false",
+            "supports_standalone_web_search = false",
+        ]
+    )
     if env_key is not None:
         lines.append(f"env_key = {_toml_string(env_key)}")
     if stream_idle_timeout_ms is not None:
@@ -146,13 +155,17 @@ def validate_runner_configuration(
     except (KeyError, TypeError, UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
         _raise_unsafe_runner_configuration(error)
     if (
-        set(document) != _RENDERED_ROOT_FIELDS
+        set(document) - {"tool_output_token_limit"} != _RENDERED_ROOT_FIELDS
         or not isinstance(providers, dict)
         or set(providers) != {RUNTIME_PROVIDER_ID}
         or not isinstance(provider, dict)
         or not _valid_rendered_provider(provider, endpoint, environment_names)
     ):
         _raise_unsafe_runner_configuration()
+    if "tool_output_token_limit" in document:
+        limit = document["tool_output_token_limit"]
+        if type(limit) is not int or not 1 <= limit <= MAX_TOOL_OUTPUT_TOKEN_LIMIT:
+            _raise_unsafe_runner_configuration()
     expected_root = {
         "model_provider": RUNTIME_PROVIDER_ID,
         "approval_policy": "never",

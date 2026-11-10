@@ -141,6 +141,8 @@ def _partition(items: Sequence[str], count: int) -> Iterable[tuple[str, ...]]:
 
 def removal_candidates(
     removable: Sequence[str],
+    *,
+    start_with_all: bool = False,
 ) -> Generator[tuple[frozenset[str], tuple[str, ...], SearchPhase], frozenset[str], None]:
     """Pure candidate order, shared by execution and offline resume verification.
 
@@ -150,7 +152,7 @@ def removal_candidates(
 
     remaining = list(removable)
     removed: frozenset[str] = frozenset()
-    granularity = min(2, len(remaining))
+    granularity = min(1 if start_with_all else 2, len(remaining))
     while remaining and granularity:
         reduced = False
         for chunk in _partition(remaining, granularity):

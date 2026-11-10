@@ -32,7 +32,7 @@ def _request(
     *,
     history: list[Message] | None = None,
     input_items: list[Message] | None = None,
-    tool_output: Message | None = None,
+    checkpoint_continuation: bool = False,
 ) -> Message:
     return {
         "schema_version": 1,
@@ -45,7 +45,7 @@ def _request(
         "developerInstructions": None,
         "history": history or [],
         "input": input_items if input_items is not None else [{"type": "text", "text": "Prompt."}],
-        "toolOutput": tool_output,
+        "checkpointContinuation": checkpoint_continuation,
     }
 
 
@@ -242,14 +242,13 @@ def test_invalid_client_version_is_refused_before_initialization(value: object) 
     assert client == []
 
 
-def test_history_is_injected_before_turn_and_tool_output_is_a_distinct_trigger() -> None:
-    history = [{"type": "message", "id": "retained-001", "text": "Retained context."}]
-    tool_output = {
-        "name": "exec",
-        "namespace": None,
-        "output": [{"type": "input_text", "text": "Synthetic result."}],
-    }
-    request = _request(history=history, input_items=[], tool_output=tool_output)
+@pytest.mark.parametrize("call_type", ["function_call", "custom_tool_call"])
+def test_tool_checkpoint_is_injected_unchanged_before_empty_continuation(call_type: str) -> None:
+    history = [
+        {"type": call_type, "call_id": "captured-call", "name": "fixture_tool"},
+        {"type": call_type + "_output", "call_id": "captured-call", "output": "Result."},
+    ]
+    request = _request(history=history, input_items=[], checkpoint_continuation=True)
     outcome, client, _ = _run(_successful_exchange(history=True), request=request)
 
     assert outcome.status == "completed"
@@ -265,7 +264,28 @@ def test_history_is_injected_before_turn_and_tool_output_is_a_distinct_trigger()
     assert injected["params"] == {"threadId": THREAD_ID, "items": history}
     turn_start = next(message for message in client if message.get("method") == "turn/start")
     assert turn_start["params"]["input"] == []
-    assert turn_start["params"]["toolOutput"] == tool_output
+    assert "toolOutput" not in turn_start["params"]
+    assert "checkpointContinuation" not in turn_start["params"]
+
+
+@pytest.mark.parametrize(
+    ("input_items", "history", "continuation"),
+    [
+        ([], [], False),
+        ([], [], True),
+        ([{"type": "text", "text": "Prompt."}], [], True),
+        ([], [{"type": "message", "role": "user"}], True),
+        ([], [{"type": "function_call_output"}], "true"),
+    ],
+)
+def test_invalid_checkpoint_request_is_refused_before_native_start(
+    input_items: list[Message], history: list[Message], continuation: Any
+) -> None:
+    request = _request(history=history, input_items=input_items)
+    request["checkpointContinuation"] = continuation
+    outcome, client, _ = _run(_successful_exchange(), request=request)
+    assert outcome.error_code == "invalid-worker-request"
+    assert client == []
 
 
 @pytest.mark.parametrize(

@@ -266,8 +266,6 @@ def _run_session(
     for field_name in ("effort", "personality"):
         if request.get(field_name) is not None:
             turn_params[field_name] = request[field_name]
-    if request.get("toolOutput") is not None:
-        turn_params["toolOutput"] = request["toolOutput"]
     state.provider_acceptance = "unknown"
     turn_result = _require_object(
         transport.request("turn/start", turn_params, state),
@@ -615,7 +613,7 @@ def _validate_worker_request(request: dict[str, object]) -> None:
         "developerInstructions",
         "history",
         "input",
-        "toolOutput",
+        "checkpointContinuation",
     }
     if set(request) != expected or request.get("schema_version") != 1:
         raise CodexProtocolError("invalid-worker-request", "Codex worker request is invalid")
@@ -627,7 +625,15 @@ def _validate_worker_request(request: dict[str, object]) -> None:
             _require_string(request[key], "worker request")
     if not isinstance(request["history"], list) or not isinstance(request["input"], list):
         raise CodexProtocolError("invalid-worker-request", "Codex worker request is invalid")
-    if bool(request["input"]) == (request["toolOutput"] is not None):
+    continuation = request["checkpointContinuation"]
+    if type(continuation) is not bool or bool(request["input"]) == continuation:
+        raise CodexProtocolError("invalid-worker-request", "Codex worker request is invalid")
+    if continuation and (
+        not request["history"]
+        or not isinstance(request["history"][-1], dict)
+        or request["history"][-1].get("type")
+        not in {"custom_tool_call_output", "function_call_output"}
+    ):
         raise CodexProtocolError("invalid-worker-request", "Codex worker request is invalid")
     validate_protocol_json(request)
 

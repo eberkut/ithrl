@@ -234,7 +234,7 @@ def prepare_experiment(
         algorithm_digest=(
             content_digest(
                 {
-                    "name": "sampled-coarse-fine-paragraph-search",
+                    "name": "sampled-coarse-fine-paragraph-search-all-selected-sections-first",
                     "version": "1",
                     "section_search": experiment.reduction.section_search.model_dump(mode="json"),
                 }
@@ -618,6 +618,20 @@ def _confirmation_search_refusal(
         return "freshness-expired"
     if (now - state.started_at).total_seconds() >= state.allowance.max_wall_time_seconds:
         return "wall-time-exhausted"
+    if state.checkpoint is not None and not state.checkpoint.confirmation_criterion_satisfied:
+        checkpoint = state.checkpoint
+        sections = checkpoint.reduction.section_search
+        if (
+            reason is not None
+            and not checkpoint.fine_complete
+            and sections is not None
+            and sum(trial.comparison is not None for trial in checkpoint.fine_trials)
+            < sections.max_fine_comparisons
+        ):
+            # No selection is published: a larger administrative allowance can
+            # still admit the next fine block under the same frozen experiment.
+            return reason
+        return "section-criterion-not-met"
     return None
 
 

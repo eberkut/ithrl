@@ -38,6 +38,7 @@ nav:
           - Overview: research/index.md
           - Feasibility: research/feasibility.md
           - Reduction design: research/reduction-design.md
+          - Ordinary-session investigation: research/ordinary-session-investigation.md
           - Context fuzzing: research/context-fuzzing.md
       - Roadmap: https://github.com/eberkut/ithrl/blob/main/ROADMAP.md
 # Navigation alone does not restrict which files MkDocs publishes.

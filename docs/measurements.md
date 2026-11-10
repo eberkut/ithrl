@@ -1,10 +1,9 @@
 # Measurements
 
-A Codex saved-session reduction lowered mean input tokens per confirmation observation by **50.17%**
-and passed fresh confirmation at a 20-percentage-point preservation margin. Codex and Copilot also
-completed synthetic fuzzing campaigns that discovered, simplified and confirmed a behavior-changing
-append. This page reports their configurations, outcomes and costs, followed by reference
-measurements.
+Ordinary Codex and Copilot saved-session experiments removed **580** and **6,512 additional UTF-8
+bytes** from retained prior-user text and passed fresh preservation confirmation. An earlier Codex
+whole-record reduction lowered mean confirmation input tokens by **50.17%**. This page reports
+these results, synthetic fuzzing campaigns and their costs, followed by reference measurements.
 
 For execution instructions, see [native runs](native-runs.md). For statistical assumptions,
 validity and call accounting, see [results](results.md). Results apply to the recorded workloads,
@@ -18,8 +17,109 @@ to the nearest second; KiB and MiB use binary units.
 ## Saved-session experiments
 
 Saved-session experiments select decisions from existing coding sessions and use predicates chosen
-before collection. Their session content, predicates, identifiers and routing remain private;
-only aggregate results are published.
+before collection. Their raw session content, identifiers and routing remain private;
+only aggregates and reviewed, sanitized interpretations are published.
+
+### Ordinary-session paragraph removal
+
+These final-response experiments tested finer removal after whole-record reduction on ordinary
+saved sessions. The deterministic `paragraph-v1` policy removed sections from one eligible retained
+prior-user text field while preserving the fixed triggering input. The usefulness criterion was at
+least **512 additional UTF-8 bytes** removed relative to the frozen coarse candidate; that byte
+criterion is separate from behavioral confirmation.
+
+| Measurement | Codex | Copilot |
+| --- | --- | --- |
+| Measured native installation | CLI `0.167.0` | CLI `1.0.104`, native-prefix SDK reconstruction |
+| Additional text removed from coarse candidate | 580 UTF-8 bytes; selected field 1,282 → 702 bytes | 6,512 UTF-8 bytes |
+| Whole-record removal | 34 source context units | 70 of 181 source context records |
+| Calibration observations | 3 | 3 |
+| Exploratory observations | 4 | 52 across 8 coarse and 5 fine comparisons |
+| Fresh original / selected matches | 11/11 / 11/11 | 20/20 / 20/20 |
+| Candidate-minus-original lower bound | −19.7405 percentage points | −11.9158 percentage points |
+| Confirmation rule | Newcombe method 10; margin 20 points; nominal 95% one-sided confidence | Same |
+| Total observations | 29 | 95 |
+| Actual / additional possible / pending calls | 37 / 0 / 0 | 95 / 0 / 0 |
+| Known input + output tokens | 3,334,167 | 4,697,910 |
+| Durable workflow elapsed time | 14 min 31 s | 1 h 34 min 19 s |
+
+Both lower bounds exceed −20 percentage points. Confirmation observations were fresh, disjoint from
+calibration and search, and compared the selected coarse-plus-fine result with the immutable full
+original. The Codex result used a separately frozen reduced confirmation allocation, approved before
+collection. No old samples were pooled. All recorded observations were valid; no possible or pending
+calls remained in these completed runs. The bounded searches establish no sampled minimality,
+necessity or global optimum.
+
+Codex mean input tokens per confirmation observation fell from **126,911 to 104,911.91**, or
+**17.334%**. Copilot fell from **59,092 to 30,313**, or **48.702%**. These are selected
+**coarse-plus-fine versus full-original** comparisons, including all requests contributing to each
+observation. The experiment did not measure a confirmation token difference between the coarse
+candidate and the fine candidate; none of these token savings can be attributed to the paragraph
+edit alone. Cached input is included in input totals; measured token use does not establish monetary
+savings.
+
+The Codex measurement qualified a private candidate wheel on its exact uncompacted workload and
+runtime. Its private wire auditor checked all 37 external requests and continuations against the
+source projection, selected edit, fixed trigger and settings, with explicitly recorded native
+normalizations. That audit is evidence for the private experiment; it is not a claim that the
+shipped runner exposes the same audit instrumentation. It does not prove complete historical
+request equivalence, provider-internal interpretation, or compaction support on `0.167.0`. Opaque
+reasoning remained opaque. Public compatibility and integration boundaries are described in
+[native runs](native-runs.md#compatibility-and-measurements).
+
+Both workflows verified unchanged source/workspace and cleanup, with zero executed actions or
+tool-side network effects. Codex exercised active interruption/resume and completed-result resume;
+the latter republished a summary snapshot without new observations or calls. A surrounding audit
+wrapper initially rejected the new summary path; the retained result and sampling state were then
+verified unchanged. This wrapper error remains part of the investigation history.
+
+The [worked investigation](research/ordinary-session-investigation.md) explains the Codex debugging
+question, retained evidence, interpretation and next action.
+
+The integrated wheel and sdist-built wheel reproduced both workloads' original, coarse and selected
+materializations without provider requests. Codex worker requests, rendered configuration and
+safety facts also matched the qualified build; its reconstruction identifier changed deliberately.
+The Copilot runner modules are unchanged from its qualified wheel. These comparisons verify the
+integration boundary, not a new provider-backed experiment. The historical Copilot search used
+partition-first fine traversal; current search tries all selected sections first. Its old result
+requires the original build for inspection and cannot resume under the current traversal. The
+integrated inspector accepts the final Codex result. Installed credential-free workflows cover the
+current CLI, inspection and recovery contracts.
+
+#### Investigation cost and unsuccessful work
+
+The final successful run is part of a larger qualification investigation. The following ledger
+keeps scoped subtotals separate from their components. Calls are inference requests; native
+authentication and model-catalogue traffic are outside these inference counts. Monetary cost is
+unknown throughout.
+
+| Scope | Known calls | Additional possible calls | Known input + output tokens | Outcome or accounting limit |
+| --- | ---: | --- | ---: | --- |
+| Current Codex selection, including its final 37-call run | 75 | 1 | Incomplete aggregate | 76 conservatively charged; separately approved earlier investigations excluded |
+| Earlier Codex mixed-field selection, pilot and stopped search combined | 103 | 12 | 4,984,018, incomplete | Selected mixed field was removed during coarse search; no fine search or confirmation |
+| Earlier Codex literal-predicate workload | 7 | Unresolved outer-process envelope | 1,014,768 known | Seven nonmatches; calibration failed; observer/cleanup uncertainty remained |
+| Copilot pilot and reconstruction controls | 7 | 0 | 423,523 | Three calibration and four control observations; no search or confirmation |
+| Copilot completed reduction, separate from its pilot | 95 | 0 | 4,697,910 | Confirmed result reported above |
+
+The current Codex selection's **75 known plus one possible** requests already include the completed
+37-call run; adding that run again would double-count it. Its full token use and elapsed duration
+have not been reconciled. Separate private diagnostic and aborted-run receipts remain retained;
+the scoped 76-call charge is not a global total across every earlier approved investigation.
+The earlier mixed-field selection's 103-known/12-possible subtotal likewise already includes its
+pilot. Its search component lasted 18 min 25 s; complete pilot-plus-search elapsed time is unknown.
+
+For the failed literal-predicate workload, the retained observer receipt permits an outer envelope
+of up to **2,548 total requests including the seven observed requests**. This is an uncertainty
+bound, not observed spend. The seven requests took 5 min 13 s of aggregate runner time; the
+9 min 6 s receipt-publication interval is not an exact whole-workflow duration. Missing observation
+or cleanup evidence cannot be treated as zero cost or a successful safety check. These historical
+uncertainties prevent an exact all-investigation call, token or elapsed-time total.
+
+The Copilot pilot lasted 5 min 8 s and the completed workflow 1 h 34 min 19 s; their separately
+measured intervals total 1 h 39 min 27 s, excluding unmeasured preparation. They used **102 actual
+requests** and **5,121,433 known tokens** combined. Pilot calibration was not reused for final
+confirmation. Failed, stopped and diagnostic attempts never enter confirmation denominators, and
+no expense or savings claim is inferred from these resource counts.
 
 ### Confirmed Codex reduction
 

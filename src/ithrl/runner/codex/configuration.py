@@ -16,6 +16,7 @@ from ithrl.case import CaseError
 from ithrl.case.filesystem import read_safe_bytes
 from ithrl.context import content_digest
 from ithrl.runner.codex.runtime_configuration import (
+    MAX_TOOL_OUTPUT_TOKEN_LIMIT,
     RUNTIME_PROVIDER_ID,
     TRANSPORT_ENVIRONMENT_NAMES,
     is_safe_runtime_environment_name,
@@ -141,6 +142,14 @@ class CodexProviderConfiguration:
             }
         )
 
+    @property
+    def tool_output_token_limit(self) -> int | None:
+        """Return the explicit output limit bound by the validated rendered configuration."""
+
+        return cast(
+            int | None, tomllib.loads(self.rendered_config.decode()).get("tool_output_token_limit")
+        )
+
 
 def resolve_codex_configuration(
     *,
@@ -233,6 +242,7 @@ def _resolve_openai(
         env_http_headers={},
         requires_openai_auth=requires_openai_auth,
         stream_idle_timeout_ms=None,
+        tool_output_token_limit=_tool_output_token_limit(document),
     )
     selected_environment.update(_transport_environment(environment))
     names = tuple(sorted(selected_environment))
@@ -327,6 +337,7 @@ def _resolve_custom(
         env_http_headers=runtime_env_headers,
         requires_openai_auth=False,
         stream_idle_timeout_ms=stream_idle_timeout_ms,
+        tool_output_token_limit=_tool_output_token_limit(document),
     )
     selected_environment.update(_transport_environment(environment))
     names = tuple(sorted(selected_environment))
@@ -518,6 +529,18 @@ def _optional_positive_integer(value: object, *, field_name: str) -> int | None:
             f"The selected Codex provider has an invalid {field_name}",
         )
     return value
+
+
+def _tool_output_token_limit(document: Mapping[str, object]) -> int | None:
+    limit = _optional_positive_integer(
+        document.get("tool_output_token_limit"), field_name="tool output token limit"
+    )
+    if limit is not None and limit > MAX_TOOL_OUTPUT_TOKEN_LIMIT:
+        raise CodexConfigurationError(
+            CodexConfigurationErrorCode.MALFORMED_CONFIG,
+            "The selected Codex provider has an invalid tool output token limit",
+        )
+    return limit
 
 
 def _provider_deviations() -> tuple[str, ...]:

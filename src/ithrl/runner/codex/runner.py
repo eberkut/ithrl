@@ -23,6 +23,7 @@ from ithrl.runner.codex.materialize import (
     CodexMaterializationError,
     CodexMaterializationErrorCode,
     materialize_codex_attempt,
+    validate_codex_output_limit,
 )
 from ithrl.runner.codex.policy import (
     CAPTURE_TYPE,
@@ -147,6 +148,7 @@ class CodexRunner:
         try:
             materialized = materialize_codex_attempt(attempt)
             _validate_materialized_identity(materialized, attempt)
+            validate_codex_output_limit(materialized, self._configuration.tool_output_token_limit)
         except CodexMaterializationError as error:
             changed = (
                 attempt.candidate.removed_context_ids or not attempt.candidate.mutation.is_empty
@@ -165,6 +167,7 @@ class CodexRunner:
         try:
             materialized = materialize_codex_attempt(attempt)
             _validate_materialized_identity(materialized, attempt)
+            validate_codex_output_limit(materialized, self._configuration.tool_output_token_limit)
         except CodexMaterializationError as error:
             raise RunnerError(
                 RunnerErrorCode.PREPARATION,
@@ -399,7 +402,7 @@ def _worker_request(
         "developerInstructions": materialized.developer_instructions,
         "history": cast(JsonValue, list(materialized.history)),
         "input": cast(JsonValue, list(materialized.turn_input.items)),
-        "toolOutput": materialized.turn_input.tool_output,
+        "checkpointContinuation": materialized.turn_input.checkpoint_continuation,
         "transport": {
             "endpoint": endpoint,
             "max_requests": max_requests,

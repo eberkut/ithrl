@@ -13,6 +13,7 @@ from ithrl.runner.codex.configuration import (
     CodexProviderConfiguration,
     resolve_codex_configuration,
 )
+from ithrl.runner.codex.runtime_configuration import validate_runner_configuration
 
 
 def _private_file(path: Path, content: str) -> Path:
@@ -255,6 +256,53 @@ def test_public_digest_is_stable_and_contains_no_credentials(tmp_path: Path) -> 
 
     assert first.public_digest == second.public_digest
     assert "first-secret" not in first.public_digest
+
+
+def test_explicit_tool_output_limit_is_rendered_validated_and_bound_to_identity(
+    tmp_path: Path,
+) -> None:
+    default = _resolve(tmp_path / "default", environment={"OPENAI_API_KEY": "fixture-key"})
+    selected = _resolve(
+        tmp_path / "selected",
+        config="tool_output_token_limit = 65536\n",
+        environment={"OPENAI_API_KEY": "fixture-key"},
+    )
+    assert default.tool_output_token_limit is None
+    assert "tool_output_token_limit" not in _rendered(default)
+    assert selected.tool_output_token_limit == 65536
+    assert _rendered(selected)["tool_output_token_limit"] == 65536
+    assert selected.public_digest != default.public_digest
+    validate_runner_configuration(
+        selected.rendered_config,
+        endpoint=selected.endpoint,
+        environment_names=selected.environment_names,
+    )
+
+
+@pytest.mark.parametrize("value", ["true", "0", "-1", "1.5", '"65536"', str(2**64)])
+def test_invalid_tool_output_limits_are_refused_without_disclosing_values(
+    tmp_path: Path, value: str
+) -> None:
+    with pytest.raises(CodexConfigurationError) as caught:
+        _resolve(
+            tmp_path,
+            config=f"tool_output_token_limit = {value}\n",
+            environment={"OPENAI_API_KEY": "fixture-key"},
+        )
+    assert caught.value.code is CodexConfigurationErrorCode.MALFORMED_CONFIG
+    assert "fixture-key" not in str(caught.value)
+
+
+@pytest.mark.parametrize("value", ["true", "0", "-1", str(2**64)])
+def test_rendered_tool_output_limit_is_validated_strictly(tmp_path: Path, value: str) -> None:
+    configuration = _resolve(tmp_path, environment={"OPENAI_API_KEY": "fixture-key"})
+    changed = f"tool_output_token_limit = {value}\n".encode() + configuration.rendered_config
+    with pytest.raises(ValueError, match="safety policy"):
+        validate_runner_configuration(
+            changed,
+            endpoint=configuration.endpoint,
+            environment_names=configuration.environment_names,
+        )
 
 
 @pytest.mark.parametrize(

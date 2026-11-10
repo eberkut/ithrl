@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import json
 from dataclasses import dataclass, field
 from enum import StrEnum
 
@@ -62,14 +63,16 @@ class CodexMaterializationError(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class CodexTurnInput:
-    """The new input that starts the reconstructed decision turn."""
+    """A user input or continuation of an injected native tool-output checkpoint."""
 
     items: tuple[JsonObject, ...] = field(repr=False)
-    tool_output: JsonObject | None = field(default=None, repr=False)
+    checkpoint_continuation: bool = False
 
     def __post_init__(self) -> None:
-        if bool(self.items) == (self.tool_output is not None):
-            raise ValueError("Codex turn input requires user items or one tool output")
+        if type(self.checkpoint_continuation) is not bool or bool(self.items) == (
+            self.checkpoint_continuation
+        ):
+            raise ValueError("Codex turn input requires user items or a checkpoint continuation")
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,6 +158,11 @@ def _materialize_session(
         raise CodexMaterializationError(
             CodexMaterializationErrorCode.AMBIGUOUS_BOUNDARY,
             "the selected Codex decision has an invalid context boundary",
+        )
+    if any(record.get("type") == "compacted" for record in records[: boundary - 1]):
+        raise CodexMaterializationError(
+            CodexMaterializationErrorCode.UNSUPPORTED_CONTEXT,
+            "Codex reconstruction requires an uncompacted source prefix",
         )
 
     retained = frozenset(attempt.candidate.retained_context_ids)
@@ -249,6 +257,9 @@ def _materialize_session(
         metadata.get("model_provider"),
         "the selected Codex session has no model provider",
     )
+    # Compute this before freezing history: a tool-output checkpoint includes the
+    # captured output itself, with its original call_id and all native metadata.
+    turn_input = _turn_input(trigger, history)
     return CodexMaterialization(
         model=model,
         provider=provider,
@@ -261,7 +272,7 @@ def _materialize_session(
             allow_document=False,
         ),
         history=tuple(history),
-        turn_input=_turn_input(trigger, history),
+        turn_input=turn_input,
     )
 
 
@@ -272,6 +283,34 @@ def editable_codex_text(attempt: PreparedAttempt) -> tuple[EditableText, ...]:
         raise MutationError("text discovery requires the unchanged original")
     materialize_codex_attempt(attempt)
     return attempt.evidence.editable_text()
+
+
+def validate_codex_output_limit(
+    materialized: CodexMaterialization, token_limit: int | None
+) -> None:
+    """Refuse tool outputs that native history insertion might silently truncate."""
+
+    # Codex 0.167 core/src/context_manager/history.rs record_item_with_metadata
+    # applies the model's truncation policy while injecting history; the override
+    # lives in models-manager/src/model_info.rs with_config_overrides.
+    # Serialized ASCII JSON bytes conservatively bound UTF-8 text/token storage,
+    # including content-list overhead. Never assume a particular model's default.
+    for item in materialized.history:
+        if item.get("type") not in {"custom_tool_call_output", "function_call_output"}:
+            continue
+        output = item.get("output")
+        if not _is_text_tool_output(output):
+            raise CodexMaterializationError(
+                CodexMaterializationErrorCode.UNSUPPORTED_CONTEXT,
+                "the Codex tool output uses an unsupported content shape",
+            )
+        size = len(json.dumps(output, ensure_ascii=True, separators=(",", ":")).encode("ascii"))
+        if token_limit is None or size > token_limit:
+            raise CodexMaterializationError(
+                CodexMaterializationErrorCode.UNSUPPORTED_CONTEXT,
+                "Codex tool-output reconstruction requires an explicit adequate "
+                "tool_output_token_limit",
+            )
 
 
 def _selected_turn_context(
@@ -298,37 +337,44 @@ def _turn_input(trigger: JsonObject, history: list[JsonObject]) -> CodexTurnInpu
         return CodexTurnInput(items=_user_inputs(trigger.get("content")))
     if item_type in {"custom_tool_call_output", "function_call_output"}:
         call_id = _required_string(trigger.get("call_id"), "Codex tool output has no call identity")
-        call = next(
-            (
-                item
-                for item in reversed(history)
-                if item.get("type") in {"custom_tool_call", "function_call"}
-                and item.get("call_id") == call_id
-            ),
-            None,
-        )
-        if call is None:
+        calls = [
+            item
+            for item in history
+            if item.get("type") in {"custom_tool_call", "function_call"}
+            and item.get("call_id") == call_id
+        ]
+        if len(calls) != 1 or calls[0].get("type") != item_type.removesuffix("_output"):
             raise CodexMaterializationError(
                 CodexMaterializationErrorCode.MISSING_TRIGGER,
-                "the Codex tool output has no retained matching call",
+                "the Codex tool output has no unique retained matching call",
             )
+        _required_string(calls[0].get("name"), "Codex tool call has no name")
         output = trigger.get("output")
-        if not isinstance(output, (str, list)):
+        if not _is_text_tool_output(output):
             raise CodexMaterializationError(
                 CodexMaterializationErrorCode.UNSUPPORTED_CONTEXT,
                 "the Codex tool output uses an unsupported content shape",
             )
-        return CodexTurnInput(
-            items=(),
-            tool_output={
-                "name": _required_string(call.get("name"), "Codex tool call has no name"),
-                "namespace": None,
-                "output": copy.deepcopy(output),
-            },
-        )
+        # turn/start.toolOutput identifies a tool by name and synthesizes a new
+        # call identity. Inject the preserved output instead, then start an empty
+        # turn so Codex continues the captured call/output pair unchanged.
+        history.append(copy.deepcopy(trigger))
+        return CodexTurnInput(items=(), checkpoint_continuation=True)
     raise CodexMaterializationError(
         CodexMaterializationErrorCode.UNSUPPORTED_CONTEXT,
         "the Codex decision trigger cannot be reconstructed by this runner",
+    )
+
+
+def _is_text_tool_output(value: JsonValue | None) -> bool:
+    return isinstance(value, str) or (
+        isinstance(value, list)
+        and all(
+            isinstance(item, dict)
+            and item.get("type") == "input_text"
+            and isinstance(item.get("text"), str)
+            for item in value
+        )
     )
 
 

@@ -148,7 +148,6 @@ def _verify_client_contract(
             "personality",
             "sandboxPolicy",
             "threadId",
-            "toolOutput",
         },
     }
     for method, properties in required.items():
@@ -241,18 +240,7 @@ def _client_request_samples() -> list[tuple[str, JsonObject]]:
     )
     trigger_variants: tuple[JsonObject, ...] = (
         {"input": [{"type": "text", "text": "input"}]},
-        {
-            "input": [],
-            "toolOutput": {"name": "tool", "namespace": None, "output": "output"},
-        },
-        {
-            "input": [],
-            "toolOutput": {
-                "name": "tool",
-                "namespace": None,
-                "output": [{"type": "input_text", "text": "output"}],
-            },
-        },
+        {"input": []},
     )
     samples.extend(
         ("turn/start", {**turn_start, **settings, **trigger})

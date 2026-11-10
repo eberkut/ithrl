@@ -681,6 +681,7 @@ class SampledReducer:
                 "wall-time-budget",
                 "freshness-budget",
                 "attempt-limit",
+                "no-retained-fields",
             }
             stopped = (self._resume is not None and self._resume.coarse_stopped) or (
                 publish
@@ -833,6 +834,17 @@ class SampledReducer:
         base = tuple(sorted(base_removals))
         requested = tuple(requested_removals)
         config = self._reduction.section_search
+        if (
+            config is not None
+            and config.stop_when_no_retained_fields
+            and all(field.context_id in base_removals for field in config.fields)
+        ):
+            if prior is not None or self._unclassified is not None:
+                raise ResumeMismatchError(
+                    "coarse trials continue after loss of all selected fields"
+                )
+            self._stop_reason = "no-retained-fields"
+            return None
         if prior is None and config is not None:
             if self._resume is not None and self._resume.coarse_stopped:
                 self._stop_reason = self._resume.coarse_stop_reason
