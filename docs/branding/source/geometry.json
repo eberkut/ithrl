@@ -1,0 +1,28 @@
+{
+  "name": "ithrl spear",
+  "version": "1.0",
+  "mark_viewbox": [0, 0, 512, 512],
+  "logo_viewbox": [0, 0, 1040, 512],
+  "colors": {
+    "graphite": "#202427",
+    "teal": "#00A58F",
+    "white": "#FFFFFF",
+    "dark_accent": "#24CDB5"
+  },
+  "parts": [
+    {"id": "context-upper-left", "d": "M136 184H286L225.62 256H75.62Z"},
+    {"id": "context-upper-right", "d": "M356.06 214H470L412.94 282H299Z"},
+    {"id": "context-lower-left-and-tail", "d": "M119 290H220L240 310L72.23 487L152 362H58.58Z"},
+    {"id": "context-lower-right", "d": "M264 312H414L361.98 374H211.98Z"},
+    {"id": "spear-tip", "d": "M266.60 227.32L294.18 250.46L456 29.65Z"},
+    {"id": "revealed-diamond", "d": "M256 237L287 268L256 299L225 268Z", "accent": true}
+  ],
+  "wordmark": {
+    "font": "Geist-Bold.ttf",
+    "glyphs": ["i.ss08", "t", "h", "r", "l.ss03"],
+    "visible_height": 200,
+    "left": 534,
+    "baseline": 375,
+    "visible_gaps": [15, 22, 16, 16]
+  }
+}

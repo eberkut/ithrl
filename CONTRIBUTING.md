@@ -82,6 +82,8 @@ The required `Python tests` check summarizes the test matrix. It accepts a skipp
 after successful Markdown-only classification. Failed classification, missing decisions, test
 failures and unexpected skips fail this check.
 
+The logo sources, usage rules and regeneration commands are in [branding](docs/branding/README.md).
+
 ## Workflow and dependency checks
 
 For GitHub Actions or Dependabot changes, use the jactionlint release pinned in

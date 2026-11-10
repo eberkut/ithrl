@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="title description">
+<title id="title">ithrl</title>
+<desc id="description">ithrl spear; adapts to light and dark themes.</desc>
+<metadata>ithrl logo 1.0. Hand-refined spear geometry; Geist Bold outlined wordmark with ss08 i and ss03 l. See source/OFL-Geist.txt for font provenance.</metadata>
+<style>
+.ink{fill:#202427}.accent{fill:#00A58F}
+@media (prefers-color-scheme:dark){.ink{fill:#FFFFFF}.accent{fill:#24CDB5}}
+</style>
+<path id="context-upper-left" class="ink" fill="#202427" d="M136 184H286L225.62 256H75.62Z"/>
+<path id="context-upper-right" class="ink" fill="#202427" d="M356.06 214H470L412.94 282H299Z"/>
+<path id="context-lower-left-and-tail" class="ink" fill="#202427" d="M119 290H220L240 310L72.23 487L152 362H58.58Z"/>
+<path id="context-lower-right" class="ink" fill="#202427" d="M264 312H414L361.98 374H211.98Z"/>
+<path id="spear-tip" class="ink" fill="#202427" d="M266.60 227.32L294.18 250.46L456 29.65Z"/>
+<path id="revealed-diamond" class="accent" fill="#00A58F" d="M256 237L287 268L256 299L225 268Z"/>
+</svg>

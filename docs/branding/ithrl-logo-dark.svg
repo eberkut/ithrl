@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="512" viewBox="0 0 1040 512" role="img" aria-labelledby="title description">
+<title id="title">ithrl</title>
+<desc id="description">ithrl spear and lowercase wordmark for dark backgrounds.</desc>
+<metadata>ithrl logo 1.0. Hand-refined spear geometry; Geist Bold outlined wordmark with ss08 i and ss03 l. See source/OFL-Geist.txt for font provenance.</metadata>
+<g id="emblem">
+<path id="context-upper-left" fill="#FFFFFF" d="M136 184H286L225.62 256H75.62Z"/>
+<path id="context-upper-right" fill="#FFFFFF" d="M356.06 214H470L412.94 282H299Z"/>
+<path id="context-lower-left-and-tail" fill="#FFFFFF" d="M119 290H220L240 310L72.23 487L152 362H58.58Z"/>
+<path id="context-lower-right" fill="#FFFFFF" d="M264 312H414L361.98 374H211.98Z"/>
+<path id="spear-tip" fill="#FFFFFF" d="M266.60 227.32L294.18 250.46L456 29.65Z"/>
+<path id="revealed-diamond" fill="#24CDB5" d="M256 237L287 268L256 299L225 268Z"/>
+</g>
+<g id="wordmark" fill="#FFFFFF" aria-hidden="true">
+<path id="letter-i" d="M534 375V228.951H574.872V375ZM554.436 213.965Q545.444 213.965 539.722 208.787Q534 203.61 534 194.619Q534 185.627 539.722 180.313Q545.444 175 554.436 175Q563.7 175 569.422 180.313Q575.144 185.627 575.144 194.619Q575.144 203.61 569.422 208.787Q563.7 213.965 554.436 213.965Z"/>
+<path id="letter-t" d="M657.447 375Q634.831 375 624.204 364.51Q613.578 354.019 613.578 331.131V259.469H590.144V228.951H613.578V194.619H654.45V228.951H692.869V259.469H654.45V326.226Q654.45 336.853 658.946 340.668Q663.441 344.482 672.433 344.482H692.869V375Z"/>
+<path id="letter-h" d="M714.869 375V181.54H755.741V246.935Q761.736 236.035 772.362 230.858Q782.989 225.681 796.068 225.681Q820.591 225.681 832.989 241.213Q845.387 256.744 845.387 280.995V375H804.515V290.804Q804.515 274.455 799.338 266.281Q794.161 258.106 782.444 258.106Q769.91 258.106 762.826 266.689Q755.741 275.272 755.741 291.894V375Z"/>
+<path id="letter-r" d="M861.387 375V228.951H900.079L901.169 258.106Q905.529 242.847 913.975 235.899Q922.422 228.951 935.774 228.951H949.125V262.738H935.774Q918.608 262.738 910.433 269.687Q902.259 276.635 902.259 292.984V375Z"/>
+<path id="letter-l" d="M965.125 375V181.54H1005.997V375Z"/>
+</g>
+</svg>

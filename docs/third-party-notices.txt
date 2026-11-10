@@ -161,6 +161,11 @@ Geist and Geist Mono, Version 1.401
 Copyright 2024 The Geist Project Authors (https://github.com/vercel/geist-font.git)
 https://github.com/vercel/geist-font/blob/main/OFL.txt
 
+The ithrl logo wordmark is outlined from the unmodified Geist Bold font:
+Copyright 2026 The Geist Project Authors (https://github.com/vercel/geist-font)
+Git blob: 5b071f457e33d42096249e3be9327f83c4440b56
+Its original font and notice are retained in docs/branding/source/ in the repository.
+
 Inter roman and italic, Version 4.001;git-9221beed3
 Copyright 2016 The Inter Project Authors
 https://github.com/rsms/inter/blob/9221beed3/LICENSE.txt

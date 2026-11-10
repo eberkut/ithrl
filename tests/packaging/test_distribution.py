@@ -169,6 +169,18 @@ PUBLIC_DOCS = frozenset(
     for directory in ("decisions", "research")
     for path in (PROJECT_ROOT / "docs" / directory).glob("*.md")
 )
+PUBLIC_DOCS |= frozenset(
+    PurePosixPath("docs/branding", name)
+    for name in (
+        "branding.css",
+        "ithrl-icon.svg",
+        "ithrl-favicon.svg",
+        "ithrl-logo.png",
+        "ithrl-social.png",
+        "ithrl-logo-light.svg",
+        "ithrl-logo-dark.svg",
+    )
+)
 
 
 @pytest.fixture(scope="module")

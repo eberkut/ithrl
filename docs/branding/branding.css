@@ -1,0 +1,39 @@
+.ithrl-mark {
+  width: 2rem;
+  height: 2rem;
+  flex-shrink: 0;
+}
+
+.ithrl-mark .ink {
+  fill: #202427;
+}
+
+.ithrl-mark .accent {
+  fill: #00a58f;
+}
+
+.dark .ithrl-mark .ink {
+  fill: #fff;
+}
+
+.dark .ithrl-mark .accent {
+  fill: #24cdb5;
+}
+
+.ithrl-wordmark {
+  margin: 1rem 0 1.5rem;
+}
+
+.ithrl-wordmark img {
+  max-width: 100%;
+  height: auto;
+}
+
+.ithrl-logo-dark,
+.dark .ithrl-logo-light {
+  display: none;
+}
+
+.dark .ithrl-logo-dark {
+  display: block;
+}

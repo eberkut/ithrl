@@ -1,5 +1,12 @@
 # ithrl documentation
 
+<!-- rumdl-disable MD033 -->
+<div class="ithrl-wordmark">
+  <img class="ithrl-logo-light" src="branding/ithrl-logo-light.svg" alt="ithrl" width="280" height="138">
+  <img class="ithrl-logo-dark" src="branding/ithrl-logo-dark.svg" alt="ithrl" width="280" height="138">
+</div>
+<!-- rumdl-enable MD033 -->
+
 `ithrl` extracts a selected decision from a saved coding-agent session and searches for context
 that preserves its behavior. Context fuzzing explores text appends to prior user input for Codex
 and Copilot final-response targets.

@@ -1,4 +1,12 @@
-# ithrl
+<!-- rumdl-disable MD033 -->
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/eberkut/ithrl/main/docs/branding/ithrl-logo-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/eberkut/ithrl/main/docs/branding/ithrl-logo-light.svg">
+    <img src="https://raw.githubusercontent.com/eberkut/ithrl/main/docs/branding/ithrl-logo.png" alt="ithrl" width="320" height="158">
+  </picture>
+</h1>
+<!-- rumdl-enable MD033 -->
 
 [![PyPI](https://img.shields.io/pypi/v/ithrl.svg)](https://pypi.org/project/ithrl/)
 [![CI](https://github.com/eberkut/ithrl/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/eberkut/ithrl/actions/workflows/ci.yml)

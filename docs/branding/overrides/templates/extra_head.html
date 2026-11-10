@@ -1,0 +1,6 @@
+{% if not page or not page.meta.image %}
+<meta property="og:image" content="{{ config.site_url | e }}branding/ithrl-social.png">
+<meta property="og:image:alt" content="ithrl — Find smaller agent contexts that preserve a selected model behavior">
+<meta name="twitter:image" content="{{ config.site_url | e }}branding/ithrl-social.png">
+{% endif %}
+<meta name="twitter:card" content="summary_large_image">
