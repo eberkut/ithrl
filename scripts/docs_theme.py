@@ -13,7 +13,6 @@ THEME_ASSETS = frozenset(
         "fonts/GeistMono.woff2",
         "fonts/Inter.woff2",
         "fonts/Inter-Italic.woff2",
-        "img/favicon.ico",
         "js/callbacks.js",
         "js/copy-button.js",
         "js/dark.js",

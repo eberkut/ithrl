@@ -7,8 +7,13 @@ docs_dir: docs
 site_dir: .local/site
 theme:
   name: shadcn
+  custom_dir: docs/branding/overrides
+  icon: branding/ithrl-icon.svg
+  favicon: branding/ithrl-favicon.svg
   show_stargazers: false
   hide_source_files: true
+extra_css:
+  - branding/branding.css
 plugins:
   - search
 hooks:
@@ -54,6 +59,13 @@ exclude_docs: |
   !/architecture.md
   !/decisions/*.md
   !/research/*.md
+  !/branding/ithrl-logo-light.svg
+  !/branding/ithrl-logo-dark.svg
+  !/branding/ithrl-icon.svg
+  !/branding/ithrl-favicon.svg
+  !/branding/ithrl-logo.png
+  !/branding/ithrl-social.png
+  !/branding/branding.css
 validation:
   nav:
     omitted_files: warn

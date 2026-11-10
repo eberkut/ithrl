@@ -43,11 +43,12 @@ error allocation.
 
 ## Current work: v0.3 deeper reduction
 
-The agreed scope is provider-free retained-context inspection and finer removal within supported
-prior-user text, with Codex and Copilot final-response parity. Begin with inspection of saved
-results, then define text-section removal contracts, integrate both native runners and qualify
-useful ordinary saved-session workflows. [Issue #12](https://github.com/eberkut/ithrl/issues/12)
-owns implementation scope and acceptance.
+Provider-free retained-context inspection and finer removal within supported prior-user text are
+implemented, with Codex and Copilot final-response workflows. Ordinary saved-session qualification
+and a [worked investigation](docs/research/ordinary-session-investigation.md) are complete; the
+[measurements](docs/measurements.md#ordinary-session-paragraph-removal) record outcomes, costs and
+limits. Version 0.3 is not yet released.
+[Issue #12](https://github.com/eberkut/ithrl/issues/12) owns the milestone's acceptance and scope.
 
 Choose section boundaries, workload-specific usefulness criteria and execution budgets before
 provider-backed evaluation. Finer native removal needs its own reconstruction, safety and live-use

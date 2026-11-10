@@ -33,7 +33,18 @@ SITE_PAGES = frozenset(
     for directory in ("decisions", "research")
     for path in (PROJECT_ROOT / "docs" / directory).glob("*.md")
 )
-SITE_ASSETS = frozenset({"third-party-notices.txt"})
+SITE_ASSETS = frozenset({"third-party-notices.txt"}) | frozenset(
+    f"branding/{name}"
+    for name in (
+        "branding.css",
+        "ithrl-icon.svg",
+        "ithrl-favicon.svg",
+        "ithrl-logo.png",
+        "ithrl-social.png",
+        "ithrl-logo-light.svg",
+        "ithrl-logo-dark.svg",
+    )
+)
 
 
 def test_cli_reference_is_current_without_external_execution(
@@ -66,6 +77,7 @@ def site_sources(tmp_path: Path) -> Path:
     shutil.copy(PROJECT_ROOT / "scripts/docs_theme.py", tmp_path / "scripts/docs_theme.py")
     docs = tmp_path / "docs"
     docs.mkdir()
+    shutil.copytree(PROJECT_ROOT / "docs/branding", docs / "branding")
     for page in SITE_PAGES | SITE_ASSETS:
         (docs / page).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(PROJECT_ROOT / "docs" / page, docs / page)
@@ -91,6 +103,11 @@ def test_site_build_publishes_only_allowlisted_sources(site_sources: Path) -> No
     (docs / "nested/private.md").write_text("PRIVATE_SENTINEL", encoding="utf-8")
     (docs / "css").mkdir()
     (docs / "css/private.css").write_text("PRIVATE_SENTINEL", encoding="utf-8")
+    (docs / "branding/private.json").write_text("PRIVATE_SENTINEL", encoding="utf-8")
+    (docs / "branding/private.css").write_text("PRIVATE_SENTINEL", encoding="utf-8")
+    (docs / "branding/private.ttf").write_text("PRIVATE_SENTINEL", encoding="utf-8")
+    (docs / "branding/private.svg").write_text("PRIVATE_SENTINEL", encoding="utf-8")
+    (docs / "branding/private.png").write_text("PRIVATE_SENTINEL", encoding="utf-8")
     (site_sources / "plan.md").write_text("PRIVATE_SENTINEL", encoding="utf-8")
     result = _build_site(site_sources)
     assert result.returncode == 0, result.stdout + result.stderr
@@ -139,6 +156,12 @@ def test_site_build_publishes_only_allowlisted_sources(site_sources: Path) -> No
         assert (site / name).read_bytes() == (PROJECT_ROOT / "docs" / name).read_bytes()
     assert "fetchStargazers(" not in (site / "index.html").read_text(encoding="utf-8")
     assert "cdnjs.cloudflare.com" not in (site / "index.html").read_text(encoding="utf-8")
+    assert not (site / "img/favicon.ico").exists()
+    assert {
+        path.relative_to(site).as_posix()
+        for path in (site / "branding").rglob("*")
+        if path.is_file()
+    } == {name for name in SITE_ASSETS if name.startswith("branding/")}
     assert all(
         b"PRIVATE_SENTINEL" not in path.read_bytes() for path in site.rglob("*") if path.is_file()
     )
@@ -152,7 +175,7 @@ class _PageAssets(HTMLParser):
     @override
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attributes = dict(attrs)
-        if tag == "script":
+        if tag == "script" or tag == "img":
             url = attributes.get("src")
         elif tag == "link" and attributes.get("rel") in {"stylesheet", "shortcut icon", "icon"}:
             url = attributes.get("href")
