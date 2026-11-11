@@ -32,6 +32,7 @@ from ithrl.cli.output import (
     render_sampled,
     shell_command,
 )
+from ithrl.cli.paths import native_storage_paths, observation_storage_paths
 from ithrl.cli.progress import calibration_status, progress_display
 from ithrl.execution import calibration_budget_bounds
 from ithrl.execution.budget import sampling_attempt_cost
@@ -64,6 +65,7 @@ def handle_sampled_shrink(
     max_wall_time_seconds: int | None = None,
     inter_attempt_delay_seconds: int = 0,
     experiment_path: Path | None = None,
+    save_preflight: Path | None = None,
 ) -> None:
     """Present a sampled preflight, then run only an acknowledged calibration."""
 
@@ -118,6 +120,14 @@ def handle_sampled_shrink(
             inter_attempt_delay_seconds=inter_attempt_delay_seconds,
             experiment_path=experiment_path,
         )
+        if save_preflight is not None:
+            if not dry_run:
+                raise ValueError("receipt export requires dry-run")
+            from ithrl.cli.preparation import save_preflight_receipt
+
+            save_preflight_receipt(
+                workspace, prepared, original_workspace, save_preflight, store_path
+            )
     except KeyboardInterrupt:
         _interrupt_before_execution(output_format, harness_started)
     except (OSError, TypeError, ValueError):
@@ -522,18 +532,9 @@ def _observation_store_path(
     protected = (
         workspace.root.resolve(strict=True),
         original_workspace.resolve(strict=True),
-        (data_root / "native-attempts").resolve(strict=False),
-        (data_root / "native-output").resolve(strict=False),
+        *native_storage_paths(),
     )
-    lifecycle_paths = (
-        resolved,
-        resolved.with_name(f"{resolved.name}.calibration.lock"),
-        resolved.with_name(f"{resolved.name}.calibration.inflight"),
-        resolved.with_name(f"{resolved.name}.sampling.lock"),
-        resolved.with_name(f"{resolved.name}-journal"),
-        resolved.with_name(f"{resolved.name}-wal"),
-        resolved.with_name(f"{resolved.name}-shm"),
-    )
+    lifecycle_paths = observation_storage_paths(resolved)
     for candidate in lifecycle_paths:
         if any(
             candidate == root or root in candidate.parents or candidate in root.parents

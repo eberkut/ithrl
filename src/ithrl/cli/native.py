@@ -27,7 +27,7 @@ from ithrl.case.filesystem import (
     reject_symlink_components,
 )
 from ithrl.cli.output import error_console, print_plain
-from ithrl.cli.paths import private_data_root
+from ithrl.cli.paths import native_storage_paths, private_data_root
 from ithrl.execution import (
     MAX_PROVIDER_CALLS_PER_ATTEMPT,
     PreflightIssue,
@@ -72,6 +72,29 @@ _MAX_WALL_TIME_SECONDS = 300
 _MAX_NATIVE_OUTPUT_BYTES = 8 * 1024 * 1024
 _MAX_DISPOSABLE_STATE_BYTES = 64 * 1024 * 1024
 _MAX_DISPOSABLE_STATE_ENTRIES = 10_000
+
+
+def native_resource_limits(
+    harness: str,
+    *,
+    max_provider_calls: int,
+    attempt_timeout_seconds: int = _MAX_WALL_TIME_SECONDS,
+    max_input_tokens: int | None = None,
+) -> ResourceLimits:
+    """Resolve native CLI bounds without detection, authentication or filesystem work."""
+
+    if harness not in {"codex", "copilot"}:
+        raise ValueError("unsupported native harness")
+    return ResourceLimits(
+        max_provider_calls=max_provider_calls,
+        max_input_tokens=max_input_tokens,
+        max_wall_time_seconds=attempt_timeout_seconds,
+        max_native_output_bytes=_MAX_NATIVE_OUTPUT_BYTES,
+        max_disposable_state_bytes=(
+            COPILOT_DISPOSABLE_STATE_BYTES if harness == "copilot" else _MAX_DISPOSABLE_STATE_BYTES
+        ),
+        max_disposable_state_entries=_MAX_DISPOSABLE_STATE_ENTRIES,
+    )
 
 
 class NativeSelectionError(RuntimeError):
@@ -219,19 +242,15 @@ def native_selection(
         allowed_provider=capability.provider,
         allowed_endpoint=capability.endpoint,
     )
-    limits = ResourceLimits(
+    limits = native_resource_limits(
+        harness,
         max_provider_calls=capability.provider_calls_per_attempt,
         max_input_tokens=max_input_tokens,
-        max_wall_time_seconds=(
+        attempt_timeout_seconds=(
             attempt_timeout_seconds
             if attempt_timeout_seconds is not None
             else _MAX_WALL_TIME_SECONDS
         ),
-        max_native_output_bytes=_MAX_NATIVE_OUTPUT_BYTES,
-        max_disposable_state_bytes=(
-            COPILOT_DISPOSABLE_STATE_BYTES if harness == "copilot" else _MAX_DISPOSABLE_STATE_BYTES
-        ),
-        max_disposable_state_entries=_MAX_DISPOSABLE_STATE_ENTRIES,
     )
     if max_input_tokens is not None and capability.input_token_limit_enforcement != "pre-dispatch":
         raise NativeSelectionError(
@@ -488,7 +507,7 @@ def _storage_paths(workspace: CaseWorkspace, original_workspace: Path) -> tuple[
         raise NativeSelectionError(
             "storage-unavailable", "private runner storage is unavailable"
         ) from error
-    return root / "native-attempts", root / "native-output"
+    return native_storage_paths()
 
 
 def _paths_overlap(first: Path, second: Path) -> bool:

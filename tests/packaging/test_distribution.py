@@ -55,6 +55,7 @@ RUNTIME_MODULES = frozenset(
         PurePosixPath("ithrl/cli/output.py"),
         PurePosixPath("ithrl/cli/progress.py"),
         PurePosixPath("ithrl/cli/paths.py"),
+        PurePosixPath("ithrl/cli/preparation.py"),
         PurePosixPath("ithrl/cli/sampled.py"),
         PurePosixPath("ithrl/cli/sampled_output.py"),
         PurePosixPath("ithrl/cli/sampled_reduction.py"),
@@ -83,6 +84,7 @@ RUNTIME_MODULES = frozenset(
         PurePosixPath("ithrl/mutation.py"),
         PurePosixPath("ithrl/observations.py"),
         PurePosixPath("ithrl/path_safety.py"),
+        PurePosixPath("ithrl/preparation.py"),
         PurePosixPath("ithrl/reduce/__init__.py"),
         PurePosixPath("ithrl/reduce/contracts.py"),
         PurePosixPath("ithrl/reduce/engine.py"),
@@ -433,6 +435,7 @@ def _assert_installed_workflow(wheel: Path, tmp_path: Path, expected_version: st
     assert report["confirmation"]["status"] == "confirmed-preserving"
     assert report["candidate_digest"] == summary["candidate_digest"]
     assert all("text" not in node for node in report["nodes"])
+    _assert_installed_preparation(executable, runtime, child_environment)
     _assert_installed_resume(executable, runtime, child_environment)
     _run(
         str(python),
@@ -449,6 +452,144 @@ def _assert_installed_workflow(wheel: Path, tmp_path: Path, expected_version: st
         cwd=runtime,
         env=child_environment,
     )
+
+
+def _assert_installed_preparation(
+    executable: Path, runtime: Path, child_environment: dict[str, str]
+) -> None:
+    """Exercise installed offline commands with recorded sanitized native facts."""
+
+    from ithrl.case.filesystem import atomic_write_bytes
+    from ithrl.cli.native import native_resource_limits
+    from ithrl.execution import SafetyPolicy, resolve_execution_plan
+    from ithrl.experiment import (
+        NativeRunnerConfig,
+        SampledCalibrationPhase,
+        SampledExperimentDefinition,
+        parse_experiment_toml,
+    )
+    from ithrl.preparation import NativePreparationReceipt
+    from native_support import codex, copilot
+
+    for harness in ("codex", "copilot"):
+        parent = runtime / f"prepare-{harness}"
+        parent.mkdir(mode=0o700)
+        if harness == "codex":
+            case, evidence = codex._case(parent, context_sensitive=True)
+        else:
+            _, case, evidence = copilot._case(parent, "final-response", context_sensitive=True)
+        capability = copilot._capability("final-response")
+        if harness == "codex":
+            capability = capability.model_copy(
+                update={
+                    "runner_type": "codex",
+                    "harness": "codex",
+                    "source_schema": "codex-rollout-jsonl",
+                    "reconstruction_method": "codex-app-server-inject-checkpoint-v1",
+                    "provider_calls_per_attempt": 4,
+                }
+            )
+        default = parse_experiment_toml(evidence.default_experiment)
+        experiment = SampledExperimentDefinition(
+            target=default.target,
+            oracle=default.oracle,
+            runner=NativeRunnerConfig(type=harness, required_capability_digest=capability.digest),
+            calibration=SampledCalibrationPhase(
+                required_valid=3, minimum_matches=3, max_attempts=3
+            ),
+        )
+        plan = resolve_execution_plan(
+            capability,
+            experiment,
+            evidence=evidence,
+            runner_fingerprint="packaging-fixture",
+            safety_policy=SafetyPolicy(
+                provider_transport="allowed",
+                allowed_provider=capability.provider,
+                allowed_endpoint=capability.endpoint,
+            ),
+            resource_limits=native_resource_limits(
+                harness,
+                max_provider_calls=capability.provider_calls_per_attempt,
+                attempt_timeout_seconds=120,
+            ),
+        )
+        assert plan.ready
+        assert plan.plan is not None
+        # This directory deliberately does not exist: preparation must not inspect it.
+        original = parent / "unavailable-original"
+        receipt = parent / "preflight.json"
+        atomic_write_bytes(
+            receipt,
+            NativePreparationReceipt.create(plan.plan, experiment, original)
+            .model_dump_json()
+            .encode(),
+        )
+        inspected = _run(
+            str(executable),
+            "inspect",
+            "sections",
+            str(case.root),
+            "--format",
+            "json",
+            cwd=runtime,
+            env=child_environment,
+        )
+        catalog = next(
+            field for field in json.loads(inspected.stdout)["fields"] if len(field["sections"]) >= 2
+        )
+        settings = parent / "settings.toml"
+        policy = (
+            'schema_version = 1\nkind = "reduction-preparation"\n'
+            "[calibration]\nrequired_valid = 3\nminimum_matches = 3\nmax_attempts = 3\n"
+            "[reduction]\nmargin = 0.2\nfreshness_seconds = 7200\n"
+            'eligibility_policy = "independent-safe-preaccept-only"\n'
+            "[reduction.search.original]\nrequired_valid = 1\nmax_attempts = 1\n"
+            "[reduction.search.candidate]\nrequired_valid = 1\nmax_attempts = 1\n"
+            "[reduction.confirmation]\none_sided_confidence = 0.95\n"
+            "[reduction.confirmation.original]\nrequired_valid = 11\nmax_attempts = 11\n"
+            "[reduction.confirmation.candidate]\nrequired_valid = 11\nmax_attempts = 11\n"
+            "[sections]\nmax_coarse_comparisons = 1\nmax_fine_comparisons = 1\n"
+            "minimum_removed_utf8_bytes = 1\nrequire_criterion_for_confirmation = true\n"
+            "stop_when_no_retained_fields = true\n[[sections.fields]]\n"
+            f"context_id = {json.dumps(catalog['context_id'])}\n"
+            f"content_index = {catalog['content_index']}\n"
+            f"section_ids = [{json.dumps(catalog['sections'][0]['id'])}]\n"
+        )
+        atomic_write_bytes(settings, policy.encode())
+        output = parent / "reduction.toml"
+        arguments = (
+            str(executable),
+            "prepare",
+            str(case.root),
+            "--preflight",
+            str(receipt),
+            "--settings",
+            str(settings),
+            "--output",
+            str(output),
+            "--max-candidates",
+            "2",
+            "--max-provider-calls",
+            "1000",
+            "--max-wall-time",
+            "7200",
+            "--format",
+            "json",
+        )
+        prepared = _run(*arguments, cwd=runtime, env=child_environment)
+        report = json.loads(prepared.stdout)
+        generated = parse_experiment_toml(output.read_text())
+        assert report["status"] == "prepared"
+        assert report["experiment_digest"] == generated.digest
+        assert generated.target == default.target
+        assert generated.oracle == default.oracle
+        assert "--dry-run" in shlex.split(report["next_command"])
+        assert "--acknowledge-model-execution" not in shlex.split(report["next_command"])
+        assert not original.exists()
+        assert not (parent / "observations.sqlite").exists()
+        repeated = _run(*arguments, cwd=runtime, env=child_environment, expected_exits=(2,))
+        assert json.loads(repeated.stdout)["error_code"] == "preparation-invalid"
 
 
 def test_installed_fuzz_extra_provides_exact_numerics(

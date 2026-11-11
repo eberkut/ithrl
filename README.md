@@ -62,7 +62,13 @@ Use a new directory to repeat the example; extraction refuses to overwrite an ex
 ## Commands
 
 - `ithrl extract` browses saved sessions and creates a case from a selected decision.
+- `ithrl prepare CASE --preflight RECEIPT --settings PRIVATE_TOML --output EXPERIMENT` creates a
+  private reduction configuration from recorded preflight evidence without starting a harness.
+  See the
+  [preparation procedure](https://github.com/eberkut/ithrl/blob/main/docs/native-runs.md#prepare-native-reduction).
 - `ithrl shrink CASE` searches for context removals that preserve the selected behavior.
+- `ithrl inspect sections CASE` lists eligible text fields, section IDs and byte bounds without
+  displaying their text or requiring a reduction result.
 - `ithrl inspect retained CASE --result RESULT` explains retained units and recorded removal trials
   from a saved reduction without model access. See
   [results and privacy](https://github.com/eberkut/ithrl/blob/main/docs/results.md#inspect-retained-context).

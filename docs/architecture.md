@@ -207,6 +207,16 @@ keep the selected decision's input outside the editable surface.
 
 ## Execution and privacy boundary
 
+Native reduction preparation reuses a private receipt exported by an explicit successful dry-run.
+The receipt carries the resolved execution plan, oracle identity and original-workspace path.
+`prepare` validates these recorded facts against the case, copies its target and oracle, and binds
+explicit statistical settings to the existing sampled experiment format. Section selectors use
+case catalogs to derive source hashes. Preparation starts no native detection and performs no
+authentication lookup or provider request. Its budget calculation is shared with normal preflight;
+administrative limits remain arguments in the generated inspection command. A receipt does not
+authenticate its author or establish current runtime readiness. The subsequent native dry-run
+checks the installed runtime and configuration before execution can be acknowledged.
+
 A capability profile states what a runner can do; a safety policy bounds permitted effects.
 Preflight resolves both for the exact source format, target, installed runtime and configuration.
 Structural capability detection is separate from provider-backed calibration and live-use
@@ -282,6 +292,7 @@ Python module names are not public API commitments.
 | `case/contracts.py`, `case/evidence.py`, `case/storage.py`, `case/source.py`, `case/source_context.py`, `case/source_storage.py`, `case/filesystem.py` | Immutable case evidence, source verification and private workspace persistence |
 | `context.py`, `mutation.py` | Context graph, dependency closure, stable selectors and bounded text-edit contracts |
 | `behavior.py`, `experiment.py` | Structural targets and frozen deterministic/sampled experimental definitions |
+| `preparation.py`, `cli/preparation.py` | Recorded preflight receipts, offline settings binding and private experiment publication |
 | `execution/contracts.py`, `execution/preflight.py`, `execution/budget.py` | Capabilities, policy, resolved plans, refusal and admission arithmetic |
 | `runner/contracts.py`, `runner/registry.py`, `runner/validation.py`, `runner/evidence.py` | Candidate/attempt contracts, runner selection and returned-evidence validation |
 | `runner/codex/`, `runner/copilot/` | Native capability detection, configuration, materialization, isolation, policy and protocol |
@@ -296,7 +307,7 @@ Python module names are not public API commitments.
 | `fuzz/configuration.py` | Private operator policy and command limits, bound to an immutable original |
 | `fuzz/progress.py`, `fuzz/campaign.py` | Frozen mutation order, authoritative traversal recovery, durable selection and terminal campaign evidence over shared sampled state |
 | `workflow.py`, `results/` | Application phase composition and validated result models, summaries and snapshots |
-| `inspection.py`, `results/inspection.py`, `cli/inspect.py` | Offline result/case binding, retained-context interpretation and CLI presentation |
+| `inspection.py`, `results/inspection.py`, `cli/inspect.py` | Offline result/case binding, retained-context interpretation, source section catalogs and CLI presentation |
 | `cli/` | Public command selection, native setup, progress, continuation and presentation |
 | `path_safety.py`, `timestamps.py` | Shared private-path/lock primitives and timestamp validation |
 

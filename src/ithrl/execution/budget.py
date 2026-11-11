@@ -7,7 +7,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 from ithrl.execution.contracts import CapabilityProfile, ResourceLimits
-from ithrl.experiment import SampledCalibrationPhase
+from ithrl.experiment import SampledCalibrationPhase, SampledReductionPlan
+from ithrl.statistics import optimistic_attainability
 
 if TYPE_CHECKING:
     from ithrl.observations import SamplingBudgetAllowance
@@ -35,6 +36,140 @@ class SamplingAttemptCost:
             raise ValueError("provider calls per attempt must be a nonnegative integer")
         if type(self.runner_seconds) is not int or self.runner_seconds < 1:
             raise ValueError("runner seconds per attempt must be a positive integer")
+
+
+@dataclass(frozen=True, slots=True)
+class ReductionBudgetBounds:
+    """Frozen-plan bounds and the first applicable preflight refusal."""
+
+    max_attempts: int
+    max_provider_calls: int
+    max_runner_seconds: int
+    max_wall_time_seconds: int
+    candidate_capacity: int
+    minimum_provider_calls: int
+    minimum_wall_time_seconds: int
+    confirmation_provider_calls: int
+    confirmation_runner_seconds: int
+    refusal_code: (
+        Literal[
+            "sampling-budget-too-small", "sampling-freshness-too-small", "confirmation-unattainable"
+        ]
+        | None
+    )
+
+
+def reduction_budget_bounds(
+    *,
+    calibration: SampledCalibrationPhase,
+    reduction: SampledReductionPlan,
+    attempt_cost: SamplingAttemptCost,
+    max_candidate_comparisons: int,
+    max_provider_calls: int | None = None,
+    max_wall_time_seconds: int | None = None,
+    inter_attempt_delay_seconds: int = 0,
+    remaining_minimum_attempts: int | None = None,
+) -> ReductionBudgetBounds:
+    """Calculate reduction admission without loading state or invoking a runner.
+
+    A supplied remaining minimum comes from a resumed run. Its minimum bounds are
+    informational: only a new run refuses administrative ceilings below the minimum.
+    """
+
+    if type(max_candidate_comparisons) is not int or max_candidate_comparisons < 1:
+        raise ValueError("candidate budget unavailable")
+    if (
+        type(inter_attempt_delay_seconds) is not int
+        or not 0 <= inter_attempt_delay_seconds <= 86_400
+    ):
+        raise ValueError("inter-attempt delay must be bounded nonnegative seconds")
+    for name, value in (
+        ("provider-call budget", max_provider_calls),
+        ("wall-time budget", max_wall_time_seconds),
+    ):
+        if value is not None and (type(value) is not int or value < 1):
+            raise ValueError(f"{name} must be a positive integer")
+    if remaining_minimum_attempts is not None and (
+        type(remaining_minimum_attempts) is not int or remaining_minimum_attempts < 0
+    ):
+        raise ValueError("remaining minimum attempts must be a nonnegative integer")
+    if attempt_cost.provider_calls < 1:
+        raise ValueError("sampled reduction requires a positive provider cost")
+
+    # Conservatively admit a full pause for every future attempt; the first may need none.
+    seconds_per_attempt = attempt_cost.runner_seconds + inter_attempt_delay_seconds
+    calibration_attempts = calibration.max_attempts
+    search = reduction.search.original.max_attempts + reduction.search.candidate.max_attempts
+    confirmation = (
+        reduction.confirmation.original.max_attempts + reduction.confirmation.candidate.max_attempts
+    )
+    minimum_attempts = (
+        calibration_attempts + search + confirmation
+        if remaining_minimum_attempts is None
+        else remaining_minimum_attempts
+    )
+    minimum_calls = minimum_attempts * attempt_cost.provider_calls
+    minimum_seconds = minimum_attempts * seconds_per_attempt
+    refusal: (
+        Literal[
+            "sampling-budget-too-small", "sampling-freshness-too-small", "confirmation-unattainable"
+        ]
+        | None
+    ) = None
+    if remaining_minimum_attempts is None and (
+        (max_provider_calls is not None and max_provider_calls < minimum_calls)
+        or (max_wall_time_seconds is not None and max_wall_time_seconds < minimum_seconds)
+    ):
+        refusal = "sampling-budget-too-small"
+    elif max(search, confirmation) * seconds_per_attempt >= reduction.freshness_seconds:
+        refusal = "sampling-freshness-too-small"
+    elif not optimistic_attainability(
+        required_candidate=reduction.confirmation.candidate.required_valid,
+        required_original=reduction.confirmation.original.required_valid,
+        confidence=reduction.confirmation.one_sided_confidence,
+        margin=reduction.margin,
+    ).preservation_possible:
+        refusal = "confirmation-unattainable"
+
+    comparisons = max_candidate_comparisons
+    if reduction.section_search is not None:
+        sections = reduction.section_search
+        comparisons = min(
+            comparisons, sections.max_coarse_comparisons + sections.max_fine_comparisons
+        )
+    attempts = calibration_attempts + comparisons * search + confirmation
+    calls = (
+        max_provider_calls
+        if max_provider_calls is not None
+        else attempts * attempt_cost.provider_calls
+    )
+    seconds = (
+        max_wall_time_seconds
+        if max_wall_time_seconds is not None
+        else attempts * seconds_per_attempt
+    )
+    capacity = max(
+        0,
+        min(
+            comparisons,
+            (calls - (calibration_attempts + confirmation) * attempt_cost.provider_calls)
+            // (search * attempt_cost.provider_calls),
+            (seconds - (calibration_attempts + confirmation) * seconds_per_attempt)
+            // (search * seconds_per_attempt),
+        ),
+    )
+    return ReductionBudgetBounds(
+        max_attempts=attempts,
+        max_provider_calls=calls,
+        max_runner_seconds=attempts * attempt_cost.runner_seconds,
+        max_wall_time_seconds=seconds,
+        candidate_capacity=capacity,
+        minimum_provider_calls=minimum_calls,
+        minimum_wall_time_seconds=minimum_seconds,
+        confirmation_provider_calls=confirmation * attempt_cost.provider_calls,
+        confirmation_runner_seconds=confirmation * attempt_cost.runner_seconds,
+        refusal_code=refusal,
+    )
 
 
 def sampling_attempt_cost(

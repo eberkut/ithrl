@@ -73,6 +73,27 @@ Recognized startup warnings before the selected turn are accepted as metadata. W
 establish successful authentication or provider acceptance; inspect the resulting refusal and
 private diagnostic if execution fails.
 
+## Preparing a reduction
+
+Follow the [preparation procedure](native-runs.md#prepare-native-reduction) to export a native
+preflight receipt, supply statistical settings and generate a complete experiment. `prepare` is
+offline. Its inspection command runs normal native dry-run and can start bounded local probes.
+
+| Error code | Next action |
+| --- | --- |
+| `invalid-preflight-receipt` | Supply the private file exported by `shrink --dry-run --save-preflight`, rather than its normal JSON summary. |
+| `preflight-evidence-mismatch` / `preflight-target-mismatch` / `preflight-oracle-mismatch` | Use the unchanged case and behavior specification bound to the receipt. Changed inputs need a new explicit preflight receipt. |
+| `preflight-limits-mismatch` | Fixed native limits differ from those recorded. Export a new receipt with the current installation. |
+| `invalid-preparation-settings` | Check the preparation TOML's schema, required statistical choices and section selectors. Do not supply target/oracle blocks, runner bindings or section hashes. |
+| `section-selection-mismatch` | Select an eligible field from `inspect sections CASE`; keep section IDs in source order. |
+| `unsupported-section-search` | Use section removal only for a supported final-response profile. Shell-action reduction accepts whole-record removal. |
+| `preparation-contract-mismatch` | Check the selected profile, behavior specification, protected IDs and section choices against the case. Keep the source evidence unchanged. |
+| `preparation-invalid` / `preflight-output-invalid` | Check private path permissions and input bounds. Choose a new output outside the case and original workspace; existing files are never overwritten. |
+
+Preparation also uses the sampling budget and freshness refusals below. A successful preparation
+validates configuration under recorded facts; it does not replace current native preflight or
+authorize model execution.
+
 ## Sampling and budget refusals
 
 | Error code | Next action |
