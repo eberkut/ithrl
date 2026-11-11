@@ -64,7 +64,7 @@ def case_digest(
     return content_digest(payload)
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class _VerifiedEditableText:
     """Derived text bound to one owner and its exact immutable evidence inputs."""
 

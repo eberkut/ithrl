@@ -33,6 +33,28 @@ from ithrl.workflow import PreflightRefusedError, prepare_experiment
 FIXTURES = Path(__file__).parents[1] / "fixtures"
 
 
+def test_verified_editable_text_repr_hides_captured_response(tmp_path: Path) -> None:
+    sentinel = "private-response-sentinel"
+    source = (FIXTURES / "codex-session/rollout.jsonl").read_text()
+    path = tmp_path / "rollout.jsonl"
+    path.write_text(source.replace("Fixture complete.", sentinel))
+    session = parse_session(path)
+    summary = enumerate_decisions(session)[0]
+    evidence = extract_decision(
+        session,
+        decision_id=summary.decision_id,
+        target_id=summary.targets[0].target_id,
+        case_path=tmp_path / "case",
+    ).load()
+
+    assert evidence.decision is not None
+    assert evidence.decision.observation.final_response == sentinel
+    assert evidence.editable_text()
+    assert evidence._verified_editable_text is not None
+    assert sentinel not in repr(evidence._verified_editable_text)
+    assert sentinel not in repr(evidence)
+
+
 @pytest.mark.parametrize("harness", ["codex", "copilot"])
 def test_editable_text_reuses_only_verified_immutable_facts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, harness: str
