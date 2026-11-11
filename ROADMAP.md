@@ -4,8 +4,8 @@
 Development priorities depend on useful results, reliable measurement and measured execution cost.
 
 The [supported-inputs table](README.md#supported-inputs) describes current public capabilities.
-The directions below describe future work; their version labels establish an intended sequence,
-with scope and release dates decided from evidence.
+The roadmap records completed work and future direction. Future version labels establish an
+intended sequence, with scope and release dates decided from evidence.
 
 ## Harness priorities
 
@@ -41,28 +41,58 @@ criteria.
 Broader mutation families and multiple-finding campaigns need their own evidence and prospective
 error allocation.
 
-## Current work: v0.3 deeper reduction
+## Completed: v0.3 deeper reduction
 
 Provider-free retained-context inspection and finer removal within supported prior-user text are
 implemented, with Codex and Copilot final-response workflows. Ordinary saved-session qualification
 and a [worked investigation](docs/research/ordinary-session-investigation.md) are complete; the
 [measurements](docs/measurements.md#ordinary-session-paragraph-removal) record outcomes, costs and
-limits. Version 0.3 is not yet released.
-[Issue #12](https://github.com/eberkut/ithrl/issues/12) owns the milestone's acceptance and scope.
+limits. [Version 0.3.0](https://github.com/eberkut/ithrl/releases/tag/v0.3.0) is published.
+[Issue #12](https://github.com/eberkut/ithrl/issues/12) records the milestone's scope, acceptance
+and release evidence.
 
-Choose section boundaries, workload-specific usefulness criteria and execution budgets before
-provider-backed evaluation. Finer native removal needs its own reconstruction, safety and live-use
-evidence. Ablation, alternative reproducers, interaction analysis and statistically confirmed
-single-removal minimality are deferred; they are not v0.3 release requirements.
+Ablation, alternative reproducers, interaction analysis and statistically confirmed single-removal
+minimality remain deferred beyond v0.3.
 
-## Direction by version
+## Current work: v0.4 preparation and passive compaction inspection
+
+[Experiment preparation](https://github.com/eberkut/ithrl/issues/48) should reduce manual native
+configuration work while keeping statistical choices, source identities and execution limits
+explicit. It is the first committed item in
+[v0.4.0](https://github.com/eberkut/ithrl/milestone/3).
+
+The
+[provider-free feasibility assessment](https://github.com/eberkut/ithrl/issues/15#issuecomment-6782516915)
+supports adding passive compaction inspection for ordinary Codex and Copilot evidence. Its parent
+is #15, with implementation in #64 and qualification in #65. The feature is planned, not yet
+implemented or publicly supported. It reports repeated recorded operations and equal or changed
+captured results without inferring avoidable work, causal effects or savings.
+
+Comparative debugging remains a candidate for later scope decisions. Its implementation is not a
+v0.4 requirement. Other candidates need useful evidence and a bounded proposal before assignment.
+
+| Scope | Issue | Expected outcome |
+| --- | --- | --- |
+| Committed to v0.4 | [#48: experiment preparation](https://github.com/eberkut/ithrl/issues/48) | Generate and inspect private native reduction configurations without copying target/oracle blocks or digests by hand |
+| Committed to v0.4; parent | [#15: passive compaction inspection](https://github.com/eberkut/ithrl/issues/15) | Deliver useful provider-free reports for both harnesses, with explicit operation/result relations and interpretation limits |
+| Committed to v0.4; implementation | [#64: implement passive inspection](https://github.com/eberkut/ithrl/issues/64) | Add bounded source projections, matching/report contracts and `inspect reacquire` without changing experimental reconstruction support |
+| Committed to v0.4; qualification | [#65: qualify passive inspection](https://github.com/eberkut/ithrl/issues/65) | Validate ordinary sources, counterexamples and installed artifacts; depends on #64 |
+| Candidate for additional v0.4 scope | [#13: comparative debugging](https://github.com/eberkut/ithrl/issues/13) | A comparability contract, paired workloads, interaction example and bounded validation proposal; decide whether to implement or defer |
+| Deferred; no release assigned | [#14: additional harnesses](https://github.com/eberkut/ithrl/issues/14) | Assess Claude Code, OpenCode and Pi before choosing an integration order and qualification scope |
+| Deferred; no release assigned | [#18: portable archives and privacy](https://github.com/eberkut/ithrl/issues/18) | Define a useful sharing workflow, archive format and deliberate privacy review before implementation |
+| Research; no release assigned | [#16: broader workloads and costs](https://github.com/eberkut/ithrl/issues/16) | Measure ordinary-workflow usefulness, eligibility, reliability and full costs beyond selected published cases |
+| Research; no release assigned | [#17: baseline sharing](https://github.com/eberkut/ithrl/issues/17) | Reconsider reuse only if useful complete-workflow savings justify the statistical and recovery complexity |
+| Deferred research; no release assigned | [#61: ablation](https://github.com/eberkut/ithrl/issues/61) | Define retained-reproducer and full-original ablation, with distinct baselines and justified claims |
+| Deferred research; no release assigned | [#62: alternative reproducers and interactions](https://github.com/eberkut/ithrl/issues/62) | Assess useful differences between preserving contexts, redundancy and joint effects, with bounded discovery and confirmation |
+| Deferred research; no release assigned | [#63: confirmed single-removal minimality](https://github.com/eberkut/ithrl/issues/63) | Define the neighbor family, statistical claim, error allocation and complete comparison budget |
+
+## Release history and current scope
 
 | Stage | Outcome | Candidate features |
 | --- | --- | --- |
 | **[v0.2: context fuzzing](https://github.com/eberkut/ithrl/issues/5)** | Find small context changes that alter a selected behavior | Bounded seeded mutations, discovery and mutation simplification, one fresh confirmed finding, exact recovery and explicit cost/reliability reporting |
 | **[v0.3: deeper reduction](https://github.com/eberkut/ithrl/issues/12)** | Inspect retained context and reduce within supported prior-user text | Provider-free inspection, text-section removal and qualified Codex/Copilot final-response workflows |
-| **[v0.4: comparative debugging](https://github.com/eberkut/ithrl/issues/13)** | Isolate behavior-changing differences between compatible cases | `compare`, context-version delta debugging and another qualified harness integration |
-| **[v0.5: trace forensics](https://github.com/eberkut/ithrl/issues/15)** | Explain what information was acquired again | Passive reacquisition analysis around compaction, resume, forks and handoffs |
+| **[v0.4: preparation and passive compaction inspection](https://github.com/eberkut/ithrl/milestone/3)** | Prepare native experiments and inspect recorded retrievals around compaction | Private preflight receipts, configuration generation, source section catalogs and qualified passive Codex/Copilot compaction inspection |
 
 ### Deeper reduction
 
@@ -71,12 +101,14 @@ context inspection should distinguish protected or frozen material, dependency c
 rejected removal trials, incomplete evidence and untested work. Trial explanations must identify
 the tested context; a rejected sampled screen does not establish behavioral necessity.
 
-Deferred retained-item and full-original ablation answer different questions and must report their
-baseline.
-Alternative reproducer search can expose several preserving contexts and interactions; none is
-automatically a unique explanation. Deterministic single-removal minimality and statistically
-confirmed minimality are distinct claims. The latter requires additional complete comparisons,
-error allocation and a budget that covers all advertised checks.
+[Ablation](https://github.com/eberkut/ithrl/issues/61) of a retained reproducer and of the full
+original answers different questions and must report its baseline.
+[Alternative reproducer and interaction research](https://github.com/eberkut/ithrl/issues/62) can
+expose several preserving contexts and joint effects; none is automatically a unique explanation.
+Deterministic single-removal minimality and
+[statistically confirmed minimality](https://github.com/eberkut/ithrl/issues/63) are distinct
+claims. The latter requires additional complete comparisons, error allocation and a budget that
+covers all advertised checks.
 
 ### Comparative debugging and another integration
 
@@ -95,10 +127,17 @@ parity.
 
 ### Passive reacquisition analysis
 
-Planned `inspect reacquire` work examines information retrieved before and after compaction,
-resume, fork or a cross-harness handoff. Reports should distinguish exact, normalized and heuristic
-matches, and check whether source state changed before describing repeated retrieval as avoidable.
-Passive analysis should work without provider calls; implementing agent handoffs is separate work.
+The first planned `inspect reacquire` workflow compares recorded operations and captured results
+across explicit compaction boundaries in one saved Codex or Copilot session. It starts with exact
+comparisons, keeps content and display scopes separate, and reports unknown state and completeness.
+Default output excludes private paths, arguments and text; detail requires bounded opt-in. It
+starts no harness, opens no referenced resources and makes no provider calls.
+
+Resume, fork, handoff and cross-harness matching remain later directions. Any normalized or
+heuristic matcher needs its own policy and qualification. Repeated operations or equal captured
+text do not prove avoidable retrieval, forgetting or effects caused by compaction. Passive
+inspection leaves active Codex compaction reconstruction unsupported; implementing agent handoffs
+is separate work.
 
 ## Further capability candidates
 

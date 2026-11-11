@@ -44,7 +44,7 @@ from ithrl.cli.sampled_session import (
     save_cli_result,
     save_cli_session,
 )
-from ithrl.execution.budget import sampling_attempt_cost
+from ithrl.execution.budget import reduction_budget_bounds, sampling_attempt_cost
 from ithrl.experiment import SampledExperimentDefinition
 from ithrl.extraction import load_extracted_case
 from ithrl.observations import (
@@ -65,10 +65,7 @@ from ithrl.run_state import (
 )
 from ithrl.runner import prepare_candidate
 from ithrl.sampled_run_metadata import SampledRunMetadata
-from ithrl.statistics import (
-    FixedSampleOutcome,
-    optimistic_attainability,
-)
+from ithrl.statistics import FixedSampleOutcome
 from ithrl.workflow import PreparedExperiment, prepare_experiment, run_sampled_phases
 
 if TYPE_CHECKING:
@@ -161,9 +158,12 @@ def handle_sampled_reduction(
     output_format: OutputFormat,
     verbose: bool = False,
     session: SampledRunMetadata | None = None,
+    save_preflight: Path | None = None,
 ) -> None:
     """Preflight, acknowledge, durably calibrate, search and independently confirm."""
     try:
+        if save_preflight is not None and (not dry_run or session is not None):
+            raise ValueError("preflight receipt requires a new dry-run")
         if original_workspace is None or not original_workspace.is_dir():
             raise ValueError("original workspace missing")
         store_path = _observation_store_path(workspace, original_workspace, observation_store)
@@ -223,6 +223,12 @@ def handle_sampled_reduction(
             session,
             output_format,
         )
+        if save_preflight is not None:
+            from ithrl.cli.preparation import save_preflight_receipt
+
+            save_preflight_receipt(
+                workspace, prepared, original_workspace, save_preflight, store_path
+            )
     except typer.Exit:
         raise
     except Exception:
@@ -417,93 +423,53 @@ def _reduction_preflight(
     reduction = experiment.reduction
     cost = sampling_attempt_cost(prepared.execution_plan.capability, prepared.resource_limits)
     delay = limits.inter_attempt_delay_seconds or 0
-    if type(delay) is not int or not 0 <= delay <= 86_400:
-        raise ValueError("inter-attempt delay must be bounded nonnegative seconds")
-    # Conservatively admit a full pause for every future attempt; the first may need none.
-    wall_seconds_per_attempt = cost.runner_seconds + delay
-    calibration = experiment.calibration.max_attempts
     search = reduction.search.original.max_attempts + reduction.search.candidate.max_attempts
     confirmation = (
         reduction.confirmation.original.max_attempts + reduction.confirmation.candidate.max_attempts
     )
-    minimum_attempts = calibration + search + confirmation
     if limits.candidates is None or limits.candidates < 1:
         raise ValueError("candidate budget unavailable")
+    remaining_minimum = None
     if session is not None:
         saved = load_cli_run_state(session.run_directory)
         if saved.selection is not None:
             block = next((b for b in saved.blocks if b.plan.role == "confirmation"), None)
-            minimum_attempts = confirmation - (0 if block is None else len(block.observations))
+            remaining_minimum = confirmation - (0 if block is None else len(block.observations))
         elif saved.checkpoint is not None:
-            minimum_attempts = confirmation
+            remaining_minimum = confirmation
             if _search_pending(saved) and len(saved.blocks) < limits.candidates:
-                minimum_attempts += search
+                remaining_minimum += search
         else:
-            minimum_attempts -= len(saved.calibration_observation_ids)
-    minimum_calls = minimum_attempts * cost.provider_calls
-    minimum_seconds = minimum_attempts * wall_seconds_per_attempt
-    if session is None and (
-        (limits.provider_calls is not None and limits.provider_calls < minimum_calls)
-        or (limits.wall_seconds is not None and limits.wall_seconds < minimum_seconds)
-    ):
-        fail_sampled(
-            error_code="sampling-budget-too-small",
-            code=ExitCode.USAGE,
-            output_format=output_format,
-            status="refused",
-            provider_call_accounting="not-started",
-            minimum_provider_calls=minimum_calls,
-            minimum_wall_time_seconds=minimum_seconds,
-        )
-    if max(search, confirmation) * wall_seconds_per_attempt >= reduction.freshness_seconds:
-        fail_sampled(
-            error_code="sampling-freshness-too-small",
-            code=ExitCode.USAGE,
-            output_format=output_format,
-            status="refused",
-            provider_call_accounting="not-started",
-        )
-    attainability = optimistic_attainability(
-        required_candidate=reduction.confirmation.candidate.required_valid,
-        required_original=reduction.confirmation.original.required_valid,
-        confidence=reduction.confirmation.one_sided_confidence,
-        margin=reduction.margin,
+            remaining_minimum = (
+                experiment.calibration.max_attempts
+                + search
+                + confirmation
+                - len(saved.calibration_observation_ids)
+            )
+    bounds = reduction_budget_bounds(
+        calibration=experiment.calibration,
+        reduction=reduction,
+        attempt_cost=cost,
+        max_candidate_comparisons=limits.candidates,
+        max_provider_calls=limits.provider_calls,
+        max_wall_time_seconds=limits.wall_seconds,
+        inter_attempt_delay_seconds=delay,
+        remaining_minimum_attempts=remaining_minimum,
     )
-    if not attainability.preservation_possible:
+    if bounds.refusal_code is not None:
+        too_small = bounds.refusal_code == "sampling-budget-too-small"
         fail_sampled(
-            error_code="confirmation-unattainable",
+            error_code=bounds.refusal_code,
             code=ExitCode.USAGE,
             output_format=output_format,
             status="refused",
             provider_call_accounting="not-started",
+            minimum_provider_calls=bounds.minimum_provider_calls if too_small else None,
+            minimum_wall_time_seconds=bounds.minimum_wall_time_seconds if too_small else None,
         )
     sections = reduction.section_search
-    comparison_capacity = limits.candidates
-    if sections is not None:
-        comparison_capacity = min(
-            comparison_capacity, sections.max_coarse_comparisons + sections.max_fine_comparisons
-        )
-    attempts = calibration + comparison_capacity * search + confirmation
-    calls = (
-        limits.provider_calls
-        if limits.provider_calls is not None
-        else attempts * cost.provider_calls
-    )
-    seconds = (
-        limits.wall_seconds
-        if limits.wall_seconds is not None
-        else attempts * wall_seconds_per_attempt
-    )
-    capacity = max(
-        0,
-        min(
-            comparison_capacity,
-            (calls - (calibration + confirmation) * cost.provider_calls)
-            // (search * cost.provider_calls),
-            (seconds - (calibration + confirmation) * wall_seconds_per_attempt)
-            // (search * wall_seconds_per_attempt),
-        ),
-    )
+    calls = bounds.max_provider_calls
+    seconds = bounds.max_wall_time_seconds
     base = _preflight_report(
         workspace=workspace,
         prepared=prepared,
@@ -572,16 +538,16 @@ def _reduction_preflight(
     values.update(
         status="ready",
         phase="calibration",
-        max_attempts=attempts,
+        max_attempts=bounds.max_attempts,
         max_provider_calls=calls,
         max_provider_calls_per_attempt=prepared.execution_plan.capability.provider_calls_per_attempt,
-        max_runner_seconds=attempts * cost.runner_seconds,
+        max_runner_seconds=bounds.max_runner_seconds,
         max_wall_time_seconds=seconds,
         inter_attempt_delay_seconds=delay,
         max_candidate_comparisons=limits.candidates,
-        candidate_capacity=capacity,
-        minimum_provider_calls=minimum_calls,
-        minimum_wall_time_seconds=minimum_seconds,
+        candidate_capacity=bounds.candidate_capacity,
+        minimum_provider_calls=bounds.minimum_provider_calls,
+        minimum_wall_time_seconds=bounds.minimum_wall_time_seconds,
         max_tokens=None,
         search_original_required_valid=reduction.search.original.required_valid,
         search_original_max_attempts=reduction.search.original.max_attempts,
@@ -591,8 +557,8 @@ def _reduction_preflight(
         confirmation_original_max_attempts=reduction.confirmation.original.max_attempts,
         confirmation_candidate_required_valid=reduction.confirmation.candidate.required_valid,
         confirmation_candidate_max_attempts=reduction.confirmation.candidate.max_attempts,
-        confirmation_provider_calls=confirmation * cost.provider_calls,
-        confirmation_runner_seconds=confirmation * cost.runner_seconds,
+        confirmation_provider_calls=bounds.confirmation_provider_calls,
+        confirmation_runner_seconds=bounds.confirmation_runner_seconds,
         confirmation_capacity="protected",
         freshness_seconds=reduction.freshness_seconds,
         eligibility_policy=reduction.eligibility_policy,

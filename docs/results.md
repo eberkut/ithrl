@@ -210,7 +210,7 @@ denial. Token usage depends on the native evidence available for each attempt; u
 explicit. Zero known tokens with nonzero unknown-token attempts does not mean zero token use.
 
 `max_provider_calls_per_attempt` reports the administrative cap frozen in the profile and run
-identity; see [plan limits](native-runs.md#3-inspect-the-complete-plan-and-budget) for
+identity; see [plan limits](native-runs.md#3-generate-and-inspect-the-complete-plan-and-budget) for
 configuration. Successful native continuations can exhaust it even when retries are disabled. A
 `provider-call-limit` error ends the run with a budget outcome and retained usage; it supplies no
 behavioral loss, automatic retry or continuation command. Inspect the evidence before choosing a

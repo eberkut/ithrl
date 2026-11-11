@@ -39,7 +39,8 @@ from ithrl.cli.output import (
     render,
     shell_command,
 )
-from ithrl.cli.paths import private_data_root
+from ithrl.cli.paths import private_data_root, reserved_native_paths
+from ithrl.cli.preparation import prepare as prepare_command
 from ithrl.cli.shrink import prepare_shrink, save_outcome, validate_phase_observations
 from ithrl.execution.contracts import MAX_PROVIDER_CALLS_PER_ATTEMPT, MAX_WALL_TIME_SECONDS
 from ithrl.experiment import (
@@ -80,6 +81,7 @@ app = typer.Typer(
 
 
 app.command()(fuzz_command)
+app.command()(prepare_command)
 app.add_typer(inspect_app, name="inspect")
 
 
@@ -411,6 +413,13 @@ def shrink(
             help="SQLite observation store. Default: platform user data directory.",
         ),
     ] = None,
+    save_preflight: Annotated[
+        Path | None,
+        typer.Option(
+            "--save-preflight",
+            help="Export a private native preparation receipt; requires --dry-run and a new case run.",
+        ),
+    ] = None,
 ) -> None:
     """Test the original context, reduce it, confirm the result, and save the evidence."""
 
@@ -441,6 +450,7 @@ def shrink(
                 inter_attempt_delay=inter_attempt_delay,
                 experiment_path=experiment,
                 verbose=verbose,
+                save_preflight=save_preflight,
             )
     except RunStateBusyError as error:
         fail(str(error), ExitCode.USAGE, output_format, "shrink", "run-in-use")
@@ -471,8 +481,10 @@ def _shrink(
     inter_attempt_delay: int | None = None,
     experiment_path: Path | None = None,
     verbose: bool = False,
+    save_preflight: Path | None = None,
 ) -> None:
     from ithrl.cli.native import NativeSelectionError, native_selection
+    from ithrl.cli.preparation import preparation_destination
     from ithrl.cli.sampled import handle_sampled_shrink
     from ithrl.cli.sampled_reduction import (
         SampledCommandLimits,
@@ -480,6 +492,30 @@ def _shrink(
         resume_sampled_shrink,
     )
 
+    if save_preflight is not None:
+        if not dry_run or resume:
+            fail(
+                "--save-preflight requires --dry-run on a new native case.",
+                ExitCode.USAGE,
+                output_format,
+                "shrink",
+                "invalid-options",
+            )
+        try:
+            protected = (
+                (source,)
+                + ((original_workspace,) if original_workspace is not None else ())
+                + reserved_native_paths(observation_store)
+            )
+            preparation_destination(save_preflight, protected=protected)
+        except (CaseError, OSError, ValueError):
+            fail(
+                "Preflight receipt needs a new private path outside the case and original workspace.",
+                ExitCode.USAGE,
+                output_format,
+                "shrink",
+                "preflight-output-invalid",
+            )
     if resume and (calibrate_only or dry_run):
         fail(
             "--resume cannot be combined with --calibrate-only or --dry-run",
@@ -721,6 +757,7 @@ def _shrink(
                 experiment_path=experiment_path,
                 output_format=output_format,
                 verbose=verbose,
+                save_preflight=save_preflight,
             )
             return
         if max_candidates is not None:
@@ -745,6 +782,7 @@ def _shrink(
             max_wall_time_seconds=max_wall_time,
             inter_attempt_delay_seconds=inter_attempt_delay or 0,
             experiment_path=experiment_path,
+            save_preflight=save_preflight,
         )
         return
 
@@ -760,6 +798,7 @@ def _shrink(
         or inter_attempt_delay is not None
         or experiment_path is not None
         or verbose
+        or save_preflight is not None
     ):
         fail(
             "native calibration options require a native case",

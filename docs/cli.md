@@ -18,6 +18,7 @@ $ ithrl [OPTIONS] COMMAND [ARGS]...
 **Commands**:
 
 * `fuzz`: Find and independently confirm a bounded...
+* `prepare`: Prepare a native reduction offline, then...
 * `extract`: Create a case from a saved agent session...
 * `shrink`: Find a smaller context that preserves the...
 * `inspect`: Inspect saved experimental evidence...
@@ -47,6 +48,33 @@ $ ithrl fuzz [OPTIONS] {CASE_OR_RUN}
 * `--detect`: Explicit credential-free structural harness detection; save a profile.
 * `--resume`: Continue exactly the saved campaign, without changing its inputs or budget.
 * `--acknowledge-model-execution`: Approve the inspected native execution within its frozen limits.
+* `--format <human|json>`: Output format.  [default: human]
+* `--help`: Show this message and exit.
+
+## `ithrl prepare`
+
+Prepare a native reduction offline, then print its inspection command.
+
+**Usage**:
+
+```console
+$ ithrl prepare [OPTIONS] {case}
+```
+
+**Arguments**:
+
+* `case`: Extracted native case directory.  [required]
+
+**Options**:
+
+* `--preflight <path>`: Private native preflight receipt.  [required]
+* `--settings <path>`: Explicit reduction preparation TOML.  [required]
+* `--output <path>`: New private experiment TOML; never overwritten.  [required]
+* `--max-candidates <int range>`: [1&lt;=x&lt;=10000; required]
+* `--max-provider-calls <int range>`: [x&gt;=1; required]
+* `--max-wall-time <int range>`: [x&gt;=1; required]
+* `--inter-attempt-delay <int range>`: Seconds between attempts; included in admission bounds.  [default: 0; 0&lt;=x&lt;=86400]
+* `--observation-store <path>`: Forward a store path without opening it.
 * `--format <human|json>`: Output format.  [default: human]
 * `--help`: Show this message and exit.
 
@@ -117,6 +145,7 @@ $ ithrl shrink [OPTIONS] {CASE_OR_RESULT}
 * `--format <human|json>`: Output format.  [default: human]
 * `--verbose`: Show detailed sampled limits, assumptions and accounting.
 * `--observation-store <path>`: SQLite observation store. Default: platform user data directory.
+* `--save-preflight <path>`: Export a private native preparation receipt; requires --dry-run and a new case run.
 * `--help`: Show this message and exit.
 
 Example: ithrl shrink .ithrl/case
@@ -138,7 +167,29 @@ $ ithrl inspect [OPTIONS] COMMAND [ARGS]...
 
 **Commands**:
 
+* `sections`: List eligible section IDs and half-open...
 * `retained`: Explain retained context and recorded...
+
+### `ithrl inspect sections`
+
+List eligible section IDs and half-open Unicode codepoint offsets without text.
+
+Section sizes are UTF-8 byte counts.
+
+**Usage**:
+
+```console
+$ ithrl inspect sections [OPTIONS] {case}
+```
+
+**Arguments**:
+
+* `case`: Case containing the original evidence.  [required]
+
+**Options**:
+
+* `--format <human|json>`: Human-readable or JSON output.  [default: human]
+* `--help`: Show this message and exit.
 
 ### `ithrl inspect retained`
 

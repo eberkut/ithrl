@@ -26,6 +26,66 @@ app = typer.Typer(
 )
 
 
+@app.command("sections")
+@command_boundary("inspect")
+def sections(
+    case: Annotated[Path, typer.Argument(help="Case containing the original evidence.")],
+    output_format: Annotated[
+        OutputFormat, typer.Option("--format", help="Human-readable or JSON output.")
+    ] = OutputFormat.HUMAN,
+) -> None:
+    """List eligible section IDs and half-open Unicode codepoint offsets without text.
+
+    Section sizes are UTF-8 byte counts.
+    """
+
+    from ithrl.case import CaseWorkspace
+    from ithrl.extraction import load_extracted_case
+
+    try:
+        evidence = load_extracted_case(CaseWorkspace.open(case))
+        catalogs = evidence.text_sections()
+        available = {(catalog.context_id, catalog.content_index) for catalog in catalogs}
+        unavailable = [
+            {
+                "context_id": site.context_id,
+                "content_index": site.content_index,
+                "reason": "section-policy-limit",
+            }
+            for site in evidence.editable_text()
+            if (site.context_id, site.content_index) not in available
+        ]
+        data = {
+            "schema_version": 1,
+            "command": "inspect",
+            "kind": "sections",
+            "case_digest": evidence.digest,
+            "fields": [catalog.model_dump(mode="json") for catalog in catalogs],
+            "unavailable_fields": unavailable,
+            "provider_calls": 0,
+            "actions_executed": 0,
+        }
+    except (OSError, ValueError):
+        fail(
+            "Cannot inspect case section catalogs. Check the case and its private paths.",
+            ExitCode.USAGE,
+            output_format,
+            "inspect",
+            "inspection-invalid",
+        )
+    if output_format is OutputFormat.JSON:
+        typer.echo(json.dumps(data, ensure_ascii=True, sort_keys=True))
+    else:
+        print_plain(console, "Case text sections (untested)")
+        for catalog in catalogs:
+            print_plain(console, f"  {catalog.context_id}, content index {catalog.content_index}")
+            for section in catalog.sections:
+                print_plain(console, f"    {section.id}: {section.model_dump_json()}")
+        for field in unavailable:
+            print_plain(console, f"  unavailable: {json.dumps(field, ensure_ascii=True)}")
+        print_plain(console, "No harness probes, provider calls or actions were executed.")
+
+
 @app.command("retained")
 @command_boundary("inspect")
 def retained(

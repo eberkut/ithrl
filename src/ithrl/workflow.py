@@ -149,7 +149,7 @@ def prepare_experiment(
                     ),
                 )
             ) from None
-    _validate_oracle_prerequisites(evidence, experiment)
+    validate_oracle_prerequisites(evidence, experiment)
     registry = registry or built_in_runner_registry()
     resolution = registry.resolve(experiment.runner, evidence)
     if resolution.issue is not None:
@@ -438,10 +438,12 @@ async def confirm(
     )
 
 
-def _validate_oracle_prerequisites(
+def validate_oracle_prerequisites(
     evidence: CaseEvidence,
     experiment: AnyExperimentDefinition,
 ) -> None:
+    """Require every structural oracle prerequisite to exist and remain protected."""
+
     by_id = evidence.context.by_id
     missing = [item for item in experiment.oracle.protected_context_ids if item not in by_id]
     unprotected = [
