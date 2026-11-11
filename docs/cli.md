@@ -167,12 +167,14 @@ $ ithrl inspect [OPTIONS] COMMAND [ARGS]...
 
 **Commands**:
 
-* `sections`: List eligible prior-user section IDs and...
+* `sections`: List eligible section IDs and half-open...
 * `retained`: Explain retained context and recorded...
 
 ### `ithrl inspect sections`
 
-List eligible prior-user section IDs and byte bounds without displaying text.
+List eligible section IDs and half-open Unicode codepoint offsets without text.
+
+Section sizes are UTF-8 byte counts.
 
 **Usage**:
 

@@ -134,7 +134,7 @@ request. It is a budget stop, not provider throttling, transport failure or a be
 No retry or continuation command is offered. Inspect the retained usage and private evidence before
 starting a new run with a different cap. Codex can make several successful Responses requests
 within one turn despite disabled retries; a lower cap does not guarantee completion. See
-[plan limits](native-runs.md#3-inspect-the-complete-plan-and-budget) for configuration.
+[plan limits](native-runs.md#3-generate-and-inspect-the-complete-plan-and-budget) for configuration.
 
 For authentication or quota failures, inspect the selected harness's account status privately.
 Provider-call limits do not predict subscription allowance. Repeated full-run attempts can spend

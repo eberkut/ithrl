@@ -34,7 +34,10 @@ def sections(
         OutputFormat, typer.Option("--format", help="Human-readable or JSON output.")
     ] = OutputFormat.HUMAN,
 ) -> None:
-    """List eligible prior-user section IDs and byte bounds without displaying text."""
+    """List eligible section IDs and half-open Unicode codepoint offsets without text.
+
+    Section sizes are UTF-8 byte counts.
+    """
 
     from ithrl.case import CaseWorkspace
     from ithrl.extraction import load_extracted_case

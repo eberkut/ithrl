@@ -151,26 +151,7 @@ on their behavior, variability and removable context. The earlier
 samples on a planted instruction. See [sampled results](results.md#sampled-results) for assumptions
 and error handling.
 
-Generate the complete private experiment and its inspection command:
-
-```bash
-ithrl prepare CASE --preflight PRIVATE/preflight.json \
-  --settings PRIVATE/settings.toml --output PRIVATE/reduction.toml \
-  --max-candidates 2 --max-provider-calls 6000 --max-wall-time 57600 \
-  --inter-attempt-delay 15 --observation-store PRIVATE/observations.sqlite --format json
-```
-
-`prepare` preserves the extracted target, oracle and protected IDs, binds the recorded capability
-digest, and reuses the normal preflight budget calculations. It starts no harness, reads no
-authentication and makes no provider calls. It neither opens the observation store nor inspects
-the original workspace. Output is private, bounded and never overwrites an existing file.
-
-The settings contain statistical policy; command arguments carry administrative ceilings and
-pacing. Per-attempt timeout, request and optional token bounds come from the receipt. If fixed
-native resource limits have changed, export a new receipt. Preparation does not choose sample
-counts, a margin or a usefulness criterion from the available budget.
-
-### Section-removal preparation
+#### Optional section-removal settings
 
 Finer final-response reduction has provider-free implementation tests and
 [ordinary-session qualification measurements](measurements.md#ordinary-session-paragraph-removal)
@@ -183,13 +164,14 @@ Before preparation, list source-bound catalogs without a saved reduction result:
 ithrl inspect sections CASE --format json
 ```
 
-The report contains eligible field IDs, ordered section IDs and byte bounds, without text. Fields
-outside the section policy limits are reported as unavailable. These catalogs describe structural
-edit choices; they do not show that a field will survive coarse search or preserve behavior.
+The report contains eligible field IDs, ordered section IDs, half-open Unicode codepoint offsets
+and UTF-8 byte counts, without text. Fields outside the section policy limits are reported as
+unavailable. These catalogs describe structural edit choices; they do not show that a field will
+survive coarse search or preserve behavior.
 
 Choose the eligible fields, removable sections, traversal order, additional-byte criterion and
-stage budgets before collecting new observations. Add these tables to `PRIVATE/settings.toml`,
-using field IDs and an ordered subset of section IDs from the catalog:
+stage budgets before collecting new observations. Add these tables to `PRIVATE/settings.toml`
+before running `prepare`, using field IDs and an ordered subset of section IDs from the catalog:
 
 ```toml
 [sections]
@@ -244,10 +226,49 @@ ceilings and caps its attempt estimate at their sum. Every comparison and final 
 uses the full immutable original as the baseline. A budget increase cannot change the frozen field
 selection, stage ceilings, criterion or sampling plan. Such a change requires a new experiment.
 
-### 3. Inspect the complete plan and budget
+### 3. Generate and inspect the complete plan and budget
+
+After completing the settings, generate the private experiment and its inspection command. Choose
+one of these Codex preparation commands, according to whether the settings include `[sections]`.
+
+For whole-record reduction without `[sections]`, use the two-comparison budget:
+
+```bash
+ithrl prepare CASE --preflight PRIVATE/preflight.json \
+  --settings PRIVATE/settings.toml --output PRIVATE/reduction.toml \
+  --max-candidates 2 --max-provider-calls 6000 --max-wall-time 57600 \
+  --inter-attempt-delay 15 --observation-store PRIVATE/observations.sqlite --format json
+```
+
+For the eight-coarse/eight-fine section settings above, allow all 16 comparisons:
+
+```bash
+ithrl prepare CASE --preflight PRIVATE/preflight.json \
+  --settings PRIVATE/settings.toml --output PRIVATE/reduction.toml \
+  --max-candidates 16 --max-provider-calls 19440 --max-wall-time 172800 \
+  --inter-attempt-delay 15 --observation-store PRIVATE/observations.sqlite --format json
+```
+
+The section plan permits `7 + 16*(30+30) + 2*124 = 1215` attempts and 19,440 provider requests at
+the recorded 16-request cap. The 48-hour wall limit covers attempt deadlines, cancellation and
+pacing. These are conservative admission bounds, not expected usage. The administrative candidate
+limit covers both stages; a limit of two could be exhausted by coarse search before fine search.
+For a smaller section plan, reduce the stage ceilings and recalculate the administrative budgets
+together. Field survival and preservation still require observation.
+
+`prepare` preserves the extracted target, oracle and protected IDs, binds the recorded capability
+digest, and reuses the normal preflight budget calculations. It starts no harness, reads no
+authentication and makes no provider calls. It neither opens the observation store nor inspects
+the original workspace. Output is private, bounded and never overwrites an existing file. Later
+settings edits require preparation to a new output path; they do not update an existing experiment.
+
+The settings contain statistical policy; command arguments carry administrative ceilings and
+pacing. Per-attempt timeout, request and optional token bounds come from the receipt. If fixed
+native resource limits have changed, export a new receipt. Preparation does not choose sample
+counts, a margin or a usefulness criterion from the available budget.
 
 Run the preparation report's `next_command`. It contains the chosen limits and `--dry-run`, without
-execution acknowledgement. For the Codex configuration above, it is equivalent to:
+execution acknowledgement. For the whole-record Codex example, it is equivalent to:
 
 ```bash
 ithrl shrink CASE --experiment PRIVATE/reduction.toml \
@@ -272,9 +293,10 @@ A native turn can require several successful requests even with retries disabled
 `--max-provider-calls-per-attempt N` from 1 to 16 and defaults to 16. A lower cap can stop a turn
 before completion. Recalculate the total-call allowance when changing it.
 
-The same sampling plan with a Copilot runner allows at most 375 calls. Set
-`--max-provider-calls-per-attempt 1`, use `--max-provider-calls 375` and omit the 15-second delay.
-This translates the plan's resource limits; the
+With a Copilot runner, the whole-record example allows at most 375 calls; the section example
+allows at most 1,215. Set `--max-provider-calls-per-attempt 1` during native preflight, use the
+corresponding total-call budget during preparation and omit the 15-second delay.
+This translates the plans' resource limits; the
 [Copilot saved-session measurements](measurements.md#earlier-copilot-reductions) used separate
 sampling configurations. The request gate stops shell execution and any continuation after denial.
 
