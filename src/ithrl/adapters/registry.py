@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -17,6 +17,7 @@ from ithrl.adapters.codex.context import decision_input_node_id as codex_decisio
 from ithrl.adapters.codex.context import editable_text as editable_codex_text
 from ithrl.adapters.codex.decisions import enumerate_decisions as enumerate_codex_decisions
 from ithrl.adapters.codex.discovery import discover_sources as discover_codex_sources
+from ithrl.adapters.codex.reacquisition import project_reacquisition as project_codex_reacquisition
 from ithrl.adapters.contracts import NativeSession, ParsingLimits
 from ithrl.adapters.copilot import PARSER as COPILOT_PARSER
 from ithrl.adapters.copilot.context import compile_context as compile_copilot_context
@@ -24,6 +25,9 @@ from ithrl.adapters.copilot.context import decision_input_node_id as copilot_dec
 from ithrl.adapters.copilot.context import editable_text as editable_copilot_text
 from ithrl.adapters.copilot.decisions import enumerate_decisions as enumerate_copilot_decisions
 from ithrl.adapters.copilot.discovery import discover_sources as discover_copilot_sources
+from ithrl.adapters.copilot.reacquisition import (
+    project_reacquisition as project_copilot_reacquisition,
+)
 from ithrl.adapters.discovery import (
     DiscoveredSession,
     DiscoveryLimits,
@@ -34,6 +38,7 @@ from ithrl.adapters.discovery import (
     SourceScan,
 )
 from ithrl.adapters.errors import AdapterError, AdapterErrorCode
+from ithrl.adapters.reacquisition import PassiveProjection
 from ithrl.context import ContextGraph, ContextNode, JsonObject
 from ithrl.decisions import DecisionDraft, DecisionSelector, DecisionSummary, SelectedDecision
 from ithrl.mutation import EditableText
@@ -101,6 +106,7 @@ class _AdapterRegistration:
     context_compiler: ContextCompiler
     decision_input_locator: DecisionInputLocator
     text_discoverer: TextDiscoverer | None = None
+    passive_projector: Callable[[JsonlDocument], PassiveProjection] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,6 +126,7 @@ _BUILTIN_ADAPTERS = (
         context_compiler=compile_codex_context,
         decision_input_locator=codex_decision_input_node_id,
         text_discoverer=editable_codex_text,
+        passive_projector=project_codex_reacquisition,
     ),
     _AdapterRegistration(
         harness="copilot",
@@ -129,11 +136,23 @@ _BUILTIN_ADAPTERS = (
         context_compiler=compile_copilot_context,
         decision_input_locator=copilot_decision_input_node_id,
         text_discoverer=editable_copilot_text,
+        passive_projector=project_copilot_reacquisition,
     ),
 )
 _ADAPTERS_BY_HARNESS = {adapter.harness: adapter for adapter in _BUILTIN_ADAPTERS}
 _ADAPTERS_BY_FORMAT = {adapter.parser.format_name: adapter for adapter in _BUILTIN_ADAPTERS}
 _BUILTIN_PARSERS = tuple(adapter.parser for adapter in _BUILTIN_ADAPTERS)
+
+
+def project_reacquisition(
+    source: str | os.PathLike[str], *, limits: ParsingLimits | None = None
+) -> PassiveProjection:
+    """Project an explicit source without experimental parsing or native execution."""
+    document = read_jsonl(source, limits=limits or ParsingLimits())
+    for adapter in _BUILTIN_ADAPTERS:
+        if adapter.parser.matches(document) and adapter.passive_projector is not None:
+            return adapter.passive_projector(document)
+    raise AdapterError(AdapterErrorCode.UNSUPPORTED_FORMAT, "unsupported passive session format")
 
 
 def decision_input_node_id(

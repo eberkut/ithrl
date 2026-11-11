@@ -207,6 +207,16 @@ keep the selected decision's input outside the editable surface.
 
 ## Execution and privacy boundary
 
+Passive compaction inspection has separate harness-owned projections over the bounded immutable
+JSONL snapshot, dispatched through the existing adapter registry. These projections retain only
+source anchors, recorded operations, captured result fields and compaction intervals needed by
+the exact matcher in `reacquisition.py`. They neither construct experimental contexts nor relax
+experimental parser or runner refusals. Unknown records stay opaque; copied nested history does
+not become newly completed execution. The shared matcher partitions adjacent epochs and keeps
+recorded-operation identity, captured-result equality, completeness and unknown resource state
+separate. It opens no referenced resource and performs no native or provider operation. See
+[passive report semantics](results.md#inspect-recorded-compaction).
+
 Native reduction preparation reuses a private receipt exported by an explicit successful dry-run.
 The receipt carries the resolved execution plan, oracle identity and original-workspace path.
 `prepare` validates these recorded facts against the case, copies its target and oracle, and binds
@@ -308,6 +318,7 @@ Python module names are not public API commitments.
 | `fuzz/progress.py`, `fuzz/campaign.py` | Frozen mutation order, authoritative traversal recovery, durable selection and terminal campaign evidence over shared sampled state |
 | `workflow.py`, `results/` | Application phase composition and validated result models, summaries and snapshots |
 | `inspection.py`, `results/inspection.py`, `cli/inspect.py` | Offline result/case binding, retained-context interpretation, source section catalogs and CLI presentation |
+| `reacquisition.py`, `adapters/reacquisition.py`, `adapters/codex/reacquisition.py`, `adapters/copilot/reacquisition.py` | Passive compaction projections, exact adjacent-epoch matching and bounded reports |
 | `cli/` | Public command selection, native setup, progress, continuation and presentation |
 | `path_safety.py`, `timestamps.py` | Shared private-path/lock primitives and timestamp validation |
 

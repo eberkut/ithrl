@@ -25,15 +25,18 @@ RUNTIME_MODULES = frozenset(
         PurePosixPath("ithrl/adapters/codex/decisions.py"),
         PurePosixPath("ithrl/adapters/codex/discovery.py"),
         PurePosixPath("ithrl/adapters/codex/parser.py"),
+        PurePosixPath("ithrl/adapters/codex/reacquisition.py"),
         PurePosixPath("ithrl/adapters/contracts.py"),
         PurePosixPath("ithrl/adapters/copilot/__init__.py"),
         PurePosixPath("ithrl/adapters/copilot/context.py"),
         PurePosixPath("ithrl/adapters/copilot/decisions.py"),
         PurePosixPath("ithrl/adapters/copilot/discovery.py"),
         PurePosixPath("ithrl/adapters/copilot/parser.py"),
+        PurePosixPath("ithrl/adapters/copilot/reacquisition.py"),
         PurePosixPath("ithrl/adapters/errors.py"),
         PurePosixPath("ithrl/adapters/discovery.py"),
         PurePosixPath("ithrl/adapters/registry.py"),
+        PurePosixPath("ithrl/adapters/reacquisition.py"),
         PurePosixPath("ithrl/behavior.py"),
         PurePosixPath("ithrl/calibration.py"),
         PurePosixPath("ithrl/case/__init__.py"),
@@ -85,6 +88,7 @@ RUNTIME_MODULES = frozenset(
         PurePosixPath("ithrl/observations.py"),
         PurePosixPath("ithrl/path_safety.py"),
         PurePosixPath("ithrl/preparation.py"),
+        PurePosixPath("ithrl/reacquisition.py"),
         PurePosixPath("ithrl/reduce/__init__.py"),
         PurePosixPath("ithrl/reduce/contracts.py"),
         PurePosixPath("ithrl/reduce/engine.py"),
@@ -478,6 +482,22 @@ def _assert_installed_preparation(
             case, evidence = codex._case(parent, context_sensitive=True)
         else:
             _, case, evidence = copilot._case(parent, "final-response", context_sensitive=True)
+        source = parent / "passive-source.jsonl"
+        atomic_write_bytes(source, evidence.source_artifacts[0].content)
+        passive = _run(
+            str(executable),
+            "inspect",
+            "reacquire",
+            str(source),
+            "--format",
+            "json",
+            cwd=runtime,
+            env=child_environment,
+        )
+        passive_report = json.loads(passive.stdout)
+        assert passive_report["harness"] == harness
+        assert passive_report["boundaries"] == []
+        assert passive_report["provider_calls"] == passive_report["actions_executed"] == 0
         capability = copilot._capability("final-response")
         if harness == "codex":
             capability = capability.model_copy(

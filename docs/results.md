@@ -18,6 +18,66 @@ Other files record the experiment, execution plan and provenance. Native reconst
 no `request.json`; use the retained-context records and recorded reconstruction method. Leave
 internal JSON and SQLite state unchanged so validation and resume can verify it.
 
+## Inspect recorded compaction
+
+The passive `reacquire` inspector reads one saved Codex or Copilot JSONL file directly. It needs no
+case, completed decision, native harness, credentials or original workspace. The command is
+implemented; ordinary-session and installed-artifact qualification is tracked in
+[#65](https://github.com/eberkut/ithrl/issues/65). It does not establish active compaction support.
+
+First list the recognized successful compactions, then choose an ID from that report:
+
+```bash
+ithrl inspect reacquire SESSION --format json
+ithrl inspect reacquire SESSION --boundary BOUNDARY_ID --format json
+```
+
+The selected report compares the immediately adjacent source epochs. Both the native call and
+its completion must lie within their epoch. Failed, incomplete, straddling and explicitly
+truncated results cannot support a positive comparison. Failed or unresolved compaction events
+limit the epochs; nested copied history is never counted as new tool execution.
+For Codex exec tools, native output headers supply exit status when structured status is absent;
+nonzero exits are failed and unrecognized headers remain unresolved. Native truncation notices
+exclude partial captures from positive comparisons. Captured text remains unchanged.
+
+For each exact recorded operation, the first eligible occurrence after compaction is paired with
+the nearest eligible predecessor. Later occurrences of that operation are counted separately;
+their results are not asserted equal. When the first occurrence has no exact predecessor, an
+equal capture in the same native field can identify a different recorded operation. Its known
+operation difference remains explicit. Copilot `content` and `detailedContent` are compared
+separately. Codex arguments remain exact captured strings, including their native call kind and
+namespace. Whitespace, timestamps and transport metadata are not removed for equality matching.
+
+| Report evidence | What it establishes |
+| --- | --- |
+| `exact-recorded-operation` | Recorded tool identity, arguments and captured workspace identity match. Underlying resource identity remains unproven. |
+| `different-recorded-operation` | A captured field matches under different recorded operations. |
+| `equal` / `different` | Complete, nonempty captured fields compare exactly within the stated scope. |
+| `unavailable` | The field is missing, empty or explicitly incomplete; no positive result comparison is supported. |
+| `resource_state = "unknown"` | No historical resource snapshot was read or inferred. |
+
+Source SHA-256, record digests and one-based line anchors locate the evidence. A boundary ID
+includes its line and record digest; use it with the same immutable source. Default output excludes
+paths, tool names, arguments and captured text. Generic Codex code/shell operations remain
+unclassified; an identical command is not automatically a file read. Copilot's passive profile can
+accept missing turn IDs when unique request/start/completion identities suffice; known turn
+contradictions still refuse. This leaves experimental extraction's stricter turn validation
+unchanged.
+
+`--max-groups` caps reported boundaries and matching groups at 100 by default, up to 1,000. Coverage
+records omitted boundaries or matching occurrences, ineligible operations, operations outside the
+adjacent epochs and unknown records. Counts describe the bounded snapshot, not all historical
+activity. Input limits are 64 MiB, 8 MiB per JSONL record, 250,000 records and 1,000,000 JSON items.
+Sources exceeding a limit are refused rather than partially scanned.
+
+For private investigation, add `--show-text --max-text-bytes 4096`. The total escaped detail
+allowance is at most 65,536 bytes; truncation is explicit. Result sizes count canonical
+ASCII-escaped JSON encoded as UTF-8, not native text length or model tokens. Captured completeness
+does not prove that the tool returned an entire resource. Usage stays unknown and savings are not
+estimated. Repetition establishes neither avoidable work nor an effect caused by compaction.
+Normalized, heuristic, resume, fork, handoff and cross-harness comparisons are outside this
+command's scope.
+
 ## Inspect retained context
 
 Inspect a saved reduction alongside its original case:
