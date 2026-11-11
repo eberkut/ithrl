@@ -56,24 +56,25 @@ minimality remain deferred beyond v0.3.
 
 ## Current work: v0.4 preparation and passive compaction inspection
 
-[Experiment preparation](https://github.com/eberkut/ithrl/issues/48) should reduce manual native
-configuration work while keeping statistical choices, source identities and execution limits
-explicit. It is the first committed item in
+[Experiment preparation](https://github.com/eberkut/ithrl/issues/48) is implemented in
+[PR #66](https://github.com/eberkut/ithrl/pull/66), keeping statistical choices, source identities
+and execution limits explicit. It is merged on main and awaits release in
 [v0.4.0](https://github.com/eberkut/ithrl/milestone/3).
 
 The
 [provider-free feasibility assessment](https://github.com/eberkut/ithrl/issues/15#issuecomment-6782516915)
 supports adding passive compaction inspection for ordinary Codex and Copilot evidence. Its parent
-is #15, with implementation in #64 and qualification in #65. The feature is planned, not yet
-implemented or publicly supported. It reports repeated recorded operations and equal or changed
-captured results without inferring avoidable work, causal effects or savings.
+is #15, with implementation in #64 and qualification in #65. The passive command is implemented;
+ordinary-session qualification and public support remain pending. It reports repeated recorded
+operations and equal or changed captured results without inferring avoidable work, causal effects or
+savings.
 
 Comparative debugging remains a candidate for later scope decisions. Its implementation is not a
 v0.4 requirement. Other candidates need useful evidence and a bounded proposal before assignment.
 
 | Scope | Issue | Expected outcome |
 | --- | --- | --- |
-| Committed to v0.4 | [#48: experiment preparation](https://github.com/eberkut/ithrl/issues/48) | Generate and inspect private native reduction configurations without copying target/oracle blocks or digests by hand |
+| Completed on main; awaiting v0.4 | [#48: experiment preparation](https://github.com/eberkut/ithrl/issues/48) | Generate and inspect private native reduction configurations without copying target/oracle blocks or digests by hand |
 | Committed to v0.4; parent | [#15: passive compaction inspection](https://github.com/eberkut/ithrl/issues/15) | Deliver useful provider-free reports for both harnesses, with explicit operation/result relations and interpretation limits |
 | Committed to v0.4; implementation | [#64: implement passive inspection](https://github.com/eberkut/ithrl/issues/64) | Add bounded source projections, matching/report contracts and `inspect reacquire` without changing experimental reconstruction support |
 | Committed to v0.4; qualification | [#65: qualify passive inspection](https://github.com/eberkut/ithrl/issues/65) | Validate ordinary sources, counterexamples and installed artifacts; depends on #64 |
@@ -127,7 +128,7 @@ parity.
 
 ### Passive reacquisition analysis
 
-The first planned `inspect reacquire` workflow compares recorded operations and captured results
+The `inspect reacquire` implementation compares recorded operations and captured results
 across explicit compaction boundaries in one saved Codex or Copilot session. It starts with exact
 comparisons, keeps content and display scopes separate, and reports unknown state and completeness.
 Default output excludes private paths, arguments and text; detail requires bounded opt-in. It

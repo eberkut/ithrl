@@ -167,8 +167,32 @@ $ ithrl inspect [OPTIONS] COMMAND [ARGS]...
 
 **Commands**:
 
+* `reacquire`: Inspect recorded operations and results...
 * `sections`: List eligible section IDs and half-open...
 * `retained`: Explain retained context and recorded...
+
+### `ithrl inspect reacquire`
+
+Inspect recorded operations and results across compaction without model access.
+
+**Usage**:
+
+```console
+$ ithrl inspect reacquire [OPTIONS] {session}
+```
+
+**Arguments**:
+
+* `session`: Explicit saved Codex or Copilot JSONL source.  [required]
+
+**Options**:
+
+* `--boundary <str>`: Boundary ID; omit to list compactions.
+* `--max-groups <int range>`: Maximum reported groups or boundaries.  [default: 100; 1&lt;=x&lt;=1000]
+* `--show-text`: Include bounded escaped detail; keep output private.
+* `--max-text-bytes <int range>`: Total escaped detail byte limit.  [default: 4096; 1&lt;=x&lt;=65536]
+* `--format <human|json>`: Human-readable or JSON output.  [default: human]
+* `--help`: Show this message and exit.
 
 ### `ithrl inspect sections`
 

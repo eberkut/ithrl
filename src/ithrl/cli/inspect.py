@@ -26,6 +26,106 @@ app = typer.Typer(
 )
 
 
+@app.command("reacquire")
+@command_boundary("inspect")
+def reacquire(
+    session: Annotated[Path, typer.Argument(help="Explicit saved Codex or Copilot JSONL source.")],
+    boundary: Annotated[
+        str | None, typer.Option("--boundary", help="Boundary ID; omit to list compactions.")
+    ] = None,
+    max_groups: Annotated[
+        int,
+        typer.Option(
+            "--max-groups", min=1, max=1000, help="Maximum reported groups or boundaries."
+        ),
+    ] = 100,
+    show_text: Annotated[
+        bool,
+        typer.Option("--show-text", help="Include bounded escaped detail; keep output private."),
+    ] = False,
+    max_text_bytes: Annotated[
+        int,
+        typer.Option(
+            "--max-text-bytes", min=1, max=65_536, help="Total escaped detail byte limit."
+        ),
+    ] = 4096,
+    output_format: Annotated[
+        OutputFormat, typer.Option("--format", help="Human-readable or JSON output.")
+    ] = OutputFormat.HUMAN,
+) -> None:
+    """Inspect recorded operations and results across compaction without model access."""
+    from ithrl.adapters.errors import AdapterError
+    from ithrl.reacquisition import inspect_reacquisition
+
+    try:
+        data = inspect_reacquisition(
+            session,
+            boundary_id=boundary,
+            max_groups=max_groups,
+            show_text=show_text,
+            max_text_bytes=max_text_bytes,
+        )
+    except AdapterError as error:
+        fail(
+            "Cannot inspect this saved source under the passive profile.",
+            ExitCode.USAGE,
+            output_format,
+            "inspect",
+            error.code.value,
+        )
+    except (OSError, ValueError):
+        fail(
+            "Cannot inspect the source or selected compaction boundary.",
+            ExitCode.USAGE,
+            output_format,
+            "inspect",
+            "reacquisition-invalid",
+        )
+    if output_format is OutputFormat.JSON:
+        typer.echo(json.dumps(data, ensure_ascii=True, sort_keys=True))
+    else:
+        _render_reacquisition(data)
+
+
+def _render_reacquisition(data: dict[str, Any]) -> None:
+    print_plain(console, "Passive compaction inspection (qualification pending)")
+    print_plain(
+        console, f"  harness: {data['harness']}; source SHA-256: {data['source']['sha256']}"
+    )
+    if data["boundary"] is None:
+        for boundary in data["boundaries"]:
+            print_plain(
+                console,
+                f"  {boundary['id']}: lines {boundary['start']['line']}-{boundary['end']['line']}",
+            )
+        print_plain(console, "Select a boundary with --boundary ID to compare adjacent epochs.")
+    else:
+        print_plain(console, f"  boundary: {data['boundary']['id']}")
+        for group in data["groups"]:
+            print_plain(
+                console,
+                f"  call lines {group['before']['call']['line']} → {group['after']['call']['line']}: {group['operation_relation']}",
+            )
+            for result in group["result_relations"]:
+                print_plain(console, f"    {result['scope']}: {result['relation']}")
+            print_plain(
+                console,
+                f"    later occurrences: {group['subsequent_after_occurrences']}; resource state: unknown",
+            )
+            for detail in group.get("escaped_detail", ()):
+                print_plain(console, f"    private detail: {detail}", soft_wrap=True)
+        if not data["groups"]:
+            print_plain(console, "  No eligible matching groups in the selected adjacent epochs.")
+    print_plain(console, f"  coverage: {json.dumps(data['coverage'], sort_keys=True)}")
+    if data["text_requested"]:
+        print_plain(
+            console, f"  text bytes: {data['text_bytes']}; truncated: {data['text_truncated']}"
+        )
+    print_plain(console, "  usage: unknown; savings: not estimated")
+    for limitation in data["limitations"]:
+        print_plain(console, f"  limitation: {limitation}")
+
+
 @app.command("sections")
 @command_boundary("inspect")
 def sections(
