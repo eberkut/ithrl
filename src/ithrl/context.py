@@ -45,7 +45,9 @@ class MaterializationError(ContextGraphError):
     """A context edit cannot be applied without violating request invariants."""
 
 
-def _canonical_json(value: Any) -> bytes:
+def canonical_json_bytes(value: Any) -> bytes:
+    """Encode bounded JSON using the canonical UTF-8 representation used by digests."""
+
     validate_json_limits(value)
     try:
         rendered = json.dumps(
@@ -63,7 +65,7 @@ def _canonical_json(value: Any) -> bytes:
 def content_digest(value: Any) -> str:
     """Return a deterministic SHA-256 digest for JSON content."""
 
-    return hashlib.sha256(_canonical_json(value)).hexdigest()
+    return hashlib.sha256(canonical_json_bytes(value)).hexdigest()
 
 
 def validate_json_limits(
@@ -132,7 +134,7 @@ def stable_context_id(*, path: str, kind: str, digest: str) -> str:
 
     decode_pointer(path)
     payload = {"digest": digest, "kind": kind, "path": path}
-    return f"ctx-{hashlib.sha256(_canonical_json(payload)).hexdigest()[:16]}"
+    return f"ctx-{hashlib.sha256(canonical_json_bytes(payload)).hexdigest()[:16]}"
 
 
 class SourceRecordSelector(BaseModel):
@@ -168,7 +170,7 @@ def stable_source_context_id(
         "selector": selector.model_dump(mode="json"),
         "source": source,
     }
-    return f"ctx-{hashlib.sha256(_canonical_json(payload)).hexdigest()[:16]}"
+    return f"ctx-{hashlib.sha256(canonical_json_bytes(payload)).hexdigest()[:16]}"
 
 
 def validate_source_reference(value: str) -> str:

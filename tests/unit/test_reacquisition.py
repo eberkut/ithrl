@@ -179,9 +179,9 @@ def test_different_native_scopes_cannot_supply_equal_result_fallback() -> None:
         _operation(2, result=""),
         _operation(2, result=" \n\t"),
         _operation(2, result={"status": "success", "exitCode": 0}),
-        _operation(
-            2,
-            result="Chunk ID: fixture\nWall time: 0.1 seconds\nProcess exited with code 0\nFinal output:\n",
+        replace(
+            _operation(2),
+            results=(CapturedResult("content", "native metadata only", has_content=False),),
         ),
         replace(_operation(2), results=(CapturedResult("content", "text", "truncated"),)),
         replace(_operation(2), results=(CapturedResult("content", "text", "unknown"),)),
@@ -343,3 +343,16 @@ def test_later_result_equality_cannot_substitute_for_first_after_occurrence() ->
         )
     )
     assert report["groups"] == []
+
+
+def test_report_byte_sizes_use_the_same_canonical_utf8_as_content_identity() -> None:
+    from hashlib import sha256
+
+    value: JsonValue = {"text": "café β\n"}
+    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
+        "utf-8"
+    )
+    report = _report(_projection(_operation(2, result=value), _operation(12, result=value)))
+    result = report["groups"][0]["before"]["results"][0]
+    assert result["canonical_utf8_bytes"] == len(encoded)
+    assert result["digest"] == sha256(encoded).hexdigest()

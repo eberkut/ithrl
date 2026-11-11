@@ -9,7 +9,7 @@ from typing import Any
 
 from ithrl.adapters.contracts import ParsingLimits
 from ithrl.adapters.reacquisition import Boundary, CapturedResult, Operation, PassiveProjection
-from ithrl.context import JsonValue, content_digest
+from ithrl.context import JsonValue, canonical_json_bytes, content_digest
 
 MAX_REPORT_GROUPS = 1000
 MAX_TEXT_BYTES = 65_536
@@ -40,8 +40,6 @@ def _operation_key(operation: Operation) -> str:
 def _substantive(value: JsonValue) -> bool:
     """Only nonempty captured text supports a positive repeated-content comparison."""
     if isinstance(value, str):
-        if value.startswith("Chunk ID:") and "\nFinal output:" in value:
-            return bool(value.split("\nFinal output:", 1)[1].strip())
         return bool(value.strip())
     if isinstance(value, list):
         return any(_substantive(item) for item in value)
@@ -55,7 +53,7 @@ def _usable_results(operation: Operation) -> tuple[CapturedResult, ...]:
     return tuple(
         result
         for result in operation.results
-        if result.completeness == "captured" and _substantive(result.value)
+        if result.completeness == "captured" and result.has_content and _substantive(result.value)
     )
 
 
@@ -78,9 +76,9 @@ def _summary(operation: Operation) -> dict[str, Any]:
             {
                 "scope": result.scope,
                 "digest": content_digest(result.value),
-                "canonical_utf8_bytes": len(_encoded(result.value).encode("utf-8")),
+                "canonical_utf8_bytes": len(canonical_json_bytes(result.value)),
                 "completeness": result.completeness,
-                "substantive_text": _substantive(result.value),
+                "substantive_text": result.has_content and _substantive(result.value),
             }
             for result in operation.results
         ],
@@ -98,6 +96,8 @@ def _result_relations(before: Operation, after: Operation) -> list[dict[str, str
             left is not None
             and right is not None
             and left.completeness == right.completeness == "captured"
+            and left.has_content
+            and right.has_content
             and _substantive(left.value)
             and _substantive(right.value)
         ):

@@ -127,7 +127,7 @@ def test_human_report_and_opt_in_text_keep_control_characters_escaped(tmp_path: 
         ],
     )
     assert result.exit_code == ExitCode.SUCCESS, result.output
-    assert "qualification pending" in result.stdout
+    assert "Passive compaction inspection" in result.stdout
     assert "text bytes: 23; truncated: True" in result.stdout
 
 

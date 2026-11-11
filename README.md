@@ -70,8 +70,7 @@ Use a new directory to repeat the example; extraction refuses to overwrite an ex
 - `ithrl inspect sections CASE` lists eligible text fields, section IDs, half-open Unicode codepoint
   offsets and UTF-8 byte counts without displaying text or requiring a reduction result.
 - `ithrl inspect reacquire SESSION` lists compactions in saved Codex or Copilot evidence;
-  `--boundary ID` compares recorded operations and captured results across one compaction.
-  Ordinary-session qualification is pending. See
+  `--boundary ID` compares recorded operations and captured results across one compaction. See
   [passive inspection](https://github.com/eberkut/ithrl/blob/main/docs/results.md#inspect-recorded-compaction).
 - `ithrl inspect retained CASE --result RESULT` explains retained units and recorded removal trials
   from a saved reduction without model access. See
@@ -92,11 +91,15 @@ Returned actions are observed and denied. Cases contain copied session content; 
 
 ## Supported inputs
 
-| Input | Extracted decisions | Reduction | Fuzzing |
-| --- | --- | --- | --- |
-| Bundled synthetic example | Synthetic tool request | Deterministic local runner | Local fake runner |
-| Codex CLI rollouts | Final responses | Experimental native runner; [paragraph-removal measurements](https://github.com/eberkut/ithrl/blob/main/docs/measurements.md#ordinary-session-paragraph-removal) | Experimental prior-user text appends |
-| Copilot CLI session events | Final responses and shell requests | Experimental final-response paragraph removal and denied `bash` runner | Experimental prior-user text appends for final-response targets |
+| Input | Extracted decisions | Reduction | Fuzzing | Passive inspection |
+| --- | --- | --- | --- | --- |
+| Bundled synthetic example | Synthetic tool request | Deterministic local runner | Local fake runner | — |
+| Codex CLI rollouts | Final responses | Experimental native runner; [paragraph-removal measurements](https://github.com/eberkut/ithrl/blob/main/docs/measurements.md#ordinary-session-paragraph-removal) | Experimental prior-user text appends | Exact recorded-operation and captured-result comparisons across compaction |
+| Copilot CLI session events | Final responses and shell requests | Experimental final-response paragraph removal and denied `bash` runner | Experimental prior-user text appends for final-response targets | Exact recorded-operation and captured-result comparisons across compaction |
+
+Passive inspection reads saved evidence without a harness or model access. The
+[worked investigation](https://github.com/eberkut/ithrl/blob/main/docs/research/passive-compaction-investigation.md)
+records the qualified native profiles, ordinary examples and interpretation limits.
 
 Native Codex and Copilot final-response fuzzing supports appending text to eligible prior user
 input while preserving the fixed triggering input. The
