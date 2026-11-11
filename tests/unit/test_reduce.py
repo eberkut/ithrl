@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections import deque
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -38,6 +41,8 @@ from ithrl.reduce import (
     ReductionCheckpoint,
     ResumeMismatchError,
 )
+from ithrl.reduce.contracts import trial_key
+from ithrl.reduce.search import _Search
 from ithrl.runner import (
     FakeRunner,
     PreparedAttempt,
@@ -48,6 +53,84 @@ from ithrl.runner import (
     RunResult,
     ToolCall,
 )
+
+
+@dataclass(frozen=True)
+class _FrozenSearchTrial:
+    trial_key: str
+    effective_removals: tuple[str, ...] = ()
+    accepts_removal: bool = False
+    allows_search_continuation: bool = True
+
+
+@pytest.mark.parametrize("continuable", [False, True])
+def test_search_reuses_first_frozen_trial_without_replay_or_checkpoint(
+    continuable: bool,
+) -> None:
+    first = _FrozenSearchTrial(
+        trial_key("chunk", (), ("A",)), allows_search_continuation=continuable
+    )
+    conflicting = _FrozenSearchTrial(first.trial_key)
+    prior = deque([conflicting])
+
+    async def unexpected_classify(**kwargs: Any) -> _FrozenSearchTrial:
+        pytest.fail("a frozen decision must not be classified again")
+
+    def unexpected_checkpoint(*args: Any) -> None:
+        pytest.fail("a frozen decision must not publish another checkpoint")
+
+    search = _Search(
+        evidence=None,  # type: ignore[arg-type]
+        removable=["A"],
+        classify=unexpected_classify,
+        prior_trials=prior,
+        publish=True,
+        publish_checkpoint=unexpected_checkpoint,
+        trials=[first, conflicting],
+    )
+    actual = asyncio.run(search._run_trial(frozenset(), ("A",), "chunk"))
+    assert actual is (first if continuable else None)
+    assert list(prior) == [conflicting]
+    assert search.trials == [first, conflicting]
+
+
+def test_search_indexes_replayed_and_new_trials_in_checkpoint_order() -> None:
+    replayed = _FrozenSearchTrial(trial_key("chunk", (), ("A",)))
+    prior = deque([replayed])
+    classified: list[tuple[str, ...]] = []
+    checkpoints: list[tuple[_FrozenSearchTrial, ...]] = []
+
+    async def classify(**kwargs: Any) -> _FrozenSearchTrial:
+        requested = tuple(kwargs["requested_removals"])
+        classified.append(requested)
+        if prior:
+            return prior.popleft()
+        return _FrozenSearchTrial(trial_key("chunk", (), requested))
+
+    def checkpoint(removed: Any, trials: Any, complete: bool) -> None:
+        checkpoints.append(tuple(trials))
+
+    search = _Search(
+        evidence=None,  # type: ignore[arg-type]
+        removable=["A", "B"],
+        classify=classify,
+        prior_trials=prior,
+        publish=True,
+        publish_checkpoint=checkpoint,
+        trials=[],
+    )
+
+    async def exercise() -> None:
+        assert await search._run_trial(frozenset(), ("A",), "chunk") is replayed
+        assert not checkpoints
+        new = await search._run_trial(frozenset(), ("B",), "chunk")
+        assert await search._run_trial(frozenset(), ("A",), "chunk") is replayed
+        assert await search._run_trial(frozenset(), ("B",), "chunk") is new
+
+    asyncio.run(exercise())
+    assert classified == [("A",), ("B",)]
+    assert not prior
+    assert checkpoints == [tuple(search.trials)]
 
 
 @pytest.fixture(scope="module")

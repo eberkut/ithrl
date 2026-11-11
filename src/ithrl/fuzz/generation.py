@@ -26,6 +26,7 @@ def generate_mutations(
     workspace, session or file and does not infer a stale instruction from secrets.
     """
 
+    retained_ids = frozenset(config.original.retained_context_ids)
     ordered = list(sites)
     random.Random(config.seed).shuffle(ordered)  # noqa: S311 - reproducible proposal order, no secrets
     mutations = []
@@ -33,7 +34,7 @@ def generate_mutations(
     examined = 0
     for site, mutator in islice(product(ordered, config.mutators), config.max_candidates):
         examined += 1
-        if site.context_id not in config.original.retained_context_ids:
+        if site.context_id not in retained_ids:
             raise MutationError("mutation location does not belong to the original candidate")
         addition = site.original_text if mutator == "duplicate-text" else stale_text
         if not addition:

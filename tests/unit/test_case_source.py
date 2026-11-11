@@ -26,6 +26,7 @@ from ithrl.case import (
     case_digest,
 )
 from ithrl.case import filesystem as case_filesystem
+from ithrl.case import source as case_source
 from ithrl.context import ContextNode, content_digest
 
 EXPERIMENT = """\
@@ -287,13 +288,25 @@ def test_source_artifact_rejects_empty_content() -> None:
         )
 
 
-def test_source_artifact_rejects_content_above_per_file_limit() -> None:
-    with pytest.raises((ValidationError, ValueError), match=r"limit|byte|large"):
-        SourceArtifact(
-            path="source/events.bin",
+def test_source_artifact_rejects_content_above_per_file_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert case_source.MAX_SOURCE_ARTIFACT_BYTES == 64 * 1024 * 1024
+    with monkeypatch.context() as limits:
+        limits.setattr(case_source, "MAX_SOURCE_ARTIFACT_BYTES", 8)
+        boundary = SourceArtifact(
+            path="source/exact.bin",
             media_type="application/octet-stream",
-            content=b"x" * (64 * 1024 * 1024 + 1),
+            content=b"x" * 8,
         )
+        assert boundary.size_bytes == 8
+        with pytest.raises((ValidationError, ValueError), match=r"limit|byte|large"):
+            SourceArtifact(
+                path="source/events.bin",
+                media_type="application/octet-stream",
+                content=b"x" * 9,
+            )
+    assert case_source.MAX_SOURCE_ARTIFACT_BYTES == 64 * 1024 * 1024
 
 
 def test_create_rejects_more_than_64_source_artifacts(tmp_path: Path) -> None:
@@ -332,28 +345,30 @@ def test_create_stops_reading_source_iterable_at_the_count_limit(tmp_path: Path)
     assert yielded == 65
 
 
-def test_create_rejects_source_content_above_aggregate_limit(tmp_path: Path) -> None:
+def test_create_rejects_source_content_above_aggregate_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     target = tmp_path / "case"
-    large_content = b"x" * (64 * 1024 * 1024)
-    artifacts = (
-        *(
-            SourceArtifact(
-                path=f"source/{index}.bin",
-                media_type="application/octet-stream",
-                content=large_content,
-            )
-            for index in range(4)
-        ),
+    artifacts = tuple(
         SourceArtifact(
-            path="source/overflow.bin",
+            path=f"source/{index}.bin",
             media_type="application/octet-stream",
-            content=b"x",
-        ),
+            content=b"x" * 8,
+        )
+        for index in range(4)
     )
-
-    with pytest.raises(CaseFormatError, match=r"source|artifact|total|byte|limit"):
-        _create_case(target, source_artifacts=artifacts)
-
+    overflow = SourceArtifact(
+        path="source/overflow.bin",
+        media_type="application/octet-stream",
+        content=b"x",
+    )
+    assert case_source.MAX_SOURCE_BYTES == 256 * 1024 * 1024
+    with monkeypatch.context() as limits:
+        limits.setattr(case_source, "MAX_SOURCE_BYTES", 32)
+        assert case_source.prepare_source_artifacts(artifacts) == artifacts
+        with pytest.raises(CaseFormatError, match=r"source|artifact|total|byte|limit"):
+            _create_case(target, source_artifacts=(*artifacts, overflow))
+    assert case_source.MAX_SOURCE_BYTES == 256 * 1024 * 1024
     assert not target.exists()
 
 

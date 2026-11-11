@@ -99,6 +99,51 @@ def test_dependency_closure_refuses_unknown_node() -> None:
         graph.dependency_closure({"missing"})
 
 
+@pytest.mark.parametrize("deep", [False, True])
+def test_graph_indexes_follow_copied_nodes_without_changing_serialization(deep: bool) -> None:
+    graph = _graph(_request())
+    serialized = graph.model_dump_json()
+    assert graph.dependency_closure({"B"}) == frozenset({"B", "C"})
+    assert graph.model_dump_json() == serialized
+    assert graph == _graph(_request())
+    assert graph.model_copy(deep=deep).dependency_closure({"B"}) == frozenset({"B", "C"})
+
+    replacement = graph.model_copy(update={"nodes": (graph.nodes[0],)}, deep=deep)
+    assert replacement.dependency_closure({"A"}) == frozenset({"A"})
+    assert tuple(replacement.by_id) == ("A",)
+    with pytest.raises(ContextGraphError, match="unknown context node IDs: B"):
+        replacement.dependency_closure({"B"})
+    assert graph.dependency_closure({"B"}) == frozenset({"B", "C"})
+
+
+def test_graph_index_view_cannot_mutate_graph() -> None:
+    graph = _graph(_request())
+    with pytest.raises(TypeError):
+        graph.by_id["B"] = graph.nodes[0]  # type: ignore[index]
+    assert graph.dependency_closure({"B"}) == frozenset({"B", "C"})
+
+
+def test_indexed_closure_preserves_sorted_errors_and_unknown_precedence() -> None:
+    request = _request()
+    graph = ContextGraph(
+        nodes=(
+            _node(request, "A", 0, depends_on=("B",), mutable=False),
+            _node(request, "B", 1),
+            _node(request, "C", 2, depends_on=("B",), protected=True),
+        )
+    )
+    for _ in range(2):
+        with pytest.raises(
+            ContextGraphError, match=r"^unknown context node IDs: missing-a, missing-z$"
+        ):
+            graph.dependency_closure(("missing-z", "B", "missing-a"))
+        with pytest.raises(
+            UnsafeRemovalError,
+            match=r"^dependency closure reaches protected or frozen nodes: A, C$",
+        ):
+            graph.dependency_closure(("B",))
+
+
 @pytest.mark.parametrize(
     ("mutable", "protected"),
     [(False, False), (True, True)],

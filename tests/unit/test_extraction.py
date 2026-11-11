@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import socket
@@ -9,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from ithrl import extraction
 from ithrl.adapters import (
     AdapterError,
     AdapterErrorCode,
@@ -19,7 +21,7 @@ from ithrl.adapters import (
 from ithrl.adapters.codex import context as codex_context
 from ithrl.adapters.codex import decisions as codex_decisions
 from ithrl.behavior import FinalResponseTarget, ShellActionTarget
-from ithrl.case import CaseEvidence, CaseFormatError
+from ithrl.case import CaseEvidence, CaseFormatError, SourceArtifact
 from ithrl.experiment import (
     ExperimentDefinition,
     FakeRunnerConfig,
@@ -29,6 +31,88 @@ from ithrl.extraction import extract_decision, load_extracted_case, validate_ext
 from ithrl.workflow import PreflightRefusedError, prepare_experiment
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
+
+
+@pytest.mark.parametrize("harness", ["codex", "copilot"])
+def test_editable_text_reuses_only_verified_immutable_facts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, harness: str
+) -> None:
+    path = (
+        FIXTURES
+        / f"{harness}-session"
+        / ("rollout.jsonl" if harness == "codex" else "events.jsonl")
+    )
+    source_bytes = path.read_bytes()
+    session = parse_session(path)
+    summary = enumerate_decisions(session)[0]
+    evidence = extract_decision(
+        session,
+        decision_id=summary.decision_id,
+        target_id=summary.targets[0].target_id,
+        case_path=tmp_path / "case",
+    ).load()
+    derive = extraction.editable_extracted_text
+    calls = []
+
+    def counted(current: CaseEvidence):
+        calls.append(current)
+        return derive(current)
+
+    monkeypatch.setattr(extraction, "editable_extracted_text", counted)
+    sites = evidence.editable_text()
+    assert sites
+    assert evidence.editable_text() is sites
+    assert len(calls) == 1
+    for clone in (copy.copy(evidence), copy.deepcopy(evidence)):
+        assert clone.editable_text() == sites
+    assert len(calls) == 3
+    # A fresh frozen input is a new verification boundary even when equal.
+    evidence._manifest = evidence.manifest.model_copy()
+    assert evidence.editable_text() == sites
+    assert len(calls) == 4
+    assert evidence.source_artifacts[0].content == source_bytes
+    assert path.read_bytes() == source_bytes
+
+
+@pytest.mark.parametrize("harness", ["codex", "copilot"])
+@pytest.mark.parametrize("changed", ["manifest", "context", "decision", "source"])
+def test_editable_text_rejects_rebound_evidence_after_verification(
+    tmp_path: Path, harness: str, changed: str
+) -> None:
+    path = (
+        FIXTURES
+        / f"{harness}-session"
+        / ("rollout.jsonl" if harness == "codex" else "events.jsonl")
+    )
+    session = parse_session(path)
+    summary = enumerate_decisions(session)[0]
+    evidence = extract_decision(
+        session,
+        decision_id=summary.decision_id,
+        target_id=summary.targets[0].target_id,
+        case_path=tmp_path / "case",
+    ).load()
+    assert evidence.editable_text()
+    assert evidence.decision is not None
+    if changed == "manifest":
+        evidence._manifest = evidence.manifest.model_copy(update={"adapter_version": "forged"})
+    elif changed == "context":
+        first, *rest = evidence.context.nodes
+        evidence._context = evidence.context.model_copy(
+            update={"nodes": (first.model_copy(update={"protected": not first.protected}), *rest)}
+        )
+    elif changed == "decision":
+        evidence._decision = evidence.decision.model_copy(update={"observed_at": "forged"})
+    else:
+        source = evidence.source_artifacts[0]
+        evidence._source_artifacts = (
+            SourceArtifact(path=source.path, media_type=source.media_type, content=b"{}"),
+        )
+    with pytest.raises(CaseFormatError):
+        evidence.editable_text()
+    # Failure must not make the changed inputs eligible for reuse.
+    with pytest.raises(CaseFormatError):
+        evidence.editable_text()
 
 
 @pytest.mark.parametrize(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -66,22 +67,26 @@ def _eligible(operation: Operation) -> bool:
 
 
 def _summary(operation: Operation) -> dict[str, Any]:
+    results = []
+    for result in operation.results:
+        encoded = canonical_json_bytes(result.value)
+        results.append(
+            {
+                "scope": result.scope,
+                "digest": sha256(encoded).hexdigest(),
+                "canonical_utf8_bytes": len(encoded),
+                "completeness": result.completeness,
+                "substantive_text": result.has_content and _substantive(result.value),
+            }
+        )
+        del encoded
     return {
         "call": asdict(operation.call),
         "completion": None if operation.completion is None else asdict(operation.completion),
         "operation_digest": _operation_key(operation),
         "category": operation.category,
         "workspace_digest": operation.workspace_digest,
-        "results": [
-            {
-                "scope": result.scope,
-                "digest": content_digest(result.value),
-                "canonical_utf8_bytes": len(canonical_json_bytes(result.value)),
-                "completeness": result.completeness,
-                "substantive_text": result.has_content and _substantive(result.value),
-            }
-            for result in operation.results
-        ],
+        "results": results,
     }
 
 

@@ -697,10 +697,15 @@ class SampledRunStateFile:
         )
 
     @staticmethod
-    def _hydrate(progress: SamplingBlockProgress, store: ObservationStore) -> SamplingBlockEvidence:
+    def _hydrate(
+        progress: SamplingBlockProgress,
+        store: ObservationStore,
+        resolved: tuple[Observation, ...] | None = None,
+    ) -> SamplingBlockEvidence:
         attempts: list[SamplingAttempt] = []
         try:
-            resolved = store.get_many(item.observation_id for item in progress.observations)
+            if resolved is None:
+                resolved = store.get_many(item.observation_id for item in progress.observations)
         except (ObservationStoreError, ValueError) as error:
             raise RunStateError(
                 "sampled progress references unavailable observation evidence"
@@ -727,8 +732,29 @@ class SampledRunStateFile:
     def _validate_authority(
         state: SampledRunState, store: ObservationStore
     ) -> tuple[tuple[Observation, ...], tuple[SamplingBlockEvidence, ...]]:
-        observations = SampledRunStateFile._calibration(state, store)
-        blocks = tuple(SampledRunStateFile._hydrate(progress, store) for progress in state.blocks)
+        references = (
+            *state.calibration_observation_ids,
+            *(item.observation_id for block in state.blocks for item in block.observations),
+        )
+        try:
+            resolved = store.get_many(references)
+        except (ObservationStoreError, ValueError) as error:
+            # A failed batch may contain bad later evidence. Repeat the original ordered
+            # checks only to preserve the first refusal; never accept a failed fresh read.
+            SampledRunStateFile._calibration(state, store)
+            for progress in state.blocks:
+                SampledRunStateFile._hydrate(progress, store)
+            raise RunStateError(
+                "sampled progress references unavailable observation evidence"
+            ) from error
+        offset = len(state.calibration_observation_ids)
+        observations = SampledRunStateFile._calibration(state, store, resolved[:offset])
+        hydrated: list[SamplingBlockEvidence] = []
+        for progress in state.blocks:
+            end = offset + len(progress.observations)
+            hydrated.append(SampledRunStateFile._hydrate(progress, store, resolved[offset:end]))
+            offset = end
+        blocks = tuple(hydrated)
         if blocks and blocks[-1].plan.selected_at is not None:
             selected_at = blocks[-1].plan.selected_at
             if any(
@@ -763,12 +789,13 @@ class SampledRunStateFile:
         blocks: tuple[SamplingBlockEvidence, ...],
     ) -> None:
         if checkpoint is not None:
-            by_digest = {block.plan.digest: block for block in blocks}
+            # Block IDs are unique in validated state; full equality still binds all evidence.
+            by_id = {block.plan.block_id: block for block in blocks}
             if (
                 checkpoint.original_identity != state.original_identity
                 or checkpoint.original_candidate_digest != state.original_candidate_digest
                 or (state.blocks and checkpoint.reduction != state.blocks[0].plan.procedure)
-                or any(by_digest.get(block.plan.digest) != block for block in checkpoint.blocks)
+                or any(by_id.get(block.plan.block_id) != block for block in checkpoint.blocks)
             ):
                 raise RunStateError("sampled checkpoint differs from authoritative block progress")
 
@@ -794,10 +821,15 @@ class SampledRunStateFile:
                 raise RunStateError("selection must follow calibration and search evidence")
 
     @staticmethod
-    def _calibration(state: SampledRunState, store: ObservationStore) -> tuple[Observation, ...]:
+    def _calibration(
+        state: SampledRunState,
+        store: ObservationStore,
+        resolved: tuple[Observation, ...] | None = None,
+    ) -> tuple[Observation, ...]:
         observations: list[Observation] = []
         try:
-            resolved = store.get_many(state.calibration_observation_ids)
+            if resolved is None:
+                resolved = store.get_many(state.calibration_observation_ids)
         except (ObservationStoreError, ValueError) as error:
             raise RunStateError("calibration accounting references unavailable evidence") from error
         for observation in resolved:

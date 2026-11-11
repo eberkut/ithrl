@@ -226,7 +226,8 @@ async def _collect_sampling_block_owned(
         now = clock()
         if now.tzinfo is None or now.utcoffset() is None:
             raise ValueError("sampling clock must include a UTC offset")
-        usage = state_file.usage(store, now=now)
+        snapshot = state_file.snapshot(store, now=now)
+        usage = snapshot.usage
         reason = block.eligibility_refusal
         if reason is None and not plan.frozen_at <= now < plan.expires_at:
             reason = "freshness-expired"
@@ -268,19 +269,28 @@ async def _collect_sampling_block_owned(
         delay = sampling_pacing_delay(state, store, clock())
         if delay:
             # Wait before publishing any reservation. Cancellation leaves no dispatch to replay.
+            snapshot = None
             await asyncio.sleep(delay)
         attempt = _attempt(evidence, prepared, partition, plan, arm)
         # Preparation is outside the runner deadline; include its elapsed time before
         # publishing a dispatch. Synchronous publication itself has no hard time bound.
         reserved_at = clock()
-        refreshed = state_file.usage(store, now=reserved_at)
+        # Without a pause, only read-only lookup and local attempt preparation
+        # separate these clocks. Recompute elapsed usage from the same fresh
+        # evidence; a pause requires resolving authority again after the await.
+        refreshed = (
+            state_file.usage(store, now=reserved_at)
+            if snapshot is None
+            else state_file._usage(
+                snapshot.state, snapshot.calibration, snapshot.blocks, now=reserved_at
+            )
+        )
+        snapshot = None
         reason = _budget_reason(state, plan, refreshed, remaining, cost, active)
         if reason is not None:
             return SamplingCollectionResult(block, refreshed, reason)
         if not plan.frozen_at <= reserved_at < plan.expires_at:
-            return SamplingCollectionResult(
-                block, state_file.usage(store, now=reserved_at), "freshness-expired"
-            )
+            return SamplingCollectionResult(block, refreshed, "freshness-expired")
         if not active:
             state = state_file.admit_block(store, plan)
             active = True

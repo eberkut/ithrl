@@ -160,12 +160,31 @@ def test_generation_caps_work_and_deduplicates_equivalent_edits(tmp_path: Path) 
     assert batch.proposals_examined == 3
     assert len(batch.mutations) == 1
     empty = EditableText(site.context_id, 0, "")
-    assert generate_mutations((empty,), _config(original), stale_text="").mutations == ()
+    empty_batch = generate_mutations((empty,), _config(original), stale_text="")
+    assert empty_batch.mutations == ()
+    assert empty_batch.proposals_examined == 1
     oversized = generate_mutations((site,), _config(original), stale_text="x" * (64 * 1024))
     assert oversized.proposals_examined == 1
     assert not oversized.mutations
     with pytest.raises(MutationError, match="original candidate"):
         generate_mutations((EditableText("foreign", 0, "text"),), config, stale_text="stale")
+
+
+def test_generation_preserves_seeded_order_and_original_identity(tmp_path: Path) -> None:
+    evidence = _evidence(tmp_path)
+    original = prepare_candidate(evidence, prepare_experiment(evidence).execution_plan)
+    sites = evidence.editable_text()[:4]
+    config = _config(original, max_candidates=3)
+    before = config.model_dump_json(), config.digest, original.digest
+
+    batch = generate_mutations(sites, config, stale_text="stale")
+
+    assert len(sites) == 4
+    assert tuple(mutation.edits[0].context_id for mutation in batch.mutations) == tuple(
+        sites[index].context_id for index in (3, 0, 2)
+    )
+    assert batch.proposals_examined == 3
+    assert (config.model_dump_json(), config.digest, original.digest) == before
 
 
 @pytest.mark.parametrize("required", [("ONE",), ("ONE", "TWO")])

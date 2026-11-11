@@ -85,6 +85,64 @@ failures and unexpected skips fail this check.
 
 The logo sources, usage rules and regeneration commands are in [branding](docs/branding/README.md).
 
+## Performance and maintainability
+
+Measure the affected workflow before optimizing it. Keep sanitized input generation and setup
+outside timings; record the revision, locked environment, input size, repeats and noise. Measure
+allocations separately from elapsed time. Include index/cache construction and retained memory,
+then repeat the same workload after the change. Provider latency and local implementation overhead
+are separate measurements.
+
+- Choose collections for their operations: a set for repeated membership, a dictionary for keyed
+  lookup, and a sequence for authoritative order. For example, fuzz proposal membership can use a
+  local set while seeded traversal retains the original sequence. Measure scaling near admitted
+  limits as well as small inputs; Radon scores alone do not justify a refactor.
+- Keep reusable derived facts with the owner of their immutable inputs. Define copy/invalidation
+  behavior and memory bounds before adding a cache. A frozen model can still copy stale derived
+  state. Do not expose mutable internal indexes or borrow mutable native records across owners.
+- Bound both output and examined work. Count rejected and duplicate proposals where the work cap
+  requires it. Avoid repeated whole-input scans when the required operation is a keyed lookup.
+  Release large temporary buffers before processing the next item.
+- Batch fresh persistence reads where their consistency contract permits it. Preserve schema,
+  identity, chronology and corruption checks, locks, durable dispatch and accounting. Persisted
+  files and external state need fresh validation; an in-memory cache is not their authority. Reuse
+  validated facts within one synchronous operation; refresh after callbacks, waits or execution.
+- Test configurable limits with small inputs at the exact boundary and one beyond; assert policy
+  defaults separately when needed. Use sparse files for size-only filesystem checks. Share completed
+  immutable fixture data, not mutable cases or stores. Retain real process, SQLite and distribution
+  checks when they establish lifecycle, recovery or artifact behavior.
+- Share an existing mechanism only when its ownership, errors and side effects fit. Require a
+  concrete maintenance benefit from abstractions; keep different harness and statistical rules
+  explicit. Compare behavior, failure paths and recovery as well as performance.
+
+### Benchmarks
+
+The permanent [pytest-benchmark](https://pytest-benchmark.readthedocs.io/en/latest/) workloads
+live in `tests/benchmarks/`. They use sanitized inputs and no native harness or provider.
+Ordinary test runs skip them. From the repository root, save a baseline before changing code:
+
+```bash
+uv run pytest tests/benchmarks --benchmark-only --no-cov --benchmark-save=before
+```
+
+After the change, compare against that saved run:
+
+```bash
+uv run pytest tests/benchmarks --benchmark-only --no-cov --benchmark-compare=0001 --benchmark-save=after
+```
+
+Replace `0001` with the baseline ID printed by the first command. The plugin keeps saved runs
+under the ignored `.benchmarks/` directory. Compare identical workloads on the same interpreter
+and machine with low competing load. Check the distributions and memory tradeoffs; do not infer
+a regression from a small noisy difference. Keep setup outside the measured call and assert
+outcomes. Stateful workloads need equivalent starting state for every round.
+
+CI runs the benchmarks on Python 3.14 in the existing Quality job. Non-PR runs retain the generated
+JSON as `benchmarks-python-3.14` artifacts for 90 days. Download comparable runs and inspect them
+with `uv run pytest-benchmark compare FIRST.json SECOND.json`. There is no elapsed-time failure
+threshold; benchmark assertions still fail on incorrect behavior. Saved JSON contains machine and
+commit metadata; raw profiles and private-workflow inputs do not belong in these artifacts.
+
 ## Workflow and dependency checks
 
 For GitHub Actions or Dependabot changes, use the jactionlint release pinned in
