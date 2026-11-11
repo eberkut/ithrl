@@ -299,3 +299,115 @@ def test_malformed_truncation_flag_never_claims_a_captured_result(
     )
     projection = _project(_call("one"), output)
     assert projection.operations[0].results[0].completeness == "unknown"
+
+
+@pytest.mark.parametrize("exit_code", [0, 1, -9, 127])
+@pytest.mark.parametrize("marker", ["Output:", "Final output:"])
+def test_native_exec_exit_header_controls_matching(exit_code: int, marker: str) -> None:
+    from ithrl.reacquisition import compare_reacquisition
+
+    value = (
+        "Chunk ID: fixture\nWall time: 0.1000 seconds\n"
+        f"Process exited with code {exit_code}\nOriginal token count: 8\n{marker}\nsubstantive text"
+    )
+    projection = _project(
+        _call("before", name="exec_command"),
+        _output("before", value),
+        _compacted(),
+        _call("after", name="exec_command"),
+        _output("after", value),
+    )
+    assert projection.operations[0].status == ("completed" if exit_code == 0 else "failed")
+    report = compare_reacquisition(projection, boundary_id=projection.boundaries[0].id)
+    assert bool(report["groups"]) is (exit_code == 0)
+
+
+def test_exit_code_text_in_command_body_is_not_native_failure_metadata() -> None:
+    value = (
+        "Wall time: 0.1000 seconds\nProcess exited with code 0\nOutput:\n"
+        "Process exited with code 1\n"
+    )
+    projection = _project(_call("one", name="exec_command"), _output("one", value))
+    assert projection.operations[0].status == "completed"
+    # A read operation can return a file containing a native-looking header verbatim.
+    value = "Wall time: 0.1000 seconds\nProcess exited with code 1\nOutput:\nexample"
+    projection = _project(_call("one"), _output("one", value))
+    assert projection.operations[0].status == "completed"
+
+
+@pytest.mark.parametrize("container", ["string", "items"])
+@pytest.mark.parametrize(
+    "prefix", ["", "Wall time: 0.1000 seconds\nProcess exited with code 0\nOutput:\n"]
+)
+def test_native_truncation_warning_excludes_positive_matches(container: str, prefix: str) -> None:
+    from ithrl.reacquisition import compare_reacquisition
+
+    text = (
+        prefix
+        + "Warning: truncated output (original token count: 9000)\nTotal output lines: 800\n\npartial content"
+    )
+    value: JsonValue = text if container == "string" else [{"type": "input_text", "text": text}]
+    projection = _project(
+        _call("before"),
+        _output("before", value, truncated=False),
+        _compacted(),
+        _call("after"),
+        _output("after", value),
+    )
+    assert projection.operations[0].results[0].completeness == "truncated"
+    assert projection.operations[0].status == "completed"
+    assert projection.operations[0].results[0].value == value
+    assert (
+        compare_reacquisition(projection, boundary_id=projection.boundaries[0].id)["groups"] == []
+    )
+
+
+def test_ordinary_warning_prose_is_not_a_native_truncation_warning() -> None:
+    projection = _project(
+        _call("one"),
+        _output("one", "The guide mentions Warning: truncated output (original token count: 9)."),
+    )
+    assert projection.operations[0].results[0].completeness == "captured"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "unrecognized future exec format",
+        "Wall time: 0.1 seconds\nProcess running with session ID 42\nOutput:\npending",
+        "Wall time: 0.1 seconds\nProcess exited with code invalid\nOutput:\ntext",
+    ],
+)
+def test_unrecognized_running_or_malformed_exec_output_is_unresolved(value: str) -> None:
+    projection = _project(_call("one", name="exec_command"), _output("one", value))
+    assert projection.operations[0].status == "incomplete"
+
+
+def test_native_exec_text_content_items_use_the_same_header_parser() -> None:
+    value: JsonValue = [
+        {
+            "type": "input_text",
+            "text": "Wall time: 0.1 seconds\nProcess exited with code 1\nOutput:\nfailed output",
+        }
+    ]
+    projection = _project(_call("one", name="write_stdin"), _output("one", value))
+    assert projection.operations[0].status == "failed"
+
+
+def test_first_output_delimiter_ends_header_even_with_another_delimiter_in_body() -> None:
+    value = (
+        "Wall time: 0.1 seconds\nProcess running with session ID 42\nFinal output:\n"
+        "Process exited with code 0\nOutput:\ncommand body"
+    )
+    projection = _project(_call("one", name="write_stdin"), _output("one", value))
+    assert projection.operations[0].status == "incomplete"
+
+
+@pytest.mark.parametrize(
+    "extra",
+    ["Process exited with code 1", "Original token count: invalid", "Future metadata: value"],
+)
+def test_ambiguous_or_unrecognized_exec_header_metadata_is_not_success(extra: str) -> None:
+    value = f"Wall time: 0.1 seconds\nProcess exited with code 0\n{extra}\nOutput:\ntext"
+    projection = _project(_call("one", name="exec_command"), _output("one", value))
+    assert projection.operations[0].status == "incomplete"

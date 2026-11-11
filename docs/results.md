@@ -36,6 +36,9 @@ The selected report compares the immediately adjacent source epochs. Both the na
 its completion must lie within their epoch. Failed, incomplete, straddling and explicitly
 truncated results cannot support a positive comparison. Failed or unresolved compaction events
 limit the epochs; nested copied history is never counted as new tool execution.
+For Codex exec tools, native output headers supply exit status when structured status is absent;
+nonzero exits are failed and unrecognized headers remain unresolved. Native truncation notices
+exclude partial captures from positive comparisons. Captured text remains unchanged.
 
 For each exact recorded operation, the first eligible occurrence after compaction is paired with
 the nearest eligible predecessor. Later occurrences of that operation are counted separately;

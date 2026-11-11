@@ -224,6 +224,15 @@ def _status(call: JsonObject, output: JsonObject) -> Literal["completed", "faile
         return "failed"
     if output.get("is_error") is True or output.get("error") not in (None, False):
         return "failed"
+    if call.get("name") in {
+        "exec_command",
+        "write_stdin",
+        "functions.exec_command",
+        "functions.write_stdin",
+    }:
+        native_status = _exec_status(output.get("output"))
+        if native_status != "completed":
+            return native_status or "incomplete"
     if (
         call.get("status") not in (None, "completed", "complete")
         or output.get("status") not in (None, "completed", "complete")
@@ -239,8 +248,68 @@ def _successful_flag(payload: JsonObject) -> bool:
 
 def _completeness(payload: JsonObject) -> Literal["captured", "truncated", "unknown"]:
     output = payload.get("output")
+    if _has_truncation_warning(output):
+        return "truncated"
     containers = (payload, output) if isinstance(output, dict) else (payload,)
     flags = [container["truncated"] for container in containers if "truncated" in container]
     if any(flag is True for flag in flags):
         return "truncated"
     return "unknown" if any(type(flag) is not bool for flag in flags) else "captured"
+
+
+def _captured_text(value: object) -> tuple[str, ...]:
+    if isinstance(value, str):
+        return (value,)
+    if isinstance(value, list):
+        return tuple(
+            item["text"]
+            for item in value
+            if isinstance(item, dict)
+            and item.get("type") in ("input_text", "text")
+            and isinstance(item.get("text"), str)
+        )
+    return ()
+
+
+def _exec_status(value: object) -> Literal["completed", "failed", "incomplete"] | None:
+    """Read only the native exec header, never status-looking command output."""
+    # Native format owner: openai/codex rust-v0.153.4,
+    # codex-rs/core/src/tools/context.rs, ExecCommandToolOutput::response_header.
+    texts = _captured_text(value)
+    if not texts:
+        return None
+    positions = (texts[0].find("\nOutput:"), texts[0].find("\nFinal output:"))
+    end = min((position for position in positions if position >= 0), default=-1)
+    if end < 0:
+        return None
+    lines = texts[0][:end].split("\n")
+    if lines[0].startswith("Chunk ID: "):
+        lines = lines[1:]
+    if not lines or not lines[0].startswith("Wall time: ") or not lines[0].endswith(" seconds"):
+        return None
+    if len(lines) not in (2, 3) or not lines[1].startswith("Process exited with code "):
+        return "incomplete"
+    if len(lines) == 3:
+        count = lines[2].removeprefix("Original token count: ")
+        if (
+            not lines[2].startswith("Original token count: ")
+            or not count.isascii()
+            or not count.isdecimal()
+        ):
+            return "incomplete"
+    code = lines[1].removeprefix("Process exited with code ")
+    digits = code.removeprefix("-")
+    if not digits or not digits.isascii() or not digits.isdecimal():
+        return "incomplete"
+    return "failed" if digits.strip("0") else "completed"
+
+
+def _has_truncation_warning(value: object) -> bool:
+    for text in _captured_text(value):
+        for line in text.split("\n"):
+            prefix = "Warning: truncated output (original token count: "
+            if line.startswith(prefix) and line.endswith(")"):
+                count = line[len(prefix) : -1]
+                if count.isascii() and count.isdecimal():
+                    return True
+    return False
