@@ -21,9 +21,10 @@ internal JSON and SQLite state unchanged so validation and resume can verify it.
 ## Inspect recorded compaction
 
 The passive `reacquire` inspector reads one saved Codex or Copilot JSONL file directly. It needs no
-case, completed decision, native harness, credentials or original workspace. The command is
-implemented; ordinary-session and installed-artifact qualification is tracked in
-[#65](https://github.com/eberkut/ithrl/issues/65). It does not establish active compaction support.
+case, completed decision, native harness, credentials or original workspace. Ordinary Codex and
+Copilot reports were qualified through the source CLI, wheel and sdist-built wheel; see the
+[worked investigation](research/passive-compaction-investigation.md). Active compaction
+reconstruction remains outside this command's scope.
 
 First list the recognized successful compactions, then choose an ID from that report:
 
@@ -72,7 +73,8 @@ Sources exceeding a limit are refused rather than partially scanned.
 
 For private investigation, add `--show-text --max-text-bytes 4096`. The total escaped detail
 allowance is at most 65,536 bytes; truncation is explicit. Result sizes count canonical
-ASCII-escaped JSON encoded as UTF-8, not native text length or model tokens. Captured completeness
+JSON encoded as UTF-8, using the same canonical representation as result digests. These sizes
+are not native text lengths or model tokens. Captured completeness
 does not prove that the tool returned an entire resource. Usage stays unknown and savings are not
 estimated. Repetition establishes neither avoidable work nor an effect caused by compaction.
 Normalized, heuristic, resume, fork, handoff and cross-harness comparisons are outside this

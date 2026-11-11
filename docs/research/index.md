@@ -11,6 +11,7 @@ capabilities. A research result can precede a supported integration.
 | [Reduction design](reduction-design.md) | Statistical choices, failed cost/usefulness combinations, fresh confirmation, baseline-sharing alternatives and remaining measurement limits |
 | [Native measurements](../measurements.md) | Synthetic qualification, saved-session outcomes, confirmation, execution failures and measured costs |
 | [Ordinary-session investigation](ordinary-session-investigation.md) | A sanitized Codex debugging question, paragraph intervention, fresh confirmation, cost and limits of interpretation |
+| [Passive compaction investigation](passive-compaction-investigation.md) | Ordinary Codex/Copilot repeated and changed captures, source-bound interpretation and provider-free installed-artifact qualification |
 | [Context fuzzing](context-fuzzing.md) | A bounded synthetic discovery/simplification/confirmation design, exact inference and validity sensitivities |
 
 ## Reproduce the synthetic studies

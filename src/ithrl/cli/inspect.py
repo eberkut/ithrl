@@ -88,7 +88,7 @@ def reacquire(
 
 
 def _render_reacquisition(data: dict[str, Any]) -> None:
-    print_plain(console, "Passive compaction inspection (qualification pending)")
+    print_plain(console, "Passive compaction inspection")
     print_plain(
         console, f"  harness: {data['harness']}; source SHA-256: {data['source']['sha256']}"
     )

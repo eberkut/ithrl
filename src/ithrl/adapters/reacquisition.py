@@ -27,6 +27,8 @@ class CapturedResult:
     scope: str
     value: JsonValue = field(repr=False)
     completeness: Literal["captured", "truncated", "unknown"] = "captured"
+    # Native wrappers may contain only execution metadata, even when the value is nonempty.
+    has_content: bool = True
 
 
 @dataclass(frozen=True, slots=True)

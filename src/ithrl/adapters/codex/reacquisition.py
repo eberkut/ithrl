@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Literal, cast
 
 from ithrl.adapters._jsonl import JsonlDocument
@@ -26,6 +26,15 @@ from ithrl.context import JsonObject, content_digest
 _CALLS = {"function_call": "arguments", "custom_tool_call": "input"}
 _OUTPUTS = {"function_call_output", "custom_tool_call_output"}
 _KNOWN_RECORDS = {"session_meta", "turn_context", "response_item", "compacted"}
+_EXEC_TOOLS = {"exec_command", "write_stdin", "functions.exec_command", "functions.write_stdin"}
+
+
+@dataclass(frozen=True, slots=True)
+class _ExecCapture:
+    status: Literal["completed", "failed", "incomplete"]
+    has_content: bool
+
+
 _STARTS = {
     "compaction_start",
     "compaction_started",
@@ -94,7 +103,12 @@ def project_reacquisition(document: JsonlDocument) -> PassiveProjection:
                 call_id = _required_string(payload, "call_id", record.line, "tool call identifier")
                 operation = operations[call_id]
                 call = cast(JsonObject, document.records[operation.call.line - 1]["payload"])
-                status = _status(call, payload)
+                exec_capture = (
+                    _exec_capture(payload.get("output"))
+                    if call.get("name") in _EXEC_TOOLS
+                    else None
+                )
+                status = _status(call, payload, exec_capture)
                 results = ()
                 if "output" in payload:
                     results = (
@@ -102,6 +116,9 @@ def project_reacquisition(document: JsonlDocument) -> PassiveProjection:
                             "output",
                             payload["output"],
                             _completeness(payload),
+                            has_content=exec_capture.has_content
+                            if exec_capture is not None
+                            else True,
                         ),
                     )
                 operations[call_id] = replace(
@@ -216,7 +233,9 @@ def _compactions(records: tuple[JsonObject, ...]) -> tuple[list[Boundary], list[
     return boundaries, barriers
 
 
-def _status(call: JsonObject, output: JsonObject) -> Literal["completed", "failed", "incomplete"]:
+def _status(
+    call: JsonObject, output: JsonObject, exec_capture: _ExecCapture | None
+) -> Literal["completed", "failed", "incomplete"]:
     if call.get("status") in ("failed", "cancelled") or output.get("status") in (
         "failed",
         "cancelled",
@@ -224,15 +243,11 @@ def _status(call: JsonObject, output: JsonObject) -> Literal["completed", "faile
         return "failed"
     if output.get("is_error") is True or output.get("error") not in (None, False):
         return "failed"
-    if call.get("name") in {
-        "exec_command",
-        "write_stdin",
-        "functions.exec_command",
-        "functions.write_stdin",
-    }:
-        native_status = _exec_status(output.get("output"))
-        if native_status != "completed":
-            return native_status or "incomplete"
+    if call.get("name") in _EXEC_TOOLS:
+        if exec_capture is None:
+            return "incomplete"
+        if exec_capture.status != "completed":
+            return exec_capture.status
     if (
         call.get("status") not in (None, "completed", "complete")
         or output.get("status") not in (None, "completed", "complete")
@@ -271,7 +286,7 @@ def _captured_text(value: object) -> tuple[str, ...]:
     return ()
 
 
-def _exec_status(value: object) -> Literal["completed", "failed", "incomplete"] | None:
+def _exec_capture(value: object) -> _ExecCapture | None:
     """Read only the native exec header, never status-looking command output."""
     # Native format owner: openai/codex rust-v0.153.4,
     # codex-rs/core/src/tools/context.rs, ExecCommandToolOutput::response_header.
@@ -282,13 +297,15 @@ def _exec_status(value: object) -> Literal["completed", "failed", "incomplete"] 
     end = min((position for position in positions if position >= 0), default=-1)
     if end < 0:
         return None
+    body = texts[0][end:].partition(":")[2]
+    has_content = any(text.strip() for text in (body, *texts[1:]))
     lines = texts[0][:end].split("\n")
     if lines[0].startswith("Chunk ID: "):
         lines = lines[1:]
     if not lines or not lines[0].startswith("Wall time: ") or not lines[0].endswith(" seconds"):
         return None
     if len(lines) not in (2, 3) or not lines[1].startswith("Process exited with code "):
-        return "incomplete"
+        return _ExecCapture("incomplete", has_content)
     if len(lines) == 3:
         count = lines[2].removeprefix("Original token count: ")
         if (
@@ -296,12 +313,12 @@ def _exec_status(value: object) -> Literal["completed", "failed", "incomplete"] 
             or not count.isascii()
             or not count.isdecimal()
         ):
-            return "incomplete"
+            return _ExecCapture("incomplete", has_content)
     code = lines[1].removeprefix("Process exited with code ")
     digits = code.removeprefix("-")
     if not digits or not digits.isascii() or not digits.isdecimal():
-        return "incomplete"
-    return "failed" if digits.strip("0") else "completed"
+        return _ExecCapture("incomplete", has_content)
+    return _ExecCapture("failed" if digits.strip("0") else "completed", has_content)
 
 
 def _has_truncation_warning(value: object) -> bool:
