@@ -98,7 +98,7 @@ def test_changed_file_capture_keeps_operation_and_result_relations_separate(
 
 
 @pytest.mark.parametrize("scope", ["content", "detailedContent"])
-@pytest.mark.parametrize("variant", ["missing", "empty", "truncated"])
+@pytest.mark.parametrize("variant", ["missing", "empty", "non-string"])
 def test_result_scopes_remain_independent(
     inspect_source: InspectSource, scope: str, variant: str
 ) -> None:
@@ -115,6 +115,14 @@ def test_result_scopes_remain_independent(
     relations = {item["scope"]: item["relation"] for item in group["result_relations"]}
     assert relations[scope] == "unavailable"
     assert relations["detailedContent" if scope == "content" else "content"] == "equal"
+
+
+def test_truncated_capture_cannot_form_comparison_group(inspect_source: InspectSource) -> None:
+    records = _records()
+    records[8]["data"]["result"]["truncated"] = True
+    report = inspect_source(records)
+    assert report["groups"] == []
+    assert report["coverage"]["ineligible_operations"] == 1
 
 
 @pytest.mark.parametrize("marker", ["Output:", "Final output:"])
