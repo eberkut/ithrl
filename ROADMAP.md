@@ -76,10 +76,10 @@ v0.4 requirement. Other candidates need useful evidence and a bounded proposal b
 | Scope | Issue | Expected outcome |
 | --- | --- | --- |
 | Completed on main; awaiting v0.4 | [#48: experiment preparation](https://github.com/eberkut/ithrl/issues/48) | Generate and inspect private native reduction configurations without copying target/oracle blocks or digests by hand |
-| Committed to v0.4; parent | [#15: passive compaction inspection](https://github.com/eberkut/ithrl/issues/15) | Deliver useful provider-free reports for both harnesses, with explicit operation/result relations and interpretation limits |
+| Completed on main; awaiting v0.4 | [#15: passive compaction inspection](https://github.com/eberkut/ithrl/issues/15) | Useful provider-free reports for both harnesses, with explicit operation/result relations and interpretation limits |
 | Completed on main; awaiting v0.4 | [#64: implement passive inspection](https://github.com/eberkut/ithrl/issues/64) | Bounded source projections, matching/report contracts and `inspect reacquire`; experimental reconstruction support is unchanged |
 | Qualification complete; awaiting v0.4 | [#65: qualify passive inspection](https://github.com/eberkut/ithrl/issues/65) | Ordinary sources, counterexamples and both installed-artifact origins validated; worked interpretation recorded |
-| Closing v0.4 review | [#67: performance and simplification](https://github.com/eberkut/ithrl/issues/67) | Review the entire project after feature qualification, disposition measured improvements and establish durable performance/coding guidance |
+| Closing v0.4 review | [#67: performance and simplification](https://github.com/eberkut/ithrl/issues/67) | Project-wide performance fixes, permanent local-workload benchmarks and durable coding guidance |
 | Closing v0.4 review | [#68: documentation and writing guidance](https://github.com/eberkut/ithrl/issues/68) | Research technical-writing practices and examples, review all documentation using Diátaxis and establish concise writing guidance |
 | Candidate for additional v0.4 scope | [#13: comparative debugging](https://github.com/eberkut/ithrl/issues/13) | A comparability contract, paired workloads, interaction example and bounded validation proposal; decide whether to implement or defer |
 | Deferred; no release assigned | [#14: additional harnesses](https://github.com/eberkut/ithrl/issues/14) | Assess Claude Code, OpenCode and Pi before choosing an integration order and qualification scope |

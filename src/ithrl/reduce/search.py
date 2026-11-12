@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import Callable, Generator, Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from ithrl.case import CaseEvidence
@@ -58,6 +58,11 @@ class _Search[Trial: _Trial]:
     publish: bool
     publish_checkpoint: _CheckpointPublisher[Trial]
     trials: list[Trial]
+    _trials_by_key: dict[str, Trial] = field(init=False, default_factory=dict)
+
+    def __post_init__(self) -> None:
+        for trial in self.trials:
+            self._trials_by_key.setdefault(trial.trial_key, trial)
 
     async def run(self) -> _SearchOutcome[Trial]:
         candidates = removal_candidates(self.removable)
@@ -82,7 +87,7 @@ class _Search[Trial: _Trial]:
         key = trial_key(phase, removed, tuple(requested))
         # Finer partitions can repeat an unchanged chunk. Keep its frozen decision
         # rather than duplicate the trial or redraw a favorable sampled block.
-        previous = next((trial for trial in self.trials if trial.trial_key == key), None)
+        previous = self._trials_by_key.get(key)
         if previous is not None:
             return previous if previous.allows_search_continuation else None
         replaying = bool(self.prior_trials)
@@ -98,6 +103,7 @@ class _Search[Trial: _Trial]:
         if trial is None:
             return None
         self.trials.append(trial)
+        self._trials_by_key.setdefault(trial.trial_key, trial)
         if self.publish and not replaying:
             checkpoint_removed = trial.effective_removals if trial.accepts_removal else removed
             self.publish_checkpoint(checkpoint_removed, self.trials, False)

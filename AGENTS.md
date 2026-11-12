@@ -95,8 +95,10 @@ Start with focused tests for the changed contract and failure paths. Run broader
 change could affect shared contracts, security boundaries, supported Python versions, or package
 contents. Run Python 3.12, 3.13, and 3.14 suites sequentially if they share `.venv`; CI runs
 tests, dependency audits and installed-package checks for each version. Radon reports are review
-signals, not a reason to split cohesive safety code or add wrappers. Tests and fixtures must remain
-credential-free and sanitized by default.
+signals, not a reason to split cohesive safety code or add wrappers. Follow the measurement,
+ownership and test-design guidance in
+[Performance and maintainability](CONTRIBUTING.md#performance-and-maintainability).
+Tests and fixtures must remain credential-free and sanitized by default.
 
 For a local matrix run, set `UV_PYTHON=VERSION` on every `uv` command. A one-off `uv sync --python`
 does not override `.python-version` for later `uv run` commands. Parallel runs need separate

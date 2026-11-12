@@ -9,8 +9,10 @@ import math
 from collections import defaultdict, deque
 from collections.abc import Iterable, Mapping, Sequence
 from enum import Enum, auto
+from functools import cached_property
 from itertools import pairwise
 from pathlib import PurePosixPath
+from types import MappingProxyType
 from typing import Annotated, Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -256,31 +258,49 @@ class ContextGraph(BaseModel):
 
     @property
     def by_id(self) -> Mapping[str, ContextNode]:
-        return {node.id: node for node in self.nodes}
+        by_id, _ = self._node_indexes()
+        return MappingProxyType(by_id)
+
+    def _node_indexes(self) -> tuple[dict[str, ContextNode], dict[str, tuple[str, ...]]]:
+        # model_copy(update=...) bypasses validation and copies cached attributes.
+        # Bind indexes to the actual tuple, so a replacement cannot reuse stale data.
+        indexes = self._indexes
+        if indexes[0] is not self.nodes:
+            self.__dict__.pop("_indexes", None)
+            indexes = self._indexes
+        return indexes[1], indexes[2]
+
+    @cached_property
+    def _indexes(
+        self,
+    ) -> tuple[tuple[ContextNode, ...], dict[str, ContextNode], dict[str, tuple[str, ...]]]:
+        by_id = {node.id: node for node in self.nodes}
+        dependants = {
+            node_id: tuple(sorted(children))
+            for node_id, children in _index_dependants(self.nodes).items()
+        }
+        return self.nodes, by_id, dependants
 
     def dependency_closure(self, remove_ids: Iterable[str]) -> frozenset[str]:
         """Also remove dependent items so the remaining graph stays valid."""
 
         requested = frozenset(remove_ids)
-        unknown = sorted(requested - self.by_id.keys())
+        by_id, dependants = self._node_indexes()
+        unknown = sorted(node_id for node_id in requested if node_id not in by_id)
         if unknown:
             raise ContextGraphError(f"unknown context node IDs: {', '.join(unknown)}")
-
-        dependants = _index_dependants(self.nodes)
 
         closure = set(requested)
         pending = deque(sorted(requested))
         while pending:
             removed = pending.popleft()
-            for dependant in sorted(dependants[removed]):
+            for dependant in dependants.get(removed, ()):
                 if dependant not in closure:
                     closure.add(dependant)
                     pending.append(dependant)
 
         unsafe = sorted(
-            node.id
-            for node in self.nodes
-            if node.id in closure and (node.protected or not node.mutable)
+            node_id for node_id in closure if by_id[node_id].protected or not by_id[node_id].mutable
         )
         if unsafe:
             raise UnsafeRemovalError(

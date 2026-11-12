@@ -66,6 +66,7 @@ dev = [
   "pre-commit>=4.3",
   "pyrefly==1.4.0",
   "pytest>=9",
+  "pytest-benchmark>=5.2.3",
   "pytest-cov>=7",
   "pytest-github-actions-annotate-failures>=0.4.2",
   "PyYAML>=6",
@@ -153,8 +154,12 @@ search-path = ["src", "tests"]
 
 [tool.pytest]
 pythonpath = ["tests"]
-markers = ["native_smoke(profile): explicit approved native harness/provider test, never default CI"]
+markers = [
+  "native_smoke(profile): explicit approved native harness/provider test, never default CI",
+  "benchmark: provider-free performance measurements, explicitly selected with --benchmark-only",
+]
 addopts = [
+  "--benchmark-skip",
   "--strict-config",
   "--strict-markers",
   "--cov=ithrl",

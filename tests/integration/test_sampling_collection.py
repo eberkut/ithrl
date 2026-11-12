@@ -722,6 +722,34 @@ def test_clock_overrun_stops_before_next_dispatch(
     assert len(result.evidence.attempts) == 1
 
 
+def test_local_preparation_elapsed_time_is_checked_before_dispatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = datetime.now(UTC)
+    case, prepared, runner, removed = _prepared(tmp_path, outcomes=(True,) * 2, max_attempts=1)
+    state_file, store = _run_state(tmp_path, case, prepared, now=now)
+    plan = _plan(case, prepared, removed, now=now, required_valid=1, max_attempts=1, seed=2)
+    clock = MutableClock(now)
+    prepare_attempt = sampling_module._attempt
+    preparations: list[PreparedAttempt] = []
+
+    def slow_preparation(*args: Any, **kwargs: Any) -> PreparedAttempt:
+        attempt = prepare_attempt(*args, **kwargs)
+        preparations.append(attempt)
+        # Input validation prepares each arm before collection starts.
+        if len(preparations) > 2:
+            clock.advance(121)
+        return attempt
+
+    monkeypatch.setattr(sampling_module, "_attempt", slow_preparation)
+    result = asyncio.run(_collect(case, prepared, removed, plan, state_file, store, clock))
+    assert len(preparations) == 3
+    assert result.stop_reason == "wall-time-budget"
+    assert not runner.calls
+    with state_file.acquire_lock(store):
+        assert state_file.load(store).pending is None
+
+
 def test_pacing_waits_before_dispatch_and_counts_elapsed_wall_time(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

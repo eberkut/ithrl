@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Iterable
+from dataclasses import dataclass
 from typing import Any
+from weakref import ReferenceType, ref
 
 from ithrl.case.contracts import CaseFormatError, CaseManifest
 from ithrl.case.source import SourceArtifact, prepare_source_artifacts
@@ -62,10 +64,23 @@ def case_digest(
     return content_digest(payload)
 
 
+@dataclass(frozen=True, slots=True, repr=False)
+class _VerifiedEditableText:
+    """Derived text bound to one owner and its exact immutable evidence inputs."""
+
+    owner: ReferenceType[CaseEvidence]
+    manifest: CaseManifest
+    context: ContextGraph
+    decision: DecisionEvidence | None
+    sources: tuple[SourceArtifact, ...]
+    sites: tuple[EditableText, ...]
+
+
 class CaseEvidence:
     """Loaded immutable evidence with defensive request copies."""
 
     __slots__ = (
+        "__weakref__",
         "_context",
         "_decision",
         "_default_experiment",
@@ -73,6 +88,7 @@ class CaseEvidence:
         "_manifest",
         "_request",
         "_source_artifacts",
+        "_verified_editable_text",
     )
 
     def __init__(
@@ -100,6 +116,7 @@ class CaseEvidence:
         self._default_experiment = default_experiment
         self._source_artifacts = sources
         self._digest = case_digest(manifest, request, context.nodes, sources, decision)
+        self._verified_editable_text: _VerifiedEditableText | None = None
 
     @property
     def manifest(self) -> CaseManifest:
@@ -211,7 +228,28 @@ class CaseEvidence:
         if self._manifest.capture.request == "logical-session":
             from ithrl.extraction import editable_extracted_text
 
-            return editable_extracted_text(self)
+            verified = self._verified_editable_text
+            if (
+                verified is not None
+                and verified.owner() is self
+                and verified.manifest is self._manifest
+                and verified.context is self._context
+                and verified.decision is self._decision
+                and verified.sources is self._source_artifacts
+            ):
+                return verified.sites
+            # Retain only immutable text facts, never the adapter's mutable native
+            # session. Rebound evidence and copied owners must verify afresh.
+            sites = editable_extracted_text(self)
+            self._verified_editable_text = _VerifiedEditableText(
+                ref(self),
+                self._manifest,
+                self._context,
+                self._decision,
+                self._source_artifacts,
+                sites,
+            )
+            return sites
         request = self._exact_request()
         found = []
         for node in self._context.nodes:

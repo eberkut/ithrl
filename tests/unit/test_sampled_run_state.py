@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 from functools import partial
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 from pydantic import ValidationError
@@ -1289,6 +1290,111 @@ def test_snapshot_rejects_earlier_clock_without_changing_clock_free_reads(tmp_pa
         assert file.evidence(store) == blocks
 
 
+@pytest.mark.parametrize("reader", ["load", "evidence", "usage", "snapshot"])
+@pytest.mark.parametrize("published", [False, True])
+def test_owned_reads_resolve_all_references_in_one_fresh_batch(
+    tmp_path: Path, reader: str, published: bool
+) -> None:
+    file, store, plan = _create(tmp_path, admit_block=not published)
+    references = ()
+    with file.acquire_lock(store):
+        if published:
+            calibration = _calibration_observation(plan)
+            calibration = calibration.model_copy(
+                update={
+                    "observation_id": "calibration-batch",
+                    "attempt_evidence": calibration.attempt_evidence.model_copy(
+                        update={"attempt_id": "attempt-" + "a" * 32}
+                    ),
+                }
+            )
+            store.append(calibration)
+            file.record_calibration(store, (calibration.observation_id,))
+            file.admit_block(store, plan)
+            reservation = _reservation(plan)
+            file.reserve_dispatch(store, reservation)
+            observation = _observation(plan, reservation)
+            file.append_observation(store, observation)
+            references = (calibration.observation_id, observation.observation_id)
+        with patch.object(store, "get_many", wraps=store.get_many) as resolve:
+            for _ in range(2):
+                kwargs = {"now": _TIME} if reader in {"usage", "snapshot"} else {}
+                getattr(file, reader)(store, **kwargs)
+            assert resolve.call_count == 2
+            assert [tuple(call.args[0]) for call in resolve.call_args_list] == [references] * 2
+
+
+@pytest.mark.parametrize("later_failure", ["missing", "invalid-body"])
+def test_failed_batch_preserves_earlier_calibration_refusal(
+    tmp_path: Path, later_failure: str
+) -> None:
+    file, store, plan = _create(tmp_path)
+    incompatible = _calibration_observation(plan).model_copy(
+        update={"arm": ObservationArm.CANDIDATE, "observation_id": "incompatible-calibration"}
+    )
+    store.append(incompatible)
+    later_reference = "missing-later-evidence"
+    if later_failure == "invalid-body":
+        later = _observation(plan, _reservation(plan))
+        store.append(later)
+        later_reference = later.observation_id
+        with closing(sqlite3.connect(store.path)) as connection, connection:
+            trigger = connection.execute(
+                "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'observations_no_update'"
+            ).fetchone()[0]
+            connection.execute("DROP TRIGGER observations_no_update")
+            connection.execute(
+                "UPDATE observations SET attempt_evidence = ? WHERE observation_id = ?",
+                ("private-invalid-json", later_reference),
+            )
+            connection.execute(trigger)
+    with file.acquire_lock(store):
+        state = file.load(store)
+        progress = state.blocks[0].model_copy(
+            update={
+                "observations": (
+                    SamplingObservationReference(
+                        observation_id=later_reference,
+                        schedule_position=0,
+                        attempt_id="attempt-" + "1" * 32,
+                        attempt_digest="1" * 64,
+                    ),
+                )
+            }
+        )
+        file._write(
+            state.model_copy(
+                update={
+                    "calibration_observation_ids": (incompatible.observation_id,),
+                    "blocks": (progress,),
+                }
+            )
+        )
+        with pytest.raises(RunStateError, match="calibration accounting does not match"):
+            file.load(store)
+
+
+def test_failed_batch_cannot_be_accepted_by_successful_diagnostic_reads(tmp_path: Path) -> None:
+    file, store, _ = _create(tmp_path)
+    resolve = store.get_many
+    calls = 0
+
+    def fail_once(references: Any) -> tuple[Observation, ...]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise ValueError("private-invalid-row")
+        return resolve(references)
+
+    with (
+        file.acquire_lock(store),
+        patch.object(store, "get_many", side_effect=fail_once),
+        pytest.raises(RunStateError, match="unavailable observation") as raised,
+    ):
+        file.load(store)
+    assert "private-invalid-row" not in str(raised.value)
+
+
 @pytest.mark.parametrize("corruption", ["attempt-digest", "invalid-body"])
 def test_snapshot_rereads_sqlite_and_refuses_corruption_between_calls(
     tmp_path: Path, corruption: str
@@ -1410,3 +1516,30 @@ def test_observation_reference_matches_all_persisted_attempt_fields(field: str |
         }[field]
         reference = reference.model_copy(update={field: changed})
     assert reference.matches_attempt(attempt) is (field is None)
+
+
+@pytest.mark.parametrize("changed", ["candidate_digest", "block_id", "attempts"])
+def test_checkpoint_authority_requires_full_block_equality(tmp_path: Path, changed: str) -> None:
+    file, store, plan = _create(tmp_path)
+    with file.acquire_lock(store):
+        block = file.evidence(store)[0]
+        checkpoint = SampledReductionCheckpoint(
+            reduction=plan.preservation,
+            original_identity=plan.original_identity,
+            original_candidate_digest=plan.original_candidate_digest,
+            best_candidate_digest=plan.original_candidate_digest,
+            removed_context_ids=(),
+            active_block=block,
+        )
+        state = file.load(store)
+        file._validate_checkpoint_authority(state, checkpoint, (block,))
+        if changed == "attempts":
+            _complete_first_block(file, store, plan)
+            changed_block = file.evidence(store)[0]
+        else:
+            replacement = "3" * 64 if changed == "candidate_digest" else "other-block"
+            changed_block = block.model_copy(
+                update={"plan": plan.model_copy(update={changed: replacement})}
+            )
+        with pytest.raises(RunStateError, match="checkpoint differs from authoritative"):
+            file._validate_checkpoint_authority(state, checkpoint, (changed_block,))
