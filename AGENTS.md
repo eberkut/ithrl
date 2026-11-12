@@ -115,6 +115,10 @@ for a new page; update publication boundaries and their tests when introducing a
 directory or asset type. Run documentation tests and the strict site build; neither needs a
 native harness.
 
+Apply [Writing and review](CONTRIBUTING.md#writing-and-review) to all documentation edits. Keep
+that section as the canonical writing guide; do not duplicate its checklist here. Shortening must
+preserve safety conditions, experimental assumptions, measured outcomes and historical scope.
+
 Use the shared rumdl configuration and pinned version for Markdown formatting and linting. Keep
 generated-file exceptions limited to demonstrated generator conflicts; preserve reproducibility.
 

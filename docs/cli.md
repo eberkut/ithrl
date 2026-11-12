@@ -70,9 +70,9 @@ $ ithrl prepare [OPTIONS] {case}
 * `--preflight <path>`: Private native preflight receipt.  [required]
 * `--settings <path>`: Explicit reduction preparation TOML.  [required]
 * `--output <path>`: New private experiment TOML; never overwritten.  [required]
-* `--max-candidates <int range>`: [1&lt;=x&lt;=10000; required]
-* `--max-provider-calls <int range>`: [x&gt;=1; required]
-* `--max-wall-time <int range>`: [x&gt;=1; required]
+* `--max-candidates <int range>`: Maximum candidate tests across coarse and fine search.  [1&lt;=x&lt;=10000; required]
+* `--max-provider-calls <int range>`: Maximum total provider calls for calibration, search and confirmation.  [x&gt;=1; required]
+* `--max-wall-time <int range>`: Total elapsed-time limit in seconds, including calibration.  [x&gt;=1; required]
 * `--inter-attempt-delay <int range>`: Seconds between attempts; included in admission bounds.  [default: 0; 0&lt;=x&lt;=86400]
 * `--observation-store <path>`: Forward a store path without opening it.
 * `--format <human|json>`: Output format.  [default: human]

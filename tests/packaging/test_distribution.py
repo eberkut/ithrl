@@ -163,6 +163,8 @@ PUBLIC_DOCS = frozenset(
     for name in (
         "index.md",
         "native-runs.md",
+        "reduction.md",
+        "fuzzing.md",
         "results.md",
         "cli.md",
         "troubleshooting.md",

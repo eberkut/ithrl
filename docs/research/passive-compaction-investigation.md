@@ -1,9 +1,8 @@
 # Inspecting repeated operations across compaction
 
-The debugging question was whether operations recorded after compaction repeated an earlier
-lookup, returned changed information, or could not be compared from the saved evidence. The
-investigation used ordinary Codex and Copilot sessions, without reconstructing a model request or
-running the recorded tools.
+This investigation asked whether operations after compaction repeated an earlier lookup, returned
+changed information, or lacked comparable saved evidence. It used ordinary Codex and Copilot
+sessions without reconstructing requests or running recorded tools.
 
 ## Evidence and checks
 
@@ -41,10 +40,9 @@ ithrl inspect reacquire SESSION --format json
 ithrl inspect reacquire SESSION --boundary BOUNDARY_ID --format json
 ```
 
-Check `source.sha256` against the source under investigation. `boundary` identifies the compaction
-interval; each group's `before` and `after` entries identify call and completion lines and record
-digests. Use those anchors in the private source. Default reports omit tool arguments and result
-text; `--show-text --max-text-bytes 4096` permits bounded, escaped private detail.
+Verify `source.sha256`, then use `boundary` and each group's `before`/`after` call lines,
+completion lines and record digests to locate the evidence in the private source. Default reports
+omit arguments and result text; `--show-text --max-text-bytes 4096` permits bounded, escaped detail.
 
 For the catalog example, the report establishes that the same recorded operation returned the
 same captured payload. Manual inspection identified the generic Codex call as a catalog lookup;
@@ -52,10 +50,9 @@ the inspector leaves generic code unclassified. A developer can now examine whet
 catalog entry survived in the compaction summary and whether the later task required a fresh
 lookup. The report alone cannot answer those questions or justify deleting that operation.
 
-The status example is a counterexample to treating every repeated operation as redundant: the
-arguments match but the returned status changed. A developer should inspect which reported state
-changed and whether refreshing it was necessary for the later task. A captured status difference
-does not by itself establish a change in an underlying resource.
+In the status example, matching arguments returned different status, so repetition alone cannot
+establish redundancy. Inspect what changed and whether the later task needed a refresh. A captured
+status difference does not establish a change in the underlying resource.
 
 The three Copilot pairs establish repeated recorded file views with equal captures in each native
 field. A developer can inspect the summary and the later request to determine why the agent opened

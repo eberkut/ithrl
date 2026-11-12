@@ -118,6 +118,8 @@ include = [
   "/README.md",
   "/ROADMAP.md",
   "/docs/native-runs.md",
+  "/docs/reduction.md",
+  "/docs/fuzzing.md",
   "/docs/results.md",
   "/docs/index.md",
   "/docs/cli.md",

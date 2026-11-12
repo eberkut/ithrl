@@ -22,6 +22,8 @@ SITE_PAGES = frozenset(
     {
         "index.md",
         "native-runs.md",
+        "reduction.md",
+        "fuzzing.md",
         "results.md",
         "cli.md",
         "troubleshooting.md",
@@ -123,6 +125,20 @@ def test_site_build_publishes_only_allowlisted_sources(site_sources: Path) -> No
         assets = _PageAssets()
         assets.feed(target.read_text(encoding="utf-8"))
         assert assets.urls
+        if page == "native-runs.md":
+            # Preserve incoming links after moving the task procedures to separate guides.
+            assert {
+                "select-a-saved-decision",
+                "prepare-native-reduction",
+                "1-inspect-the-local-capabilities",
+                "2-configure-the-experiment",
+                "optional-section-removal-settings",
+                "3-generate-and-inspect-the-complete-plan-and-budget",
+                "4-run-the-experiment",
+                "context-fuzzing",
+                "run-the-synthetic-native-campaign",
+                "compatibility-and-measurements",
+            } <= assets.ids
         for url in assets.urls:
             parsed = urlsplit(url)
             assert not parsed.scheme, f"External asset: {url}"
@@ -171,10 +187,13 @@ class _PageAssets(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
         self.urls: list[str] = []
+        self.ids: set[str] = set()
 
     @override
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attributes = dict(attrs)
+        if identifier := attributes.get("id"):
+            self.ids.add(identifier)
         if tag == "script" or tag == "img":
             url = attributes.get("src")
         elif tag == "link" and attributes.get("rel") in {"stylesheet", "shortcut icon", "icon"}:

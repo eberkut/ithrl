@@ -1,8 +1,8 @@
 # Troubleshooting
 
-Start with `ithrl --version` and the command's `--help`. For a refusal, keep the error code,
-`next_action` and any printed private evidence location. `--format json` returns structured
-output; progress is written to stderr. Review output before sharing it, including local paths.
+Record `ithrl --version`, the error code, `next_action` and any private evidence location. Check
+the failing command's `--help`; `--format json` returns structured output with progress on stderr.
+Review output, including local paths, before sharing it. Keep raw sessions and diagnostics private.
 
 ## Selecting a decision
 
@@ -21,9 +21,8 @@ do not attach the session.
 
 ## Native setup and preflight
 
-Native reduction needs Linux, usable Bubblewrap, an installed harness with existing local
-authentication, and the original workspace. Follow the [native-run procedure](native-runs.md)
-before acknowledging model execution. Native dry-run can start local, network-denied probes.
+Check the [native-run prerequisites](native-runs.md#native-prerequisites) before authorizing
+execution. Native dry-run can start bounded, network-denied local probes without provider calls.
 
 | Error code | Next action |
 | --- | --- |
@@ -37,47 +36,51 @@ before acknowledging model execution. Native dry-run can start local, network-de
 | `storage-overlap` | Move disposable storage outside the protected case and original workspace. |
 | `input-token-limit-unenforceable` | The current native profiles cannot enforce a hard input-token cap. Use a profile with that guarantee, or explicitly decide whether to proceed without the cap. |
 
-Do not disable permission checks or edit internal state to bypass a refusal. A new harness version
-can pass the same capability checks without a product update; unsupported protocol or safety
-behavior requires investigation.
+Do not bypass a refusal by disabling permission checks or editing internal state. New harness
+versions use the same capability checks; unsupported protocol or safety behavior needs
+investigation.
 
 `runner_error_reason_code = "protected-input-snapshot"` means the runner could not snapshot the
 source or original workspace before starting that attempt. Check read permissions, unsupported
 file types or links, and tree size or nesting limits.
 
-For custom Codex CA trust, configure `SSL_CERT_FILE` with a certificate bundle. The runner copies
-it into private disposable state and preserves certificate verification. A custom `SSL_CERT_DIR`
-under a path hidden by isolation is unavailable inside the runner.
+### Authentication and certificate trust
 
-Copilot token environment variables take precedence over its saved credentials, in the order
+For Codex custom CA trust, set `SSL_CERT_FILE` to a certificate bundle. The runner copies it into
+private disposable state with verification enabled. A custom `SSL_CERT_DIR` hidden by isolation
+is unavailable inside the runner.
+
+Copilot chooses token environment variables before saved credentials, in this order:
 `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`. To use saved credentials, prefix each detection,
 execution or resume command with
 `env -u COPILOT_GITHUB_TOKEN -u GH_TOKEN -u GITHUB_TOKEN`. This changes only that command's
-environment. Authenticate through Copilot itself; a token from another CLI may lack Copilot access.
+environment. Authenticate through Copilot; another CLI's token may lack Copilot access.
 
-Copilot preserves supported proxy settings. Configured `SSL_CERT_FILE` and `NODE_EXTRA_CA_CERTS`
-bundles are bounded, copied into private disposable state and referenced there. If certificate
-setup is refused, check the configured files and permissions; keep certificate verification enabled.
-Copilot's SDK forwards HTTP through the Python runtime used by `ithrl`. A successful CLI login
-does not verify that this runtime accepts the configured certificate chain.
+Copilot preserves supported proxy settings and copies bounded `SSL_CERT_FILE` and
+`NODE_EXTRA_CA_CERTS` bundles into private disposable state. For certificate refusals, check file
+permissions and trust configuration; keep verification enabled. SDK HTTP forwarding uses ithrl's
+Python runtime, whose certificate trust is not established by a successful CLI login.
 
-`model-catalog-connection` identifies exhausted connection recovery for Copilot's read-only model
-catalogue. The runner allows three connection attempts, with 0.5- and 1-second delays, within the
-existing attempt timeout. `model-catalog-tls` identifies a certificate-verification failure;
-`model-catalog-failed` identifies another catalogue refusal. Check network/proxy connectivity,
-certificate trust or account access as appropriate. Catalogue connection recovery preserves the
-SDK's proxy and certificate settings and never retries an inference request. HTTP status errors
-and failures while streaming the catalogue body are outside this recovery loop.
+### Copilot model catalogue
 
-Recognized startup warnings before the selected turn are accepted as metadata. Warnings do not
-establish successful authentication or provider acceptance; inspect the resulting refusal and
-private diagnostic if execution fails.
+| Reason code | Next action |
+| --- | --- |
+| `model-catalog-connection` | Check network and proxy connectivity after connection recovery is exhausted. |
+| `model-catalog-tls` | Check certificate trust. |
+| `model-catalog-failed` | Check account access and the private diagnostic for another catalogue refusal. |
+
+Read-only catalogue recovery allows three connection attempts, delayed by 0.5 then 1 second,
+within the attempt timeout. It preserves SDK proxy/certificate settings and never retries
+inference. HTTP status errors and streaming-body failures are outside that loop.
+
+Recognized pre-turn startup warnings are metadata, not proof of authentication or provider
+acceptance. If execution fails, inspect the refusal and private diagnostic.
 
 ## Preparing a reduction
 
-Follow the [preparation procedure](native-runs.md#prepare-native-reduction) to export a native
-preflight receipt, supply statistical settings and generate a complete experiment. `prepare` is
-offline. Its inspection command runs normal native dry-run and can start bounded local probes.
+Follow the [preparation procedure](reduction.md) to export a receipt,
+supply settings and generate an experiment. `prepare` is offline; its returned inspection command
+runs native dry-run, which can start bounded local probes.
 
 | Error code | Next action |
 | --- | --- |
@@ -90,9 +93,8 @@ offline. Its inspection command runs normal native dry-run and can start bounded
 | `preparation-contract-mismatch` | Check the selected profile, behavior specification, protected IDs and section choices against the case. Keep the source evidence unchanged. |
 | `preparation-invalid` / `preflight-output-invalid` | Check private path permissions and input bounds. Choose a new output outside the case and original workspace; existing files are never overwritten. |
 
-Preparation also uses the sampling budget and freshness refusals below. A successful preparation
-validates configuration under recorded facts; it does not replace current native preflight or
-authorize model execution.
+Preparation also checks sampling budgets and freshness. Success validates recorded facts; it
+neither replaces current native preflight nor authorizes model execution.
 
 ## Sampling and budget refusals
 
@@ -110,7 +112,7 @@ authorize model execution.
 
 ## Fuzz setup and resume
 
-The [fuzzing walkthrough](native-runs.md#context-fuzzing) covers the fake-runner example and native
+The [fuzzing walkthrough](fuzzing.md) covers the fake-runner example and native
 setup. Detection makes no provider requests; inspecting a saved profile with `--dry-run` starts no
 harness.
 
@@ -129,21 +131,18 @@ recovery.
 
 ## Provider errors and interruption
 
-`runner_error_category = "provider-call-limit"` means the local per-attempt cap stopped another
-request. It is a budget stop, not provider throttling, transport failure or a behavioral nonmatch.
-No retry or continuation command is offered. Inspect the retained usage and private evidence before
-starting a new run with a different cap. Codex can make several successful Responses requests
-within one turn despite disabled retries; a lower cap does not guarantee completion. See
-[plan limits](native-runs.md#3-generate-and-inspect-the-complete-plan-and-budget) for configuration.
+`runner_error_category = "provider-call-limit"` means the local per-attempt cap blocked another
+request. It is a budget stop, not throttling, transport failure or a behavioral nonmatch; no retry
+or continuation is offered. Inspect retained usage before starting a new run with a different cap.
+Codex can need several successful requests per turn even with retries disabled. See
+[plan limits](reduction.md#3-generate-and-inspect-the-complete-plan-and-budget).
 
 For authentication or quota failures, inspect the selected harness's account status privately.
 Provider-call limits do not predict subscription allowance. Repeated full-run attempts can spend
 calls without completing confirmation; preserve every failed run and its charge.
 
-Sampled reduction and fuzz reports expose `runner_error_category` and
-`runner_error_reason_code` when a runner error is available. These fields describe the failure
-without copying native messages, response bodies or request identifiers into normal output.
-Structured Copilot provider failures have the following reason codes:
+Sampled reduction and fuzz reports expose `runner_error_category` and `runner_error_reason_code`
+without copying native messages, bodies or request identifiers. Structured Copilot failures use:
 
 | Reason code | Next action |
 | --- | --- |
@@ -155,15 +154,13 @@ Structured Copilot provider failures have the following reason codes:
 | `provider-unavailable` | Check provider service status and retain the failed observation. |
 | `provider-failure` | Inspect the private native diagnostic for an unclassified failure; share only sanitized evidence. |
 
-These codes classify structured provider evidence. They do not retry an attempt, establish
-provider acceptance or change its charge. An account quota refusal is an execution prerequisite;
-it does not by itself establish a harness compatibility failure.
+These codes classify evidence; they neither retry attempts, establish provider acceptance nor
+change charges. A quota refusal alone does not establish a harness compatibility failure.
 
-Errors remain outside behavioral denominators. `started-unknown` accounting means execution
-started but the available evidence cannot establish the complete provider-call count. Inspect
-actual, additional possible, pending and charged counts separately; unknown usage is not zero.
-The [result guide](results.md#sampled-results) explains the conditional interpretation and the
-opt-in structured-overload replacement policy.
+Errors stay outside behavioral denominators. `started-unknown` means execution started without a
+complete provider-call count. Inspect actual, additional possible, pending and charged counts
+separately; unknown usage is not zero. See [sampled results](results.md#sampled-results) for
+interpretation and the opt-in structured-overload replacement policy.
 
 When interrupted, use the printed continuation command if one is supplied. An unresolved dispatch
 must be reconciled before execution can continue. Completed confirmation is never repeated.

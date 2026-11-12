@@ -6,10 +6,10 @@ caller? The observed answer mentioned Databricks. The investigation asked whethe
 still appear when the administrative paragraphs were removed, while retaining the technical
 question and the other evidence in the selected context.
 
-The smaller context passed fresh preservation confirmation for the fixed topic predicate. It gave
-the developer a shorter record in which to inspect the installer-versus-installed-version boundary.
-It did not establish that the answer explained that boundary correctly or that the removed
-paragraphs never influenced the original answer.
+The smaller context passed fresh preservation confirmation for the fixed topic predicate. It lets
+the developer inspect the installer-versus-installed-version distinction in a shorter record.
+It establishes neither the answer's correctness nor whether the removed paragraphs influenced the
+original answer.
 
 ## Source, predicate and intervention
 
@@ -29,8 +29,8 @@ approval and pinning-policy discussion. It retained **702 bytes** containing the
 installer/CLI distinction, a separate CLI compatibility question, and clarification questions. The
 fixed triggering input and the selected field's remaining text stayed unchanged.
 
-This is a description of the private edit, not a replacement prompt. No private source or answer
-excerpt is reproduced here, and no public reproduction inherits the private experiment's verdict.
+The private edit is described without source or answer excerpts. This description cannot serve as
+a replacement prompt or transfer the verdict to a public reproduction.
 
 ## What was tested
 
@@ -48,27 +48,21 @@ earlier pilot, control or search observations entered the confirmation sample. T
 [measurements](../measurements.md#ordinary-session-paragraph-removal) record the exact interval and
 the associated Copilot result.
 
-This supports preservation of the chosen topic predicate within that declared margin and the
-method's assumptions. Eleven successes in each arm do not prove equal response distributions,
-universal preservation or a minimum match rate for future sessions. The nominal approximate
-interval does not establish uniform finite-sample coverage. Independent valid observations and
-stationarity within the comparison remain assumptions. Exploratory screening establishes no
-minimality, necessity, unique cause or global optimum.
+The result supports the topic predicate within the declared margin, assuming independent valid
+observations and stationarity. Eleven successes per arm do not prove equal response distributions,
+universal preservation or a future minimum match rate. The approximate interval has no uniform
+finite-sample coverage guarantee. Search establishes no minimality, necessity, unique cause or
+global optimum.
 
 ## What the developer can do with the result
 
-The original discussion raised two questions: which administrative approval or pinning policy to
-apply, and how the installer action selects the CLI used by a caller.
-The selected context still elicited the Databricks topic after the first question's paragraphs were
-removed. The developer can inspect the retained technical question and its code/documentation
-evidence without treating the administrative discussion as required for this particular topic
-check.
+The Databricks topic still appeared after removal of the administrative paragraphs. The developer
+can inspect the retained technical question and its code/documentation evidence without treating
+that discussion as required for this topic check.
 
-The next debugging action is to trace the retained installer action's version selection and the
-caller's CLI-version input separately, then verify the installed CLI version in an isolated,
-appropriately authorized workflow. Compare that evidence with the actual recommendation before
-changing the workflow. This action follows from the distinction exposed by the smaller context;
-it was not executed or validated by the reduction experiment.
+Next, trace the installer's version selection and the caller's CLI-version input separately.
+Verify the installed version in an isolated, authorized workflow and compare it with the actual
+recommendation before changing the workflow. The reduction experiment did not perform this check.
 
 The result does not show that all administrative information disappeared. Equivalent information
 may remain elsewhere in history, instructions, code or the fixed triggering input. The source also
@@ -106,7 +100,6 @@ request bodies, provider routing and endpoints. Its prose generalizes the privat
 reported observations still refer to the frozen private artifacts. There is no downloadable public
 case with which to reproduce those observations.
 
-The experiment qualifies one target, workload, runtime and policy. It provides a worked
-interpretation of that experiment; broader support remains governed by the
+This experiment qualifies one target, workload, runtime and policy. For broader support, see the
 [public capability table](https://github.com/eberkut/ithrl/blob/main/README.md#supported-inputs) and
 [native compatibility guidance](../native-runs.md#compatibility-and-measurements).

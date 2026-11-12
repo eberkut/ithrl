@@ -62,15 +62,14 @@ Use a new directory to repeat the example; extraction refuses to overwrite an ex
 ## Commands
 
 - `ithrl extract` browses saved sessions and creates a case from a selected decision.
-- `ithrl prepare CASE --preflight RECEIPT --settings PRIVATE_TOML --output EXPERIMENT` creates a
-  private reduction configuration from recorded preflight evidence without starting a harness.
-  See the
-  [preparation procedure](https://github.com/eberkut/ithrl/blob/main/docs/native-runs.md#prepare-native-reduction).
+- `ithrl prepare CASE` generates a private reduction configuration from a preflight receipt and
+  statistical settings. Follow the
+  [preparation procedure](https://github.com/eberkut/ithrl/blob/main/docs/reduction.md).
 - `ithrl shrink CASE` searches for context removals that preserve the selected behavior.
-- `ithrl inspect sections CASE` lists eligible text fields, section IDs, half-open Unicode codepoint
-  offsets and UTF-8 byte counts without displaying text or requiring a reduction result.
-- `ithrl inspect reacquire SESSION` lists compactions in saved Codex or Copilot evidence;
-  `--boundary ID` compares recorded operations and captured results across one compaction. See
+- `ithrl inspect sections CASE` lists editable text fields and paragraph boundaries without
+  displaying text or requiring a reduction result.
+- `ithrl inspect reacquire SESSION` compares recorded operations and captured results across
+  compaction. See
   [passive inspection](https://github.com/eberkut/ithrl/blob/main/docs/results.md#inspect-recorded-compaction).
 - `ithrl inspect retained CASE --result RESULT` explains retained units and recorded removal trials
   from a saved reduction without model access. See
@@ -101,27 +100,30 @@ Passive inspection reads saved evidence without a harness or model access. The
 [worked investigation](https://github.com/eberkut/ithrl/blob/main/docs/research/passive-compaction-investigation.md)
 records the qualified native profiles, ordinary examples and interpretation limits.
 
-Native Codex and Copilot final-response fuzzing supports appending text to eligible prior user
-input while preserving the fixed triggering input. The
-[fuzzing walkthrough](https://github.com/eberkut/ithrl/blob/main/docs/native-runs.md#context-fuzzing)
-starts with a local example and covers native execution.
+Native fuzzing appends text to eligible prior user input while preserving the fixed triggering
+input. The
+[fuzzing walkthrough](https://github.com/eberkut/ithrl/blob/main/docs/fuzzing.md)
+covers a local example and native execution.
 
-[Saved-session measurements](https://github.com/eberkut/ithrl/blob/main/docs/measurements.md#saved-session-experiments)
-include ordinary Codex and Copilot final-response experiments that removed paragraphs from retained
-prior-user text and passed fresh confirmation at a 20-percentage-point preservation margin. The
+Ordinary Codex and Copilot paragraph-removal experiments passed fresh confirmation at a
+20-percentage-point preservation margin. See the
+[measurements](https://github.com/eberkut/ithrl/blob/main/docs/measurements.md#saved-session-experiments)
+for completed and unsuccessful outcomes, costs and qualification limits, and the
 [worked investigation](https://github.com/eberkut/ithrl/blob/main/docs/research/ordinary-session-investigation.md)
-explains what the smaller Codex context helped a developer inspect and what remains unresolved.
-The measurements distinguish private runtime qualification from integrated support and report
-resource usage and unsuccessful outcomes alongside completed runs. Check
+for a developer's interpretation. Check
 [native compatibility](https://github.com/eberkut/ithrl/blob/main/docs/native-runs.md#compatibility-and-measurements)
-for the installed harness's requirements.
+before using an installed harness.
 
 ## Documentation
 
 Read the [documentation site](https://eberkut.github.io/ithrl/) or browse the guides below.
 
 - [Native runs](https://github.com/eberkut/ithrl/blob/main/docs/native-runs.md): session selection,
-  experiment configuration, preflight, model execution and measured resource usage.
+  shared prerequisites and compatibility.
+- [Native reduction](https://github.com/eberkut/ithrl/blob/main/docs/reduction.md): prepare,
+  inspect and execute a context-removal experiment.
+- [Context fuzzing](https://github.com/eberkut/ithrl/blob/main/docs/fuzzing.md): try the local
+  example and run a native text-append campaign.
 - [Results and privacy](https://github.com/eberkut/ithrl/blob/main/docs/results.md): saved files,
   result interpretation, budgets, resume and sensitive data.
 - [Contributing](https://github.com/eberkut/ithrl/blob/main/CONTRIBUTING.md): issue-first

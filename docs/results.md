@@ -20,11 +20,10 @@ internal JSON and SQLite state unchanged so validation and resume can verify it.
 
 ## Inspect recorded compaction
 
-The passive `reacquire` inspector reads one saved Codex or Copilot JSONL file directly. It needs no
-case, completed decision, native harness, credentials or original workspace. Ordinary Codex and
-Copilot reports were qualified through the source CLI, wheel and sdist-built wheel; see the
-[worked investigation](research/passive-compaction-investigation.md). Active compaction
-reconstruction remains outside this command's scope.
+`reacquire` compares recorded operations and captured results around compaction in one saved Codex
+or Copilot JSONL file. No case, completed decision, harness, credentials or original workspace is
+needed. See the [worked investigation](research/passive-compaction-investigation.md) for qualified
+profiles and ordinary examples.
 
 First list the recognized successful compactions, then choose an ID from that report:
 
@@ -33,21 +32,22 @@ ithrl inspect reacquire SESSION --format json
 ithrl inspect reacquire SESSION --boundary BOUNDARY_ID --format json
 ```
 
-The selected report compares the immediately adjacent source epochs. Both the native call and
-its completion must lie within their epoch. Failed, incomplete, straddling and explicitly
-truncated results cannot support a positive comparison. Failed or unresolved compaction events
-limit the epochs; nested copied history is never counted as new tool execution.
-For Codex exec tools, native output headers supply exit status when structured status is absent;
-nonzero exits are failed and unrecognized headers remain unresolved. Native truncation notices
-exclude partial captures from positive comparisons. Captured text remains unchanged.
+### Read the comparison
 
-For each exact recorded operation, the first eligible occurrence after compaction is paired with
-the nearest eligible predecessor. Later occurrences of that operation are counted separately;
-their results are not asserted equal. When the first occurrence has no exact predecessor, an
-equal capture in the same native field can identify a different recorded operation. Its known
-operation difference remains explicit. Copilot `content` and `detailedContent` are compared
-separately. Codex arguments remain exact captured strings, including their native call kind and
-namespace. Whitespace, timestamps and transport metadata are not removed for equality matching.
+The report compares intervals immediately before and after compaction. A call and its completion
+must share an interval; failed or unresolved compactions limit those intervals. Copied history
+is not new execution. Failed, incomplete, straddling or explicitly truncated captures cannot support
+positive comparisons. Codex exec headers supply missing exit status: nonzero exits fail and
+unrecognized headers remain unresolved.
+
+The first eligible post-compaction occurrence of an exact recorded operation is paired with its
+nearest eligible predecessor. Later occurrences are counted without asserting equal results.
+Without an exact predecessor, an equal capture in the same native field can identify a *different*
+recorded operation; the difference stays explicit.
+
+Equality uses the exact captured values: Copilot `content` and `detailedContent` are compared
+separately; Codex preserves native call kind, namespace and argument strings. Matching does not
+strip whitespace, timestamps or transport metadata.
 
 | Report evidence | What it establishes |
 | --- | --- |
@@ -57,28 +57,27 @@ namespace. Whitespace, timestamps and transport metadata are not removed for equ
 | `unavailable` | The field is missing, empty or explicitly incomplete; no positive result comparison is supported. |
 | `resource_state = "unknown"` | No historical resource snapshot was read or inferred. |
 
-Source SHA-256, record digests and one-based line anchors locate the evidence. A boundary ID
-includes its line and record digest; use it with the same immutable source. Default output excludes
-paths, tool names, arguments and captured text. Generic Codex code/shell operations remain
-unclassified; an identical command is not automatically a file read. Copilot's passive profile can
-accept missing turn IDs when unique request/start/completion identities suffice; known turn
-contradictions still refuse. This leaves experimental extraction's stricter turn validation
-unchanged.
+SHA-256, record digests and one-based lines locate evidence. Boundary IDs include line and record
+digest; reuse them only with unchanged sources. Generic Codex code/shell operations stay
+unclassified: identical commands do not establish a file read. Copilot accepts missing turn IDs
+when unique request/start/completion identities suffice, but rejects contradictions. Experimental
+extraction keeps stricter turn validation.
 
-`--max-groups` caps reported boundaries and matching groups at 100 by default, up to 1,000. Coverage
-records omitted boundaries or matching occurrences, ineligible operations, operations outside the
-adjacent epochs and unknown records. Counts describe the bounded snapshot, not all historical
-activity. Input limits are 64 MiB, 8 MiB per JSONL record, 250,000 records and 1,000,000 JSON items.
-Sources exceeding a limit are refused rather than partially scanned.
+### Limits and private detail
 
-For private investigation, add `--show-text --max-text-bytes 4096`. The total escaped detail
-allowance is at most 65,536 bytes; truncation is explicit. Result sizes count canonical
-JSON encoded as UTF-8, using the same canonical representation as result digests. These sizes
-are not native text lengths or model tokens. Captured completeness
-does not prove that the tool returned an entire resource. Usage stays unknown and savings are not
-estimated. Repetition establishes neither avoidable work nor an effect caused by compaction.
-Normalized, heuristic, resume, fork, handoff and cross-harness comparisons are outside this
-command's scope.
+Default output excludes paths, tool names, arguments and captured text. To include bounded private
+detail, add `--show-text --max-text-bytes 4096`. The total escaped display allowance cannot exceed
+65,536 bytes; truncation is explicit.
+
+`--max-groups` defaults to 100, up to 1,000 boundaries or matching groups. Coverage counts omitted
+boundaries/matches, ineligible or out-of-interval operations and unknown records in the bounded
+snapshot. Input limits are 64 MiB, 8 MiB per record, 250,000 records and 1,000,000 JSON items;
+exceeding any limit refuses the source instead of partially scanning it.
+
+Sizes measure canonical UTF-8 JSON used for digests, not native text lengths or model tokens.
+Complete captures need not contain entire resources. Usage stays unknown; savings, avoidable work
+and compaction's causal effects remain unestablished. Active reconstruction and normalized,
+heuristic, resume, fork, handoff or cross-harness comparisons are unsupported.
 
 ## Inspect retained context
 
@@ -89,14 +88,15 @@ ithrl inspect retained CASE --result RESULT
 ithrl inspect retained CASE --result RESULT --format json
 ```
 
-The inspector reads the case and saved deterministic or sampled result. It needs no installed
-native harness, credentials, original workspace, live run directory or observation database.
-It makes no provider calls, starts no harness probes and changes no input files.
+Inspection reads the case and saved deterministic or sampled result without changing either. It
+needs no harness, credentials, original workspace, live run directory or observation database, and
+makes no provider calls or probes.
 
-The report lists retained units, their editability and dependencies, and the recorded removal
-trials that concern them. Each trial identifies its search parent, requested and effective
-removals, candidate, and outcome. Sampled comparisons retain the full immutable original as their
-statistical baseline; the search parent is the context from which another removal was proposed.
+### Interpret retained units and trials
+
+The report lists units, editability, dependencies and removal trials. Trials identify requested
+and effective removals, candidate, outcome and search parent—the context from which removal was
+proposed. Sampled comparisons use the full immutable original as their statistical baseline.
 
 | Evidence | Interpretation |
 | --- | --- |
@@ -105,53 +105,55 @@ statistical baseline; the search parent is the context from which another remova
 | Joint or historical trial | An outcome for several removals or an earlier context; it cannot explain each retained item individually. |
 | Invalid, incomplete, ineligible or untested work | No supported behavioral conclusion for that removal. |
 
-Eligible retained prior-user fields also include `text_section_fields`. An `available-untested`
-field has a source-bound paragraph catalog: its section IDs and ranges describe possible edits, not
-recorded section-removal trials. `exploratory-tested` and `selected` distinguish fields with
-recorded fine trials and the selected edit. Whole-record trial outcomes do not establish that an
-individual section is needed. An `unavailable` field has no partial catalog; `section-policy-limit`
-identifies a field outside the paragraph policy's limits, while `inspection-section-limit`
-identifies the report's metadata allowance. See the
-[section contract](architecture.md#source-bound-text-sections) for boundaries and limits. A
-section-aware result also records fine trials and the selected section IDs. These exploratory
-screens apply to complete tested edits; they do not establish necessity of individual retained
-paragraphs. The final confirmation applies to the one selected candidate against the full original.
+Eligible retained prior-user fields include `text_section_fields`:
+
+- `available-untested`: a source-bound paragraph catalog describes possible edits, without recorded
+  section-removal trials.
+- `exploratory-tested` or `selected`: fine trials were recorded, or that field's edit was selected.
+- `unavailable`: no partial catalog is supplied. `section-policy-limit` means the field exceeds the
+  paragraph policy; `inspection-section-limit` means it exceeds the report's metadata allowance.
+
+See the [section contract](architecture.md#source-bound-text-sections) for boundaries and limits.
+Section-aware results record fine trials and selected section IDs. Whole-record outcomes and fine
+screens do not establish the necessity of individual paragraphs. Fresh confirmation applies only
+to the selected candidate against the full original.
 
 Deterministic reports include `failed_candidate_observation_count` for recorded candidate-run
 failures. The checkpoint lacks their removal-set details, so failures cannot be attributed to
 individual units or treated as behavioral losses. This count is unavailable for sampled results.
 
-A sampled screen rejection is exploratory, not confirmed loss or necessity. Search coverage and
-fresh confirmation are reported separately. The report includes the recorded target type,
-confirmation counts, margin and interval when available. Missing fields are `null` in JSON and
-shown as unavailable in human output. Current sampled snapshots do not contain their full execution
-plan, so their reconstruction method and detailed runner policy remain unavailable.
+A rejected screen is not confirmed loss or necessity. Coverage and fresh confirmation are separate.
+Target type, confirmation counts, margin and interval appear when saved; missing fields are `null`
+in JSON and unavailable in human output. Sampled snapshots omit the full execution plan, leaving
+detailed runner policy and reconstruction method unavailable.
 
-Inspection validates saved identities and consistency against the supplied case; it does not recheck
-observations in an external database or reproduce historical execution. Results concern the recorded
-reconstructed context and runner policy. Context byte counts measure canonical JSON encoded as
-UTF-8. `canonical_json_scope` identifies original source records before section edits; these counts
-do not subtract text removals. In section catalogs, `original_utf8_bytes` and each section's
-`utf8_bytes` count the original text only; `start` and `end` are half-open Unicode code-point
-offsets. Neither byte measure establishes provider-token or monetary savings.
+Inspection checks saved identities against the case. It does not recheck an external observation
+database or reproduce historical execution. Byte counts have two scopes:
 
-For private troubleshooting, explicitly include retained content with a total display allowance:
+- Context counts measure canonical UTF-8 JSON. `canonical_json_scope` identifies original source
+  records before section edits; those counts do not subtract text removals.
+- `original_utf8_bytes` and section `utf8_bytes` measure original text. `start` and `end` are
+  half-open Unicode code-point offsets.
+
+Neither measure establishes provider-token or monetary savings.
+
+### Display private content
+
+Explicitly request retained content with a total display allowance:
 
 ```bash
 ithrl inspect retained CASE --result RESULT --show-text --max-text-bytes 4096
 ithrl inspect retained CASE --result RESULT --show-text --text-node NODE_ID
 ```
 
-This displays serialized request values or native source records. For a section-edited node it
-displays only the selected field's exact retained text; `text_scope` and `text_content_index`
-identify that narrower view. Other blocks in that node are not displayed. This output may contain
-sensitive session content. Markup and terminal controls are escaped. The byte allowance applies
-across all displayed content after escaping, with a maximum of 65,536 bytes; truncation is explicit.
-Default output contains metadata only. Keep text-enabled output private.
+Keep text-enabled output private. It displays serialized request values or native source records.
+For a section-edited node, only the selected field's exact retained text appears; `text_scope` and
+`text_content_index` identify that scope. Other blocks are omitted. Markup and terminal controls
+are escaped; the total allowance applies after escaping, cannot exceed 65,536 bytes and reports
+truncation explicitly.
 
-Use `--text-node` with a retained unit ID from the report to inspect a later unit without spending
-the allowance on earlier records. All unit metadata and trial evidence remain in the report;
-only the selected unit's content is displayed.
+Use `--text-node` with a retained unit ID to spend the allowance only on that unit. Metadata and
+trial evidence for all units remain in the report. Default output contains metadata only.
 
 ## Deterministic results
 
@@ -176,28 +178,25 @@ ithrl shrink ithrl-demo/case --observation-store ithrl-demo/observations.sqlite 
 
 ## Sampled results
 
-Native reduction screens candidates against fresh samples of the original context, freezes one
-selected candidate, then compares it with the immutable original using separate fresh observations.
-A confirmed result supports preservation within the declared degradation margin among valid
-observations. Errors are excluded from match-rate calculations; execution reliability is reported
-separately.
+Native reduction screens candidates against fresh original samples, freezes one candidate, then
+compares it against the immutable original with separate fresh observations. A
+`confirmed-preserving` result supports preservation within the declared margin among valid
+observations. Errors are excluded from match rates; execution reliability is reported separately.
 
-The inference assumes independent valid observations and stationarity within each comparison.
-Sampled confirmation does not establish global or confirmed minimality, causality or campaign-wide
-confidence. `search-incomplete` records unfinished search coverage, for example at a comparison
-limit. It can accompany `confirmed-preserving` when a safe search stop leaves a selected candidate
-and enough budget for complete fresh confirmation. Report both outcomes.
+Inference assumes independent valid observations and stationarity within comparisons. Confirmation
+establishes neither minimality, causality nor campaign-wide confidence. `search-incomplete` records
+unfinished coverage, such as a comparison limit; it can accompany `confirmed-preserving` if a safe
+stop leaves a candidate and enough budget for complete fresh confirmation. Report both outcomes.
 
 A preservation verdict can also apply when the selected context is unchanged. Report actual
 removals and usage to establish whether the run produced a useful reduction.
 
-With `reduction.section_search`, results preserve the coarse candidate and stopping reason,
-coarse and fine comparison counts, fine coverage, and the selected one-field mutation. The summary's
-`additional_removed_utf8_bytes` counts only original editable text removed relative to the frozen
-coarse candidate. It excludes whole-record deletions and native envelope changes. The independent
-`additional_reduction_result` is `criterion-met`, `below-threshold`, `no-retained-fields`, or
-`not-assessed`; none is a behavioral verdict. A confirmed candidate below the byte criterion still
-fails that workload's additional-reduction gate. Debugging value requires its own interpretation.
+Section-search results retain the coarse candidate/stop reason, coarse/fine comparison counts,
+fine coverage and selected one-field mutation. `additional_removed_utf8_bytes` counts editable text
+removed from the frozen coarse candidate, excluding whole-record deletions and envelope changes.
+`additional_reduction_result` is `criterion-met`, `below-threshold`, `no-retained-fields` or
+`not-assessed`, independently of the behavioral verdict. Confirmation below the byte criterion
+still fails the workload's additional-reduction gate. Debugging value needs separate interpretation.
 
 Both search stages can be incomplete at final selection. `search-reduced` requires complete coarse
 and fine coverage when fine search is configured; `coarse_final_sweep_complete` describes only the
@@ -210,12 +209,11 @@ valid-only interpretation assumes independent, stationary attempts with prespeci
 
 ## Fuzz results
 
-Fuzzing explores text appends to editable context, selects at most one mutation and confirms a
-**decrease** in the original target's match rate. `confirmed-change` requires separate fresh fixed
-samples and an exact Clopper–Pearson union-bound lower bound above the declared decrease. The
-threshold, alpha, original/mutant counts and rates appear in the summary. This estimates behavior
-among valid observations under independent, stationary attempts; it does not establish causality,
-global minimality or overall execution reliability.
+Fuzzing selects at most one text append and confirms a **decrease** in the original target's match
+rate. `confirmed-change` requires separate fresh fixed samples and an exact Clopper–Pearson
+union-bound lower bound above the declared decrease. The summary reports threshold, alpha and
+original/mutant counts/rates. Inference concerns valid observations under independent, stationary
+attempts, not causality, global minimality or overall execution reliability.
 
 | Outcome | Meaning |
 | --- | --- |
@@ -228,19 +226,15 @@ Use the stop reason to distinguish calibration failure from inconclusive confirm
 Confirmation remains `not-run` when calibration stops the campaign. Errors remain separate from
 valid match/nonmatch counts.
 
-Private fuzz results contain `summary.json`, `fuzz-session.json` and
-`sampling/sampling-state.json`; the observation database remains at its frozen external path.
-The session and state retain exact mutation payloads and configuration. Normal human/JSON output
-shows mutation type, byte count and digest without printing payload text. The fixed triggering
-input covers what ithrl supplies to the harness; the harness may add context. Keep the entire
-result and database private.
+Private fuzz results contain `summary.json`, `fuzz-session.json` and `sampling/sampling-state.json`,
+including exact mutation payloads and configuration. The database stays at its frozen external
+path. Normal output shows mutation type, byte count and digest without payload text. Fixed input
+means what ithrl supplies; the harness may add context. Keep results and the database private.
 
-Resume with `ithrl fuzz RUN_OR_RESULT --resume`, adding `--acknowledge-model-execution` for a
-native campaign. The session freezes configuration, source, profile, store and limits. Resume
-continues only that campaign, rechecks native identity before execution and preserves actual,
-additional possible, pending and conservatively charged calls. It never redispatches an unresolved
-attempt, changes final selection or repeats completed confirmation. `--dry-run --resume` inspects
-the saved state without starting a harness.
+Use `ithrl fuzz RUN_OR_RESULT --resume`, adding `--acknowledge-model-execution` for native runs.
+Resume keeps configuration, source, profile, store, limits and all call accounting, and rechecks
+native identity. It never redispatches unresolved attempts, changes final selection or repeats
+completed confirmation. `--dry-run --resume` inspects state without starting a harness.
 
 If result saving fails, `result-publication-failed` retains the known usage and canonical run
 path and exits with code 70. Resolve the storage problem, then resume from `run_state_path` to
@@ -255,38 +249,35 @@ and limits behind the result claims.
 
 ## Budgets and resume
 
-The summary reports calibration, search, confirmation, eligibility, reliability and known usage.
-Actual calls record known starts; additional possible calls retain usage that the runner cannot
-exclude. Completed attempts are charged their known calls. Failed attempts with started provider
-work retain the full per-attempt allowance, and pending dispatch reservations stay charged until
-reconciled. Reopening a run reconciles saved observations before admitting another complete block;
-it never repeats an unresolved dispatch.
+The summary reports calibration, search, confirmation, eligibility, reliability and usage. Actual
+calls are known starts; additional possible calls are usage the runner cannot exclude. Completed
+attempts are charged known calls; failures with started provider work retain the full per-attempt
+allowance. Pending reservations stay charged until reconciliation. Resume reconciles observations
+before admitting another block and never repeats unresolved dispatches.
 
-One valid observation can include several physical requests. Compare input usage by totaling all
-requests contributing to each observation and including every valid observation in each declared
-arm. A complete arm mean requires known input usage for every observation; do not silently average
-only the known subset. Cached input tokens are already included in total input tokens.
+One valid observation can include several physical requests. Total all contributing requests and
+include every valid observation when comparing arm means. If any observation has unknown input
+usage, a complete arm mean is unavailable; averaging only known observations changes the sample.
+Cached input tokens are already included in the total.
 
-Copilot's request gate permits one inference request per attempt and blocks continuation after
-denial. Token usage depends on the native evidence available for each attempt; unknown usage stays
-explicit. Zero known tokens with nonzero unknown-token attempts does not mean zero token use.
+Copilot permits one inference request per attempt and blocks continuation after denial. Available
+native evidence determines token reporting. Zero known tokens alongside unknown-token attempts
+does not mean zero token use.
 
 `max_provider_calls_per_attempt` reports the administrative cap frozen in the profile and run
-identity; see [plan limits](native-runs.md#3-generate-and-inspect-the-complete-plan-and-budget) for
+identity; see [plan limits](reduction.md#3-generate-and-inspect-the-complete-plan-and-budget) for
 configuration. Successful native continuations can exhaust it even when retries are disabled. A
 `provider-call-limit` error ends the run with a budget outcome and retained usage; it supplies no
 behavioral loss, automatic retry or continuation command. Inspect the evidence before choosing a
 different cap for a new run.
 
-When a search stops at a budget, follow its printed continuation command. Deterministic searches
-can resume from a saved result or active run. Sampled resume preserves the experiment and completed
-work. For sampled `shrink`, supported administrative limits may increase; fuzz resume keeps its
-original limits. Neither repeats completed confirmation or automatically replays an unresolved
-dispatch.
+After a budget stop, use the printed continuation command with the saved result or active run.
+Sampled resume preserves the experiment and completed work. Supported administrative limits may
+increase for `shrink`; fuzz keeps its original limits. Neither repeats completed confirmation or
+unresolved dispatches.
 
-Starting sampled `shrink` again from the case without `--resume` creates another run with its own
-budget. To continue existing work, use `--resume` with its saved run or result directory. Reusing
-the observation database alone does not resume that run.
+For sampled `shrink`, `--resume` requires the saved run or result directory. Starting from the case
+without it creates a new run and budget; reusing the observation database alone does not resume.
 
 `--inter-attempt-delay SECONDS` defaults to zero, persists across sampled resume and consumes the
 overall wall-time allowance. A run also stops when its evidence becomes stale or its safety
