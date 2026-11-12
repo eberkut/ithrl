@@ -40,9 +40,10 @@ insufficient.
 
 ## Conditions for reconsideration
 
-A bounded follow-up must establish meaningful workload savings using total charged work per
-unconditionally confirmed useful result, including unsuccessful/incomplete work, calibration,
-replacements and fresh confirmation. Freeze workload weights, precision and usefulness/error
+A bounded follow-up must establish meaningful workload savings. Measure total charged work across
+all campaigns per useful confirmed result, including unsuccessful/incomplete work, calibration,
+replacements and fresh confirmation.
+Freeze workload weights, precision and usefulness/error
 criteria before evaluation; report position-specific effects and expected versus maximal work.
 
 Before any group dispatch, conservative call/time admission must fit one original arm, both

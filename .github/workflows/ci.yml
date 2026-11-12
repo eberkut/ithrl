@@ -56,7 +56,7 @@ jobs:
             full:
               - '**'
               - '!{AGENTS,CHANGELOG,CODE_OF_CONDUCT,CONTRIBUTING,README,ROADMAP,SECURITY,SUPPORT}.md'
-              - '!docs/{index,native-runs,results,cli,troubleshooting,measurements,architecture}.md'
+              - '!docs/{index,native-runs,reduction,fuzzing,results,cli,troubleshooting,measurements,architecture}.md'
               - '!docs/decisions/*.md'
               - '!docs/research/*.md'
               - '!research/{fuzzing,reduction}/README.md'

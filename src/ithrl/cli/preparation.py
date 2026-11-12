@@ -106,9 +106,31 @@ def prepare(
     output: Annotated[
         Path, typer.Option("--output", help="New private experiment TOML; never overwritten.")
     ],
-    max_candidates: Annotated[int, typer.Option("--max-candidates", min=1, max=MAX_CANDIDATE_RUNS)],
-    max_provider_calls: Annotated[int, typer.Option("--max-provider-calls", min=1)],
-    max_wall_time: Annotated[int, typer.Option("--max-wall-time", min=1)],
+    max_candidates: Annotated[
+        int,
+        typer.Option(
+            "--max-candidates",
+            min=1,
+            max=MAX_CANDIDATE_RUNS,
+            help="Maximum candidate tests across coarse and fine search.",
+        ),
+    ],
+    max_provider_calls: Annotated[
+        int,
+        typer.Option(
+            "--max-provider-calls",
+            min=1,
+            help="Maximum total provider calls for calibration, search and confirmation.",
+        ),
+    ],
+    max_wall_time: Annotated[
+        int,
+        typer.Option(
+            "--max-wall-time",
+            min=1,
+            help="Total elapsed-time limit in seconds, including calibration.",
+        ),
+    ],
     inter_attempt_delay: Annotated[
         int,
         typer.Option(

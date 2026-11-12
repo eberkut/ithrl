@@ -43,11 +43,10 @@ aggregates. The full qualification grid has not been rerun after public-source r
 
 ## Reproduce
 
-Run from the repository root with Python 3.12–3.14 and the repository's locked `fuzz` extra.
-SciPy supplies NumPy transitively; the recorded numerical versions are NumPy 2.5.4 and
-SciPy 1.18.1. There is no separate requirements file. If dependencies are not installed,
-prepare the environment with `uv sync --locked --extra fuzz`. This preparation may download
-locked packages; the study itself is offline and needs no credentials.
+Run from the repository root with Python 3.12–3.14 and the locked `fuzz` extra. The recorded
+numerical versions are NumPy 2.5.4 and SciPy 1.18.1. Install missing dependencies with
+`uv sync --locked --extra fuzz`; this may download locked packages. The study itself is offline
+and needs no credentials.
 
 The short replay checks:
 

@@ -73,9 +73,8 @@ uv run --locked --offline --no-sync python research/reduction/reproduce.py repla
 To run one evaluation, pass `--study decisions`, `--study eager`, `--study sharing`,
 `--study operational` or `--study native` to the second command. The eager study simulates 4.8
 million workflows. The operational study simulates 1.76 million workflows and scores each against
-two byte layouts; those scores share outcomes and are not
-independent samples. Runtime depends on hardware. The configured runtime limits leave sample counts
-and criteria unchanged if a run cannot finish in time.
+two byte layouts; these scores share outcomes and are not independent samples. Runtime depends on
+hardware. A run that exceeds its time limit stops without changing sample counts or criteria.
 
 All generated files stay in the required directory under ignored `outputs/`. Choose a new
 directory for each run. Freezing refuses an existing directory, result writes use exclusive

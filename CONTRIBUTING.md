@@ -72,16 +72,13 @@ Install the local hooks with `uv run pre-commit install`; run them on the whole 
 `uv run pre-commit run --all-files`. Ruff and rumdl format files in place. CI checks formatting
 without modifying files.
 
-Recognized Markdown-only PRs skip Python linting, typing, unit-test matrices and dependency audits.
-They retain Markdown formatting/linting, documentation tests, the strict site build, workflow and
-dependency review, and all package build/install checks. Mixed changes, unknown paths, configuration
-changes and PRs with 3,000 or more changed files run full validation. Rename detection considers
-both paths; deletions participate. Failed path detection fails the required Workflows check.
-Main-branch, scheduled, manual and release runs always perform full validation.
-
-The required `Python tests` check summarizes the test matrix. It accepts a skipped matrix only
-after successful Markdown-only classification. Failed classification, missing decisions, test
-failures and unexpected skips fail this check.
+Markdown-only PRs skip Python linting, typing, unit tests and dependency audits. They still run
+Markdown, documentation, strict site, workflow, dependency-review and package checks. Mixed changes,
+unknown paths, configuration changes or 3,000 or more changed files require full validation;
+classification includes deleted files and both sides of renames. Failed detection fails Workflows.
+Main, scheduled, manual and release runs always validate fully. The required `Python tests` summary
+accepts a skipped matrix only after successful Markdown-only classification; missing decisions,
+failures and unexpected skips fail it.
 
 The logo sources, usage rules and regeneration commands are in [branding](docs/branding/README.md).
 
@@ -164,14 +161,11 @@ uv export --locked --all-groups --all-extras --no-emit-project --format requirem
   uv run --locked --group audit pip-audit --strict --disable-pip --require-hashes -r /dev/stdin
 ```
 
-The hashed export is temporary pipeline input. The audit queries PyPI's vulnerability service for
-package names and versions without installing those packages, resolving alternatives or applying
-fixes. CI evaluates markers on each supported Python version. This covers locked versions rather
-than every version permitted by package dependency ranges.
-
-For dependency changes, run the lockfile audit above on each supported Python version. GitHub's
-dependency graph may omit packages from `uv.lock`, so Dependabot and Dependency Review cannot
-replace that audit.
+The audit sends locked package names and versions to PyPI's vulnerability service. It installs
+nothing, resolves no alternatives and applies no fixes. It covers locked versions, not entire
+dependency ranges. For dependency changes, run it on each supported Python version to evaluate
+markers. Dependabot and Dependency Review cannot replace it: GitHub's dependency graph may omit
+lockfile packages.
 
 The PR dependency-review job rejects newly introduced known vulnerabilities at any severity across
 runtime, development and unknown scopes. It uses a read-only token and does not check out or execute
@@ -196,13 +190,41 @@ Keep installation and first-use instructions in README, and detailed user guides
 `docs/`. Support, security and conduct policies live at the repository root. Keep private sessions,
 cases and credentials out of documentation and generated output.
 
-Use [Diátaxis](https://diataxis.fr/) to match a section to the reader's need. A tutorial guides
-learning through a reproducible example with expected results. A how-to gives prerequisites,
-actions and a success check for a specific task. Reference describes commands and contracts;
-explanation covers rationale, evidence and limits. Link between these when the reader needs more
-detail. Apply the distinction within existing pages; add a page when it has a separate purpose.
-Use concrete instructions and claims supported by evidence. Remove filler, promotional language
-and repeated explanations.
+### Writing and review
+
+Start with the reader's task. Use [Diátaxis](https://diataxis.fr/start-here/) to distinguish a
+guided learning example, a task-specific how-to, reference facts and explanation. A README can
+combine orientation and first use; do not split pages just to fill those categories.
+
+- Put prerequisites before commands, conditions before dependent actions and the expected result
+  after a step that needs verification. Use numbered steps for a sequence and tables for
+  comparisons.
+- State what the reader can do or conclude. Prefer concrete verbs and established terms; remove
+  filler, promotional claims, rhetorical contrasts and sentences that repeat their heading.
+  For example, replace “It is important to note that execution requires explicit acknowledgement”
+  with “After reviewing the plan, pass `--acknowledge-model-execution` to allow provider calls.”
+- Give each topic one owner. Keep options in the generated CLI reference, procedures in user guides,
+  measurements in `docs/measurements.md`, rationale in decisions and methods in research. Link to
+  detail instead of repeating it. Keep essential safety conditions beside the affected action.
+- Shorten without widening claims. Preserve tested profiles, statistical conditions, costs,
+  uncertainty, failed outcomes and historical context. “The screen passed” does not mean
+  “preservation is confirmed.” Check commands against the current CLI and qualify future work.
+- Follow [W3C's writing guidance](https://www.w3.org/WAI/tips/writing/): use descriptive link text,
+  ordered headings and useful image alternatives. Do not rely on color alone. Keep code blocks
+  executable or identify placeholders before the command.
+
+Before review, check: can the intended reader find the task, run its steps and interpret the
+result? Does each paragraph add information? Are terms, claims, links and generated content current?
+Check the [documentation commands](#building-and-checking-documentation) below after edits.
+
+For additional guidance, consult the
+[Google developer documentation style guide](https://developers.google.com/style) and
+[Microsoft Writing Style Guide](https://learn.microsoft.com/en-us/style-guide/welcome/).
+Follow this project's conventions where they differ.
+Use judgment rather than word-count targets; explanations and research need enough detail to support
+their conclusions.
+
+### Documentation ownership
 
 [ROADMAP.md](ROADMAP.md) describes future direction. GitHub issues own actionable scope,
 dependencies, acceptance criteria and status; release milestones group scope and the public
@@ -220,12 +242,12 @@ Before evaluating a new study, declare its tested domain, criteria, seeds, budge
 claims. Report costs across complete workflows, including failed and incomplete work, and document
 the alternatives and limitations needed to interpret the results.
 
-The optional `docs` dependency group pins MkDocs and the shadcn theme. Search runs in the browser;
-fonts and scripts are served with the site. GitHub star-count requests and raw Markdown copying
-are disabled. A local hook admits only the packaged theme assets used by this configuration.
-When changing the theme or enabled extensions, check that asset list and the
-[third-party notices](docs/third-party-notices.txt) alongside the rendered site.
-To preview the site locally:
+### Building and checking documentation
+
+The `docs` group pins MkDocs and the shadcn theme. Search runs in the browser; the site bundles
+fonts and scripts. GitHub star-count requests and raw Markdown copying are disabled. When changing
+the theme or extensions, review the asset allowlist in `scripts/docs_theme.py`, the
+[third-party notices](docs/third-party-notices.txt) and the rendered site. To preview:
 
 ```bash
 uv sync --locked --all-groups --all-extras
@@ -361,10 +383,8 @@ CodeRabbit's optional planning and code-generation features are configured in
 
 ## Preparing a release
 
-The release procedures below are for maintainers with repository and package-publishing access.
-
-For every feature, aim for parity across supported harnesses. Any exception must be clearly
-justified and documented before release.
+Maintainers need repository and package-publishing access. Before release, justify and document
+any feature-parity exception between supported harnesses.
 
 Python Semantic Release, pinned in the `release` dependency group, calculates versions from
 Conventional Commits. `pyproject.toml` is the version source; installed CLI and Codex client
@@ -373,9 +393,8 @@ history, omitting routine build, CI, documentation, style and test commits. Its
 [template](.github/changelog/CHANGELOG.md.j2) keeps lists compact, with one entry per source line.
 Change the template to adjust formatting; do not edit generated entries by hand.
 
-A maintainer starts preparation; Semantic Release chooses the version and writes the notes.
-Review and merge the generated files through a PR so CI tests the prepared version before the
-publication workflow builds it. The publication workflow uses that committed version.
+Review and merge generated version/notes changes through a PR. CI tests the prepared version;
+publication builds that committed version.
 
 Use `main` with complete history and all existing release tags available. Preview the next version
 without changing files, the index, commits, tags or remote state:
@@ -460,11 +479,11 @@ gh workflow run release.yml --repo eberkut/ithrl --ref main \
 6. Verify the published versions, hashes, attestations and installed example. A successful upload
    alone does not complete release acceptance.
 
-Complete review within 30 days: release artifacts are retained for 30 days, and GitHub limits the
-total workflow lifetime, including approval waits. Start only one release at a time; concurrency
-preserves the active run but GitHub may replace an older pending run when another is queued.
-Do not rerun the whole workflow to promote a completed rehearsal or cancel a run during upload.
-For failure or partial publication, inspect the index and existing release first; preserve the
-original files and hashes. Any recovery upload needs explicit approval and must use identical
-missing files. Never rebuild and overwrite a published version or suppress conflicts with
-`skip-existing`.
+Complete review within the 30-day artifact retention and GitHub workflow lifetime, including
+approval waits. Start one release at a time: a new queued run may replace an older pending run,
+though the active run is preserved. Do not rerun the workflow to promote a completed rehearsal or
+cancel during upload.
+
+After failure or partial publication, inspect the index and release before recovery. Preserve
+the original files and hashes; uploading identical missing files requires explicit approval.
+Never overwrite a published version with rebuilt files or suppress conflicts with `skip-existing`.

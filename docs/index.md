@@ -7,9 +7,9 @@
 </div>
 <!-- rumdl-enable MD033 -->
 
-`ithrl` extracts a selected decision from a saved coding-agent session and searches for context
-that preserves its behavior. Context fuzzing explores text appends to prior user input for Codex
-and Copilot final-response targets.
+`ithrl` turns saved coding-agent sessions into debugging experiments: reduce context while
+preserving a selected behavior, or test text appends that alter it. You can also inspect recorded
+operations around compaction without running a model.
 
 ## Start here
 
@@ -18,8 +18,12 @@ and Copilot final-response targets.
     [run the bundled example](https://github.com/eberkut/ithrl/blob/main/README.md#try-it). It needs
     no agent installation or model access and shows the expected output.
 - **Use your own session:** [select a saved decision](native-runs.md#select-a-saved-decision),
-  configure a reduction experiment and review its provider, safety controls and budget. The
-  [fuzzing walkthrough](native-runs.md#context-fuzzing) covers text appends.
+    [prepare a reduction](reduction.md) and review its provider, safety
+    controls and budget. The [fuzzing walkthrough](fuzzing.md) covers text
+    appends.
+- **Inspect compaction without model calls:**
+    [compare recorded operations and captured results](results.md#inspect-recorded-compaction) in
+    one saved session.
 - **Investigate a result:** [inspect retained context](results.md#inspect-retained-context) and
   read the [worked investigation](research/ordinary-session-investigation.md) for an example of
   what the reduced context can tell you.

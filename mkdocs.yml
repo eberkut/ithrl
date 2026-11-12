@@ -27,6 +27,8 @@ markdown_extensions:
 nav:
   - Overview: index.md
   - Native runs: native-runs.md
+  - Native reduction: reduction.md
+  - Context fuzzing: fuzzing.md
   - Results and privacy: results.md
   - CLI reference: cli.md
   - Troubleshooting: troubleshooting.md
@@ -52,6 +54,8 @@ exclude_docs: |
   *
   !/index.md
   !/native-runs.md
+  !/reduction.md
+  !/fuzzing.md
   !/results.md
   !/cli.md
   !/troubleshooting.md

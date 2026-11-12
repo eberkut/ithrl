@@ -1,11 +1,11 @@
 # Post-hoc experiment feasibility
 
-The feasibility study completed on **2026-09-02**. It found that ordinary saved sessions can supply
-decision evidence and harness-specific runners can support context interventions. Exact
-provider-request capture is optional. The results describe the installations inspected during the
-study. For current capabilities, see the [README supported-inputs
-table](https://github.com/eberkut/ithrl/blob/main/README.md#supported-inputs); the later
-[native measurements](../measurements.md) describe qualified reduction and fuzzing profiles.
+The **2026-09-02** study found that ordinary saved sessions can supply decision evidence for
+harness-specific context interventions without exact provider-request capture. Its results apply to
+the inspected installations. See the
+[supported-inputs table](https://github.com/eberkut/ithrl/blob/main/README.md#supported-inputs) for
+current capabilities; later [native measurements](../measurements.md) record qualified reduction and
+fuzzing profiles.
 
 ## Research basis
 
@@ -16,7 +16,7 @@ questions and design boundaries:
     [*Same Model, Different Harness: Different Coding-Agent Results*](https://arxiv.org/abs/2608.26218),
     motivates recording harness behavior and context reconstruction alongside the model.
 - Shuyu Liu, [*What Does Context Compression Cost an Agent? Interaction Costs Unrevealed by
-  Task-Completion Metrics*](https://arxiv.org/abs/2608.16370), motivates the planned analysis of
+  Task-Completion Metrics*](https://arxiv.org/abs/2608.16370), motivates the analysis of
   information retrieved again after context removal; see the
   [roadmap](https://github.com/eberkut/ithrl/blob/main/ROADMAP.md#passive-reacquisition-analysis).
 - I. de Zarzà, J. de Curtò, Jordi Cabot, Pietro Manzoni and Carlos T. Calafate,

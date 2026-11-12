@@ -14,23 +14,16 @@ is the current priority.
 
 ## Completed: v0.2 context fuzzing
 
-The `ithrl fuzz` command explores bounded context changes, simplifies interventions and
-independently confirms their effects.
+The `ithrl fuzz` command explores bounded context changes, simplifies interventions and freshly
+confirms **at most one finding per campaign**: a declared decrease in the target's match probability
+among valid observations. This is conditional experimental evidence, not proof of a model defect,
+unique cause or semantic equivalence.
 
-The released fuzzing capability supports **one confirmed finding per campaign**: a declared decrease
-in the existing target's match probability among valid observations. A finding describes the
-selected experiment, including execution reliability and assumptions. It does not establish a
-model defect, a unique cause or semantic equivalence of the original and changed context.
-
-The Codex and Copilot prior-user append workflows have completed synthetic qualification, including
-simplification and fresh confirmation. See
-[measurements](docs/measurements.md#native-context-fuzzing) for their workloads, results and costs,
-and [fuzzing research](docs/research/context-fuzzing.md) for the method and assumptions.
-
-[Practical settings and public claims](https://github.com/eberkut/ithrl/issues/10) cover
-complete-workflow usefulness and measured costs.
-[Copilot qualification](https://github.com/eberkut/ithrl/issues/29) tracks its reconstruction,
-simplification and fresh-confirmation acceptance checks.
+Codex and Copilot prior-user append workflows have completed synthetic qualification. Their
+[measurements](docs/measurements.md#native-context-fuzzing) cover workloads, results and costs;
+[fuzzing research](docs/research/context-fuzzing.md) owns the method and assumptions.
+[Practical settings](https://github.com/eberkut/ithrl/issues/10) and
+[Copilot qualification](https://github.com/eberkut/ithrl/issues/29) record acceptance evidence.
 
 See the [fuzzing capability issue](https://github.com/eberkut/ithrl/issues/5) and
 [`v0.2.0` milestone](https://github.com/eberkut/ithrl/milestone/1) for scope and acceptance
@@ -61,10 +54,10 @@ minimality remain deferred beyond v0.3.
 and execution limits explicit. It is merged on main and awaits release in
 [v0.4.0](https://github.com/eberkut/ithrl/milestone/3).
 
-The
+Passive compaction inspection for ordinary Codex and Copilot evidence is implemented under #15,
+with implementation in #64 and qualification in #65. Its
 [provider-free feasibility assessment](https://github.com/eberkut/ithrl/issues/15#issuecomment-6782516915)
-supports adding passive compaction inspection for ordinary Codex and Copilot evidence. Its parent
-is #15, with implementation in #64 and qualification in #65. The passive command has completed
+led to the current scope. The command has completed
 [ordinary-session qualification](docs/research/passive-compaction-investigation.md) through the
 CLI and both installed-artifact origins. It reports repeated recorded
 operations and equal or changed captured results without inferring avoidable work, causal effects or
@@ -79,9 +72,9 @@ v0.4 requirement. Other candidates need useful evidence and a bounded proposal b
 | Completed on main; awaiting v0.4 | [#15: passive compaction inspection](https://github.com/eberkut/ithrl/issues/15) | Useful provider-free reports for both harnesses, with explicit operation/result relations and interpretation limits |
 | Completed on main; awaiting v0.4 | [#64: implement passive inspection](https://github.com/eberkut/ithrl/issues/64) | Bounded source projections, matching/report contracts and `inspect reacquire`; experimental reconstruction support is unchanged |
 | Qualification complete; awaiting v0.4 | [#65: qualify passive inspection](https://github.com/eberkut/ithrl/issues/65) | Ordinary sources, counterexamples and both installed-artifact origins validated; worked interpretation recorded |
-| Closing v0.4 review | [#67: performance and simplification](https://github.com/eberkut/ithrl/issues/67) | Project-wide performance fixes, permanent local-workload benchmarks and durable coding guidance |
+| Completed on main; awaiting v0.4 | [#67: performance and simplification](https://github.com/eberkut/ithrl/issues/67) | Project-wide performance fixes, permanent local-workload benchmarks and durable coding guidance, merged in [PR #71](https://github.com/eberkut/ithrl/pull/71) |
 | Closing v0.4 review | [#68: documentation and writing guidance](https://github.com/eberkut/ithrl/issues/68) | Research technical-writing practices and examples, review all documentation using Diátaxis and establish concise writing guidance |
-| Candidate for additional v0.4 scope | [#13: comparative debugging](https://github.com/eberkut/ithrl/issues/13) | A comparability contract, paired workloads, interaction example and bounded validation proposal; decide whether to implement or defer |
+| Candidate; no release assigned | [#13: comparative debugging](https://github.com/eberkut/ithrl/issues/13) | A comparability contract, paired workloads, interaction example and bounded validation proposal; decide whether to implement or defer |
 | Deferred; no release assigned | [#14: additional harnesses](https://github.com/eberkut/ithrl/issues/14) | Assess Claude Code, OpenCode and Pi before choosing an integration order and qualification scope |
 | Deferred; no release assigned | [#18: portable archives and privacy](https://github.com/eberkut/ithrl/issues/18) | Define a useful sharing workflow, archive format and deliberate privacy review before implementation |
 | Research; no release assigned | [#16: broader workloads and costs](https://github.com/eberkut/ithrl/issues/16) | Measure ordinary-workflow usefulness, eligibility, reliability and full costs beyond selected published cases |
@@ -91,12 +84,6 @@ v0.4 requirement. Other candidates need useful evidence and a bounded proposal b
 | Deferred research; no release assigned | [#63: confirmed single-removal minimality](https://github.com/eberkut/ithrl/issues/63) | Define the neighbor family, statistical claim, error allocation and complete comparison budget |
 
 ## Release history and current scope
-
-| Stage | Outcome | Candidate features |
-| --- | --- | --- |
-| **[v0.2: context fuzzing](https://github.com/eberkut/ithrl/issues/5)** | Find small context changes that alter a selected behavior | Bounded seeded mutations, discovery and mutation simplification, one fresh confirmed finding, exact recovery and explicit cost/reliability reporting |
-| **[v0.3: deeper reduction](https://github.com/eberkut/ithrl/issues/12)** | Inspect retained context and reduce within supported prior-user text | Provider-free inspection, text-section removal and qualified Codex/Copilot final-response workflows |
-| **[v0.4: preparation and passive compaction inspection](https://github.com/eberkut/ithrl/milestone/3)** | Prepare native experiments and inspect recorded retrievals around compaction | Private preflight receipts, configuration generation, source section catalogs and qualified passive Codex/Copilot compaction inspection |
 
 ### Deeper reduction
 

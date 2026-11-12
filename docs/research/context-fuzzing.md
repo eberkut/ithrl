@@ -8,14 +8,11 @@ workload. The [native measurements](../measurements.md#native-context-fuzzing) e
 Codex app-server and Copilot native-prefix append-text workflows, with their own input and
 execution checks. Ordinary-session success rates remain unmeasured.
 
-The implementation provides deterministic mutation generation and simplification, sampled
-comparisons and durable campaign recovery through the shared observation store. The
-[architecture](../architecture.md#measurement-search-and-confirmation) describes the current
-contracts. The public `ithrl fuzz` command provides a credential-free walkthrough and saved results.
-The [supported-inputs table](https://github.com/eberkut/ithrl/blob/main/README.md#supported-inputs)
-lists current capabilities. The
-[decision record](../decisions/0004-single-finding-fuzz-confirmation.md) explains the selected
-procedure and alternatives.
+For current implementation contracts, see
+[architecture](../architecture.md#measurement-search-and-confirmation). The
+[supported-inputs table](https://github.com/eberkut/ithrl/blob/main/README.md#supported-inputs)
+defines public capabilities; [ADR 0004](../decisions/0004-single-finding-fuzz-confirmation.md)
+records the adopted procedure and alternatives.
 
 ## Question and scope
 
@@ -32,7 +29,7 @@ are never confirmation. Simplification removes parts of the added intervention, 
 immutable original as the control. An empty intervention is that original, not another candidate
 to dispatch.
 
-The two mutation questions are deliberately narrow:
+The study tests two mutations:
 
 - `duplicate-text` repeats eligible prior user text within its existing field. It tests sensitivity
   to repetition. The study treats it as a no-effect control; native semantic equivalence is an
@@ -55,15 +52,14 @@ sequential inference are outside this design.
 
 ## Editable seam and evidence identity
 
-Pure reconstruction checks found a suitable Codex final-response seam: append only to an ordinary
-`input_text` block of a copied prior `role=user`, `type=message` history item. Preserve message
-identity, outer record order, other fields and the fixed triggering input. Instructions, tools,
-model/provider routing, policy, assistant text, tool results and opaque/image blocks are excluded.
-Copilot uses eligible prior `user.message` records in the copied native prefix. The editable
-field is `transformedContent` when captured, otherwise `content`; it must contain plain text.
-The overlay preserves native identities, record order, other fields and the selected turn's
-fixed user or completed-tool input. Reconstruction resumes that prefix without adding a user
-message.
+Reconstruction checks identified eligible Codex `input_text` blocks in copied prior `role=user`,
+`type=message` items. Instructions, tools, model/provider routing, policy, assistant text, tool
+results and opaque/image blocks are excluded.
+
+Copilot edits plain text in prior `user.message` records: `transformedContent` when captured,
+otherwise `content`. It resumes the copied prefix without adding a user message. Both overlays
+preserve native identities, record order, other fields and fixed triggering input, including
+Copilot's completed-tool input.
 
 The credential-free prototype checked no-op reconstruction, duplication and appended paragraphs
 on sanitized fixture materialization. Non-text fields, trigger, source bytes and original objects
@@ -110,13 +106,12 @@ a false declaration is contained in the union of those two failures and has prob
 `alpha`. Discreteness makes the construction conservative. This is an analytic model-based
 bound; a low simulated declaration rate is an implementation check, not its proof.
 
-The argument applies conditional on selection using independent exploratory evidence. Exactly
-one mutation must be durably frozen before any confirmation outcome is read, together with target,
-payload, threshold, method, sample targets, eligibility and execution identity. Both final arms
-must be fresh and disjoint from calibration, discovery and simplification. After final selection,
-there is no further search, payload adjustment, candidate substitution, outcome-driven sample
-extension or repeated confirmation until a pass. Recovery may finish the same frozen incomplete
-block only after reconciling recorded observations; unresolved dispatches cannot be replayed.
+The argument requires selection using independent exploratory evidence. Freeze one mutation, target,
+payload, threshold, method, sample targets, eligibility and execution identity before reading
+confirmation outcomes. Both final arms must be fresh and disjoint from calibration, discovery and
+simplification. Selection ends search: no payload changes, substitution, outcome-driven sample
+extension or repeated confirmation until a pass. Recovery can finish the same frozen incomplete
+block after reconciling observations; it cannot replay unresolved dispatches.
 
 This controls one selected comparison per campaign. It provides no guarantee over user-initiated
 repeated campaigns or selectively reported favorable campaigns. Supporting up to `K` findings
@@ -167,8 +162,8 @@ and one complete eligible fresh confirmation. The byte criterion tests whether s
 produces useful inspection work on this fixture. It is neither a provider-token metric nor a
 general compression claim.
 
-The prospective menu combines exploratory samples `{3,5,8}` per arm, final samples `{20,40,80}`
-per arm and administrative call ceilings `{256,384,512}`: 27 designs. Each later arm allows
+The prospective menu combines exploratory samples `{3,5,8}`, final samples `{20,40,80}` per arm,
+and call ceilings `{256,384,512}`: 27 designs. Each post-calibration arm allows
 `A(n) = n + ceil(n/2) + 6` attempts. Calibration requires three valid observations and at least
 two matches within seven attempts. A fresh original is collected for every comparison. Discovery
 uses the first placement whose observed original-minus-mutant difference is at least `.40`.
@@ -287,15 +282,16 @@ arm validity probabilities need not invalidate that explicitly conditional compa
 with valid probabilities `.95` original / `.80` mutant, while holding conditional target rates at
 `.90` / `.10`, achieved 91.98% complete useful workflows.
 
-Outcome-dependent validity changes what those conditional probabilities mean. A second sensitivity
-sets both unconditional match probabilities to `.50`. The original accepts matches with probability
-1 and nonmatches with `.50`; the mutant reverses those acceptance probabilities. Both arms have
-valid probability `.75`, yet their conditional match rates are `2/3` and `1/3`. The experiment
-declared 281 changes in 10,000 campaigns: true conditional decreases despite equal unconditional
-behavior. Equal observed failure rates therefore cannot establish comparable unconditional
-behavior. There is no planted causative paragraph in this sensitivity, so geometry-based
-simplification-success metrics are inapplicable. An unconditional claim needs a different justified
-measurement design; outcome-driven filtering cannot be silently treated as benign missing data.
+With outcome-dependent validity, equal unconditional behavior can produce a conditional decrease.
+A second sensitivity sets both unconditional match probabilities to `.50`. The original accepts
+matches with probability 1 and nonmatches with `.50`; the mutant reverses these probabilities.
+Both arms are valid with probability `.75`, but conditional match rates are `2/3` and `1/3`.
+The experiment declared 281 changes in 10,000 campaigns.
+
+These are true conditional decreases; equal failure rates do not establish comparable
+unconditional behavior. No planted causative paragraph exists here, so geometry-based
+simplification-success metrics do not apply. An unconditional claim needs a different measurement
+design that accounts for outcome-driven filtering.
 
 Across 22 all-null/duplication-control cells of 10,000 campaigns each, no final declaration
 occurred. This does not prove zero error. A shuffled-arm common-drift sensitivity decreasing the
@@ -304,10 +300,9 @@ common response probability from `.90` to `.50` during confirmation produced 3 d
 drift robustness. Interleaving and finite freshness mitigate temporal separation; they do not
 demonstrate independence or stationarity.
 
-The outcome-dependent-validity sensitivity uses the mutant conditional rate `1/3` at every
-placement. These declarations represent real conditional effects; planted-paragraph geometry
-metrics do not apply to that sensitivity. The aggregate evidence includes checks of all 7,128 row
-counts, terminal/cost invariants and replay equality.
+The mutant conditional rate is `1/3` at every placement in the outcome-dependent-validity
+sensitivity. Aggregate checks cover all 7,128 row counts, terminal/cost invariants and replay
+equality.
 
 ## Reproducibility and implementation evidence
 
@@ -340,6 +335,6 @@ identical complete provider input. The independent, stationary sampling assumpti
 controlled harness surface.
 
 See [measurements](../measurements.md#native-context-fuzzing) for native workloads, results and
-costs, and [native runs](../native-runs.md#context-fuzzing) for execution instructions. Native
+costs, and [native runs](../fuzzing.md) for execution instructions. Native
 qualification covers the measured reconstruction and request policy; changes require their own
 qualification. Copilot shell-action fuzzing remains outside this qualification.
