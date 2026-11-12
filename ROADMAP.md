@@ -15,8 +15,8 @@ is the current priority.
 ## Completed: v0.2 context fuzzing
 
 The `ithrl fuzz` command explores bounded context changes, simplifies interventions and freshly
-confirms **one finding per campaign**: a declared decrease in the target's match probability among
-valid observations. This is conditional experimental evidence, not proof of a model defect,
+confirms **at most one finding per campaign**: a declared decrease in the target's match probability
+among valid observations. This is conditional experimental evidence, not proof of a model defect,
 unique cause or semantic equivalence.
 
 Codex and Copilot prior-user append workflows have completed synthetic qualification. Their
