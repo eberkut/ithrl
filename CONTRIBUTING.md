@@ -217,9 +217,10 @@ Before review, check: can the intended reader find the task, run its steps and i
 result? Does each paragraph add information? Are terms, claims, links and generated content current?
 Check the [documentation commands](#building-and-checking-documentation) below after edits.
 
-These rules apply
-[Google's guidance on clear, concise writing](https://developers.google.com/style/highlights) and
-[Microsoft's procedural guidance](https://learn.microsoft.com/en-us/style-guide/procedures-instructions/writing-step-by-step-instructions).
+For additional guidance, consult the
+[Google developer documentation style guide](https://developers.google.com/style) and
+[Microsoft Writing Style Guide](https://learn.microsoft.com/en-us/style-guide/welcome/).
+Follow this project's conventions where they differ.
 Use judgment rather than word-count targets; explanations and research need enough detail to support
 their conclusions.
 
