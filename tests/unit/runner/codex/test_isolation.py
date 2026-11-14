@@ -110,6 +110,46 @@ def test_prepares_private_worker_state_and_minimal_environment(tmp_path: Path) -
         os.close(descriptor)
 
 
+@pytest.mark.parametrize(
+    "invalid",
+    ["worker-digest", "empty-support", "duplicate-support", "worker-support", "request-size"],
+)
+def test_preparation_refuses_invalid_worker_inputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, invalid: str
+) -> None:
+    state = OwnedAttemptState.create(tmp_path / "state", ATTEMPT_ID)
+    worker = _program(tmp_path / "worker.py")
+    support = _program(tmp_path / "protocol.py")
+    programs = ((support, program_digest(support)),)
+    digest = program_digest(worker)
+    if invalid == "worker-digest":
+        digest = "0" * 64
+    elif invalid == "empty-support":
+        programs = ()
+    elif invalid == "duplicate-support":
+        programs = programs + programs
+    elif invalid == "worker-support":
+        programs = ((worker, digest),)
+    else:
+        monkeypatch.setattr(isolation, "MAX_WORKER_REQUEST_BYTES", 1)
+
+    with pytest.raises(CodexIsolationError):
+        prepare_codex_process(
+            state,
+            runtime=CodexRuntime(
+                codex=Path("/bin/true"), bubblewrap=Path("/bin/true"), python=Path("/bin/true")
+            ),
+            configuration=_configuration(),
+            request={"text": "private fixture input"},
+            worker_source=worker,
+            worker_digest=digest,
+            support_programs=programs,
+        )
+
+    assert not (state.root / "request.json").exists()
+    assert not (state.root / "codex-home" / "config.toml").exists()
+
+
 @pytest.mark.skipif(not hasattr(os, "memfd_create"), reason="requires Linux memfd")
 def test_auth_memory_file_avoids_standard_stream_descriptors() -> None:
     script = """

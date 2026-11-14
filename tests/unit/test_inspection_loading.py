@@ -37,7 +37,12 @@ from ithrl.observations import (
     SamplingBudgetAllowance,
     sampling_schedule,
 )
-from ithrl.reduce import SampledCandidateTrial, SampledComparison, SampledReductionCheckpoint
+from ithrl.reduce import (
+    SampledCandidateTrial,
+    SampledComparison,
+    SampledInvalidCandidateTrial,
+    SampledReductionCheckpoint,
+)
 from ithrl.reduce.contracts import trial_key
 from ithrl.results import ResultSnapshotError, SampledReductionEvidence
 from ithrl.results.inspection import load_retained_result
@@ -263,6 +268,39 @@ def test_detached_sampled_snapshot_loads_without_live_state_or_store(
     assert any("observation database" in line for line in loaded.validation_limits)
     assert {p: p.read_bytes() for p in before} == before
     assert not (case / ".runs").exists()
+    assert not (tmp_path / "missing-observations.sqlite").exists()
+
+
+@pytest.mark.parametrize("harness", ["codex", "copilot"])
+def test_recorded_candidate_refusal_is_inspectable_without_reconstruction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, harness: str
+) -> None:
+    case, result = _sampled(tmp_path, harness, with_trial=True)
+    for name in ("result.json", "sampling/sampling-state.json"):
+        path = result / name
+        document = json.loads(path.read_text())
+        checkpoint = document["checkpoint"]
+        recorded = checkpoint["trials"][0]
+        trial = SampledInvalidCandidateTrial(
+            trial_key=recorded["trial_key"],
+            base_removals=(),
+            requested_removals=tuple(recorded["requested_removals"]),
+            effective_removals=(),
+            phase="chunk",
+            classification="invalid",
+        )
+        checkpoint["trials"] = [trial.model_dump(mode="json")]
+        if "blocks" in document:
+            document["blocks"] = []
+        _write(path, document)
+    monkeypatch.setattr(subprocess, "Popen", _forbid_runtime)
+    monkeypatch.setattr(sqlite3, "connect", _forbid_runtime)
+
+    loaded = load_retained_result(case, result)
+
+    assert loaded.sampled is not None
+    assert loaded.sampled.checkpoint.trials == (trial,)
+    assert loaded.retained_ids == tuple(node.id for node in loaded.evidence.context.nodes)
     assert not (tmp_path / "missing-observations.sqlite").exists()
 
 

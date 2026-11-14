@@ -18,6 +18,17 @@ from ithrl.runner.runtime.state import OwnedAttemptState
 ATTEMPT_ID = "attempt-00000000000000000000000000000001"
 
 
+@pytest.fixture
+def published_output(tmp_path: Path) -> tuple[ProtectedOutputStore, NativeOutputReference]:
+    state = OwnedAttemptState.create(tmp_path / "attempts", ATTEMPT_ID)
+    _write_private(state.member("stdout"), b"fixture output")
+    _write_private(state.member("stderr"), b"")
+    store = ProtectedOutputStore.open(tmp_path / "native-output")
+    return store, store.publish(
+        state, stdout_name="stdout", stderr_name="stderr", max_bytes=1024, complete=True
+    )
+
+
 def _write_private(path: Path, content: bytes) -> None:
     path.write_bytes(content)
     if os.name == "posix":
@@ -150,4 +161,58 @@ def test_read_rejects_an_unrecognized_reference(tmp_path: Path) -> None:
     )
 
     with pytest.raises(NativeOutputStoreError, match="incompatible"):
+        store.read(reference)
+
+
+@pytest.mark.parametrize("malformed", ["magic", "header", "length", "completeness"])
+def test_authenticated_artifact_still_requires_valid_framing(
+    published_output: tuple[ProtectedOutputStore, NativeOutputReference], malformed: str
+) -> None:
+    store, reference = published_output
+    path = store.root / f"{reference.artifact_id}.bin"
+    original = path.read_bytes()
+    if malformed == "magic":
+        content = b"x" + original[1:]
+    elif malformed == "header":
+        content = original[:10]
+    elif malformed == "length":
+        content = original + b"extra"
+    else:
+        prefix = b"ITHRL-OUTPUT-1\n"
+        content = prefix + b"\x02" + original[len(prefix) + 1 :]
+    _write_private(path, content)
+    reference = reference.model_copy(
+        update={"size_bytes": len(content), "sha256": hashlib.sha256(content).hexdigest()}
+    )
+
+    with pytest.raises(NativeOutputStoreError, match="invalid format"):
+        store.read(reference)
+
+
+def test_reference_completeness_must_match_the_artifact(
+    published_output: tuple[ProtectedOutputStore, NativeOutputReference],
+) -> None:
+    store, reference = published_output
+
+    with pytest.raises(NativeOutputStoreError, match="completeness does not match"):
+        store.read(reference.model_copy(update={"complete": False}))
+
+
+@pytest.mark.parametrize("unavailable", ["artifact", "root", "replaced-root", "permissions"])
+def test_read_refuses_missing_or_replaced_storage(
+    published_output: tuple[ProtectedOutputStore, NativeOutputReference], unavailable: str
+) -> None:
+    store, reference = published_output
+    if unavailable == "artifact":
+        (store.root / f"{reference.artifact_id}.bin").unlink()
+    elif unavailable in {"root", "replaced-root"}:
+        store.root.rename(store.root.with_name("old-output"))
+        if unavailable == "replaced-root":
+            store.root.mkdir(mode=0o700)
+    else:
+        if os.name != "posix":
+            pytest.skip("private directory modes require POSIX")
+        store.root.chmod(0o755)
+
+    with pytest.raises(NativeOutputStoreError):
         store.read(reference)

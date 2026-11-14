@@ -810,6 +810,13 @@ def test_calibration_aggregate_preserves_may_change_protected_effect() -> None:
 def test_calibration_aggregate_rejects_mismatched_or_unordered_observations() -> None:
     valid = _calibration_observation(1, ObservationOutcome.MATCH, accounting=RunAccounting())
     wrong_arm = valid.model_copy(update={"arm": ObservationArm.CANDIDATE})
+    with pytest.raises(ValueError, match="identity differs"):
+        calibration_summary_from_observations(
+            base=_calibration_base(),
+            observations=(valid.model_copy(update={"execution_plan_digest": "f" * 64}),),
+            expected_policy_digest=_sampled_plan().safety_policy.digest,
+            max_provider_calls_per_attempt=_sampled_plan().capability.provider_calls_per_attempt,
+        )
     with pytest.raises(ValueError, match="role, arm, or candidate"):
         calibration_summary_from_observations(
             base=_calibration_base(),

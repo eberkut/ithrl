@@ -318,6 +318,21 @@ def test_growth_during_probe_is_bounded_and_stopped(
         detect_copilot_capability(_runtime(fake), _configuration(), target="final-response")
 
 
+def test_probe_state_nesting_is_bounded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path / "state"
+    nested = root / "one" / "two"
+    nested.mkdir(parents=True, mode=0o700)
+    root.chmod(0o700)
+    (root / "one").chmod(0o700)
+    monkeypatch.setattr(capability, "_MAX_PROBE_STATE_DEPTH", 1)
+
+    with pytest.raises(CopilotCapabilityError, match="nesting limit") as refused:
+        capability._require_bounded_probe_state(root)
+
+    assert refused.value.code is CopilotCapabilityErrorCode.PROBE_FAILED
+    assert nested.is_dir()
+
+
 def test_byte_limit_diagnostic_identifies_owned_file_without_contents(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -110,6 +110,51 @@ def _forbidden(*_args: object, **_kwargs: object) -> None:
     raise AssertionError("offline preparation accessed native execution or the observation store")
 
 
+def test_parent_traversal_is_refused_without_creating_destination(tmp_path: Path) -> None:
+    path = tmp_path / "missing" / ".." / "private.json"
+
+    with pytest.raises(ValueError, match="unsafe"):
+        observation_storage_paths(path)
+    with pytest.raises(ValueError, match="unsafe"):
+        preparation_destination(path, protected=())
+
+    assert not (tmp_path / "missing").exists()
+    assert not (tmp_path / "private.json").exists()
+
+
+@pytest.mark.parametrize("provider_calls", [1, 1000])
+def test_prepare_reports_budget_refusal_or_human_success_without_native_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider_calls: int
+) -> None:
+    scenario = _scenario(tmp_path, monkeypatch, "codex", "final-response", mode="context-sensitive")
+    receipt = tmp_path / "preflight.json"
+    _receipt(scenario, receipt)
+    settings = tmp_path / "settings.toml"
+    settings.write_text(_SETTINGS)
+    settings.chmod(0o600)
+    output = tmp_path / "prepared.toml"
+    arguments = _arguments(scenario, receipt, settings, output)
+    arguments[arguments.index("--max-provider-calls") + 1] = str(provider_calls)
+    if provider_calls == 1000:
+        arguments[-1] = "human"
+    monkeypatch.setattr(native, "native_selection", _forbidden)
+    monkeypatch.setattr(subprocess, "Popen", _forbidden)
+    monkeypatch.setattr(ObservationStore, "__init__", _forbidden)
+
+    result = CliRunner().invoke(app, arguments)
+
+    if provider_calls == 1:
+        assert result.exit_code == ExitCode.USAGE, result.output
+        assert json.loads(result.stdout)["error_code"] == "sampling-budget-too-small"
+        assert not output.exists()
+    else:
+        assert result.exit_code == ExitCode.SUCCESS, result.output
+        assert "Private reduction configuration prepared" in result.stdout
+        assert "No harness probes, provider calls or actions were executed." in result.stdout
+        assert isinstance(parse_experiment_toml(output.read_text()), SampledExperimentDefinition)
+    assert not scenario.database.exists()
+
+
 @pytest.mark.parametrize("harness", ["codex", "copilot"])
 @pytest.mark.parametrize("with_sections", [False, True])
 def test_prepare_round_trip_and_inspection_command_are_provider_free(

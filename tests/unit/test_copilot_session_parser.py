@@ -241,6 +241,26 @@ def test_tool_relationships_must_use_an_open_matching_turn() -> None:
     assert private_value not in str(caught.value)
 
 
+@pytest.mark.parametrize("stage", ["execution", "completion"])
+def test_tool_lifecycle_cannot_cross_two_open_turns(stage: str) -> None:
+    records = _mutable_records()
+    other_turn = copy.deepcopy(records[2])
+    other_turn["id"] = "90000000-0000-4000-8000-000000000001"
+    other_turn["data"]["turnId"] = "other-open-turn"
+    if stage == "execution":
+        records[12]["data"]["turnId"] = "other-open-turn"
+    else:
+        records[11]["data"]["turnId"] = "other-open-turn"
+        records[12]["data"]["turnId"] = "other-open-turn"
+    records.insert(11, other_turn)
+
+    with pytest.raises(AdapterError, match="different turns") as caught:
+        PARSER.parse(_changed_document(records=tuple(records)))
+
+    assert caught.value.code is AdapterErrorCode.INVALID_SESSION
+    assert caught.value.line == (14 if stage == "execution" else 15)
+
+
 def test_turn_can_end_after_a_tool_request_without_a_completion_record() -> None:
     records = _mutable_records()
     del records[12:14]

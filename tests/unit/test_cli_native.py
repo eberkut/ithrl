@@ -26,6 +26,7 @@ from ithrl.experiment import (
     SamplingArmTarget,
 )
 from ithrl.extraction import extract_decision
+from ithrl.runner.copilot.capability import CopilotCapabilityErrorCode
 
 FIXTURE = Path(__file__).parents[1] / "fixtures/codex-session/rollout.jsonl"
 PHASE = SampledCalibrationPhase(required_valid=2, minimum_matches=1, max_attempts=3)
@@ -356,6 +357,47 @@ def test_missing_runtime_is_content_safe_and_never_probes(
     assert raised.value.code == "runtime-unavailable"
     assert str(original) not in str(raised.value)
     mocked_runtime[0].assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("owner", "code", "started"),
+    [
+        ("resolve_codex_configuration", "runtime-unavailable", False),
+        ("detect_codex_capability", "codex-probe-failed", None),
+        ("CodexRunner", "runner-unavailable", True),
+    ],
+)
+def test_native_startup_failures_preserve_stage_without_private_exception_text(
+    native_case: tuple[CaseWorkspace, CaseEvidence, Path],
+    mocked_runtime: tuple[Mock, Mock],
+    monkeypatch: pytest.MonkeyPatch,
+    owner: str,
+    code: str,
+    started: bool | None,
+) -> None:
+    workspace, evidence, original = native_case
+    failing = Mock(side_effect=OSError("PRIVATE-STARTUP-DETAIL"))
+    monkeypatch.setattr(native, owner, failing)
+
+    with pytest.raises(native.NativeSelectionError) as refused:
+        native.native_selection(workspace, evidence, original_workspace=original, calibration=PHASE)
+
+    assert refused.value.code == code
+    assert refused.value.harness_started is started
+    assert "PRIVATE-STARTUP-DETAIL" not in str(refused.value)
+    failing.assert_called_once()
+    if owner != "CodexRunner":
+        mocked_runtime[1].assert_not_called()
+
+
+def test_probe_diagnostic_failure_does_not_replace_the_original_refusal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    error = native.CopilotCapabilityError(CopilotCapabilityErrorCode.PROBE_FAILED, "probe failed")
+    monkeypatch.setattr(native, "prepare_private_directory", Mock(side_effect=OSError("private")))
+
+    assert native._copilot_probe_diagnostic(error, tmp_path) is None
+    assert str(error) == "probe failed"
 
 
 def test_native_storage_overlap_refuses_before_probe(

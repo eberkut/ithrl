@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 import ithrl.runner.codex.protocol as protocol
+import ithrl.runner.codex.protocol_contracts as protocol_contracts
 import ithrl.runner.codex.transcript as transcript
 from ithrl.runner.codex.protocol import (
     ACTION_ITEM_TYPES,
@@ -18,6 +19,7 @@ from ithrl.runner.codex.protocol import (
     ProtocolUsage,
     run_session,
 )
+from ithrl.runner.codex.protocol_contracts import validate_protocol_json
 from ithrl.runner.codex.transcript import parse_transcript, physical_request_counts
 
 THREAD_ID = "thread-fixture-001"
@@ -26,6 +28,54 @@ MODEL = "fixture-model"
 PROVIDER = "fixture-provider"
 FINAL_TEXT = "Final response from the sanitized fixture."
 type Message = dict[str, Any]
+
+
+@pytest.mark.parametrize("invalid", [{1: "value"}, {"value": float("nan")}, {"value": b"bytes"}])
+def test_protocol_json_refuses_non_json_keys_and_values(invalid: object) -> None:
+    with pytest.raises(CodexProtocolError) as caught:
+        validate_protocol_json(invalid)
+
+    assert caught.value.code == "invalid-json"
+
+
+@pytest.mark.parametrize("limit", ["depth", "items"])
+def test_protocol_json_enforces_resource_bounds(
+    monkeypatch: pytest.MonkeyPatch, limit: str
+) -> None:
+    value: object
+    if limit == "depth":
+        monkeypatch.setattr(protocol_contracts, "MAX_PROTOCOL_DEPTH", 1)
+        value = {"outer": {"inner": "value"}}
+    else:
+        monkeypatch.setattr(protocol_contracts, "MAX_PROTOCOL_ITEMS", 1)
+        value = {"one": 1, "two": 2}
+
+    with pytest.raises(CodexProtocolError) as caught:
+        validate_protocol_json(value)
+
+    assert caught.value.code == "json-" + limit
+
+
+@pytest.mark.parametrize(
+    ("started", "completed", "denied", "message"),
+    [
+        (-1, 0, 0, "counts cannot be negative"),
+        (0, 1, 0, "completed provider calls cannot exceed"),
+        (0, 0, 1, "denied actions cannot exceed"),
+    ],
+)
+def test_protocol_outcome_refuses_inconsistent_accounting(
+    started: int, completed: int, denied: int, message: str
+) -> None:
+    outcome, _, _ = _run([*_prefix(), _final_item(), _turn_completed()])
+
+    with pytest.raises(ValueError, match=message):
+        replace(
+            outcome,
+            provider_calls_started=started,
+            provider_calls_completed=completed,
+            actions_denied=denied,
+        )
 
 
 def _request(

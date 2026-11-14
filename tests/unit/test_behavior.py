@@ -19,6 +19,7 @@ from ithrl.behavior import (
 def test_final_response_target_uses_one_bounded_predicate() -> None:
     observation = BehaviorObservation(final_response="deprecated API: use v2")
 
+    assert not evaluate_target(FinalResponseTarget(), BehaviorObservation())
     assert evaluate_target(FinalResponseTarget(), observation)
     assert evaluate_target(FinalResponseTarget(text_contains="deprecated API"), observation)
     assert not evaluate_target(FinalResponseTarget(text_equals="deprecated API"), observation)

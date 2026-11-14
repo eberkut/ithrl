@@ -15,7 +15,16 @@ from ithrl.adapters.codex.context import compile_context
 from ithrl.adapters.codex.decisions import enumerate_decisions
 from ithrl.adapters.contracts import NativeSession, ParsingLimits, SourceFacts
 from ithrl.behavior import FinalResponseTarget
-from ithrl.context import ContextNode, JsonObject, SourceRecordSelector, content_digest
+from ithrl.case import CaseFormatError
+from ithrl.case.source import SourceArtifact
+from ithrl.case.source_context import validate_source_references
+from ithrl.context import (
+    ContextGraph,
+    ContextNode,
+    JsonObject,
+    SourceRecordSelector,
+    content_digest,
+)
 from ithrl.decisions import DecisionSummary
 
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "codex-session" / "rollout.jsonl"
@@ -116,6 +125,38 @@ def test_final_response_context_preserves_call_output_dependency(
     assert output.depends_on == (call.id,)
     assert not by_ordinal[6].mutable
     assert 9 not in by_ordinal
+
+
+@pytest.mark.parametrize("invalid", ["other-source", "decision-boundary"])
+def test_source_context_must_precede_its_decision_in_the_same_artifact(
+    session: NativeSession, invalid: str
+) -> None:
+    decision = enumerate_decisions(session)[0]
+    context = compile_context(session, decision.selector)
+    selected = decision.select(decision.targets[0].target_id, context=context).evidence
+    artifacts = (
+        SourceArtifact(
+            path=decision.selector.source,
+            media_type=decision.case.source_media_type,
+            content=session.native_bytes,
+        ),
+    )
+    validate_source_references(context, selected, artifacts)
+    last = context.nodes[-1]
+    if invalid == "other-source":
+        changed = last.model_copy(update={"source": "source/other.jsonl"})
+        message = "one source artifact"
+    else:
+        selector = _source_selector(last).model_copy(
+            update={"line": decision.selector.context_before_line}
+        )
+        changed = last.model_copy(update={"selector": selector})
+        message = "must precede"
+
+    with pytest.raises(CaseFormatError, match=message):
+        validate_source_references(
+            ContextGraph(nodes=(*context.nodes[:-1], changed)), selected, artifacts
+        )
 
 
 def test_incomplete_trailing_turn_is_omitted(session: NativeSession) -> None:

@@ -11,7 +11,12 @@ import pytest
 from typer.testing import CliRunner
 
 from ithrl.cli import app
-from ithrl.cli.fuzz_session import FuzzSessionError, load_fuzz_session
+from ithrl.cli.fuzz_session import (
+    FuzzSessionError,
+    load_fuzz_profile,
+    load_fuzz_session,
+    save_fuzz_profile,
+)
 from ithrl.cli.output import ExitCode
 from ithrl.observations import ObservationStore
 from ithrl.run_state import SampledRunStateFile
@@ -767,6 +772,61 @@ def _detected_mock_command(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     detected = CliRunner().invoke(app, [*args, "--detect", "--profile", str(profile)])
     assert detected.exit_code == 0, detected.output
     return [*args, "--profile", str(profile), "--acknowledge-model-execution"], runner
+
+
+def test_saved_fuzz_profile_is_idempotent_and_cannot_be_replaced(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, runner = _detected_mock_command(tmp_path, monkeypatch)
+    path = tmp_path / "profile.json"
+    profile = load_fuzz_profile(path)
+    original = path.read_bytes()
+
+    save_fuzz_profile(path, profile)
+    assert path.read_bytes() == original
+    changed = profile.model_copy(
+        update={"configuration": profile.configuration.model_copy(update={"stale_text": "changed"})}
+    )
+    changed = type(profile).model_validate_json(changed.model_dump_json())
+    with pytest.raises(FuzzSessionError, match="different inputs"):
+        save_fuzz_profile(path, changed)
+
+    assert path.read_bytes() == original
+    assert load_fuzz_profile(path) == profile
+    assert runner.calls == []
+
+
+@pytest.mark.parametrize("tamper", ["session-identity", "unexpected-file"])
+def test_detached_fuzz_receipt_refuses_semantic_tampering_without_touching_live_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tamper: str
+) -> None:
+    args, runner = _detected_mock_command(tmp_path, monkeypatch)
+    completed = CliRunner().invoke(app, args)
+    assert completed.exit_code == 0, completed.output
+    report = json.loads(completed.stdout)
+    receipt = Path(report["result_path"])
+    live = Path(report["run_state_path"])
+    before = {
+        name: (live / name).read_bytes() for name in ("fuzz-session.json", "sampled-state.json")
+    }
+    calls = len(runner.calls)
+    load_fuzz_session(receipt)
+    if tamper == "session-identity":
+        path = receipt / "fuzz-session.json"
+        document = json.loads(path.read_text())
+        document["started_at"] = (
+            datetime.fromisoformat(document["started_at"]) + timedelta(seconds=1)
+        ).isoformat()
+        path.write_text(json.dumps(document))
+    else:
+        (receipt / "unexpected.json").write_text("PRIVATE-CONTENT")
+
+    with pytest.raises(FuzzSessionError, match="cannot load private fuzz session") as refused:
+        load_fuzz_session(receipt)
+
+    assert "PRIVATE-CONTENT" not in str(refused.value)
+    assert {name: (live / name).read_bytes() for name in before} == before
+    assert len(runner.calls) == calls
 
 
 @pytest.mark.parametrize("target", ["session", "state", "snapshot", "summary"])
