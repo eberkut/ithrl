@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import tomllib
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
@@ -214,9 +214,7 @@ def _prepare_reduction(
         reduction = reduction.model_copy(
             update={"section_search": settings.sections.bind(evidence)}
         )
-    runner_type = source.capability.runner_type
-    if runner_type not in ("codex", "copilot"):
-        raise PreparationError("invalid-preflight-receipt")
+    runner_type = cast(Literal["codex", "copilot"], source.capability.runner_type)
     experiment = SampledExperimentDefinition(
         target=default.target,
         oracle=default.oracle,

@@ -31,6 +31,23 @@ def test_output_store_open_normalizes_unsafe_directory_failure(tmp_path: Path) -
     assert target.is_dir()
 
 
+def test_output_store_refuses_a_directory_replaced_after_preparation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prepare = output_module.prepare_private_directory
+    target = tmp_path / "outputs"
+
+    def replace_after_preparation(path: Path) -> None:
+        prepare(path)
+        path.rmdir()
+        path.write_bytes(b"fixture replacement")
+
+    monkeypatch.setattr(output_module, "prepare_private_directory", replace_after_preparation)
+    with pytest.raises(NativeOutputStoreError, match="not a directory"):
+        ProtectedOutputStore.open(target)
+    assert target.read_bytes() == b"fixture replacement"
+
+
 @pytest.mark.parametrize("fault", ["missing", "symlink", "publish-error"])
 def test_failed_publication_leaves_no_artifact_and_preserves_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str

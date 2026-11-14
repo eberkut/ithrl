@@ -278,7 +278,10 @@ def test_preflight_requires_oracle_dependencies_to_be_protected(tmp_path: Path) 
         prepare_experiment(changed_evidence)
 
 
-def test_observation_enforces_the_shared_wall_time_limit(tmp_path: Path) -> None:
+@pytest.mark.parametrize("suppresses_cancellation", [False, True])
+def test_observation_enforces_the_shared_wall_time_limit(
+    tmp_path: Path, suppresses_cancellation: bool
+) -> None:
     evidence = _evidence(tmp_path)
     prepared = prepare_experiment(evidence)
 
@@ -287,7 +290,11 @@ def test_observation_enforces_the_shared_wall_time_limit(tmp_path: Path) -> None
         capability_profile = prepared.runner.capability_profile
 
         async def run(self, attempt: PreparedAttempt) -> RunResult:
-            await asyncio.sleep(2)
+            try:
+                await asyncio.sleep(2)
+            except asyncio.CancelledError:
+                if not suppresses_cancellation:
+                    raise
             return await prepared.runner.run(attempt)
 
     limits = prepared.resource_limits.model_copy(update={"max_wall_time_seconds": 1})
@@ -485,7 +492,10 @@ def test_incomplete_provider_attempt_blocks_automatic_retry(
     assert calls == 1
 
 
-def test_inconsistent_provider_accounting_blocks_automatic_retry(tmp_path: Path) -> None:
+@pytest.mark.parametrize("fault", ["missing-call", "pending-call", "provider-mismatch"])
+def test_inconsistent_provider_accounting_blocks_automatic_retry(
+    tmp_path: Path, fault: str
+) -> None:
     evidence = _evidence(tmp_path)
     prepared = prepare_experiment(evidence)
     calls = 0
@@ -524,10 +534,15 @@ def test_inconsistent_provider_accounting_blocks_automatic_retry(tmp_path: Path)
                 attempt_id=attempt.attempt_id,
                 effective_policy_digest=attempt.safety_policy.digest,
                 final_text="synthetic target response",
-                provider=attempt.execution_plan.capability.provider,
+                provider="different-provider"
+                if fault == "provider-mismatch"
+                else attempt.execution_plan.capability.provider,
                 endpoint=attempt.execution_plan.capability.endpoint,
                 model_requested=attempt.execution_plan.model_requested,
-                accounting=RunAccounting(),
+                accounting=RunAccounting(
+                    provider_calls_started=0 if fault == "missing-call" else 1,
+                    provider_calls_completed=1 if fault == "provider-mismatch" else 0,
+                ),
             )
 
     candidate = prepare_candidate(evidence, report.plan)
@@ -552,14 +567,18 @@ def test_inconsistent_provider_accounting_blocks_automatic_retry(tmp_path: Path)
 
     store = ObservationStore(tmp_path / "inconsistent-accounting.sqlite")
     runner = InconsistentRunner()
-    with pytest.raises(RunnerExecutionError, match="contract"):
+    with pytest.raises(RunnerExecutionError):
         asyncio.run(observe_once(runner=runner, identity=identity, store=store, attempt=attempt()))
     with pytest.raises(RunnerExecutionError, match="automatic retry is disabled"):
         asyncio.run(observe_once(runner=runner, identity=identity, store=store, attempt=attempt()))
 
     [observation] = store.list_for_experiment(prepared.experiment.digest)
-    assert observation.attempt_evidence.provider_acceptance_state == "unknown"
-    assert observation.attempt_evidence.provider_calls_possible == 1
+    assert observation.attempt_evidence.provider_acceptance_state == (
+        "accepted" if fault == "provider-mismatch" else "unknown"
+    )
+    assert observation.attempt_evidence.provider_calls_possible == (
+        0 if fault == "provider-mismatch" else 1
+    )
     assert calls == 1
 
 
@@ -686,7 +705,10 @@ def test_clean_pre_dispatch_failure_can_be_retried(tmp_path: Path) -> None:
     assert calls == 2
 
 
-def test_measurement_refuses_capability_change_after_preflight(tmp_path: Path) -> None:
+@pytest.mark.parametrize("changed", ["capability", "identity"])
+def test_measurement_refuses_identity_or_capability_change_after_preflight(
+    tmp_path: Path, changed: str
+) -> None:
     evidence = _evidence(tmp_path)
     prepared = prepare_experiment(evidence)
     candidate = prepare_candidate(evidence, prepared.execution_plan)
@@ -703,25 +725,69 @@ def test_measurement_refuses_capability_change_after_preflight(tmp_path: Path) -
 
     class ChangedProfileRunner:
         fingerprint = prepared.runner.fingerprint
-        capability_profile = prepared.runner.capability_profile.model_copy(
-            update={"runner_version": "changed"}
+        capability_profile = (
+            prepared.runner.capability_profile.model_copy(update={"runner_version": "changed"})
+            if changed == "capability"
+            else prepared.runner.capability_profile
         )
 
         async def run(self, attempt: PreparedAttempt) -> RunResult:
-            return await prepared.runner.run(attempt)
+            pytest.fail("mismatched measurement inputs must fail before execution")
 
     store = ObservationStore(tmp_path / "changed-profile.sqlite")
-    with pytest.raises(ValueError, match="capability profile changed"):
+    identity = (
+        prepared.identity
+        if changed == "capability"
+        else prepared.identity.model_copy(update={"target_digest": "f" * 64})
+    )
+    with pytest.raises(ValueError, match=r"capability profile changed|identity does not match"):
         asyncio.run(
             observe_once(
                 runner=ChangedProfileRunner(),
-                identity=prepared.identity,
+                identity=identity,
                 store=store,
                 attempt=attempt,
             )
         )
 
     assert store.list_for_experiment(prepared.experiment.digest) == ()
+
+
+def test_runner_timeout_error_is_recorded_as_an_internal_failure(tmp_path: Path) -> None:
+    evidence = _evidence(tmp_path)
+    prepared = prepare_experiment(evidence)
+    attempt = PreparedAttempt(
+        evidence=evidence,
+        candidate=prepare_candidate(evidence, prepared.execution_plan),
+        target=prepared.experiment.target,
+        execution_plan=prepared.execution_plan,
+        safety_policy=prepared.safety_policy,
+        resource_limits=prepared.resource_limits,
+        phase="calibration",
+        arm="baseline",
+    )
+
+    class InternalTimeoutRunner:
+        fingerprint = prepared.runner.fingerprint
+        capability_profile = prepared.runner.capability_profile
+
+        async def run(self, attempt: PreparedAttempt) -> RunResult:
+            raise TimeoutError("private-timeout-detail")
+
+    store = ObservationStore(tmp_path / "internal-timeout.sqlite")
+    with pytest.raises(RunnerExecutionError, match="internal") as refused:
+        asyncio.run(
+            observe_once(
+                runner=InternalTimeoutRunner(),
+                identity=prepared.identity,
+                store=store,
+                attempt=attempt,
+            )
+        )
+    assert "private-timeout-detail" not in str(refused.value)
+    (observation,) = store.list_for_experiment(prepared.experiment.digest)
+    assert observation.error_category == "internal"
+    assert observation.target_observed is None
 
 
 def test_cancelled_attempt_is_persisted_before_cancellation_propagates(tmp_path: Path) -> None:

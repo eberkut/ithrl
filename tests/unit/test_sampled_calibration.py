@@ -50,6 +50,27 @@ from ithrl.workflow import PreflightRefusedError, WorkflowError, prepare_experim
 FIXTURE = Path(__file__).parents[1] / "fixtures/synthetic-trace.json"
 
 
+@pytest.mark.parametrize(
+    ("content", "mode", "message"),
+    [
+        (b"{}", 0o644, "unsafe"),
+        (b"x" * 65_537, 0o600, "exceeds its limit"),
+        (b"{", 0o600, "invalid"),
+    ],
+)
+def test_inflight_marker_refusals_preserve_unresolved_evidence(
+    tmp_path: Path, content: bytes, mode: int, message: str
+) -> None:
+    store = ObservationStore(tmp_path / "observations.sqlite")
+    store.initialize()
+    marker = calibration_module._inflight_path(store)
+    marker.write_bytes(content)
+    marker.chmod(mode)
+    with pytest.raises(CalibrationInFlightError, match=message):
+        calibration_module._read_inflight(store)
+    assert marker.read_bytes() == content
+
+
 def test_calibration_lock_rejects_hard_link_without_modifying_store(tmp_path: Path) -> None:
     store = ObservationStore(tmp_path / "observations.sqlite")
     store.initialize()

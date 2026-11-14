@@ -6,12 +6,13 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
+from unittest.mock import Mock
 
 import pytest
 from pydantic import ValidationError
 from typer.testing import CliRunner
 
-from ithrl.cli import app
+from ithrl.cli import app, fuzz_run
 from ithrl.cli.fuzz_session import (
     FuzzProfile,
     FuzzSession,
@@ -781,6 +782,74 @@ def _detected_mock_command(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     detected = CliRunner().invoke(app, [*args, "--detect", "--profile", str(profile)])
     assert detected.exit_code == 0, detected.output
     return [*args, "--profile", str(profile), "--acknowledge-model-execution"], runner
+
+
+def test_profile_report_refuses_an_unbound_campaign_algorithm(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, runner = _detected_mock_command(tmp_path, monkeypatch)
+    profile = load_fuzz_profile(tmp_path / "profile.json")
+    data = profile.model_dump()
+    data["identity"]["algorithm_digest"] = "f" * 64
+    changed = FuzzProfile.model_validate(data)
+    with pytest.raises(ValueError, match="bound campaign policy"):
+        fuzz_run.report_for_profile(changed, harness_started=False)
+    assert runner.calls == []
+
+
+@pytest.mark.parametrize("failure", ["calibration-refusal", "campaign-error"])
+def test_execution_refusals_retain_safe_reports_without_confirmation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    args = inputs(tmp_path)
+    if failure == "calibration-refusal":
+        monkeypatch.setattr(
+            fuzz_run, "run_owned_calibration", Mock(return_value="provider-call-budget")
+        )
+        expected = "provider-call-budget"
+    else:
+        monkeypatch.setattr(
+            fuzz_run,
+            "_initialize_fuzz_campaign_owned",
+            Mock(side_effect=OSError("private-execution-detail")),
+        )
+        expected = "execution-refused"
+    result = CliRunner().invoke(app, args)
+    assert result.exit_code == (
+        ExitCode.BUDGET if failure == "calibration-refusal" else ExitCode.PROVIDER
+    ), result.output
+    report = json.loads(result.stdout)
+    assert report["status"] == "incomplete"
+    assert report["stop_reason"] == expected
+    assert report["confirmation_result"] == "not-run"
+    assert report["actions_executed"] == 0
+    assert "private-execution-detail" not in result.output
+
+
+@pytest.mark.parametrize("operation", ["report", "resume", "missing-preparation"])
+def test_report_and_resume_recheck_frozen_administration_before_dispatch(
+    tmp_path: Path, operation: str
+) -> None:
+    result = CliRunner().invoke(app, inputs(tmp_path))
+    assert result.exit_code == ExitCode.SUCCESS, result.output
+    session = load_fuzz_session(Path(json.loads(result.stdout)["result_path"]))
+    store = ObservationStore(session.observation_store)
+    state_file = SampledRunStateFile.open(session.run_directory)
+    before = store.list_for_experiment(session.profile.experiment.digest)
+    if operation != "missing-preparation":
+        saved = json.loads(state_file.path.read_text())
+        saved["approvals"][0]["allowance"]["max_provider_calls"] += 1
+        state_file.path.write_text(json.dumps(saved))
+        message = "budget differs from its frozen session"
+    else:
+        message = "execution must match the frozen campaign identity"
+    if operation == "report":
+        with state_file.acquire_lock(store), pytest.raises(ValueError, match=message):
+            fuzz_run._report(session, state_file, store, stop_reason=None, dry_run=True)
+    else:
+        with pytest.raises(ValueError, match=message):
+            fuzz_run.execute_fuzz(session, None, dry_run=operation == "resume")
+    assert store.list_for_experiment(session.profile.experiment.digest) == before
 
 
 @pytest.mark.parametrize("changed", ["configuration", "call-cap"])

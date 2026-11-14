@@ -359,6 +359,77 @@ def test_cleanup_or_process_uncertainty_blocks_safe_retry(tmp_path: Path) -> Non
         assert not AttemptEvidence.from_error(attempt, error).automatic_retry_safe
 
 
+@pytest.mark.parametrize("fault", [None, "wall-time", "policy", "missing-output"])
+def test_preaccept_retry_requires_bound_limits_policy_and_output(
+    tmp_path: Path, fault: str | None
+) -> None:
+    _, attempt = _attempt(_synthetic_evidence(tmp_path))
+    accounting = RunAccounting(
+        elapsed_milliseconds=attempt.resource_limits.max_wall_time_seconds * 1000 + 1
+        if fault == "wall-time"
+        else 0,
+        native_output_bytes=1 if fault == "missing-output" else 0,
+    )
+    error = RunnerError(
+        RunnerErrorCode.STARTUP,
+        "fixture startup failure",
+        accounting=accounting,
+        effective_policy_digest="f" * 64 if fault == "policy" else attempt.safety_policy.digest,
+    )
+    evidence = AttemptEvidence.from_error(attempt, error)
+    assert evidence.automatic_retry_safe is (fault is None)
+    assert evidence.accounting == accounting
+    assert evidence.provider_acceptance_state is ProviderAcceptanceState.NOT_STARTED
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        (
+            {
+                "termination_reason": "completed",
+                "effective_policy_digest": "c" * 64,
+                "provider_acceptance_state": ProviderAcceptanceState.UNKNOWN,
+                "provider_calls_possible": 1,
+            },
+            "unknown acceptance",
+        ),
+        ({"provider_acceptance_state": ProviderAcceptanceState.UNKNOWN}, "positive possible"),
+        (
+            {
+                "retry_safe": True,
+                "provider_acceptance_state": ProviderAcceptanceState.ACCEPTED,
+                "accounting": RunAccounting(provider_calls_started=1, provider_calls_completed=1),
+            },
+            "not to have started",
+        ),
+        ({"retry_safe": True, "accounting": None}, "complete effect accounting"),
+        (
+            {
+                "retry_safe": True,
+                "accounting": RunAccounting(actions_requested=1, actions_executed=1),
+            },
+            "external effects",
+        ),
+        ({"overload_replacement_safe": True}, "complete bounded safety evidence"),
+    ],
+)
+def test_persisted_attempt_evidence_refuses_unsupported_safety_claims(
+    changes: dict[str, object], message: str
+) -> None:
+    with pytest.raises(ValidationError, match=message):
+        AttemptEvidence.model_validate(
+            {
+                "attempt_id": "attempt-" + "a" * 32,
+                "attempt_digest": "b" * 64,
+                "termination_reason": "failed",
+                "accounting": RunAccounting(),
+                "provider_acceptance_state": ProviderAcceptanceState.NOT_STARTED,
+                **changes,
+            }
+        )
+
+
 def test_accounting_preserves_uncertain_termination_and_failed_cleanup(tmp_path: Path) -> None:
     _, attempt = _attempt(_synthetic_evidence(tmp_path))
     accounting = RunAccounting(

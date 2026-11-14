@@ -1578,6 +1578,22 @@ def test_reserved_dispatch_without_observation_stays_charged_and_never_replays(
     operator_case.assert_sources_unchanged()
 
 
+def test_session_size_limit_preserves_published_resume_metadata(
+    operator_case: OperatorCase, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    result = _invoke(operator_case.command())
+    assert result.exit_code == ExitCode.SUCCESS, result.output
+    root = Path(_json(result)["run_state_path"])
+    session = sampled_session.load_cli_session(root)
+    before = (root / "cli-session.json").read_bytes()
+    calls = tuple(operator_case.runner.calls)
+    monkeypatch.setattr(sampled_session, "_MAX_SESSION_BYTES", 1)
+    with pytest.raises(sampled_session.SampledCliSessionError, match="cannot save private"):
+        sampled_session.save_cli_session(root, session)
+    assert (root / "cli-session.json").read_bytes() == before
+    assert tuple(operator_case.runner.calls) == calls
+
+
 @pytest.mark.parametrize("metadata", ["missing", "malformed"])
 def test_interrupted_session_publication_does_not_propose_unusable_resume(
     operator_case: OperatorCase, monkeypatch: pytest.MonkeyPatch, metadata: str

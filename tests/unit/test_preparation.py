@@ -26,6 +26,7 @@ from ithrl.preparation import (
     ReductionPreparationSettings,
     prepare_reduction,
 )
+from ithrl.synthetic import extract_inference
 from native_support import codex, copilot
 
 SETTINGS = """schema_version = 1
@@ -121,6 +122,57 @@ def _sections(evidence: CaseEvidence, section_ids: tuple[str, ...] | None = None
         f"context_id = {json.dumps(catalog.context_id)}\n"
         f"content_index = {catalog.content_index}\nsection_ids = {json.dumps(ids)}\n"
     )
+
+
+def test_prepare_accepts_an_exact_request_without_a_native_decision(tmp_path: Path) -> None:
+    evidence = extract_inference(
+        Path(__file__).parents[1] / "fixtures/synthetic-trace.json",
+        inference_call_id="synthetic-ac-001",
+        case_path=tmp_path / "case",
+    ).load()
+    profile = CapabilityProfile.model_validate(
+        {
+            **copilot._capability("shell-action").model_dump(),
+            "harness": None,
+            "source_schema": None,
+            "runtime_harness_version": None,
+            "supported_capture_types": ("provider-request",),
+            "supported_materializations": ("exact-request",),
+        }
+    )
+    receipt = _receipt(evidence, profile, tmp_path)
+    result = prepare_reduction(evidence, receipt, ReductionPreparationSettings.from_toml(SETTINGS))
+    assert evidence.decision is None
+    assert result.target == parse_experiment_toml(evidence.default_experiment).target
+    assert isinstance(result.runner, NativeRunnerConfig)
+    assert result.runner.required_capability_digest == profile.digest
+
+
+def test_preparation_rechecks_a_receipts_sampled_capability_contract(
+    recorded_case: tuple[CaseEvidence, NativePreparationReceipt],
+) -> None:
+    evidence, receipt = recorded_case
+    data = receipt.model_dump(mode="json")
+    data["source_plan"]["capability"]["deterministic"] = True
+    from ithrl.execution import ResolvedExecutionPlan
+
+    plan = ResolvedExecutionPlan.model_validate_json(json.dumps(data["source_plan"]))
+    data.update(source_plan=plan.model_dump(mode="json"), source_plan_digest=plan.digest)
+    changed = NativePreparationReceipt.from_json(json.dumps(data))
+    with pytest.raises(PreparationError, match="preparation-contract-mismatch"):
+        prepare_reduction(evidence, changed, ReductionPreparationSettings.from_toml(SETTINGS))
+
+
+def test_section_selection_requires_a_catalog_in_the_selected_case(
+    recorded_case: tuple[CaseEvidence, NativePreparationReceipt],
+) -> None:
+    evidence, receipt = recorded_case
+    catalog = next(c for c in evidence.text_sections() if len(c.sections) >= 2)
+    settings = ReductionPreparationSettings.from_toml(
+        SETTINGS + _sections(evidence).replace(catalog.context_id, "ctx-unknown")
+    )
+    with pytest.raises(PreparationError, match="section-selection-mismatch"):
+        prepare_reduction(evidence, receipt, settings)
 
 
 def test_receipt_creation_rejects_a_different_experiment(

@@ -115,6 +115,26 @@ def _runner(
     return runner
 
 
+@pytest.mark.parametrize("missing", ["source", "workspace"])
+def test_runner_requires_protected_source_and_workspace_paths(tmp_path: Path, missing: str) -> None:
+    workspace, _ = _case(tmp_path)
+    selected = _runner(tmp_path, workspace)
+    with pytest.raises(ValueError, match="requires protected source and workspace paths"):
+        CodexRunner(
+            capability_profile=selected.capability_profile,
+            runtime=selected._runtime,
+            configuration=selected._configuration,
+            state_parent=tmp_path / "other-attempts",
+            output_root=tmp_path / "other-output",
+            source_paths=() if missing == "source" else (ProtectedPath("case", workspace.root),),
+            workspace_paths=()
+            if missing == "workspace"
+            else (ProtectedPath("workspace", tmp_path / "original-workspace"),),
+        )
+    assert not (tmp_path / "other-attempts").exists()
+    assert not (tmp_path / "other-output").exists()
+
+
 @pytest.mark.parametrize("storage", ["state", "output"])
 def test_rejects_storage_inside_protected_workspace(tmp_path: Path, storage: str) -> None:
     workspace, _ = _case(tmp_path)

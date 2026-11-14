@@ -10,8 +10,16 @@ from hypothesis import given
 from hypothesis import strategies as st
 from pydantic import ValidationError
 
-from ithrl.context import content_digest
-from ithrl.mutation import MAX_MUTATION_TEXT_BYTES, TextAppend, TextMutation
+from ithrl.context import ContextNode, JsonObject, content_digest
+from ithrl.mutation import (
+    MAX_MUTATION_TEXT_BYTES,
+    MutationError,
+    TextAppend,
+    TextMutation,
+    message_text,
+    replace_message_text,
+    request_text_item,
+)
 from ithrl.runner import Candidate, PreparedAttempt, prepare_candidate
 from ithrl.synthetic import extract_inference
 from ithrl.workflow import prepare_experiment
@@ -27,6 +35,46 @@ def _append(**changes: Any) -> TextAppend:
             **changes,
         }
     )
+
+
+@pytest.mark.parametrize(
+    ("message", "index"),
+    [
+        ({"role": "user", "content": "text"}, -1),
+        ({"role": "user", "content": "text"}, 1),
+        ({"role": "user", "content": [{"type": "input_text", "text": 42}]}, 0),
+    ],
+)
+def test_message_text_refuses_invalid_indices_and_nontext_blocks(
+    message: JsonObject, index: int
+) -> None:
+    with pytest.raises(MutationError):
+        message_text(message, index)
+    with pytest.raises(MutationError):
+        replace_message_text(message, index, "replacement")
+
+
+@pytest.mark.parametrize("content", ["original", [{"type": "input_text", "text": "original"}]])
+def test_replacement_preserves_the_original_message_and_surrounding_fields(content: Any) -> None:
+    original: JsonObject = {"role": "user", "content": content, "opaque": {"keep": [1, 2]}}
+    changed = replace_message_text(original, 0, "replacement")
+    assert message_text(changed, 0) == "replacement"
+    assert message_text(original, 0) == "original"
+    changed["opaque"] = None
+    assert original["opaque"] == {"keep": [1, 2]}
+
+
+def test_request_text_refuses_a_nonmessage_prior_input() -> None:
+    node = ContextNode(
+        id="ctx-a",
+        kind="message",
+        path="/input/0",
+        source="request.json",
+        mutable=True,
+        digest=content_digest("opaque"),
+    )
+    with pytest.raises(MutationError, match="ordinary user message"):
+        request_text_item({"input": ["opaque", {"role": "user", "content": "trigger"}]}, node)
 
 
 def _candidate(**changes: Any) -> Candidate:

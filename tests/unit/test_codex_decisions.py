@@ -164,6 +164,20 @@ def test_provider_metadata_is_not_inferred_from_an_unrelated_record(session: Nat
     assert codex_decisions._provider((first,)) is None
 
 
+def test_decision_context_boundary_cannot_follow_its_observed_record(
+    session: NativeSession,
+) -> None:
+    (decision,) = enumerate_decisions(session)
+    selector = decision.selector
+    with pytest.raises(ValidationError, match="boundary must not follow"):
+        type(selector).model_validate(
+            {
+                **selector.model_dump(),
+                "context_before_line": selector.record.line + 1,
+            }
+        )
+
+
 def test_decision_context_contains_only_earlier_source_records(
     session: NativeSession,
 ) -> None:

@@ -601,8 +601,8 @@ def test_capability_state_inspection_refuses_unavailable_state_without_exposing_
     assert str(missing) not in str(refused.value)
 
 
-@pytest.mark.parametrize("failure", ["setup", "verification"])
-def test_isolation_probe_failure_is_sanitized_and_cleans_temporary_state(
+@pytest.mark.parametrize("failure", ["setup", "verification", "verified-proof"])
+def test_isolation_probe_checks_proof_and_cleans_temporary_state(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
 ) -> None:
     state = tmp_path / "state"
@@ -618,23 +618,31 @@ def test_isolation_probe_failure_is_sanitized_and_cleans_temporary_state(
         )
     else:
 
-        def incorrect_proof(
-            _argv: tuple[str, ...], _environment: dict[str, str], cwd: Path, **_kwargs: object
+        def recorded_proof(
+            argv: tuple[str, ...], _environment: dict[str, str], cwd: Path, **_kwargs: object
         ) -> capability._CommandResult:
-            (cwd / "isolation-probe.txt").write_bytes(b"invalid-proof")
+            # Exercise orchestration; the real boundary has its own process test.
+            assert "--unshare-net" in argv
+            assert cwd.is_relative_to(state)
+            (cwd / "isolation-probe.txt").write_bytes(
+                capability._ISOLATION_RESULT if failure == "verified-proof" else b"invalid-proof"
+            )
             return capability._CommandResult(
                 stdout=b"private-proof-output", stderr=b"private-setup-detail"
             )
 
-        monkeypatch.setattr(capability, "_run_probe", incorrect_proof)
-    with pytest.raises(CopilotCapabilityError) as refused:
+        monkeypatch.setattr(capability, "_run_probe", recorded_proof)
+    if failure == "verified-proof":
         _REAL_ISOLATION_PROBE(_runtime(_fake_copilot(tmp_path)), state)
-    assert refused.value.code is CopilotCapabilityErrorCode.UNAVAILABLE
-    assert refused.value.probe_stage == "isolation"
-    assert "private-setup-detail" not in str(refused.value)
-    if failure == "verification":
-        assert refused.value.stdout == b"private-proof-output"
-        assert refused.value.stderr == b"private-setup-detail"
+    else:
+        with pytest.raises(CopilotCapabilityError) as refused:
+            _REAL_ISOLATION_PROBE(_runtime(_fake_copilot(tmp_path)), state)
+        assert refused.value.code is CopilotCapabilityErrorCode.UNAVAILABLE
+        assert refused.value.probe_stage == "isolation"
+        assert "private-setup-detail" not in str(refused.value)
+        if failure == "verification":
+            assert refused.value.stdout == b"private-proof-output"
+            assert refused.value.stderr == b"private-setup-detail"
     assert not tuple(state.iterdir())
     assert not tuple(host.iterdir())
 

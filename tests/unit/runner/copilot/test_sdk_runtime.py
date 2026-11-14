@@ -72,3 +72,58 @@ def test_runtime_detects_modified_dependency_content(
     module.write_text("value = 2\n")
     with pytest.raises(ValueError, match="runtime changed after selection"):
         runtime.assert_unchanged()
+
+
+def test_runtime_refuses_a_dependency_replaced_with_a_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _distribution(tmp_path, monkeypatch)
+    runtime = sdk_runtime.SDKRuntime()
+    module.unlink()
+    module.mkdir()
+    with pytest.raises(ValueError, match="runtime contains an unsafe file"):
+        runtime.assert_unchanged()
+
+
+@pytest.mark.parametrize("changed_at", [2, 3])
+def test_runtime_refuses_dependency_changes_during_inspection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, changed_at: int
+) -> None:
+    module = _distribution(tmp_path, monkeypatch)
+    runtime = sdk_runtime.SDKRuntime()
+    signature = sdk_runtime._signature
+    calls = 0
+
+    def changed_signature(path: Path) -> tuple[int, int, int, int, int]:
+        nonlocal calls
+        before = signature(path)
+        if path == module:
+            calls += 1
+            if calls >= changed_at:
+                return (*before[:4], before[4] + 1)
+        return before
+
+    monkeypatch.setattr(sdk_runtime, "_signature", changed_signature)
+    with pytest.raises(ValueError, match="runtime changed during inspection"):
+        runtime.assert_unchanged()
+    assert calls == changed_at
+
+
+def test_runtime_mounts_a_python_without_a_shared_library(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _distribution(tmp_path, monkeypatch)
+    config_var = sdk_runtime.sysconfig.get_config_var
+
+    def static_library(name: str) -> object:
+        return {"LIBDIR": str(tmp_path), "LDLIBRARY": "missing-library.so"}.get(
+            name, config_var(name)
+        )
+
+    monkeypatch.setattr(sdk_runtime.sysconfig, "get_config_var", static_library)
+    runtime = sdk_runtime.SDKRuntime()
+    assert runtime.shared_library is None
+    mounts = runtime.mounts("/fixture-state")
+    assert str(runtime.python) in mounts
+    assert str(runtime.stdlib) in mounts
+    assert str(module.parent) in mounts

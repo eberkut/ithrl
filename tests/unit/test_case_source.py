@@ -8,6 +8,7 @@ from collections.abc import Iterable, Iterator
 from operator import attrgetter
 from pathlib import Path
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 from pydantic import ValidationError
@@ -24,6 +25,7 @@ from ithrl.case import (
     SourceArtifact,
     UnsafeCasePathError,
     case_digest,
+    source_storage,
 )
 from ithrl.case import filesystem as case_filesystem
 from ithrl.case import source as case_source
@@ -140,6 +142,59 @@ def _create_case(
         default_experiment=EXPERIMENT,
         source_artifacts=source_artifacts,
     )
+
+
+def test_manifest_write_limit_removes_the_unpublished_case(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "case"
+    monkeypatch.setattr(source_storage, "MAX_SOURCE_MANIFEST_BYTES", 1)
+    with pytest.raises(CaseFormatError, match="manifest exceeds the byte limit"):
+        _create_case(target, source_artifacts=_artifacts())
+    assert not target.exists()
+
+
+def test_loading_enforces_the_total_source_read_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = _create_case(tmp_path / "case", source_artifacts=_artifacts())
+    monkeypatch.setattr(source_storage, "MAX_SOURCE_BYTES", 1)
+    with pytest.raises(CaseFormatError, match="total byte limit"):
+        workspace.load()
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="requires named pipes")
+def test_source_scan_refuses_special_files_without_opening_them(tmp_path: Path) -> None:
+    workspace = _create_case(tmp_path / "case", source_artifacts=_artifacts())
+    os.mkfifo(workspace.root / "source/pipe")
+    with pytest.raises(UnsafeCasePathError, match="regular files"):
+        workspace.load()
+
+
+def test_source_scan_normalizes_directory_io_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = _create_case(tmp_path / "case", source_artifacts=_artifacts())
+    scan = os.scandir
+
+    def unavailable(path: Any) -> Any:
+        if Path(path) == workspace.root / "source":
+            raise PermissionError("private-source-detail")
+        return scan(path)
+
+    monkeypatch.setattr(os, "scandir", unavailable)
+    with pytest.raises(CaseFormatError, match="cannot inspect source evidence") as refused:
+        workspace.load()
+    assert "private-source-detail" not in str(refused.value)
+
+
+def test_source_entry_stat_failure_is_content_safe() -> None:
+    entry = Mock(spec=os.DirEntry)
+    entry.stat.side_effect = OSError("private-entry-detail")
+    with pytest.raises(CaseFormatError, match="cannot inspect source evidence") as refused:
+        source_storage._entry_metadata(entry)
+    entry.stat.assert_called_once_with(follow_symlinks=False)
+    assert "private-entry-detail" not in str(refused.value)
 
 
 def _render_manifest_json(value: object) -> bytes:

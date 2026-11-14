@@ -13,7 +13,10 @@ from ithrl.runner.codex.configuration import (
     CodexProviderConfiguration,
     resolve_codex_configuration,
 )
-from ithrl.runner.codex.runtime_configuration import validate_runner_configuration
+from ithrl.runner.codex.runtime_configuration import (
+    normalize_base_url,
+    validate_runner_configuration,
+)
 
 
 def _private_file(path: Path, content: str) -> Path:
@@ -21,6 +24,67 @@ def _private_file(path: Path, content: str) -> Path:
     path.write_text(content, encoding="utf-8")
     path.chmod(0o600)
     return path
+
+
+@pytest.mark.parametrize("port", ["not-a-port", "65536", "-1"])
+def test_base_url_refuses_invalid_ports(port: str) -> None:
+    with pytest.raises(ValueError, match="base URL is unsafe"):
+        normalize_base_url(f"https://example.invalid:{port}/v1")
+
+
+@pytest.mark.parametrize("port", ["", ":8443"])
+def test_base_url_preserves_bracketed_ipv6_addresses(port: str) -> None:
+    assert normalize_base_url(f"https://[2001:db8::1]{port}/v1/") == (
+        f"https://[2001:db8::1]{port}/v1"
+    )
+
+
+@pytest.mark.parametrize("rendered", [b"\xff", b"invalid = [", b""])
+def test_runtime_configuration_refuses_malformed_documents(rendered: bytes) -> None:
+    with pytest.raises(ValueError, match="safety policy"):
+        validate_runner_configuration(
+            rendered, endpoint="https://example.invalid/responses", environment_names=()
+        )
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        "root-policy",
+        "feature-policy",
+        "provider-field",
+        "provider-policy",
+        "idle-timeout",
+        "header-type",
+        "header-value",
+    ],
+)
+def test_runtime_configuration_refuses_policy_and_provider_drift(
+    tmp_path: Path, changed: str
+) -> None:
+    configuration = _resolve(tmp_path, environment={"OPENAI_API_KEY": "fixture-key"})
+    rendered = configuration.rendered_config
+    if changed == "root-policy":
+        rendered = rendered.replace(b'approval_policy = "never"', b'approval_policy = "on-request"')
+    elif changed == "feature-policy":
+        rendered = rendered.replace(b"[features]", b"[features]\nunknown = false")
+    elif changed == "provider-field":
+        rendered = rendered.replace(b'name = "ithrl isolated provider"\n', b"")
+    elif changed == "provider-policy":
+        rendered = rendered.replace(b"supports_websockets = false", b"supports_websockets = true")
+    else:
+        addition = {
+            "idle-timeout": b"stream_idle_timeout_ms = 0",
+            "header-type": b"env_http_headers = 1",
+            "header-value": b"env_http_headers = { Authorization = 1 }",
+        }[changed]
+        rendered = rendered.replace(b"[features]", addition + b"\n[features]")
+    with pytest.raises(ValueError, match="safety policy"):
+        validate_runner_configuration(
+            rendered,
+            endpoint=configuration.endpoint,
+            environment_names=configuration.environment_names,
+        )
 
 
 def _resolve(

@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 from weakref import ReferenceType, ref
 
 from ithrl.case.contracts import CaseFormatError, CaseManifest
@@ -15,6 +15,7 @@ from ithrl.context import (
     ContextGraph,
     ContextNode,
     JsonObject,
+    JsonValue,
     content_digest,
     decode_pointer,
     validate_json_limits,
@@ -179,9 +180,9 @@ class CaseEvidence:
             if node.id in removed:
                 raise MutationError("section removal overlaps a whole-record dependency closure")
             index, original = request_text_item(self._exact_request(), node)
-            inputs = request["input"]
-            if not isinstance(inputs, list):
-                raise MutationError("mutation requires an input-message list")
+            # request_text_item proves the original input list. Graph pruning preserves
+            # container types and forbids paths overlapping this retained message.
+            inputs = cast(list[JsonValue], request["input"])
             if isinstance(edit, TextAppend):
                 inputs[index] = append_message_text(original, edit)
             else:
@@ -202,9 +203,7 @@ class CaseEvidence:
                     and tokens[1].isdigit()
                     and int(tokens[1]) < index
                 )
-                copied = inputs[index - prior_removed]
-                if not isinstance(copied, dict):
-                    raise MutationError("mutation requires an ordinary user message")
+                copied = cast(JsonObject, inputs[index - prior_removed])
                 inputs[index - prior_removed] = replace_message_text(
                     copied, edit.content_index, retained
                 )

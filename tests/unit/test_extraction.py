@@ -70,6 +70,25 @@ def test_native_rederivation_refuses_missing_selected_source(tmp_path: Path) -> 
         validate_extracted_case(evidence)
 
 
+@pytest.mark.parametrize("missing", ["decision", "harness", "harness_version", "source_schema"])
+def test_logical_capture_requires_its_decision_and_source_metadata(
+    tmp_path: Path, missing: str
+) -> None:
+    evidence = _native_case_evidence(tmp_path)
+    manifest = evidence.manifest
+    if missing != "decision":
+        manifest = manifest.model_copy(update={missing: None})
+    with pytest.raises(CaseFormatError, match="logical-session capture requires"):
+        CaseEvidence(
+            manifest=manifest,
+            request=None,
+            context=evidence.context,
+            default_experiment=evidence.default_experiment,
+            source_artifacts=evidence.source_artifacts,
+            decision=None if missing == "decision" else evidence.decision,
+        )
+
+
 def test_editable_text_normalizes_adapter_refusal_without_exposing_its_content(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -11,8 +11,14 @@ from typer.testing import CliRunner
 
 from ithrl.cli import app
 from ithrl.cli.fuzz_output import FuzzCounts, FuzzOutput, render_fuzz
+from ithrl.cli.fuzz_run import execute_fuzz
 from ithrl.cli.output import ExitCode, OutputFormat
 from ithrl.fuzz.configuration import FuzzConfigurationError, load_fuzz_configuration
+
+
+def test_new_fuzz_execution_requires_all_prepared_inputs() -> None:
+    with pytest.raises(ValueError, match="complete prepared inputs"):
+        execute_fuzz(None, None)
 
 
 @pytest.mark.parametrize("mode", ["--dry-run", "--resume"])
