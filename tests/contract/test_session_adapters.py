@@ -89,6 +89,18 @@ def test_native_session_returns_defensive_record_copies() -> None:
     assert session.records[0]["type"] == "session_meta"
 
 
+@pytest.mark.parametrize("empty", ["bytes", "records"])
+def test_native_session_refuses_empty_evidence(empty: str) -> None:
+    session = parse_session(CASES[0][0])
+    with pytest.raises(ValueError, match="native session evidence must not be empty"):
+        NativeSession(
+            metadata=session.metadata,
+            source=session.source,
+            native_bytes=b"" if empty == "bytes" else session.native_bytes,
+            records=() if empty == "records" else session.records,
+        )
+
+
 @pytest.mark.parametrize(("sha256", "size_delta"), [("0" * 64, 0), (None, 1)])
 def test_native_session_requires_source_facts_to_match_bytes(
     sha256: str | None,

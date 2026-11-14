@@ -10,6 +10,7 @@ from dataclasses import replace
 from pathlib import Path
 from types import TracebackType
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 
@@ -54,6 +55,58 @@ def test_private_request_is_consumed_after_reading(tmp_path: Path) -> None:
 
     assert worker._read_private_request(path) == _request()
     assert not path.exists()
+
+
+@pytest.mark.parametrize("failure", ["opening", "reading", "unavailable"])
+def test_request_read_failures_are_detected_without_disclosing_contents(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    path = tmp_path / "request.json"
+    path.write_text(json.dumps(_request()))
+    path.chmod(0o600)
+    original_open = Path.open
+
+    def racing_open(selected: Path, *args: Any, **kwargs: Any) -> Any:
+        if selected == path and args == ("rb",):
+            if failure == "unavailable":
+                raise OSError("private-detail")
+            if failure == "reading":
+                path.write_bytes(b"{}")
+            else:
+                replacement = tmp_path / "replacement.json"
+                replacement.write_bytes(b"{}")
+                replacement.chmod(0o600)
+                replacement.replace(path)
+        return original_open(selected, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", racing_open)
+    with pytest.raises(worker.WorkerError, match=r"changed while|unavailable") as refused:
+        worker._read_private_request(path)
+    assert "private-detail" not in str(refused.value)
+    assert path.exists() is (failure != "reading")
+
+
+def test_app_server_start_failure_is_content_safe(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(worker, "_configure_relay", Mock())
+    monkeypatch.setattr(worker.subprocess, "Popen", Mock(side_effect=OSError("private-detail")))
+    with pytest.raises(worker.WorkerError, match="could not start") as refused:
+        worker._exchange(
+            Path("/fixture/codex"), _request(), "http://127.0.0.1", audit=io.StringIO()
+        )
+    assert "private-detail" not in str(refused.value)
+
+
+@pytest.mark.parametrize("provider", [None, "", "bad/provider"])
+def test_invalid_provider_is_refused_before_transport_creation(
+    monkeypatch: pytest.MonkeyPatch, provider: object
+) -> None:
+    transport = Mock(side_effect=AssertionError("invalid provider reached transport creation"))
+    monkeypatch.setattr(worker, "ResponsesRelay", transport)
+    request = _request()
+    request["provider"] = provider
+    with pytest.raises(worker.WorkerError, match="provider is invalid"):
+        worker._run_app_server(Path("/fixture/codex"), request, audit=io.StringIO())
+    transport.assert_not_called()
 
 
 @pytest.mark.parametrize("unsafe", ["permissions", "symlink", "empty", "oversized", "relative"])

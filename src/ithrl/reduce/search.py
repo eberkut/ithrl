@@ -134,14 +134,13 @@ async def run_search[Trial: _Trial](
 
 
 def _partition(items: Sequence[str], count: int) -> Iterable[tuple[str, ...]]:
-    if count < 1:
-        raise ValueError("partition count must be at least one")
+    """Split a traversal's nonempty items; its count is within [1, len(items)]."""
+
     size, remainder = divmod(len(items), count)
     start = 0
     for index in range(count):
         width = size + (1 if index < remainder else 0)
-        if width:
-            yield tuple(items[start : start + width])
+        yield tuple(items[start : start + width])
         start += width
 
 

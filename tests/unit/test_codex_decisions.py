@@ -11,7 +11,7 @@ from pydantic import ValidationError
 from ithrl.adapters._jsonl import JsonlDocument, read_jsonl
 from ithrl.adapters.codex import PARSER
 from ithrl.adapters.codex import decisions as codex_decisions
-from ithrl.adapters.codex.context import compile_context
+from ithrl.adapters.codex.context import compile_context, decision_input_node_id, editable_text
 from ithrl.adapters.codex.decisions import enumerate_decisions
 from ithrl.adapters.contracts import NativeSession, ParsingLimits, SourceFacts
 from ithrl.behavior import FinalResponseTarget
@@ -82,6 +82,86 @@ def test_enumeration_is_deterministic_and_summary_is_content_free(
     summary = first[0].summarize().model_dump_json()
     assert "fixture-command" not in summary
     assert "fixture-value" not in summary
+
+
+def test_trigger_selection_skips_assistant_messages_and_derived_nodes(
+    session: NativeSession,
+) -> None:
+    records = list(session.records[:2])
+    records.extend(
+        [
+            _record(
+                2,
+                "response_item",
+                {
+                    "type": "message",
+                    "id": "user-1",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "Task."}],
+                },
+            ),
+            _record(
+                3,
+                "response_item",
+                {
+                    "type": "message",
+                    "id": "assistant-1",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Prior answer."}],
+                },
+            ),
+            _record(4, "token_usage_record", {}),
+            _record(5, "event_msg", {"type": "task_started", "turn_id": "turn-fixture-001"}),
+            _record(
+                6,
+                "event_msg",
+                {
+                    "type": "task_complete",
+                    "turn_id": "turn-fixture-001",
+                    "last_agent_message": "Complete.",
+                },
+            ),
+        ]
+    )
+    session = PARSER.parse(_document(tuple(records)))
+    (decision,) = enumerate_decisions(session)
+    context = compile_context(session, decision.selector)
+    derived = ContextNode(
+        id="derived",
+        kind="fixture",
+        path="/derived",
+        source="derived",
+        mutable=False,
+        digest=content_digest("derived"),
+    )
+    assert (
+        decision_input_node_id((*context.nodes, derived), session.records, decision.selector)
+        == context.nodes[2].id
+    )
+    assert editable_text(session, decision.selector, context) == ()
+    assert not context.nodes[4].mutable
+    assert "opaque-context-frozen" in decision.limitations
+
+
+@pytest.mark.parametrize("missing", ["turn_id", "model"])
+def test_missing_optional_turn_metadata_and_orphan_events_do_not_invent_decisions(
+    session: NativeSession, missing: str
+) -> None:
+    records = list(session.records)
+    _payload(records[1]).pop(missing)
+    records.append(
+        _record(13, "event_msg", {"type": "task_complete", "last_agent_message": "Orphan."})
+    )
+    (decision,) = enumerate_decisions(PARSER.parse(_document(tuple(records))))
+    assert decision.case.model_requested is None
+    assert decision.observation.final_response == "Fixture complete."
+
+
+def test_provider_metadata_is_not_inferred_from_an_unrelated_record(session: NativeSession) -> None:
+    first = session.records[0]
+    assert codex_decisions._provider((first,)) == "fixture-provider"
+    first["type"] = "turn_context"
+    assert codex_decisions._provider((first,)) is None
 
 
 def test_decision_context_contains_only_earlier_source_records(

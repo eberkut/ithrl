@@ -8,7 +8,7 @@ import pytest
 
 from ithrl.adapters import enumerate_decisions, parse_session
 from ithrl.adapters.contracts import NativeSession
-from ithrl.case import CaseEvidence
+from ithrl.case import CaseEvidence, SourceArtifact
 from ithrl.context import JsonObject, JsonValue, content_digest
 from ithrl.decisions import DecisionEvidence
 from ithrl.execution import (
@@ -44,6 +44,42 @@ def _evidence(tmp_path: Path) -> CaseEvidence:
         target_id=decision.targets[0].target_id,
         case_path=tmp_path / "case",
     ).load()
+
+
+def test_materialization_rejects_rebound_source_evidence(tmp_path: Path) -> None:
+    evidence = _evidence(tmp_path)
+    attempt = _attempt(evidence)
+    artifact = evidence.source_artifacts[0]
+    evidence._source_artifacts = (
+        SourceArtifact(path=artifact.path, media_type=artifact.media_type, content=b"{}"),
+    )
+    with pytest.raises(CodexMaterializationError) as refused:
+        materialize_codex_attempt(attempt)
+    assert refused.value.code is CodexMaterializationErrorCode.CHANGED_EVIDENCE
+
+
+@pytest.mark.parametrize(
+    "content", [[], [{"type": "input_image"}], [{"type": "input_text", "text": ""}]]
+)
+def test_direct_user_trigger_refuses_unsupported_or_empty_input(
+    tmp_path: Path, content: JsonValue
+) -> None:
+    records = [
+        json.loads(line)
+        for line in (FIXTURES / "codex-session/rollout.jsonl").read_text().splitlines()
+    ]
+    records = [
+        record
+        for record in records
+        if record["type"] != "response_item" or record["payload"].get("type") == "message"
+    ]
+    next(record for record in records if record["type"] == "response_item")["payload"][
+        "content"
+    ] = content
+    evidence = _evidence_from_records(tmp_path, records)
+    with pytest.raises(CodexMaterializationError) as refused:
+        materialize_codex_attempt(_attempt(evidence))
+    assert refused.value.code is CodexMaterializationErrorCode.UNSUPPORTED_CONTEXT
 
 
 def _evidence_with_field(

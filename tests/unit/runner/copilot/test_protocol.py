@@ -365,6 +365,85 @@ def test_input_and_dispatch_receipts_are_bound_and_strict(
 
 
 @pytest.mark.parametrize(
+    ("requests", "code"),
+    [
+        ("invalid-request-list", "invalid-message"),
+        ([None], "invalid-action"),
+        ([{"toolCallId": "call-1", "name": "network", "arguments": {}}], "unsupported-action"),
+        ([{"toolCallId": "call-1", "name": "bash", "arguments": "pwd"}], "invalid-action"),
+        (
+            [{"toolCallId": "call-1", "name": "bash", "arguments": {"command": "x" * 70000}}],
+            "invalid-action",
+        ),
+        ([{"toolCallId": "call-1", "name": "bash", "arguments": {}}] * 2, "action-mismatch"),
+        ([{"toolCallId": "call-1", "name": "bash", "arguments": {}}] * 65, "action-limit"),
+    ],
+)
+def test_shell_request_validation_refuses_invalid_or_unbounded_actions(
+    requests: object, code: str
+) -> None:
+    events = _events(shell_target=True)
+    message = next(event for event in events if event["type"] == "assistant.message")
+    message["data"]["toolRequests"] = requests
+    with pytest.raises(CopilotProtocolError) as refused:
+        _parse(events, shell_target=True)
+    assert refused.value.code == code
+
+
+def test_returned_system_message_must_match_captured_input() -> None:
+    events = _events()
+    system = next(event for event in events if event["type"] == "system.message")
+    system["data"]["content"] = "Changed fixture guidance"
+    with pytest.raises(CopilotProtocolError) as refused:
+        _parse(events)
+    assert refused.value.code == "input-mismatch"
+
+
+def test_reasoning_identity_metadata_is_bound_to_the_selected_turn_and_model() -> None:
+    events = _events()
+    events.insert(
+        8,
+        _event(
+            "assistant.reasoning",
+            content="Fixture reasoning",
+            reasoningId="reasoning-1",
+            model=MODEL,
+            turnId=TURN,
+        ),
+    )
+    assert _parse(events).final_text == "Fixture complete."
+
+
+def test_continuation_refuses_an_unrequested_user_message() -> None:
+    events = _events()
+    events.insert(4, _event("user.message", content="Private unrequested fixture input"))
+    with pytest.raises(CopilotProtocolError) as refused:
+        _parse(events)
+    assert refused.value.code == "unexpected-user-message"
+
+
+def test_startup_events_cannot_restart_an_active_turn() -> None:
+    events = _events()
+    events.insert(8, _event("session.resume", eventCount=3))
+    with pytest.raises(CopilotProtocolError) as refused:
+        _parse(events)
+    assert refused.value.code == "invalid-sequence"
+
+
+def test_denial_drain_retains_bounded_continuation_lifecycle_without_more_dispatch() -> None:
+    events = _events(shell_target=True)
+    events[-1:-1] = [
+        _event("assistant.turn_end", turnId=TURN),
+        _event("assistant.turn_start", turnId="next-turn"),
+        _event("session.usage_checkpoint"),
+        _event("session.idle"),
+    ]
+    result = _parse(events, shell_target=True)
+    assert result.actions_requested == result.actions_denied == 1
+    assert result.provider_calls_started == 1
+
+
+@pytest.mark.parametrize(
     "kind",
     [
         "ithrl.copilot.input",

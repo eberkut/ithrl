@@ -105,6 +105,29 @@ def test_public_runner_imports_execute_a_prepared_candidate(tmp_path: Path) -> N
     assert result.accounting.tool_network_requests == 0
 
 
+@pytest.mark.parametrize("fault", ["provider-calls", "wall-time"])
+def test_successful_result_cannot_exceed_its_frozen_execution_budget(
+    tmp_path: Path, fault: str
+) -> None:
+    runner, attempt = _attempt(_synthetic_evidence(tmp_path))
+    result = asyncio.run(runner.run(attempt))
+    accounting = result.accounting.model_dump()
+    if fault == "provider-calls":
+        accounting.update(provider_calls_started=1, provider_calls_completed=1)
+        code = RunnerErrorCode.SAFETY
+        message = "planned provider-call count"
+    else:
+        accounting["elapsed_milliseconds"] = (
+            attempt.resource_limits.max_wall_time_seconds * 1000 + 1
+        )
+        code = RunnerErrorCode.TIMEOUT
+        message = "wall-time limit"
+    result = RunResult.model_validate({**result.model_dump(), "accounting": accounting})
+    with pytest.raises(RunnerError, match=message) as refused:
+        validate_run_result(attempt, result)
+    assert refused.value.code is code
+
+
 @pytest.mark.parametrize(
     ("phase", "arm"),
     [
@@ -717,6 +740,45 @@ def test_candidate_contract_rejects_overlapping_context_partitions() -> None:
             removed_context_ids=("ctx-a",),
             materialization="exact-request",
         )
+
+
+@pytest.mark.parametrize("field", ["retained_context_ids", "removed_context_ids"])
+def test_candidate_refuses_duplicate_partition_members(field: str) -> None:
+    data = {
+        "case_digest": "a" * 64,
+        "execution_plan_digest": "b" * 64,
+        "retained_context_ids": (),
+        "removed_context_ids": (),
+        "materialization": "exact-request",
+        field: ("ctx-a", "ctx-a"),
+    }
+    with pytest.raises(ValidationError, match="must not contain duplicates"):
+        Candidate.model_validate(data)
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"reason_code": "failed"}, "cannot have an error reason"),
+        ({"accounting": None}, "requires accounting"),
+        ({"effective_policy_digest": None}, "requires an effective policy"),
+        ({"retry_safe": True}, "do not need a retry-safe marker"),
+    ],
+)
+def test_completed_attempt_evidence_requires_complete_consistent_facts(
+    changes: dict[str, object], message: str
+) -> None:
+    data = {
+        "attempt_id": "attempt-" + "a" * 32,
+        "attempt_digest": "b" * 64,
+        "termination_reason": "completed",
+        "effective_policy_digest": "c" * 64,
+        "provider_acceptance_state": ProviderAcceptanceState.NOT_STARTED,
+        "accounting": RunAccounting(),
+        **changes,
+    }
+    with pytest.raises(ValidationError, match=message):
+        AttemptEvidence.model_validate(data)
 
 
 def test_tool_call_rejects_oversized_or_deep_arguments() -> None:

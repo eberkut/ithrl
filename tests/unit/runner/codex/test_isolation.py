@@ -8,6 +8,7 @@ import sysconfig
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import MappingProxyType
+from unittest.mock import Mock
 
 import pytest
 
@@ -112,7 +113,14 @@ def test_prepares_private_worker_state_and_minimal_environment(tmp_path: Path) -
 
 @pytest.mark.parametrize(
     "invalid",
-    ["worker-digest", "empty-support", "duplicate-support", "worker-support", "request-size"],
+    [
+        "worker-digest",
+        "empty-support",
+        "duplicate-support",
+        "worker-support",
+        "request-size",
+        "workspace-exists",
+    ],
 )
 def test_preparation_refuses_invalid_worker_inputs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, invalid: str
@@ -130,6 +138,8 @@ def test_preparation_refuses_invalid_worker_inputs(
         programs = programs + programs
     elif invalid == "worker-support":
         programs = ((worker, digest),)
+    elif invalid == "workspace-exists":
+        (state.root / "workspace").mkdir(mode=0o700)
     else:
         monkeypatch.setattr(isolation, "MAX_WORKER_REQUEST_BYTES", 1)
 
@@ -148,6 +158,84 @@ def test_preparation_refuses_invalid_worker_inputs(
 
     assert not (state.root / "request.json").exists()
     assert not (state.root / "codex-home" / "config.toml").exists()
+
+
+@pytest.mark.parametrize("failure", ["certificate", "command", "publication"])
+def test_preparation_failures_close_authentication_and_keep_errors_content_safe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    from ithrl.case import CaseError
+
+    state = OwnedAttemptState.create(tmp_path / "state", ATTEMPT_ID)
+    worker = _program(tmp_path / "worker.py")
+    support = _program(tmp_path / "protocol.py")
+    descriptors: list[int] = []
+    original = isolation._memory_file
+
+    def remember(content: bytes | None) -> int | None:
+        descriptor = original(content)
+        if descriptor is not None:
+            descriptors.append(descriptor)
+        return descriptor
+
+    monkeypatch.setattr(isolation, "_memory_file", remember)
+    if failure == "certificate":
+        monkeypatch.setattr(
+            isolation, "snapshot_certificate_files", Mock(side_effect=ValueError("private-detail"))
+        )
+    elif failure == "command":
+        monkeypatch.setattr(
+            isolation,
+            "_bubblewrap_argv",
+            Mock(side_effect=CodexIsolationError("command unavailable")),
+        )
+    else:
+        monkeypatch.setattr(
+            isolation, "atomic_write_bytes", Mock(side_effect=CaseError("private-detail"))
+        )
+    with pytest.raises(CodexIsolationError) as refused:
+        prepare_codex_process(
+            state,
+            runtime=CodexRuntime(
+                codex=Path("/bin/true"), bubblewrap=Path("/bin/true"), python=Path("/bin/true")
+            ),
+            configuration=_configuration(auth_data=b"fixture-auth"),
+            request={"text": "fixture"},
+            worker_source=worker,
+            worker_digest=program_digest(worker),
+            support_programs=((support, program_digest(support)),),
+        )
+    assert "private-detail" not in str(refused.value)
+    assert len(descriptors) == (1 if failure == "command" else 0)
+    for descriptor in descriptors:
+        with pytest.raises(OSError, match="Bad file descriptor"):
+            os.fstat(descriptor)
+
+
+@pytest.mark.skipif(not hasattr(os, "memfd_create"), reason="requires Linux memfd")
+def test_authentication_write_failure_closes_the_memory_file(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    descriptors: list[int] = []
+    create = os.memfd_create
+
+    def remember(name: str, flags: int) -> int:
+        descriptor = create(name, flags)
+        descriptors.append(descriptor)
+        return descriptor
+
+    monkeypatch.setattr(os, "memfd_create", remember)
+    monkeypatch.setattr(os, "write", Mock(side_effect=OSError("private-write-detail")))
+    with pytest.raises(CodexIsolationError, match="private Codex authentication"):
+        isolation._memory_file(b"fixture-auth")
+    assert len(descriptors) == 1
+    with pytest.raises(OSError, match="Bad file descriptor"):
+        os.fstat(descriptors[0])
+
+
+def test_empty_authentication_is_refused() -> None:
+    with pytest.raises(CodexIsolationError, match="private Codex authentication"):
+        isolation._memory_file(b"")
 
 
 @pytest.mark.skipif(not hasattr(os, "memfd_create"), reason="requires Linux memfd")

@@ -204,8 +204,6 @@ def _selector(
 
 
 def _provider(records: tuple[JsonObject, ...]) -> str | None:
-    if not records:
-        return None
     first = records[0]
     if first.get("type") != "session_meta":
         return None

@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import asyncio
 from collections import Counter
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
+from ithrl.experiment import ExperimentDefinition, SampledCalibrationPhase
 from ithrl.fuzz import FuzzOutcome
 from ithrl.fuzz.sampling import (
     confirm_fuzz_block,
@@ -25,6 +27,40 @@ pytest.importorskip("scipy")
 
 
 from fuzz_support import setup
+
+
+@pytest.mark.parametrize("changed", ["experiment", "calibration", "original"])
+def test_sampling_refuses_unbound_campaign_inputs_before_dispatch(
+    tmp_path: Path, changed: str
+) -> None:
+    evidence, prepared, campaign, runner, _, _, _ = setup(tmp_path)
+    if changed == "experiment":
+        prepared = replace(
+            prepared, experiment=ExperimentDefinition.from_toml(evidence.default_experiment)
+        )
+        message = "sampled fuzzing requires a sampled experiment"
+    elif changed == "calibration":
+        prepared = replace(
+            prepared,
+            experiment=prepared.experiment.model_copy(
+                update={
+                    "calibration": SampledCalibrationPhase(
+                        required_valid=1, minimum_matches=1, max_attempts=1
+                    )
+                }
+            ),
+        )
+        message = "campaign calibration differs"
+    else:
+        campaign = campaign.model_copy(
+            update={
+                "original": campaign.original.model_copy(update={"execution_plan_digest": "f" * 64})
+            }
+        )
+        message = "campaign original differs"
+    with pytest.raises(ValueError, match=message):
+        prepare_fuzz_sampling(evidence, prepared, campaign)
+    assert runner.calls == []
 
 
 def test_discovery_simplification_and_fresh_confirmation_use_separate_owned_samples(

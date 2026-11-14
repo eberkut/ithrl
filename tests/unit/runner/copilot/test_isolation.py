@@ -7,6 +7,7 @@ import stat
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -61,6 +62,38 @@ def _configuration() -> CopilotConfiguration:
         environment={"GH_TOKEN": "private-token"},
         config_file=None,
     )
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"session_id": "../foreign"}, "session identity is invalid"),
+        ({"native_session": b""}, "native session exceeds"),
+        ({"system_message": ""}, "system message exceeds"),
+        ({"system_message": "\ud800"}, "worker input is invalid"),
+        ({"model": ""}, "model identity is invalid"),
+        ({"worker_digest": "0" * 64}, "worker source changed"),
+    ],
+)
+def test_process_preparation_refuses_invalid_private_inputs_before_launch(
+    tmp_path: Path, changes: dict[str, Any], message: str
+) -> None:
+    state = OwnedAttemptState.create(tmp_path / "state", ATTEMPT_ID)
+    worker = _program(tmp_path / "worker.py")
+    arguments: dict[str, Any] = {
+        "runtime": _runtime(tmp_path),
+        "configuration": _configuration(),
+        "native_session": b'{"type":"session"}\n',
+        "session_id": "session-1",
+        "system_message": "Fixture guidance",
+        "model": "fixture-model",
+        "target": "final-response",
+        "worker_source": worker,
+        "worker_digest": program_digest(worker),
+        **changes,
+    }
+    with pytest.raises(CopilotIsolationError, match=message):
+        prepare_copilot_process(state, **arguments)
 
 
 @pytest.mark.parametrize("target", ["final-response", "shell-action"])

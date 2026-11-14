@@ -8,10 +8,13 @@ from pathlib import Path
 from typing import Literal
 
 import pytest
+from pydantic import ValidationError
 from typer.testing import CliRunner
 
 from ithrl.cli import app
 from ithrl.cli.fuzz_session import (
+    FuzzProfile,
+    FuzzSession,
     FuzzSessionError,
     load_fuzz_profile,
     load_fuzz_session,
@@ -333,10 +336,16 @@ def test_native_detection_consent_and_saved_profile_dry_run(
     )
     experiment_before = (tmp_path / "case/experiments/default.toml").read_bytes()
     protected = _protected_inputs(tmp_path)
-    preflight = CliRunner().invoke(app, [*args, "--dry-run"])
+    refused = CliRunner().invoke(app, args)
+    assert refused.exit_code == ExitCode.UNSUPPORTED, refused.output
+    assert json.loads(refused.stdout)["error_code"] == "detection-required"
+    preflight = CliRunner().invoke(
+        app, [*args, "--dry-run", "--max-provider-calls-per-attempt", "1"]
+    )
     assert preflight.exit_code == 0, preflight.output
     assert json.loads(preflight.stdout)["status"] == "detection-required"
     assert json.loads(preflight.stdout)["harness"] == harness
+    assert "--max-provider-calls-per-attempt 1" in json.loads(preflight.stdout)["next_command"]
     assert not detections
     assert not runner.calls
     profile = tmp_path / "profile.json"
@@ -772,6 +781,77 @@ def _detected_mock_command(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     detected = CliRunner().invoke(app, [*args, "--detect", "--profile", str(profile)])
     assert detected.exit_code == 0, detected.output
     return [*args, "--profile", str(profile), "--acknowledge-model-execution"], runner
+
+
+@pytest.mark.parametrize("changed", ["configuration", "call-cap"])
+def test_saved_fuzz_profile_refuses_changed_operator_inputs_before_dispatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, changed: str
+) -> None:
+    arguments, runner = _detected_mock_command(tmp_path, monkeypatch)
+    expected = "profile-provider-call-limit-mismatch"
+    if changed == "configuration":
+        config = tmp_path / "fuzz.toml"
+        config.write_text(config.read_text().replace("seed = 1", "seed = 2"))
+        expected = "profile-input-mismatch"
+    else:
+        arguments += ["--max-provider-calls-per-attempt", "2"]
+    result = CliRunner().invoke(app, arguments)
+    assert result.exit_code == ExitCode.UNSUPPORTED, result.output
+    assert json.loads(result.stdout)["error_code"] == expected
+    assert runner.calls == []
+
+
+def test_detection_uses_private_default_profile_location_without_dispatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    arguments, runner, _ = mock_native(tmp_path, monkeypatch)
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    result = CliRunner().invoke(app, [*arguments, "--detect"])
+    assert result.exit_code == ExitCode.SUCCESS, result.output
+    path = Path(json.loads(result.stdout)["profile_path"])
+    assert path.parent == tmp_path / "data/ithrl/fuzz-profiles"
+    assert load_fuzz_profile(path).digest == path.stem
+    assert runner.calls == []
+
+
+@pytest.mark.parametrize(
+    "fault", ["relative-case", "identity", "foreign-run", "relative-store", "naive-start"]
+)
+def test_saved_fuzz_contracts_require_bound_identity_and_canonical_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str
+) -> None:
+    _, runner = _detected_mock_command(tmp_path, monkeypatch)
+    profile = load_fuzz_profile(tmp_path / "profile.json")
+    if fault in {"relative-case", "identity"}:
+        data = profile.model_dump()
+        if fault == "relative-case":
+            data["case_path"] = Path("relative")
+        else:
+            data["identity"]["runner_fingerprint"] = "changed-runner"
+        with pytest.raises(
+            ValidationError, match=r"paths must be absolute|execution identities differ"
+        ):
+            FuzzProfile.model_validate(data)
+    else:
+        run_id = "fuzz-" + "a" * 32
+        data = {
+            "run_id": run_id,
+            "run_directory": profile.case_path / ".runs" / run_id,
+            "observation_store": tmp_path / "observations.sqlite",
+            "profile": profile,
+            "started_at": datetime.now(UTC),
+        }
+        if fault == "foreign-run":
+            data["run_directory"] = tmp_path / "other-run"
+        elif fault == "relative-store":
+            data["observation_store"] = Path("relative.sqlite")
+        else:
+            data["started_at"] = datetime(2026, 1, 1, tzinfo=UTC).replace(tzinfo=None)
+        with pytest.raises(
+            ValidationError, match=r"canonical case|absolute without traversal|UTC offset"
+        ):
+            FuzzSession.model_validate(data)
+    assert runner.calls == []
 
 
 def test_saved_fuzz_profile_is_idempotent_and_cannot_be_replaced(

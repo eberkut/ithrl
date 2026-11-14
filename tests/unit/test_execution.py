@@ -573,6 +573,22 @@ def test_capability_contract_is_strict_and_immutable() -> None:
         ({}, {"action_denial": "unverified"}, "action denial"),
         ({}, {"source_store_effect": "may-change"}, "source session"),
         ({}, {"supports_timeout": False}, "timeout and cancellation"),
+        (
+            {"capture_type": "reconstructed", "candidate_materialization": "source-backed"},
+            {},
+            "capture type is not supported",
+        ),
+        ({}, {"supported_targets": ("final-response",)}, "target is not supported"),
+        ({}, {"harness": "other-harness"}, "harness differs"),
+        ({}, {"source_schema": "other-schema"}, "source schema differs"),
+        (
+            {},
+            {"supported_context_operations": ("append-text",)},
+            "dependency-closed context removal",
+        ),
+        ({}, {"action_visibility": "unknown"}, "keep the action visible"),
+        ({}, {"original_workspace_effect": "may-change"}, "original workspace"),
+        ({}, {"protected_state_enforcement": "postcondition"}, "cannot prevent"),
     ],
 )
 def test_resolved_plan_rejects_contradictory_execution_facts(

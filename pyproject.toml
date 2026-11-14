@@ -177,6 +177,7 @@ branch = true
 source = ["ithrl"]
 
 [tool.coverage.report]
+fail_under = 90
 exclude_also = [
   "if TYPE_CHECKING:",
   "raise AssertionError",

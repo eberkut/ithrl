@@ -4,10 +4,13 @@ import hashlib
 import os
 import stat
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
+from ithrl.case import CaseError
 from ithrl.runner.contracts import NativeOutputReference
+from ithrl.runner.runtime import output as output_module
 from ithrl.runner.runtime.output import (
     NativeOutputLimitError,
     NativeOutputStoreError,
@@ -16,6 +19,41 @@ from ithrl.runner.runtime.output import (
 from ithrl.runner.runtime.state import OwnedAttemptState
 
 ATTEMPT_ID = "attempt-00000000000000000000000000000001"
+
+
+def test_output_store_open_normalizes_unsafe_directory_failure(tmp_path: Path) -> None:
+    target = tmp_path / "target"
+    target.mkdir(mode=0o700)
+    alias = tmp_path / "alias"
+    alias.symlink_to(target, target_is_directory=True)
+    with pytest.raises(NativeOutputStoreError, match="cannot prepare protected"):
+        ProtectedOutputStore.open(alias)
+    assert target.is_dir()
+
+
+@pytest.mark.parametrize("fault", ["missing", "symlink", "publish-error"])
+def test_failed_publication_leaves_no_artifact_and_preserves_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str
+) -> None:
+    state = OwnedAttemptState.create(tmp_path / "attempts", ATTEMPT_ID)
+    source = tmp_path / "source-output"
+    source.write_bytes(b"fixture output")
+    if fault == "symlink":
+        state.member("stdout").symlink_to(source)
+    elif fault == "publish-error":
+        _write_private(state.member("stdout"), source.read_bytes())
+        _write_private(state.member("stderr"), b"")
+        monkeypatch.setattr(
+            output_module, "atomic_write_bytes", Mock(side_effect=CaseError("private detail"))
+        )
+    store = ProtectedOutputStore.open(tmp_path / "outputs")
+    with pytest.raises(NativeOutputStoreError) as refused:
+        store.publish(
+            state, stdout_name="stdout", stderr_name="stderr", max_bytes=1024, complete=True
+        )
+    assert not tuple(store.root.iterdir())
+    assert source.read_bytes() == b"fixture output"
+    assert "private detail" not in str(refused.value)
 
 
 @pytest.fixture

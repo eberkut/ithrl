@@ -34,10 +34,13 @@ from ithrl.mutation import TextAppend, TextMutation
 from ithrl.runner import (
     PreparedAttempt,
     ProviderAcceptanceState,
+    RunAccounting,
     RunnerCancelled,
     RunnerError,
     RunnerErrorCode,
+    RunResult,
     prepare_candidate,
+    validate_run_result,
 )
 from ithrl.runner.codex import CodexProviderConfiguration, CodexRunner, CodexRuntime
 from ithrl.runner.codex.isolation import CodexIsolationError, program_digest
@@ -217,6 +220,24 @@ def _attempt(
         phase="calibration",
         arm="baseline",
     )
+
+
+def test_completed_native_result_requires_every_started_call_to_finish(tmp_path: Path) -> None:
+    workspace, evidence = _case(tmp_path)
+    runner = _runner(tmp_path, workspace)
+    attempt = _attempt(evidence, runner)
+    result = RunResult(
+        attempt_id=attempt.attempt_id,
+        effective_policy_digest=attempt.safety_policy.digest,
+        provider=attempt.execution_plan.capability.provider,
+        endpoint=attempt.execution_plan.capability.endpoint,
+        model_requested=attempt.execution_plan.model_requested,
+        final_text="Fixture complete.",
+        accounting=RunAccounting(provider_calls_started=1, provider_calls_completed=0),
+    )
+    with pytest.raises(RunnerError, match="every started provider call") as refused:
+        validate_run_result(attempt, result)
+    assert refused.value.code is RunnerErrorCode.CONTRACT
 
 
 @contextmanager

@@ -30,6 +30,50 @@ FINAL_TEXT = "Final response from the sanitized fixture."
 type Message = dict[str, Any]
 
 
+@pytest.mark.parametrize(
+    ("response", "code"),
+    [
+        ({"id": 1, "error": {"message": "private-detail"}}, "server-error"),
+        ({"id": 1}, "invalid-response"),
+    ],
+)
+def test_rpc_refusal_and_missing_result_are_classified(response: Message, code: str) -> None:
+    outcome, _, _ = _run([response])
+    assert outcome.status == "error"
+    assert outcome.error_code == code
+    assert "private-detail" not in repr(outcome)
+
+
+def test_final_response_can_be_corroborated_by_completed_turn_items() -> None:
+    final_item = _final_item()["params"]["item"]
+    outcome, _, _ = _run(
+        [
+            *_prefix(),
+            _usage(),
+            _turn_completed(items=[{"type": "reasoning", "id": "reasoning-1"}, final_item]),
+        ]
+    )
+    assert outcome.status == "completed"
+    assert outcome.final_text == FINAL_TEXT
+    assert outcome.behavior_output_observed
+
+
+@pytest.mark.parametrize("items", [None, [None]])
+def test_completion_requires_a_list_of_native_item_objects(items: object) -> None:
+    completed = _turn_completed()
+    completed["params"]["turn"]["items"] = items
+    outcome, _, _ = _run([*_prefix(), completed])
+    assert outcome.status == "error"
+    assert outcome.error_code == "invalid-completion"
+
+
+def test_transcript_total_size_is_bounded_before_decoding(monkeypatch: pytest.MonkeyPatch) -> None:
+    _, _, audit = _physical_transcript()
+    monkeypatch.setattr(transcript, "MAX_NATIVE_OUTPUT_BYTES", 1)
+    with pytest.raises(CodexProtocolError, match="byte limit"):
+        parse_transcript(_server_bytes(audit))
+
+
 def test_protocol_json_accepts_finite_numbers_and_nested_json_values() -> None:
     validate_protocol_json({"values": [0.5, None, True, "fixture", {}]})
 
@@ -1051,7 +1095,17 @@ def test_multiple_usage_increments_preserve_complete_cumulative_usage() -> None:
 
 
 @pytest.mark.parametrize(
-    "mutation", ["summary-count", "missing-start", "duplicate-start", "after-summary", "rejected"]
+    "mutation",
+    [
+        "summary-count",
+        "missing-start",
+        "duplicate-start",
+        "after-summary",
+        "rejected",
+        "invalid-close",
+        "invalid-completion",
+        "invalid-failure",
+    ],
 )
 def test_transcript_requires_ordered_receipts_and_safe_transport(mutation: str) -> None:
     _, _, audit = _physical_transcript()
@@ -1064,6 +1118,22 @@ def test_transcript_requires_ordered_receipts_and_safe_transport(mutation: str) 
         audit.insert(provider_index + 2, audit[provider_index + 1])
     elif mutation == "after-summary":
         audit.append({"kind": "client", "value": {}})
+    elif mutation == "invalid-close":
+        next(
+            record
+            for record in audit
+            if record["kind"] == "provider" and record["value"]["kind"] == "closed"
+        )["value"]["status"] = 1
+    elif mutation == "invalid-completion":
+        next(
+            record
+            for record in audit
+            if record["kind"] == "provider" and record["value"]["kind"] == "completed"
+        )["value"]["status"] = 99
+    elif mutation == "invalid-failure":
+        failed = _receipt("failed", 9, 1)
+        failed["value"].update(request_bytes=32, response_bytes=64)
+        audit.insert(-2, failed)
     else:
         rejected = _receipt("rejected", 0, 1, 429)
         rejected["value"].update(request_bytes=32, response_bytes=64)

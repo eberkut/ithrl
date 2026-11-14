@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 import stat
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 from filelock import Timeout
@@ -16,6 +18,54 @@ from ithrl.path_safety import UnsafePathError, private_file_lock, validate_direc
 def test_directory_chain_rejects_parent_traversal() -> None:
     with pytest.raises(UnsafePathError, match="cannot contain"):
         validate_directory_chain(Path("private/../evidence"))
+
+
+@pytest.mark.parametrize("inside_profile", [False, True])
+def test_non_posix_directory_control_requires_the_active_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, inside_profile: bool
+) -> None:
+    target = tmp_path / "data"
+    monkeypatch.setattr(path_safety, "os", SimpleNamespace(name="nt"))
+    check = Mock(return_value=inside_profile)
+    monkeypatch.setattr(path_safety, "_is_below_user_profile", check)
+    if inside_profile:
+        validate_directory_chain(target)
+    else:
+        with pytest.raises(UnsafePathError, match="active user's profile"):
+            validate_directory_chain(target)
+    check.assert_called_once_with(target.absolute())
+
+
+def test_profile_containment_handles_incompatible_roots(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            path_safety.os.path, "commonpath", Mock(side_effect=ValueError("different drives"))
+        )
+        assert not path_safety._is_below_user_profile(Path.home())
+    assert path_safety._is_below_user_profile(Path.home() / "data")
+
+
+@pytest.mark.parametrize("root_fault", ["unavailable", "not-directory"])
+def test_directory_chain_refuses_an_unusable_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, root_fault: str
+) -> None:
+    original = Path.lstat
+    root = Path(tmp_path.anchor)
+
+    def root_metadata(path: Path) -> os.stat_result:
+        if path == root:
+            if root_fault == "unavailable":
+                raise PermissionError("private-root-detail")
+            metadata = original(path)
+            return os.stat_result((stat.S_IFREG | 0o600, *metadata[1:]))
+        return original(path)
+
+    monkeypatch.setattr(Path, "lstat", root_metadata)
+    with pytest.raises(UnsafePathError, match="path root is") as refused:
+        validate_directory_chain(tmp_path)
+    assert "private-root-detail" not in str(refused.value)
 
 
 @pytest.mark.parametrize("component", ["file", "symlink", "dangling-symlink"])

@@ -209,6 +209,17 @@ def test_expired_wall_time_and_comparison_limit_are_refused() -> None:
 def test_invalid_budget_arguments_fail_closed() -> None:
     allowance = _allowance(confirmation_seconds=5)
     cost = SamplingAttemptCost(provider_calls=1, runner_seconds=5)
+    with pytest.raises(TypeError, match="attempt_cost must be SamplingAttemptCost"):
+        sampling_budget_refusal(
+            allowance=allowance,
+            charged_provider_calls=0,
+            elapsed_seconds=0,
+            remaining_attempts=0,
+            attempt_cost=object(),  # type: ignore[arg-type]
+            confirmation_attempts=1,
+            search_blocks=1,
+            role="search",
+        )
     with pytest.raises(ValueError, match="charged provider calls"):
         sampling_budget_refusal(
             allowance=allowance,

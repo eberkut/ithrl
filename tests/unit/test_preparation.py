@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from ithrl.behavior import FinalResponseTarget
 from ithrl.case import CaseEvidence
@@ -120,6 +121,31 @@ def _sections(evidence: CaseEvidence, section_ids: tuple[str, ...] | None = None
         f"context_id = {json.dumps(catalog.context_id)}\n"
         f"content_index = {catalog.content_index}\nsection_ids = {json.dumps(ids)}\n"
     )
+
+
+def test_receipt_creation_rejects_a_different_experiment(
+    recorded_case: tuple[CaseEvidence, NativePreparationReceipt],
+) -> None:
+    evidence, receipt = recorded_case
+    different = parse_experiment_toml(evidence.default_experiment)
+    with pytest.raises(PreparationError, match="preflight-experiment-mismatch"):
+        NativePreparationReceipt.create(
+            receipt.source_plan, different, Path(receipt.original_workspace)
+        )
+
+
+def test_receipt_requires_native_runner_and_consistent_plan(
+    recorded_case: tuple[CaseEvidence, NativePreparationReceipt],
+) -> None:
+    _, receipt = recorded_case
+    data = receipt.model_dump()
+    data["source_plan"]["capability"]["runner_type"] = "fixture-runner"
+    from ithrl.execution import ResolvedExecutionPlan
+
+    plan = ResolvedExecutionPlan.model_validate(data["source_plan"])
+    data.update(source_plan=plan, source_plan_digest=plan.digest)
+    with pytest.raises(ValidationError, match="receipt requires a native runner"):
+        NativePreparationReceipt.model_validate(data)
 
 
 def test_prepare_roundtrip_without_native_work(

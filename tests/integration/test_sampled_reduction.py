@@ -57,6 +57,7 @@ from ithrl.results import (
 )
 from ithrl.run_state import SampledRunStateFile, SamplingBudgetApproval
 from ithrl.runner import (
+    FakeRunner,
     PreparedAttempt,
     ProviderAcceptanceState,
     RunAccounting,
@@ -200,6 +201,43 @@ class SearchFixture:
                     ),
                 ),
             )
+
+
+@pytest.mark.parametrize("changed", ["reduction", "runner"])
+def test_sampled_reducer_refuses_missing_plan_or_deterministic_runner(
+    tmp_path: Path, changed: str
+) -> None:
+    fixture = _fixture(tmp_path)
+    prepared = fixture.prepared
+    if changed == "reduction":
+        prepared = replace(
+            prepared, experiment=prepared.experiment.model_copy(update={"reduction": None})
+        )
+        message = "frozen reduction plan"
+    else:
+        prepared = replace(
+            prepared, runner=FakeRunner(required_markers=frozenset({"A"}), final_text="kept")
+        )
+        message = "nondeterministic runner"
+    before = len(fixture.runner.calls)
+    with pytest.raises(ValueError, match=message):
+        SampledReducer(
+            prepared=prepared, state_file=fixture.state_file, observation_store=fixture.store
+        )
+    assert len(fixture.runner.calls) == before
+
+
+def test_calibration_references_cannot_omit_authoritative_observations(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    saved = json.loads(fixture.state_file.path.read_text())
+    saved["calibration_observation_ids"] = []
+    fixture.state_file.path.write_text(json.dumps(saved))
+    before = len(fixture.runner.calls)
+    with pytest.raises(
+        ReductionError, match="calibration references omit authoritative observations"
+    ):
+        fixture.run()
+    assert len(fixture.runner.calls) == before
 
 
 def _fixture(
