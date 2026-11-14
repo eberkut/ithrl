@@ -21,6 +21,7 @@ from ithrl.case import (
     case_digest,
 )
 from ithrl.case import storage as case_storage
+from ithrl.case.evidence import validate_case_inputs
 from ithrl.context import ContextGraph, ContextNode, content_digest
 from ithrl.experiment import SampledExperimentDefinition, parse_experiment_toml
 from ithrl.mutation import MutationError, TextAppend, TextMutation
@@ -51,6 +52,23 @@ def _manifest() -> CaseManifest:
             trace_schema="synthetic-v1",
         ),
     )
+
+
+@pytest.mark.parametrize("request_context", [False, True])
+def test_case_inputs_refuse_context_or_evidence_without_a_request(request_context: bool) -> None:
+    manifest = _manifest().model_copy(
+        update={"capture": CaptureFacts(request="unknown", completeness="partial")}
+    )
+    context = ContextGraph(nodes=_nodes(_request()) if request_context else ())
+    message = (
+        "request-backed context requires"
+        if request_context
+        else "requires request.json or decision.json"
+    )
+    with pytest.raises(CaseFormatError, match=message):
+        validate_case_inputs(
+            manifest=manifest, request=None, context=context, source_artifacts=(), decision=None
+        )
 
 
 def _request() -> dict[str, Any]:

@@ -444,18 +444,35 @@ def test_refuses_unsupported_generated_protocol(tmp_path: Path) -> None:
     assert "incomplete" in str(refused.value)
 
 
-def test_refuses_invalid_version_output_without_exposing_probe_output(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "version_body", ['print("private invalid version output")', 'sys.stdout.buffer.write(b"\\xff")']
+)
+def test_refuses_invalid_version_output_without_exposing_probe_output(
+    tmp_path: Path, version_body: str
+) -> None:
     schema = tmp_path / "fixture-schema"
     shutil.copytree(SCHEMA_FIXTURE, schema)
-    executable = _fake_codex(
-        tmp_path, schema, version_body='print("private invalid version output")'
-    )
+    executable = _fake_codex(tmp_path, schema, version_body=version_body)
 
     with pytest.raises(CodexCapabilityError) as refused:
         detect_codex_capability(_runtime(executable), _configuration())
 
     assert refused.value.code is CodexCapabilityErrorCode.UNAVAILABLE
     assert "private invalid" not in str(refused.value)
+
+
+def test_policy_probe_refuses_non_utf8_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from unittest.mock import Mock
+
+    executable = tmp_path / "codex"
+    executable.write_text("#!/bin/sh\nexit 0\n")
+    executable.chmod(0o700)
+    result = subprocess.CompletedProcess(args=[], returncode=0, stdout=b"\xff", stderr=b"")
+    monkeypatch.setattr(capability, "_run_structural_probe", Mock(return_value=result))
+    with pytest.raises(CodexCapabilityError, match="policy output is invalid"):
+        capability._verify_policy(_runtime(executable), {}, tmp_path)
 
 
 def test_capability_probe_never_serializes_credential_values(tmp_path: Path) -> None:

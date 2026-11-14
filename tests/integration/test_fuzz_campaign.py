@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -16,7 +17,7 @@ from ithrl.calibration import run_sampled_calibration
 from ithrl.case import CaseEvidence
 from ithrl.fuzz.campaign import initialize_fuzz_campaign, run_fuzz_campaign
 from ithrl.fuzz.contracts import FuzzCampaignConfig, FuzzOutcome
-from ithrl.observations import ObservationStore
+from ithrl.observations import ObservationStore, SamplingBlockPlan, sampling_schedule
 from ithrl.run_state import (
     RunStateBusyError,
     RunStateError,
@@ -41,7 +42,9 @@ type CampaignParts = tuple[
 ]
 
 
-def campaign(tmp_path: Path, *, limit: int = 384) -> CampaignParts:
+def campaign(
+    tmp_path: Path, *, limit: int = 384, stale_text: str = "irrelevant\n\nSTALE"
+) -> CampaignParts:
     evidence, prepared, config, runner, state, store, _ = setup(
         tmp_path, screen_valid=2, screen_attempts=3, limit=limit
     )
@@ -53,7 +56,7 @@ def campaign(tmp_path: Path, *, limit: int = 384) -> CampaignParts:
         evidence=evidence,
         prepared=prepared,
         campaign=config,
-        stale_text="irrelevant\n\nSTALE",
+        stale_text=stale_text,
         state_file=state,
         store=store,
     )
@@ -122,6 +125,20 @@ def test_no_candidate_is_bounded_and_has_no_confirmation(tmp_path: Path) -> None
     assert all(a.phase != "confirmation" for a in parts[3].calls)
 
 
+def test_empty_generation_finishes_without_exploratory_sampling(tmp_path: Path) -> None:
+    parts = campaign(tmp_path, stale_text="")
+    calls = len(parts[3].calls)
+    result = run(parts)
+    assert result.outcome is FuzzOutcome.NO_CANDIDATE_FOUND
+    assert result.confirmation is None
+    assert len(parts[3].calls) == calls
+    with parts[4].acquire_lock(parts[5]):
+        progress = parts[4].load(parts[5]).fuzz_progress
+        assert progress is not None
+        assert progress.generated == ()
+        assert progress.trials == ()
+
+
 def test_error_stops_campaign_without_becoming_unchanged_or_redrawn(tmp_path: Path) -> None:
     parts = campaign(tmp_path)
     parts[3].fail = True
@@ -185,6 +202,8 @@ def test_candidate_local_refusals_consume_work_without_sampling(
     before = len(parts[3].calls)
     assert run(parts).outcome is FuzzOutcome.NO_CANDIDATE_FOUND
     assert len(parts[3].calls) == before
+    assert run(parts).outcome is FuzzOutcome.NO_CANDIDATE_FOUND
+    assert len(parts[3].calls) == before
     with parts[4].acquire_lock(parts[5]):
         progress = parts[4].load(parts[5]).fuzz_progress
         assert progress is not None
@@ -193,6 +212,98 @@ def test_candidate_local_refusals_consume_work_without_sampling(
     monkeypatch.delattr(parts[3], "validate_candidate")
     with pytest.raises(RunStateError, match="admission"):
         run(parts)
+
+
+def test_previously_admitted_candidates_must_remain_reconstructable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parts = campaign(tmp_path)
+    run(parts)
+    calls = len(parts[3].calls)
+
+    def reject_mutations(attempt: PreparedAttempt) -> None:
+        if not attempt.candidate.mutation.is_empty:
+            raise CandidateInvalidError("candidate no longer reconstructable")
+
+    monkeypatch.setattr(parts[3], "validate_candidate", reject_mutations, raising=False)
+    with pytest.raises(
+        RunStateError, match="previously admitted mutation is no longer reconstructable"
+    ):
+        run(parts)
+    assert len(parts[3].calls) == calls
+
+
+@pytest.mark.parametrize("changed", ["initialized", "identity", "reserve"])
+def test_campaign_initialization_refuses_reuse_or_incompatible_administration(
+    tmp_path: Path, changed: str
+) -> None:
+    if changed == "initialized":
+        parts = campaign(tmp_path)
+        message = "unused sampled progress"
+    else:
+        evidence, prepared, config, runner, state, store, _ = setup(tmp_path)
+        if changed == "identity":
+            prepared = replace(
+                prepared,
+                identity=prepared.identity.model_copy(update={"runner_fingerprint": "changed"}),
+            )
+            message = "prepared observation identity"
+        else:
+            saved = json.loads(state.path.read_text())
+            saved["approvals"][0]["allowance"]["confirmation_provider_calls"] -= 1
+            state.path.write_text(json.dumps(saved))
+            message = "complete frozen confirmation reserve"
+        parts = evidence, prepared, config, runner, state, store
+    evidence, prepared, config, runner, state, store = parts
+    calls = len(runner.calls)
+    with pytest.raises(RunStateError, match=message):
+        initialize_fuzz_campaign(
+            evidence=evidence,
+            prepared=prepared,
+            campaign=config,
+            stale_text="STALE",
+            state_file=state,
+            store=store,
+        )
+    assert len(runner.calls) == calls
+
+
+def test_campaign_cannot_run_before_initialization(tmp_path: Path) -> None:
+    evidence, prepared, config, runner, state, store, _ = setup(tmp_path)
+    with pytest.raises(RunStateError, match="has not been initialized"):
+        run((evidence, prepared, config, runner, state, store))
+    assert runner.calls == []
+
+
+@pytest.mark.parametrize(
+    ("changed", "message"),
+    [
+        ("calibration", "complete measurable calibration"),
+        ("selection", "requires durable final selection"),
+        ("no-candidate", "no-candidate outcome disagrees"),
+        ("incomplete", "requires its collection refusal"),
+    ],
+)
+def test_campaign_recovery_refuses_unsupported_progress_claims(
+    tmp_path: Path, changed: str, message: str
+) -> None:
+    parts = campaign(tmp_path)
+    state = parts[4]
+    saved = json.loads(state.path.read_text())
+    progress = saved["fuzz_progress"]
+    if changed == "calibration":
+        saved["calibration_observation_ids"] = []
+    elif changed == "selection":
+        progress["selected_mutation"] = progress["generated"][0]
+    elif changed == "no-candidate":
+        progress.update(terminal=FuzzOutcome.NO_CANDIDATE_FOUND.value, stop_reason="no-candidate")
+    else:
+        progress.update(terminal=FuzzOutcome.INCOMPLETE.value, stop_reason="screen-incomplete")
+    state.path.write_text(json.dumps(saved))
+    calls = len(parts[3].calls)
+    with pytest.raises(RunStateError, match=message):
+        run(parts)
+    assert len(parts[3].calls) == calls
 
 
 def test_concurrent_campaign_cannot_start_another_attempt(tmp_path: Path) -> None:
@@ -249,6 +360,58 @@ def test_forged_implementation_or_verdict_refuses_before_dispatch(
 
 class Crash(BaseException):
     pass
+
+
+@pytest.mark.parametrize(
+    ("changed", "message"),
+    [("policy", "incompatible sampling policy or ownership"), ("role", "trial order differs")],
+)
+def test_unstarted_trial_must_preserve_sampling_policy_and_traversal_role(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, changed: str, message: str
+) -> None:
+    parts = campaign(tmp_path)
+    state = parts[4]
+    write = state._write
+
+    def interrupt_after_trial(updated: SampledRunState) -> None:
+        write(updated)
+        if updated.fuzz_progress and updated.fuzz_progress.trials and not updated.blocks:
+            raise Crash()
+
+    with monkeypatch.context() as interrupted:
+        interrupted.setattr(state, "_write", interrupt_after_trial)
+        with pytest.raises(Crash):
+            run(parts)
+    saved = json.loads(state.path.read_text())
+    trial = saved["fuzz_progress"]["trials"][0]
+    if changed == "policy":
+        plan = SamplingBlockPlan.model_validate_json(json.dumps(trial["plan"]))
+        seed = plan.schedule_seed + 1
+        revised = SamplingBlockPlan.model_validate(
+            {
+                **plan.model_dump(),
+                "schedule_seed": seed,
+                "schedule": sampling_schedule(
+                    plan.targets_for("baseline").max_attempts,
+                    plan.targets_for("candidate").max_attempts,
+                    seed,
+                ),
+            }
+        )
+        trial["plan"] = revised.model_dump(mode="json")
+    else:
+        trial.update(plan=None, role="simplification")
+
+        def refuse_mutations(attempt: PreparedAttempt) -> None:
+            if not attempt.candidate.mutation.is_empty:
+                raise CandidateInvalidError("recorded candidate refusal")
+
+        monkeypatch.setattr(parts[3], "validate_candidate", refuse_mutations, raising=False)
+    state.path.write_text(json.dumps(saved))
+    before = len(parts[3].calls)
+    with pytest.raises(RunStateError, match=message):
+        run(parts)
+    assert len(parts[3].calls) == before
 
 
 @pytest.mark.parametrize(

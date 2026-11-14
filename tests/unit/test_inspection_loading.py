@@ -37,9 +37,17 @@ from ithrl.observations import (
     SamplingBudgetAllowance,
     sampling_schedule,
 )
-from ithrl.reduce import SampledCandidateTrial, SampledComparison, SampledReductionCheckpoint
+from ithrl.reduce import (
+    CandidateTrial,
+    ReductionCheckpoint,
+    SampledCandidateTrial,
+    SampledComparison,
+    SampledInvalidCandidateTrial,
+    SampledReductionCheckpoint,
+)
 from ithrl.reduce.contracts import trial_key
-from ithrl.results import ResultSnapshotError, SampledReductionEvidence
+from ithrl.results import ResultSnapshot, ResultSnapshotError, SampledReductionEvidence
+from ithrl.results import inspection as inspection_storage
 from ithrl.results.inspection import load_retained_result
 from ithrl.run_state import SampledRunState, SamplingBlockProgress, SamplingBudgetApproval
 from ithrl.runner import Candidate
@@ -246,6 +254,120 @@ def _forbid_runtime(*_args: Any, **_kwargs: Any) -> None:
     raise AssertionError("offline inspection must not access processes or SQLite")
 
 
+def test_inspection_refuses_a_file_that_acquires_a_link_during_its_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    case, result = _sampled(tmp_path)
+    selected = result / "result.json"
+    original = selected.read_bytes()
+    alias = tmp_path / "unexpected-alias"
+    read = inspection_storage.read_safe_text
+
+    def link_after_read(path: Path, **kwargs: Any) -> str:
+        value = read(path, **kwargs)
+        if path == selected:
+            os.link(path, alias)
+        return value
+
+    monkeypatch.setattr(inspection_storage, "read_safe_text", link_after_read)
+    with pytest.raises(ResultSnapshotError, match="cannot inspect"):
+        load_retained_result(case, result)
+    assert selected.read_bytes() == alias.read_bytes() == original
+
+
+@pytest.fixture
+def deterministic_saved(tmp_path: Path) -> tuple[CaseEvidence, ResultSnapshot]:
+    case, _ = _case(tmp_path, "synthetic")
+    outcome = CliRunner().invoke(
+        app,
+        [
+            "shrink",
+            str(case),
+            "--observation-store",
+            str(tmp_path / "store.sqlite"),
+            "--format",
+            "json",
+        ],
+    )
+    assert outcome.exit_code == 0, outcome.output
+    loaded = load_retained_result(case, Path(json.loads(outcome.stdout)["result_path"]))
+    assert loaded.deterministic is not None
+    return loaded.evidence, loaded.deterministic
+
+
+@pytest.mark.parametrize(
+    "fault", ["parent", "unknown", "false-invalid", "unsafe-observed", "candidate", "final"]
+)
+def test_deterministic_trial_validation_rejects_source_inconsistent_claims(
+    deterministic_saved: tuple[CaseEvidence, ResultSnapshot], fault: str
+) -> None:
+    evidence, snapshot = deterministic_saved
+    node = next(node for node in evidence.context.nodes if node.mutable and not node.protected)
+    requested = (node.id,)
+    base: tuple[str, ...] = ()
+    effective = tuple(sorted(evidence.context.dependency_closure(requested)))
+    invalid = fault == "false-invalid"
+    if fault == "parent":
+        base = effective
+    elif fault == "unknown":
+        requested = ("ctx-unknown",)
+    elif fault == "unsafe-observed":
+        requested = (next(n.id for n in evidence.context.nodes if n.protected),)
+    if invalid:
+        effective = ()
+    trial = CandidateTrial(
+        trial_key=trial_key("chunk", base, requested),
+        candidate_digest=None if invalid else "f" * 64,
+        base_removals=base,
+        requested_removals=requested,
+        effective_removals=effective,
+        target_observed=None if invalid else False,
+        classification="invalid" if invalid else "loses",
+        phase="chunk",
+        runner_executed=not invalid,
+        observation_id=None if invalid else "fixture-observation",
+        observation_attempt=None if invalid else 1,
+    )
+    checkpoint = ReductionCheckpoint.model_validate(
+        {
+            **snapshot.checkpoint.model_dump(),
+            "trials": () if fault == "final" else (trial,),
+            "candidate_runs_used": 0 if fault == "final" or invalid else 1,
+            "failed_candidate_observation_ids": (),
+            "removed_context_ids": effective if fault == "final" else (),
+            "final_sweep_complete": False,
+        }
+    )
+    changed = ResultSnapshot.model_validate({**snapshot.model_dump(), "checkpoint": checkpoint})
+    with pytest.raises(ValueError, match=r"trial|retained context"):
+        inspection_storage._validate_deterministic_trials(changed, evidence)
+
+
+@pytest.mark.parametrize("fault", ["calibration", "blocks", "plan"])
+def test_sampled_state_and_result_require_identical_recorded_evidence(
+    tmp_path: Path, fault: str
+) -> None:
+    _, root = _sampled(tmp_path, with_trial=True)
+    result = SampledReductionEvidence.model_validate_json((root / "result.json").read_text())
+    state = SampledRunState.model_validate_json((root / "sampling/sampling-state.json").read_text())
+    data = state.model_dump()
+    if fault == "calibration":
+        data["calibration_observation_ids"] = ("unknown-observation",)
+    elif fault == "blocks":
+        data["blocks"] = ()
+    else:
+        data["blocks"][0]["plan"]["schedule_seed"] += 1
+        plan = state.blocks[0].plan
+        data["blocks"][0]["plan"]["schedule"] = sampling_schedule(
+            plan.targets_for("baseline").max_attempts,
+            plan.targets_for("candidate").max_attempts,
+            data["blocks"][0]["plan"]["schedule_seed"],
+        )
+    changed = SampledRunState.model_validate(data)
+    with pytest.raises(ValueError, match=r"sampled result|sampling snapshot"):
+        inspection_storage._validate_result_state(result, changed)
+
+
 @pytest.mark.parametrize("harness", ["synthetic", "codex", "copilot"])
 def test_detached_sampled_snapshot_loads_without_live_state_or_store(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, harness: str
@@ -263,6 +385,39 @@ def test_detached_sampled_snapshot_loads_without_live_state_or_store(
     assert any("observation database" in line for line in loaded.validation_limits)
     assert {p: p.read_bytes() for p in before} == before
     assert not (case / ".runs").exists()
+    assert not (tmp_path / "missing-observations.sqlite").exists()
+
+
+@pytest.mark.parametrize("harness", ["codex", "copilot"])
+def test_recorded_candidate_refusal_is_inspectable_without_reconstruction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, harness: str
+) -> None:
+    case, result = _sampled(tmp_path, harness, with_trial=True)
+    for name in ("result.json", "sampling/sampling-state.json"):
+        path = result / name
+        document = json.loads(path.read_text())
+        checkpoint = document["checkpoint"]
+        recorded = checkpoint["trials"][0]
+        trial = SampledInvalidCandidateTrial(
+            trial_key=recorded["trial_key"],
+            base_removals=(),
+            requested_removals=tuple(recorded["requested_removals"]),
+            effective_removals=(),
+            phase="chunk",
+            classification="invalid",
+        )
+        checkpoint["trials"] = [trial.model_dump(mode="json")]
+        if "blocks" in document:
+            document["blocks"] = []
+        _write(path, document)
+    monkeypatch.setattr(subprocess, "Popen", _forbid_runtime)
+    monkeypatch.setattr(sqlite3, "connect", _forbid_runtime)
+
+    loaded = load_retained_result(case, result)
+
+    assert loaded.sampled is not None
+    assert loaded.sampled.checkpoint.trials == (trial,)
+    assert loaded.retained_ids == tuple(node.id for node in loaded.evidence.context.nodes)
     assert not (tmp_path / "missing-observations.sqlite").exists()
 
 
@@ -291,6 +446,10 @@ def test_deterministic_snapshot_uses_case_bound_trials(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     "change",
     [
+        "schema",
+        "summary-array",
+        "sampling-extra",
+        "session-store",
         "kind",
         "summary-count",
         "retained",
@@ -307,7 +466,21 @@ def test_sampled_refuses_mismatched_or_unknown_artifacts_without_content_errors(
     tmp_path: Path, change: str
 ) -> None:
     case, result = _sampled(tmp_path)
-    if change in {"kind", "summary-count"}:
+    if change == "schema":
+        path = result / "summary.json"
+        value = json.loads(path.read_text())
+        value["schema_version"] = 2
+        _write(path, value)
+    elif change == "summary-array":
+        _write(result / "summary.json", [])
+    elif change == "sampling-extra":
+        _write(result / "sampling/extra.json", {})
+    elif change == "session-store":
+        path = result / "cli-session.json"
+        value = json.loads(path.read_text())
+        value["observation_store"] = str(tmp_path / "another.sqlite")
+        _write(path, value)
+    elif change in {"kind", "summary-count"}:
         p = result / "summary.json"
         v = json.loads(p.read_text())
         v["kind" if change == "kind" else "retained_context_count"] = "PRIVATE_UNTRUSTED"

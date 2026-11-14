@@ -76,6 +76,21 @@ def _edit(evidence: CaseEvidence) -> TextSectionRemoval:
     return catalog.removal((catalog.sections[1].id,))
 
 
+@pytest.mark.parametrize("inputs", [None, []])
+def test_section_edit_refuses_a_case_without_a_prior_input_field(
+    tmp_path: Path, inputs: JsonValue
+) -> None:
+    original = _evidence(tmp_path)
+    empty = CaseEvidence(
+        manifest=original.manifest,
+        request={"input": inputs},
+        context=ContextGraph(nodes=()),
+        default_experiment=original.default_experiment,
+    )
+    with pytest.raises(MutationError, match="unknown context node"):
+        empty.materialize(mutation=TextMutation(edits=(_edit(original),)))
+
+
 @pytest.mark.parametrize("limited_by", ["bytes", "sections"])
 @pytest.mark.parametrize("oversized_first", [False, True])
 def test_catalog_discovery_skips_only_complete_fields_beyond_policy_limits(

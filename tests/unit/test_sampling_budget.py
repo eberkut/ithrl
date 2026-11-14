@@ -6,10 +6,12 @@ import pytest
 
 from ithrl.execution.budget import (
     SamplingAttemptCost,
+    calibration_budget_bounds,
     sampling_attempt_cost,
     sampling_budget_refusal,
 )
 from ithrl.execution.contracts import CapabilityProfile, ResourceLimits
+from ithrl.experiment import SampledCalibrationPhase
 from ithrl.observations import SamplingBudgetAllowance
 
 
@@ -207,6 +209,17 @@ def test_expired_wall_time_and_comparison_limit_are_refused() -> None:
 def test_invalid_budget_arguments_fail_closed() -> None:
     allowance = _allowance(confirmation_seconds=5)
     cost = SamplingAttemptCost(provider_calls=1, runner_seconds=5)
+    with pytest.raises(TypeError, match="attempt_cost must be SamplingAttemptCost"):
+        sampling_budget_refusal(
+            allowance=allowance,
+            charged_provider_calls=0,
+            elapsed_seconds=0,
+            remaining_attempts=0,
+            attempt_cost=object(),  # type: ignore[arg-type]
+            confirmation_attempts=1,
+            search_blocks=1,
+            role="search",
+        )
     with pytest.raises(ValueError, match="charged provider calls"):
         sampling_budget_refusal(
             allowance=allowance,
@@ -324,3 +337,23 @@ def test_credential_free_fake_collection_has_zero_provider_cost() -> None:
     ) == SamplingAttemptCost(provider_calls=0, runner_seconds=1)
     with pytest.raises(ValueError, match="at least one provider call"):
         sampling_attempt_cost(profile.model_copy(update={"deterministic": False}), ResourceLimits())
+
+
+@pytest.mark.parametrize("phase", ["sampling", "calibration"])
+def test_deterministic_collection_cannot_claim_zero_cost_for_provider_transport(phase: str) -> None:
+    profile = CapabilityProfile.model_validate(
+        {
+            **CapabilityProfile.deterministic_fake().model_dump(mode="python"),
+            "provider_transport": "required",
+            "provider_calls_per_attempt": 1,
+            "provider": "fixture-provider",
+            "endpoint": "https://fixture.invalid",
+        }
+    )
+    if phase == "sampling":
+        with pytest.raises(ValueError, match="credential-free fake runner"):
+            sampling_attempt_cost(profile, ResourceLimits())
+    else:
+        calibration = SampledCalibrationPhase(required_valid=1, minimum_matches=1, max_attempts=1)
+        with pytest.raises(ValueError, match="credential-free fake runner"):
+            calibration_budget_bounds(calibration, profile, ResourceLimits())

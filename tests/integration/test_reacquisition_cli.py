@@ -110,6 +110,11 @@ def test_boundary_listing_then_inspection_are_private_provider_free_and_preserve
 
 def test_human_report_and_opt_in_text_keep_control_characters_escaped(tmp_path: Path) -> None:
     source = _source(tmp_path, "codex")
+    unselected = CliRunner().invoke(app, ["inspect", "reacquire", str(source)])
+    assert unselected.exit_code == ExitCode.SUCCESS, unselected.output
+    assert "Passive compaction inspection" in unselected.stdout
+    assert "lines 4-4" in unselected.stdout
+    assert "Select a boundary with --boundary" in unselected.stdout
     listing = json.loads(
         CliRunner().invoke(app, ["inspect", "reacquire", str(source), "--format", "json"]).stdout
     )
@@ -129,6 +134,20 @@ def test_human_report_and_opt_in_text_keep_control_characters_escaped(tmp_path: 
     assert result.exit_code == ExitCode.SUCCESS, result.output
     assert "Passive compaction inspection" in result.stdout
     assert "text bytes: 23; truncated: True" in result.stdout
+
+
+def test_human_report_explains_absence_of_matching_groups(tmp_path: Path) -> None:
+    source = tmp_path / "session.jsonl"
+    records = [_meta(), _call("before"), _output("before"), _compacted()]
+    source.write_text("\n".join(json.dumps(record) for record in records) + "\n")
+    runner = CliRunner()
+    listing = runner.invoke(app, ["inspect", "reacquire", str(source), "--format", "json"])
+    assert listing.exit_code == ExitCode.SUCCESS, listing.output
+    boundary = json.loads(listing.stdout)["boundaries"][0]["id"]
+    result = runner.invoke(app, ["inspect", "reacquire", str(source), "--boundary", boundary])
+    assert result.exit_code == ExitCode.SUCCESS, result.output
+    assert "No eligible matching groups in the selected adjacent epochs." in result.stdout
+    assert "savings: not estimated" in result.stdout
 
 
 @pytest.mark.parametrize("variant", ["malformed", "unsupported", "symlink", "missing-boundary"])

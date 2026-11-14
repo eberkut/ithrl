@@ -201,6 +201,82 @@ def test_dry_run_has_reproducible_bounds_without_store_or_calibration(
         service.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("harness", "unsafe\nharness", "unsafe or missing harness"),
+        ("runtime_harness_version", "unsafe\nversion", "unsafe or missing harness version"),
+        ("provider", "unsafe\nprovider", "provider cannot be safely displayed"),
+        (
+            "endpoint",
+            "https://fixture.invalid/unsafe\nendpoint",
+            "endpoint cannot be safely displayed",
+        ),
+    ],
+)
+def test_preflight_refuses_unsafe_public_identity_fields(
+    prepared_case: _PreparedCase, field: str, value: str, message: str
+) -> None:
+    plan = prepared_case.prepared.execution_plan
+    plan.capability = CapabilityProfile.model_validate(
+        {**plan.capability.model_dump(), field: value}
+    )
+    with pytest.raises(ValueError, match=message):
+        sampled._preflight_report(
+            workspace=prepared_case.workspace,
+            prepared=cast(PreparedExperiment, prepared_case.prepared),
+            original_workspace=prepared_case.original_workspace,
+            observation_store=prepared_case.observation_store,
+        )
+
+
+def test_preflight_forwards_input_cap_and_resolves_default_store_without_opening_it(
+    prepared_case: _PreparedCase,
+) -> None:
+    plan = prepared_case.prepared.execution_plan
+    plan.capability = CapabilityProfile.model_validate(
+        {**plan.capability.model_dump(), "input_token_limit_enforcement": "pre-dispatch"}
+    )
+    prepared_case.prepared.resource_limits = ResourceLimits(
+        max_provider_calls=2, max_wall_time_seconds=12, max_input_tokens=1000
+    )
+    report = sampled._preflight_report(
+        workspace=prepared_case.workspace,
+        prepared=cast(PreparedExperiment, prepared_case.prepared),
+        original_workspace=prepared_case.original_workspace,
+        observation_store=None,
+    )
+    assert report.next_command is not None
+    command = shlex.split(report.next_command)
+    assert command[command.index("--max-input-tokens") + 1] == "1000"
+    assert "--observation-store" in command
+    assert not Path(command[command.index("--observation-store") + 1]).exists()
+
+
+def test_preflight_omits_an_overlong_command(prepared_case: _PreparedCase) -> None:
+    report = sampled._preflight_report(
+        workspace=prepared_case.workspace,
+        prepared=cast(PreparedExperiment, prepared_case.prepared),
+        original_workspace=Path("/" + "long" * 600),
+        observation_store=prepared_case.observation_store,
+    )
+    assert report.next_command is None
+    assert report.next_command_shell is None
+
+
+def test_preflight_requires_the_sampled_experiment_contract(prepared_case: _PreparedCase) -> None:
+    prepared_case.prepared.experiment = ExperimentDefinition.from_toml(
+        prepared_case.evidence.default_experiment
+    )
+    with pytest.raises(ValueError, match="sampled experiment required"):
+        sampled._preflight_report(
+            workspace=prepared_case.workspace,
+            prepared=cast(PreparedExperiment, prepared_case.prepared),
+            original_workspace=prepared_case.original_workspace,
+            observation_store=prepared_case.observation_store,
+        )
+
+
 @pytest.mark.parametrize("interactive", [False, True])
 def test_acknowledgement_required_or_declined_before_store_writes(
     prepared_case: _PreparedCase,

@@ -15,6 +15,7 @@ from ithrl.runner import Candidate
 from ithrl.text_sections import (
     MAX_TEXT_SECTION_BYTES,
     MAX_TEXT_SECTIONS,
+    TextSection,
     TextSectionCatalog,
     TextSectionError,
     TextSectionLimitError,
@@ -22,6 +23,28 @@ from ithrl.text_sections import (
     catalog_text_sections,
     remove_text_sections,
 )
+
+
+@pytest.mark.parametrize(("start", "end", "size"), [(2, 2, 1), (0, 2, 1)])
+def test_section_refuses_empty_or_understated_unicode_spans(
+    start: int, end: int, size: int
+) -> None:
+    with pytest.raises(ValidationError, match="nonempty Unicode span"):
+        TextSection(id="section-" + "a" * 64, start=start, end=end, utf8_bytes=size)
+
+
+@pytest.mark.parametrize("fault", ["policy", "byte-total"])
+def test_catalog_refuses_unsupported_policy_and_inconsistent_byte_total(fault: str) -> None:
+    catalog = _catalog("First.\n\nSecond.")
+    data = catalog.model_dump()
+    if fault == "policy":
+        data["policy_digest"] = "e" * 64
+        message = "unsupported text-section policy"
+    else:
+        data["sections"][0]["utf8_bytes"] += 1
+        message = "section byte sizes must cover the original field"
+    with pytest.raises(ValidationError, match=message):
+        TextSectionCatalog.model_validate(data)
 
 
 def _catalog(

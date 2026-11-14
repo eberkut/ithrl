@@ -97,6 +97,37 @@ def _relay(endpoint: str, events: list[dict[str, object]], **limits: int) -> Res
     )
 
 
+@pytest.mark.parametrize("limits", [{"max_requests": True}, {"max_request_bytes": 0}])
+def test_relay_refuses_invalid_limits_before_starting(limits: dict[str, int]) -> None:
+    with pytest.raises(ValueError, match="limits are invalid"):
+        _relay("http://127.0.0.1/fixture/responses", [], **limits)
+
+
+def test_malformed_endpoint_port_is_refused() -> None:
+    with pytest.raises(ValueError, match="endpoint is invalid"):
+        ResponsesRelay(
+            "https://fixture.invalid:bad/responses", 1, 1, 1024, 1024, lambda _event: None
+        )
+
+
+def test_running_relay_cannot_be_started_again() -> None:
+    with _upstream() as (endpoint, calls), _relay(endpoint, []) as relay:
+        with pytest.raises(RuntimeError, match="cannot be restarted"):
+            relay.__enter__()
+        assert relay.requests_reserved == 0
+        assert calls == []
+
+
+@pytest.mark.parametrize("length", ["invalid", "-1"])
+def test_invalid_content_length_is_rejected_before_reserving_or_forwarding(length: str) -> None:
+    events: list[dict[str, object]] = []
+    with _upstream() as (endpoint, calls), _relay(endpoint, events) as relay:
+        status, _, _ = _request(relay, headers={"Content-Length": length})
+        assert status == 400
+        assert relay.requests_reserved == relay.requests_started == 0
+        assert calls == []
+
+
 @pytest.fixture(autouse=True)
 def _loopback_proxy_bypass(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("no_proxy", "127.0.0.1,::1")
@@ -257,6 +288,7 @@ def test_oversized_or_truncated_response_never_counts_completed(
         _relay(endpoint, [], max_response_bytes=5 if declared_length is None else 100) as relay,
     ):
         _request(relay)
+        assert _request(relay)[0] == 429
     assert len(calls) == 1
     assert relay.requests_started == 1
     assert relay.responses_completed == 0

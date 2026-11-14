@@ -28,7 +28,7 @@ from ithrl.case.source import (
     SourceArtifact,
     SourceManifest,
 )
-from ithrl.context import JsonValue, validate_json_limits
+from ithrl.context import validate_json_limits
 
 SOURCE_ROOT = Path("source")
 SOURCE_MANIFEST = Path(SOURCE_MANIFEST_PATH)
@@ -196,23 +196,16 @@ def source_parent_paths(path: str) -> tuple[Path, ...]:
 
 
 def _render_manifest(manifest: SourceManifest) -> str:
-    return _render_json(manifest.model_dump(mode="json"))
-
-
-def _render_json(value: JsonValue) -> str:
-    try:
-        return (
-            json.dumps(
-                value,
-                allow_nan=False,
-                ensure_ascii=False,
-                indent=2,
-                sort_keys=True,
-            )
-            + "\n"
+    return (
+        json.dumps(
+            manifest.model_dump(mode="json"),
+            allow_nan=False,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
         )
-    except (TypeError, ValueError) as error:
-        raise CaseFormatError("value is not valid JSON") from error
+        + "\n"
+    )
 
 
 def _load_json(source: str) -> object:

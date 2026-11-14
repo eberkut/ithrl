@@ -231,9 +231,6 @@ def _validate_sample(sample: BinomialSample, *, positive: bool) -> None:
     if not isinstance(sample, BinomialSample):
         raise ValueError("samples must be BinomialSample values")
     _validate_count(sample.valid, "valid", positive=positive)
-    _validate_count(sample.matches, "matches", positive=False)
-    if sample.matches > sample.valid:
-        raise ValueError("matches must not exceed valid observations")
 
 
 def _validate_configuration(

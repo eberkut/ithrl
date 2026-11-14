@@ -4,27 +4,143 @@ from __future__ import annotations
 
 import asyncio
 from collections import Counter
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+from ithrl.execution.budget import SamplingAttemptCost
+from ithrl.experiment import ExperimentDefinition, SampledCalibrationPhase
 from ithrl.fuzz import FuzzOutcome
 from ithrl.fuzz.sampling import (
     confirm_fuzz_block,
+    confirm_fuzz_evidence,
     fuzz_block_plan,
+    fuzz_budget_bounds,
     prepare_fuzz_sampling,
     screen_fuzz_block,
+    screen_fuzz_evidence,
 )
 from ithrl.fuzz.simplify import MutationDecision
 from ithrl.mutation import TextMutation
+from ithrl.observations import SamplingBlockEvidence
 from ithrl.reduce.contracts import SampledConfirmation
-from ithrl.sampling import collect_sampling_block
+from ithrl.sampling import SamplingCollectionResult, collect_sampling_block
 
 pytest.importorskip("scipy")
 
 
 from fuzz_support import setup
+
+
+@pytest.mark.parametrize("fault", ["identity", "empty-mutation"])
+def test_fuzz_block_admission_refuses_unbound_or_empty_interventions(
+    tmp_path: Path, fault: str
+) -> None:
+    evidence, prepared, campaign, runner, _, _, mutation = setup(tmp_path)
+    if fault == "identity":
+        prepared = replace(
+            prepared, identity=prepared.identity.model_copy(update={"algorithm_digest": "f" * 64})
+        )
+    else:
+        mutation = TextMutation()
+    with pytest.raises(
+        ValueError, match=r"campaign-bound sampling identities|nonempty intervention"
+    ):
+        fuzz_block_plan(
+            evidence=evidence,
+            prepared=prepared,
+            campaign=campaign,
+            mutation=mutation,
+            role="discovery",
+            block_id="refused-block",
+            frozen_at=datetime.now(UTC),
+            schedule_seed=1,
+        )
+    assert runner.calls == []
+
+
+@pytest.mark.parametrize("delay", [-1, 86_401, True, 1.5])
+def test_fuzz_budget_refuses_invalid_pacing(tmp_path: Path, delay: Any) -> None:
+    _, _, campaign, _, _, _, _ = setup(tmp_path)
+    with pytest.raises(ValueError, match="bounded nonnegative"):
+        fuzz_budget_bounds(
+            campaign,
+            SamplingAttemptCost(provider_calls=1, runner_seconds=1),
+            inter_attempt_delay_seconds=delay,
+        )
+
+
+def test_fuzz_decisions_require_the_correct_sampling_role(tmp_path: Path) -> None:
+    evidence, prepared, campaign, runner, state, store, mutation = setup(tmp_path)
+    frozen = datetime.now(UTC)
+    plan = fuzz_block_plan(
+        evidence=evidence,
+        prepared=prepared,
+        campaign=campaign,
+        mutation=mutation,
+        role="discovery",
+        block_id="discovery-1",
+        frozen_at=frozen,
+        schedule_seed=1,
+    )
+    block = SamplingBlockEvidence(plan=plan, attempts=())
+    with state.acquire_lock(store):
+        usage = state.usage(store, now=frozen)
+    with pytest.raises(ValueError, match="fresh selected comparison"):
+        confirm_fuzz_evidence(block)
+    with pytest.raises(ValueError, match="fresh selected comparison"):
+        confirm_fuzz_block(SamplingCollectionResult(evidence=block, usage=usage, stop_reason=None))
+    confirmation = fuzz_block_plan(
+        evidence=evidence,
+        prepared=prepared,
+        campaign=campaign,
+        mutation=mutation,
+        role="confirmation",
+        block_id="confirmation-1",
+        frozen_at=frozen + timedelta(microseconds=1),
+        selected_at=frozen,
+        schedule_seed=1,
+    )
+    with pytest.raises(ValueError, match="exploratory change evidence"):
+        screen_fuzz_evidence(SamplingBlockEvidence(plan=confirmation, attempts=()))
+    assert runner.calls == []
+
+
+@pytest.mark.parametrize("changed", ["experiment", "calibration", "original"])
+def test_sampling_refuses_unbound_campaign_inputs_before_dispatch(
+    tmp_path: Path, changed: str
+) -> None:
+    evidence, prepared, campaign, runner, _, _, _ = setup(tmp_path)
+    if changed == "experiment":
+        prepared = replace(
+            prepared, experiment=ExperimentDefinition.from_toml(evidence.default_experiment)
+        )
+        message = "sampled fuzzing requires a sampled experiment"
+    elif changed == "calibration":
+        prepared = replace(
+            prepared,
+            experiment=prepared.experiment.model_copy(
+                update={
+                    "calibration": SampledCalibrationPhase(
+                        required_valid=1, minimum_matches=1, max_attempts=1
+                    )
+                }
+            ),
+        )
+        message = "campaign calibration differs"
+    else:
+        campaign = campaign.model_copy(
+            update={
+                "original": campaign.original.model_copy(update={"execution_plan_digest": "f" * 64})
+            }
+        )
+        message = "campaign original differs"
+    with pytest.raises(ValueError, match=message):
+        prepare_fuzz_sampling(evidence, prepared, campaign)
+    assert runner.calls == []
 
 
 def test_discovery_simplification_and_fresh_confirmation_use_separate_owned_samples(

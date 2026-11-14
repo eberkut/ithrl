@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import MappingProxyType
+from typing import Any
 
 import pytest
 
@@ -198,3 +199,55 @@ def test_configuration_rejects_inconsistent_private_sources() -> None:
             environment=MappingProxyType({"GH_TOKEN": "private"}),
             config_data=b"{}",
         )
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"environment_names": ()}, "does not match its declaration"),
+        ({"environment": {"GH_TOKEN": ""}}, "empty value"),
+        (
+            {"environment_names": ("UNSUPPORTED",), "environment": {"UNSUPPORTED": "fixture"}},
+            "unsupported name",
+        ),
+        (
+            {
+                "environment_names": ("GH_TOKEN", "GITHUB_TOKEN"),
+                "environment": {"GH_TOKEN": "fixture", "GITHUB_TOKEN": "fixture"},
+            },
+            "one credential source",
+        ),
+        ({"authentication": "github-token"}, "method does not match"),
+        (
+            {
+                "authentication": "managed-config",
+                "environment_names": (),
+                "environment": {},
+                "config_data": b"",
+            },
+            "cannot be empty",
+        ),
+        (
+            {
+                "authentication": "gh-token",
+                "environment_names": (),
+                "environment": {},
+                "config_data": b"{}",
+            },
+            "method does not match",
+        ),
+        ({"settings_data": b"{}"}, "fixed by the runner policy"),
+    ],
+)
+def test_direct_configuration_refuses_inconsistent_environment_authentication_and_policy(
+    changes: dict[str, Any], message: str
+) -> None:
+    arguments: dict[str, Any] = {
+        "authentication": "gh-token",
+        "environment_names": ("GH_TOKEN",),
+        "environment": {"GH_TOKEN": "private-fixture"},
+        **changes,
+    }
+    with pytest.raises(ValueError, match=message) as refused:
+        CopilotConfiguration(**arguments)
+    assert "private-fixture" not in str(refused.value)

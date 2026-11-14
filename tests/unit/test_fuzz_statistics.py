@@ -15,6 +15,50 @@ from ithrl.statistics import BinomialSample
 pytest.importorskip("scipy")
 
 
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"minimum_decrease": -0.1}, "minimum decrease must be within"),
+        ({"minimum_decrease": float("nan")}, "finite number"),
+        ({"alpha": True}, "finite number"),
+        ({"required_original": 0}, "positive fixed valid-sample targets"),
+        ({"required_mutant": True}, "positive fixed valid-sample targets"),
+        ({"required_mutant": 1.0}, "positive fixed valid-sample targets"),
+    ],
+)
+def test_confirmation_refuses_invalid_effects_and_sample_targets(
+    changes: dict[str, Any], message: str
+) -> None:
+    arguments: dict[str, Any] = {
+        "required_original": 1,
+        "required_mutant": 1,
+        "alpha": 0.05,
+        "minimum_decrease": 0.1,
+        **changes,
+    }
+    with pytest.raises(ValueError, match=message):
+        confirm_change(BinomialSample(1, 1), BinomialSample(0, 1), **arguments)
+
+
+@pytest.mark.parametrize("bound", [float("nan"), float("inf"), -0.1, 1.1])
+def test_confirmation_refuses_invalid_numerical_bounds(
+    monkeypatch: pytest.MonkeyPatch, bound: float
+) -> None:
+    def invalid_bound(*_args: object) -> float:
+        return bound
+
+    monkeypatch.setattr("scipy.special.betaincinv", invalid_bound)
+    with pytest.raises(ValueError, match="invalid probability bounds"):
+        confirm_change(
+            BinomialSample(1, 1),
+            BinomialSample(0, 1),
+            required_original=1,
+            required_mutant=1,
+            alpha=0.05,
+            minimum_decrease=0.1,
+        )
+
+
 @pytest.mark.parametrize("n", [1, 2, 5, 10, 20, 37])
 def test_exact_bounds_satisfy_independent_standard_library_tail_equations(n: int) -> None:
     for x in range(n + 1):

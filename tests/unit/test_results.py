@@ -37,7 +37,7 @@ from ithrl.results import (
     write_calibration_snapshot,
     write_result_snapshot,
 )
-from ithrl.results.validation import validate_result_case
+from ithrl.results.validation import json_object, validate_result_case
 from ithrl.runner import (
     AttemptEvidence,
     Candidate,
@@ -78,6 +78,51 @@ runs = 1
 role = "confirmation"
 runs = 1
 """
+
+
+@pytest.mark.parametrize("value", [1.5, [], None])
+def test_result_json_normalization_requires_an_object(value: Any) -> None:
+    with pytest.raises(ResultSnapshotError, match="must be a JSON object"):
+        json_object(value, label="request")
+
+
+def test_result_json_normalization_refuses_cycles_with_a_bounded_diagnostic() -> None:
+    recursive: dict[str, Any] = {}
+    recursive["self"] = recursive
+    with pytest.raises(ResultSnapshotError, match="supported JSON nesting limit"):
+        json_object(recursive, label="request")
+
+
+def test_result_readers_require_complete_framing_and_available_inputs(tmp_path: Path) -> None:
+    path = tmp_path / "context.jsonl"
+    path.write_text("{}")
+    with pytest.raises(ResultSnapshotError, match="end with a newline"):
+        storage._read_context_lines(path)
+    path.write_text("")
+    assert storage._read_context_lines(path) == ()
+    with pytest.raises(ResultSnapshotError, match="is unavailable"):
+        storage._read_regular_text(tmp_path / "missing", label="result input")
+
+
+@pytest.mark.parametrize(
+    "fault", ["summary-array", "unterminated-context", "oversize", "invalid-utf8"]
+)
+def test_result_loader_refuses_malformed_or_unbounded_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str
+) -> None:
+    destination = tmp_path / "result"
+    _write(destination)
+    if fault == "summary-array":
+        (destination / "summary.json").write_text("[]")
+    elif fault == "unterminated-context":
+        path = destination / "retained-context.jsonl"
+        path.write_text(path.read_text().rstrip("\n"))
+    elif fault == "invalid-utf8":
+        (destination / "summary.json").write_bytes(b"\xff")
+    else:
+        monkeypatch.setattr(storage, "_MAX_RESULT_FILE_BYTES", 1)
+    with pytest.raises(ResultSnapshotError):
+        load_result_snapshot(destination)
 
 
 def _experiment() -> ExperimentDefinition:
@@ -809,7 +854,21 @@ def test_calibration_aggregate_preserves_may_change_protected_effect() -> None:
 
 def test_calibration_aggregate_rejects_mismatched_or_unordered_observations() -> None:
     valid = _calibration_observation(1, ObservationOutcome.MATCH, accounting=RunAccounting())
+    with pytest.raises(ValueError, match="effective policy differs"):
+        calibration_summary_from_observations(
+            base=_calibration_base(),
+            observations=(valid,),
+            expected_policy_digest="f" * 64,
+            max_provider_calls_per_attempt=1,
+        )
     wrong_arm = valid.model_copy(update={"arm": ObservationArm.CANDIDATE})
+    with pytest.raises(ValueError, match="identity differs"):
+        calibration_summary_from_observations(
+            base=_calibration_base(),
+            observations=(valid.model_copy(update={"execution_plan_digest": "f" * 64}),),
+            expected_policy_digest=_sampled_plan().safety_policy.digest,
+            max_provider_calls_per_attempt=_sampled_plan().capability.provider_calls_per_attempt,
+        )
     with pytest.raises(ValueError, match="role, arm, or candidate"):
         calibration_summary_from_observations(
             base=_calibration_base(),
@@ -824,6 +883,58 @@ def test_calibration_aggregate_rejects_mismatched_or_unordered_observations() ->
             expected_policy_digest=_sampled_plan().safety_policy.digest,
             max_provider_calls_per_attempt=_sampled_plan().capability.provider_calls_per_attempt,
         )
+
+
+@pytest.mark.parametrize(
+    ("base_changes", "call_cap", "message"),
+    [
+        ({"matches": 0}, 1, "aggregate fields must come from observations"),
+        ({}, -1, "max_provider_calls_per_attempt is out of range"),
+    ],
+)
+def test_calibration_aggregation_refuses_supplied_totals_and_invalid_call_caps(
+    base_changes: dict[str, object], call_cap: int, message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        calibration_summary_from_observations(
+            base={**_calibration_base(), **base_changes},
+            observations=(),
+            expected_policy_digest=_sampled_plan().safety_policy.digest,
+            max_provider_calls_per_attempt=call_cap,
+        )
+
+
+@pytest.mark.parametrize("terminal_safety_refusal", [False, True])
+def test_over_plan_provider_usage_is_allowed_only_for_a_terminal_safety_refusal(
+    terminal_safety_refusal: bool,
+) -> None:
+    observation = _calibration_observation(
+        1, ObservationOutcome.RUNNER_ERROR, possible=2, acceptance=ProviderAcceptanceState.UNKNOWN
+    )
+    if terminal_safety_refusal:
+        observation = Observation.model_validate(
+            {**observation.model_dump(), "error_category": "safety"}
+        )
+    arguments: dict[str, Any] = {
+        "base": _calibration_base(outcome="refused")
+        if terminal_safety_refusal
+        else _calibration_base(),
+        "observations": (observation,),
+        "expected_policy_digest": _sampled_plan().safety_policy.digest,
+        "max_provider_calls_per_attempt": 1,
+    }
+    if terminal_safety_refusal:
+        summary = calibration_summary_from_observations(**arguments)
+        assert summary.provider_calls_possible == 2
+        assert summary.runner_errors == 1
+    else:
+        with pytest.raises(ValueError, match="possible provider calls exceed the plan"):
+            calibration_summary_from_observations(**arguments)
+
+
+def test_confirmation_failure_remains_a_valid_reported_outcome() -> None:
+    summary = _summary(status="confirmation-failed", confirmation_result="failed")
+    assert summary.confirmation_result == "failed"
 
 
 @pytest.mark.parametrize(

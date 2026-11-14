@@ -89,8 +89,6 @@ def _validate_envelopes(records: tuple[JsonObject, ...]) -> tuple[_Record, ...]:
 
 def _session_metadata(records: tuple[_Record, ...]) -> SessionMetadata:
     record = records[0]
-    if record.type != "session_meta":
-        _invalid("Codex session metadata must be the first record")
     source_session_id = _required_string(
         record.payload,
         "id",

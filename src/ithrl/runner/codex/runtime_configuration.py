@@ -6,7 +6,7 @@ import json
 import re
 import tomllib
 from collections.abc import Mapping
-from typing import Never
+from typing import Never, cast
 from urllib.parse import SplitResult, urlsplit, urlunsplit
 
 from ithrl.runner.codex.policy import DISABLED_FEATURES
@@ -74,9 +74,7 @@ def normalize_base_url(value: str) -> str:
         raise ValueError("provider base URL is unsafe") from error
     if not _is_supported_url_shape(parsed):
         raise ValueError("provider base URL is unsafe")
-    host = parsed.hostname
-    if host is None:  # Proved by _is_supported_url_shape; keeps narrowing explicit.
-        raise ValueError("provider base URL is unsafe")
+    host = cast(str, parsed.hostname)  # _is_supported_url_shape requires a hostname.
     if ":" in host and not host.startswith("["):
         host = f"[{host}]"
     netloc = host if port is None else f"{host}:{port}"

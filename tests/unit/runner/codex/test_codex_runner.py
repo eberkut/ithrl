@@ -34,10 +34,13 @@ from ithrl.mutation import TextAppend, TextMutation
 from ithrl.runner import (
     PreparedAttempt,
     ProviderAcceptanceState,
+    RunAccounting,
     RunnerCancelled,
     RunnerError,
     RunnerErrorCode,
+    RunResult,
     prepare_candidate,
+    validate_run_result,
 )
 from ithrl.runner.codex import CodexProviderConfiguration, CodexRunner, CodexRuntime
 from ithrl.runner.codex.isolation import CodexIsolationError, program_digest
@@ -110,6 +113,26 @@ def _runner(
     runner._worker_source = worker_source
     runner._worker_digest = program_digest(worker_source)
     return runner
+
+
+@pytest.mark.parametrize("missing", ["source", "workspace"])
+def test_runner_requires_protected_source_and_workspace_paths(tmp_path: Path, missing: str) -> None:
+    workspace, _ = _case(tmp_path)
+    selected = _runner(tmp_path, workspace)
+    with pytest.raises(ValueError, match="requires protected source and workspace paths"):
+        CodexRunner(
+            capability_profile=selected.capability_profile,
+            runtime=selected._runtime,
+            configuration=selected._configuration,
+            state_parent=tmp_path / "other-attempts",
+            output_root=tmp_path / "other-output",
+            source_paths=() if missing == "source" else (ProtectedPath("case", workspace.root),),
+            workspace_paths=()
+            if missing == "workspace"
+            else (ProtectedPath("workspace", tmp_path / "original-workspace"),),
+        )
+    assert not (tmp_path / "other-attempts").exists()
+    assert not (tmp_path / "other-output").exists()
 
 
 @pytest.mark.parametrize("storage", ["state", "output"])
@@ -217,6 +240,24 @@ def _attempt(
         phase="calibration",
         arm="baseline",
     )
+
+
+def test_completed_native_result_requires_every_started_call_to_finish(tmp_path: Path) -> None:
+    workspace, evidence = _case(tmp_path)
+    runner = _runner(tmp_path, workspace)
+    attempt = _attempt(evidence, runner)
+    result = RunResult(
+        attempt_id=attempt.attempt_id,
+        effective_policy_digest=attempt.safety_policy.digest,
+        provider=attempt.execution_plan.capability.provider,
+        endpoint=attempt.execution_plan.capability.endpoint,
+        model_requested=attempt.execution_plan.model_requested,
+        final_text="Fixture complete.",
+        accounting=RunAccounting(provider_calls_started=1, provider_calls_completed=0),
+    )
+    with pytest.raises(RunnerError, match="every started provider call") as refused:
+        validate_run_result(attempt, result)
+    assert refused.value.code is RunnerErrorCode.CONTRACT
 
 
 @contextmanager

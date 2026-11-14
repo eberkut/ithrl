@@ -24,9 +24,29 @@ from ithrl.runner import PreparedAttempt, prepare_candidate
 from ithrl.runner.copilot.materialize import (
     CopilotMaterializationError,
     CopilotMaterializationErrorCode,
+    _captured_system_message,
     _materialize_session,
+    _validate_complete_tool_work,
     materialize_copilot_attempt,
 )
+
+
+def test_retained_tool_requests_require_matching_native_lifecycle_evidence() -> None:
+    with pytest.raises(CopilotMaterializationError, match="incomplete tool work"):
+        _validate_complete_tool_work(tuple(_direct_records(shell_action=True)))
+
+
+def test_captured_system_message_requires_text_content() -> None:
+    records = (_record(1, "system.message", {"role": "system", "content": 42}),)
+    with pytest.raises(CopilotMaterializationError, match="unsupported content"):
+        _captured_system_message(records)
+    assert (
+        _captured_system_message(
+            (_record(1, "system.message", {"role": "developer", "content": "Fixture guidance"}),)
+        )
+        is None
+    )
+
 
 FIXTURES = Path(__file__).parents[3] / "fixtures"
 

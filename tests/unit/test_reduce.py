@@ -266,6 +266,7 @@ def _reducer(
     alternatives: tuple[frozenset[str], ...] = (),
     maximum: int | None = None,
     resume: ReductionCheckpoint | None = None,
+    identity_changes: dict[str, Any] | None = None,
 ) -> DeterministicReducer:
     if runner is None:
         runner = FakeRunner(
@@ -297,6 +298,8 @@ def _reducer(
         target_digest=target.digest,
         algorithm_digest=ALGORITHM_DIGEST,
     )
+    if identity_changes is not None:
+        identity = ObservationIdentity.model_validate({**identity.model_dump(), **identity_changes})
     return DeterministicReducer(
         runner=runner,
         target=target,
@@ -308,6 +311,26 @@ def _reducer(
         max_candidate_runs=maximum,
         resume=resume,
     )
+
+
+@pytest.mark.parametrize(
+    ("maximum", "identity_changes", "message"),
+    [
+        (0, None, "max_candidate_runs"),
+        (None, {"algorithm_digest": "f" * 64}, "another reduction algorithm"),
+        (None, {"runner_fingerprint": "changed"}, "does not match the execution plan"),
+    ],
+)
+def test_reducer_refuses_invalid_budget_or_execution_identity(
+    tmp_path: Path, maximum: int | None, identity_changes: dict[str, Any] | None, message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        _reducer(
+            _evidence(),
+            ObservationStore(tmp_path / "observations.sqlite"),
+            maximum=maximum,
+            identity_changes=identity_changes,
+        )
 
 
 def _experiment(

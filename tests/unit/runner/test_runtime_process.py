@@ -98,6 +98,38 @@ async def _run(
     return store, result
 
 
+@pytest.mark.parametrize(
+    ("failure", "code"),
+    [
+        (TimeoutError("private detail"), RunnerErrorCode.TIMEOUT),
+        (ValueError("private detail"), RunnerErrorCode.PREPARATION),
+        (RuntimeError("private detail"), RunnerErrorCode.INTERNAL),
+        (asyncio.CancelledError(), None),
+    ],
+)
+def test_preparation_failure_never_starts_a_process_and_cleans_owned_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: BaseException,
+    code: RunnerErrorCode | None,
+) -> None:
+    def prepare(_state: OwnedAttemptState) -> ProcessSpec:
+        raise failure
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("failed preparation started a process")
+
+    monkeypatch.setattr(runtime_process.subprocess, "Popen", forbidden)
+    expected = ProcessRuntimeCancelled if code is None else ProcessRuntimeError
+    with pytest.raises(expected) as refused:
+        asyncio.run(_run(tmp_path, prepare))
+    if isinstance(refused.value, ProcessRuntimeError):
+        assert refused.value.code is code
+    assert refused.value.report.cleanup_outcome == "verified"
+    assert not (tmp_path / "state" / ATTEMPT_ID).exists()
+    assert "private detail" not in str(refused.value)
+
+
 @pytest.mark.parametrize("refusal", ["source-bytes", "workspace-bytes", "workspace-nesting"])
 def test_snapshot_refusal_prevents_process_preparation(tmp_path: Path, refusal: str) -> None:
     sources, workspaces = _protected_paths(tmp_path)

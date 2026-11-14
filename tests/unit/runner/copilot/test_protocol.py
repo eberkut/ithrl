@@ -365,6 +365,85 @@ def test_input_and_dispatch_receipts_are_bound_and_strict(
 
 
 @pytest.mark.parametrize(
+    ("requests", "code"),
+    [
+        ("invalid-request-list", "invalid-message"),
+        ([None], "invalid-action"),
+        ([{"toolCallId": "call-1", "name": "network", "arguments": {}}], "unsupported-action"),
+        ([{"toolCallId": "call-1", "name": "bash", "arguments": "pwd"}], "invalid-action"),
+        (
+            [{"toolCallId": "call-1", "name": "bash", "arguments": {"command": "x" * 70000}}],
+            "invalid-action",
+        ),
+        ([{"toolCallId": "call-1", "name": "bash", "arguments": {}}] * 2, "action-mismatch"),
+        ([{"toolCallId": "call-1", "name": "bash", "arguments": {}}] * 65, "action-limit"),
+    ],
+)
+def test_shell_request_validation_refuses_invalid_or_unbounded_actions(
+    requests: object, code: str
+) -> None:
+    events = _events(shell_target=True)
+    message = next(event for event in events if event["type"] == "assistant.message")
+    message["data"]["toolRequests"] = requests
+    with pytest.raises(CopilotProtocolError) as refused:
+        _parse(events, shell_target=True)
+    assert refused.value.code == code
+
+
+def test_returned_system_message_must_match_captured_input() -> None:
+    events = _events()
+    system = next(event for event in events if event["type"] == "system.message")
+    system["data"]["content"] = "Changed fixture guidance"
+    with pytest.raises(CopilotProtocolError) as refused:
+        _parse(events)
+    assert refused.value.code == "input-mismatch"
+
+
+def test_reasoning_identity_metadata_is_bound_to_the_selected_turn_and_model() -> None:
+    events = _events()
+    events.insert(
+        8,
+        _event(
+            "assistant.reasoning",
+            content="Fixture reasoning",
+            reasoningId="reasoning-1",
+            model=MODEL,
+            turnId=TURN,
+        ),
+    )
+    assert _parse(events).final_text == "Fixture complete."
+
+
+def test_continuation_refuses_an_unrequested_user_message() -> None:
+    events = _events()
+    events.insert(4, _event("user.message", content="Private unrequested fixture input"))
+    with pytest.raises(CopilotProtocolError) as refused:
+        _parse(events)
+    assert refused.value.code == "unexpected-user-message"
+
+
+def test_startup_events_cannot_restart_an_active_turn() -> None:
+    events = _events()
+    events.insert(8, _event("session.resume", eventCount=3))
+    with pytest.raises(CopilotProtocolError) as refused:
+        _parse(events)
+    assert refused.value.code == "invalid-sequence"
+
+
+def test_denial_drain_retains_bounded_continuation_lifecycle_without_more_dispatch() -> None:
+    events = _events(shell_target=True)
+    events[-1:-1] = [
+        _event("assistant.turn_end", turnId=TURN),
+        _event("assistant.turn_start", turnId="next-turn"),
+        _event("session.usage_checkpoint"),
+        _event("session.idle"),
+    ]
+    result = _parse(events, shell_target=True)
+    assert result.actions_requested == result.actions_denied == 1
+    assert result.provider_calls_started == 1
+
+
+@pytest.mark.parametrize(
     "kind",
     [
         "ithrl.copilot.input",
@@ -548,6 +627,9 @@ def test_malformed_usage_is_not_replaced_with_zero(usage: dict[str, object]) -> 
     "raw",
     [
         b"",
+        b"\n",
+        b'{"type":"assistant.idle","agentId":"other-agent"}\n',
+        b'{"type":"assistant.idle","data":null}\n',
         b'{"type":"assistant.idle","type":"assistant.idle"}\n',
         b'{"type":"assistant.idle","data":{"value":NaN}}\n',
         b"[]\n",
@@ -557,6 +639,41 @@ def test_malformed_usage_is_not_replaced_with_zero(usage: dict[str, object]) -> 
 def test_decoder_bounds_and_strict_json_fail_safely(raw: bytes) -> None:
     with pytest.raises(CopilotProtocolError):
         parse_output(raw, expected="final-response")
+
+
+def test_decoder_refuses_output_and_structure_limits(monkeypatch: pytest.MonkeyPatch) -> None:
+    from ithrl.runner.copilot.protocol import decoding
+
+    raw = b'{"type":"assistant.idle","data":{}}\n'
+    assert decoding.decode_events(raw) == [{"type": "assistant.idle", "data": {}}]
+    with monkeypatch.context() as context:
+        context.setattr(decoding, "MAX_OUTPUT_BYTES", len(raw) - 1)
+        with pytest.raises(CopilotProtocolError) as caught:
+            decoding.decode_events(raw)
+        assert caught.value.code == "output-limit"
+    monkeypatch.setattr(decoding, "MAX_EVENT_ITEMS", 1)
+    with pytest.raises(CopilotProtocolError) as caught:
+        decoding.decode_events(raw)
+    assert caught.value.code == "event-limit"
+
+
+def test_protocol_field_helpers_refuse_malformed_values_without_exposing_them() -> None:
+    from ithrl.runner.copilot.protocol.decoding import event_data
+    from ithrl.runner.copilot.protocol.state import bounded_string, parse_usage
+
+    assert parse_usage({}) is None
+    assert bounded_string("", max_length=1, allow_empty=True) == ""
+    for value in (None, "", "private-fixture-value"):
+        with pytest.raises(CopilotProtocolError) as caught:
+            bounded_string(value, max_length=1)
+        assert caught.value.code == "invalid-field"
+        assert "private-fixture-value" not in str(caught.value)
+    with pytest.raises(CopilotProtocolError) as caught:
+        parse_usage(None)
+    assert caught.value.code == "invalid-usage"
+    with pytest.raises(CopilotProtocolError) as caught:
+        event_data({"data": None})
+    assert caught.value.code == "invalid-event"
 
 
 def test_model_telemetry_is_preserved_without_substituting_lifecycle_evidence() -> None:

@@ -10,6 +10,7 @@ from dataclasses import replace
 from pathlib import Path
 from types import TracebackType
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 
@@ -45,6 +46,197 @@ def _request() -> dict[str, Any]:
             "max_response_bytes": 1024,
         },
     }
+
+
+def test_private_request_is_consumed_after_reading(tmp_path: Path) -> None:
+    path = tmp_path / "request.json"
+    path.write_text(json.dumps(_request()))
+    path.chmod(0o600)
+
+    assert worker._read_private_request(path) == _request()
+    assert not path.exists()
+
+
+@pytest.mark.parametrize("failure", ["opening", "reading", "unavailable"])
+def test_request_read_failures_are_detected_without_disclosing_contents(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    path = tmp_path / "request.json"
+    path.write_text(json.dumps(_request()))
+    path.chmod(0o600)
+    original_open = Path.open
+
+    def racing_open(selected: Path, *args: Any, **kwargs: Any) -> Any:
+        if selected == path and args == ("rb",):
+            if failure == "unavailable":
+                raise OSError("private-detail")
+            if failure == "reading":
+                path.write_bytes(b"{}")
+            else:
+                replacement = tmp_path / "replacement.json"
+                replacement.write_bytes(b"{}")
+                replacement.chmod(0o600)
+                replacement.replace(path)
+        return original_open(selected, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", racing_open)
+    with pytest.raises(worker.WorkerError, match=r"changed while|unavailable") as refused:
+        worker._read_private_request(path)
+    assert "private-detail" not in str(refused.value)
+    assert path.exists() is (failure != "reading")
+
+
+def test_app_server_start_failure_is_content_safe(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(worker, "_configure_relay", Mock())
+    monkeypatch.setattr(worker.subprocess, "Popen", Mock(side_effect=OSError("private-detail")))
+    with pytest.raises(worker.WorkerError, match="could not start") as refused:
+        worker._exchange(
+            Path("/fixture/codex"), _request(), "http://127.0.0.1", audit=io.StringIO()
+        )
+    assert "private-detail" not in str(refused.value)
+
+
+@pytest.mark.parametrize("provider", [None, "", "bad/provider"])
+def test_invalid_provider_is_refused_before_transport_creation(
+    monkeypatch: pytest.MonkeyPatch, provider: object
+) -> None:
+    transport = Mock(side_effect=AssertionError("invalid provider reached transport creation"))
+    monkeypatch.setattr(worker, "ResponsesRelay", transport)
+    request = _request()
+    request["provider"] = provider
+    with pytest.raises(worker.WorkerError, match="provider is invalid"):
+        worker._run_app_server(Path("/fixture/codex"), request, audit=io.StringIO())
+    transport.assert_not_called()
+
+
+@pytest.mark.parametrize("unsafe", ["permissions", "symlink", "empty", "oversized", "relative"])
+def test_unsafe_private_request_is_not_consumed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, unsafe: str
+) -> None:
+    path = tmp_path / "request.json"
+    content = json.dumps(_request()).encode()
+    path.write_bytes(content)
+    path.chmod(0o600)
+    if unsafe == "permissions":
+        path.chmod(0o644)
+    elif unsafe == "symlink":
+        target = tmp_path / "original.json"
+        path.rename(target)
+        path.symlink_to(target)
+    elif unsafe == "empty":
+        path.write_bytes(b"")
+    elif unsafe == "oversized":
+        monkeypatch.setattr(worker, "MAX_WORKER_REQUEST_BYTES", len(content) - 1)
+    else:
+        monkeypatch.chdir(tmp_path)
+        path = Path("request.json")
+
+    with pytest.raises(worker.WorkerError, match="request is unsafe"):
+        worker._read_private_request(path)
+
+    assert path.exists()
+    if unsafe == "symlink":
+        assert path.read_bytes() == content
+
+
+@pytest.mark.parametrize("content", [b"private invalid JSON", b"\xff", b"[]"])
+def test_consumed_request_validation_does_not_disclose_content(
+    tmp_path: Path, content: bytes
+) -> None:
+    path = tmp_path / "request.json"
+    path.write_bytes(content)
+    path.chmod(0o600)
+
+    with pytest.raises(worker.WorkerError, match="JSON") as refused:
+        worker._read_private_request(path)
+
+    assert "private" not in str(refused.value)
+    assert str(path) not in str(refused.value)
+    assert not path.exists()
+
+
+@pytest.mark.parametrize("invalid", ["provider", "missing-url", "duplicate-url", "toml", "size"])
+def test_relay_configuration_refusal_preserves_the_original(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, invalid: str
+) -> None:
+    monkeypatch.setattr(worker, "SANDBOX_ROOT", str(tmp_path))
+    path = tmp_path / "codex-home" / "config.toml"
+    path.parent.mkdir()
+    text = (
+        'model_provider = "ithrl"\n[model_providers.ithrl]\n'
+        'base_url = "https://fixture.invalid/v1"\nrequest_max_retries = 0\n'
+    )
+    if invalid == "missing-url":
+        text = text.replace('base_url = "https://fixture.invalid/v1"\n', "")
+    elif invalid == "duplicate-url":
+        text = 'base_url = "https://other.invalid"\n' + text
+    elif invalid == "toml":
+        text = "private invalid configuration"
+    path.write_text(text)
+    if invalid == "size":
+        monkeypatch.setattr(worker, "MAX_WORKER_REQUEST_BYTES", len(text.encode()) - 1)
+
+    with pytest.raises(worker.WorkerError, match="configuration could not be prepared"):
+        worker._configure_relay("other" if invalid == "provider" else "ithrl", "http://127.0.0.1")
+
+    assert path.read_text() == text
+
+
+@pytest.mark.parametrize("stage", ["initialization", "exchange"])
+def test_transport_failures_are_content_safe(monkeypatch: pytest.MonkeyPatch, stage: str) -> None:
+    def fail(*_args: object, **_kwargs: object) -> Any:
+        raise OSError("PRIVATE-TRANSPORT-DETAIL")
+
+    monkeypatch.setattr(worker, "ResponsesRelay", fail if stage == "initialization" else _Relay)
+    if stage == "exchange":
+        monkeypatch.setattr(worker, "_exchange", fail)
+
+    with pytest.raises(worker.WorkerError, match="transport is unavailable") as refused:
+        worker._run_app_server(Path("/fixture/codex"), _request(), audit=io.StringIO())
+
+    assert "PRIVATE-TRANSPORT-DETAIL" not in str(refused.value)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="native executable permissions require POSIX")
+@pytest.mark.parametrize(
+    "kind", ["executable", "symlink", "missing", "directory", "permissions", "relative"]
+)
+def test_worker_requires_an_absolute_regular_executable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    path = tmp_path / "codex"
+    if kind == "directory":
+        path.mkdir()
+    elif kind != "missing":
+        path.write_text("fixture program is never executed")
+        path.chmod(0o600 if kind == "permissions" else 0o700)
+    if kind == "symlink":
+        link = tmp_path / "codex-link"
+        link.symlink_to(path)
+        path = link
+    elif kind == "relative":
+        monkeypatch.chdir(tmp_path)
+        path = Path("codex")
+
+    if kind in {"executable", "symlink"}:
+        assert worker._require_executable(path) == (tmp_path / "codex").resolve()
+    else:
+        with pytest.raises(worker.WorkerError, match="Codex executable is unavailable"):
+            worker._require_executable(path)
+
+
+def test_unexpected_startup_failure_does_not_print_private_details(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def fail(_path: Path) -> dict[str, object]:
+        raise OSError("PRIVATE-STARTUP-DETAIL")
+
+    monkeypatch.setattr(worker, "_read_private_request", fail)
+
+    assert worker.main(["/fixture/request"]) == 70
+    error = capsys.readouterr().err
+    assert "Codex worker failed" in error
+    assert "PRIVATE-STARTUP-DETAIL" not in error
 
 
 class _Relay:

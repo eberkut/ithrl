@@ -11,11 +11,20 @@ from pydantic import ValidationError
 from ithrl.adapters._jsonl import JsonlDocument, read_jsonl
 from ithrl.adapters.codex import PARSER
 from ithrl.adapters.codex import decisions as codex_decisions
-from ithrl.adapters.codex.context import compile_context
+from ithrl.adapters.codex.context import compile_context, decision_input_node_id, editable_text
 from ithrl.adapters.codex.decisions import enumerate_decisions
 from ithrl.adapters.contracts import NativeSession, ParsingLimits, SourceFacts
 from ithrl.behavior import FinalResponseTarget
-from ithrl.context import ContextNode, JsonObject, SourceRecordSelector, content_digest
+from ithrl.case import CaseFormatError
+from ithrl.case.source import SourceArtifact
+from ithrl.case.source_context import validate_source_references
+from ithrl.context import (
+    ContextGraph,
+    ContextNode,
+    JsonObject,
+    SourceRecordSelector,
+    content_digest,
+)
 from ithrl.decisions import DecisionSummary
 
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "codex-session" / "rollout.jsonl"
@@ -75,6 +84,100 @@ def test_enumeration_is_deterministic_and_summary_is_content_free(
     assert "fixture-value" not in summary
 
 
+def test_trigger_selection_skips_assistant_messages_and_derived_nodes(
+    session: NativeSession,
+) -> None:
+    records = list(session.records[:2])
+    records.extend(
+        [
+            _record(
+                2,
+                "response_item",
+                {
+                    "type": "message",
+                    "id": "user-1",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "Task."}],
+                },
+            ),
+            _record(
+                3,
+                "response_item",
+                {
+                    "type": "message",
+                    "id": "assistant-1",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Prior answer."}],
+                },
+            ),
+            _record(4, "token_usage_record", {}),
+            _record(5, "event_msg", {"type": "task_started", "turn_id": "turn-fixture-001"}),
+            _record(
+                6,
+                "event_msg",
+                {
+                    "type": "task_complete",
+                    "turn_id": "turn-fixture-001",
+                    "last_agent_message": "Complete.",
+                },
+            ),
+        ]
+    )
+    session = PARSER.parse(_document(tuple(records)))
+    (decision,) = enumerate_decisions(session)
+    context = compile_context(session, decision.selector)
+    derived = ContextNode(
+        id="derived",
+        kind="fixture",
+        path="/derived",
+        source="derived",
+        mutable=False,
+        digest=content_digest("derived"),
+    )
+    assert (
+        decision_input_node_id((*context.nodes, derived), session.records, decision.selector)
+        == context.nodes[2].id
+    )
+    assert editable_text(session, decision.selector, context) == ()
+    assert not context.nodes[4].mutable
+    assert "opaque-context-frozen" in decision.limitations
+
+
+@pytest.mark.parametrize("missing", ["turn_id", "model"])
+def test_missing_optional_turn_metadata_and_orphan_events_do_not_invent_decisions(
+    session: NativeSession, missing: str
+) -> None:
+    records = list(session.records)
+    _payload(records[1]).pop(missing)
+    records.append(
+        _record(13, "event_msg", {"type": "task_complete", "last_agent_message": "Orphan."})
+    )
+    (decision,) = enumerate_decisions(PARSER.parse(_document(tuple(records))))
+    assert decision.case.model_requested is None
+    assert decision.observation.final_response == "Fixture complete."
+
+
+def test_provider_metadata_is_not_inferred_from_an_unrelated_record(session: NativeSession) -> None:
+    first = session.records[0]
+    assert codex_decisions._provider((first,)) == "fixture-provider"
+    first["type"] = "turn_context"
+    assert codex_decisions._provider((first,)) is None
+
+
+def test_decision_context_boundary_cannot_follow_its_observed_record(
+    session: NativeSession,
+) -> None:
+    (decision,) = enumerate_decisions(session)
+    selector = decision.selector
+    with pytest.raises(ValidationError, match="boundary must not follow"):
+        type(selector).model_validate(
+            {
+                **selector.model_dump(),
+                "context_before_line": selector.record.line + 1,
+            }
+        )
+
+
 def test_decision_context_contains_only_earlier_source_records(
     session: NativeSession,
 ) -> None:
@@ -116,6 +219,46 @@ def test_final_response_context_preserves_call_output_dependency(
     assert output.depends_on == (call.id,)
     assert not by_ordinal[6].mutable
     assert 9 not in by_ordinal
+
+
+@pytest.mark.parametrize("invalid", ["other-source", "decision-boundary"])
+def test_source_context_must_precede_its_decision_in_the_same_artifact(
+    session: NativeSession, invalid: str
+) -> None:
+    decision = enumerate_decisions(session)[0]
+    context = compile_context(session, decision.selector)
+    selected = decision.select(decision.targets[0].target_id, context=context).evidence
+    artifacts = (
+        SourceArtifact(
+            path=decision.selector.source,
+            media_type=decision.case.source_media_type,
+            content=session.native_bytes,
+        ),
+    )
+    derived = ContextNode(
+        id="derived-fact",
+        kind="fixture",
+        path="/derived",
+        mutable=False,
+        source="derived",
+        digest=content_digest("derived"),
+    )
+    validate_source_references(ContextGraph(nodes=(*context.nodes, derived)), selected, artifacts)
+    last = context.nodes[-1]
+    if invalid == "other-source":
+        changed = last.model_copy(update={"source": "source/other.jsonl"})
+        message = "one source artifact"
+    else:
+        selector = _source_selector(last).model_copy(
+            update={"line": decision.selector.context_before_line}
+        )
+        changed = last.model_copy(update={"selector": selector})
+        message = "must precede"
+
+    with pytest.raises(CaseFormatError, match=message):
+        validate_source_references(
+            ContextGraph(nodes=(*context.nodes[:-1], changed)), selected, artifacts
+        )
 
 
 def test_incomplete_trailing_turn_is_omitted(session: NativeSession) -> None:

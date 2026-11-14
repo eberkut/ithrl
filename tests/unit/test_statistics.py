@@ -29,6 +29,11 @@ REFERENCE: dict[str, Any] = json.loads(
 )
 
 
+def test_interval_requires_explicit_binomial_samples() -> None:
+    with pytest.raises(ValueError, match="samples must be BinomialSample"):
+        newcombe_interval(object(), BinomialSample(1, 1))  # type: ignore[arg-type]
+
+
 def test_reference_vectors_record_published_independent_method_provenance() -> None:
     provenance = REFERENCE["provenance"]
     assert provenance["package"] == "statsmodels"

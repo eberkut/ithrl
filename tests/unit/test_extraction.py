@@ -7,6 +7,7 @@ import socket
 import stat
 import subprocess
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -28,9 +29,78 @@ from ithrl.experiment import (
     UnavailableRunnerConfig,
 )
 from ithrl.extraction import extract_decision, load_extracted_case, validate_extracted_case
+from ithrl.synthetic import extract_inference
 from ithrl.workflow import PreflightRefusedError, prepare_experiment
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
+
+
+def test_open_native_session_requires_exactly_one_source() -> None:
+    with pytest.raises(ValueError, match="select exactly one"):
+        extraction.open_native_session()
+    with pytest.raises(ValueError, match="select exactly one"):
+        extraction.open_native_session(source=FIXTURES / "unused.jsonl", session_id="fixture")
+    with pytest.raises(AdapterError) as refused:
+        extraction.open_native_session(session_id="fixture")
+    assert refused.value.code is AdapterErrorCode.SESSION_NOT_FOUND
+
+
+def test_exact_request_cases_have_no_native_editable_text(tmp_path: Path) -> None:
+    evidence = extract_inference(
+        FIXTURES / "synthetic-trace.json",
+        inference_call_id="synthetic-ac-001",
+        case_path=tmp_path / "case",
+    ).load()
+    assert validate_extracted_case(evidence) is None
+    assert extraction.editable_extracted_text(evidence) == ()
+
+
+def test_open_native_session_refuses_a_harness_mismatch() -> None:
+    with pytest.raises(AdapterError) as refused:
+        extraction.open_native_session(
+            source=FIXTURES / "codex-session/rollout.jsonl", harness="copilot"
+        )
+    assert refused.value.code is AdapterErrorCode.UNSUPPORTED_FORMAT
+
+
+def test_native_rederivation_refuses_missing_selected_source(tmp_path: Path) -> None:
+    evidence = _native_case_evidence(tmp_path)
+    evidence._source_artifacts = ()
+    with pytest.raises(CaseFormatError, match="no selected source evidence"):
+        validate_extracted_case(evidence)
+
+
+@pytest.mark.parametrize("missing", ["decision", "harness", "harness_version", "source_schema"])
+def test_logical_capture_requires_its_decision_and_source_metadata(
+    tmp_path: Path, missing: str
+) -> None:
+    evidence = _native_case_evidence(tmp_path)
+    manifest = evidence.manifest
+    if missing != "decision":
+        manifest = manifest.model_copy(update={missing: None})
+    with pytest.raises(CaseFormatError, match="logical-session capture requires"):
+        CaseEvidence(
+            manifest=manifest,
+            request=None,
+            context=evidence.context,
+            default_experiment=evidence.default_experiment,
+            source_artifacts=evidence.source_artifacts,
+            decision=None if missing == "decision" else evidence.decision,
+        )
+
+
+def test_editable_text_normalizes_adapter_refusal_without_exposing_its_content(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    evidence = _native_case_evidence(tmp_path)
+    adapter = Mock(
+        side_effect=AdapterError(AdapterErrorCode.INVALID_SESSION, "private-fixture-detail")
+    )
+    monkeypatch.setattr(extraction, "editable_session_text", adapter)
+    with pytest.raises(CaseFormatError, match="editable text cannot be derived safely") as refused:
+        extraction.editable_extracted_text(evidence)
+    adapter.assert_called_once()
+    assert "private-fixture-detail" not in str(refused.value)
 
 
 def test_verified_editable_text_repr_hides_captured_response(tmp_path: Path) -> None:

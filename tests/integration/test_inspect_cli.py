@@ -12,6 +12,53 @@ from typer.testing import CliRunner
 
 from ithrl.cli import app
 from ithrl.observations import ObservationStore
+from ithrl.text_sections import MAX_TEXT_SECTIONS
+
+
+def test_sections_rejects_missing_case_without_echoing_its_path(tmp_path: Path) -> None:
+    source = tmp_path / "private-case-path"
+    result = CliRunner().invoke(app, ["inspect", "sections", str(source), "--format", "json"])
+    assert result.exit_code == 2, result.output
+    assert json.loads(result.stdout)["error_code"] == "inspection-invalid"
+    assert "private-case-path" not in result.output
+
+
+def test_sections_human_output_uses_saved_catalogs(reduced_example: tuple[Path, Path]) -> None:
+    case, _ = reduced_example
+    result = CliRunner().invoke(app, ["inspect", "sections", str(case)])
+    assert result.exit_code == 0, result.output
+    assert "Case text sections (untested)" in result.stdout
+    assert "section-" in result.stdout
+    assert "No harness probes, provider calls or actions were executed" in result.stdout
+
+
+def test_sections_reports_policy_limited_fields_without_exposing_text(tmp_path: Path) -> None:
+    trace = json.loads((Path(__file__).parents[1] / "fixtures/synthetic-trace.json").read_text())
+    private_text = "private-section-sentinel\n\n" * (MAX_TEXT_SECTIONS + 1)
+    trace["inferences"][0]["request"]["input"][1]["content"] = private_text
+    source = tmp_path / "trace.json"
+    source.write_text(json.dumps(trace))
+    case = tmp_path / "case"
+    runner = CliRunner()
+    extracted = runner.invoke(
+        app,
+        ["extract", str(source), "--inference", "synthetic-ac-001", "--output", str(case)],
+    )
+    assert extracted.exit_code == 0, extracted.output
+    args = ["inspect", "sections", str(case)]
+    metadata = runner.invoke(app, [*args, "--format", "json"])
+    assert metadata.exit_code == 0, metadata.output
+    report = json.loads(metadata.stdout)
+    (unavailable,) = report["unavailable_fields"]
+    assert unavailable["reason"] == "section-policy-limit"
+    assert report["fields"]
+    assert all(field["context_id"] != unavailable["context_id"] for field in report["fields"])
+    human = runner.invoke(app, args)
+    assert human.exit_code == 0, human.output
+    assert "unavailable:" in human.stdout
+    assert "section-policy-limit" in human.stdout
+    assert unavailable["context_id"] in human.stdout
+    assert "private-section-sentinel" not in metadata.stdout + human.stdout
 
 
 @pytest.fixture

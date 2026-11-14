@@ -12,6 +12,20 @@ from ithrl.adapters import _jsonl as jsonl_module
 from ithrl.adapters._jsonl import read_jsonl, read_jsonl_bytes
 
 
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        ({"max_records": 0}, "parsing limits must be positive"),
+        ({"max_bytes": 1, "max_line_bytes": 2}, "max_line_bytes must not exceed max_bytes"),
+    ],
+)
+def test_parsing_limits_refuse_nonpositive_or_inconsistent_bounds(
+    arguments: dict[str, int], message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        ParsingLimits(**arguments)
+
+
 def _write(path: Path, content: bytes) -> Path:
     path.write_bytes(content)
     return path

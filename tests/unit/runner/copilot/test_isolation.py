@@ -7,9 +7,13 @@ import stat
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
+from unittest.mock import Mock
 
 import pytest
 
+import ithrl.runner.copilot.isolation as isolation
+from ithrl.case import CaseError
 from ithrl.runner.copilot.configuration import (
     MAX_CONFIG_BYTES,
     CopilotConfiguration,
@@ -61,6 +65,38 @@ def _configuration() -> CopilotConfiguration:
         environment={"GH_TOKEN": "private-token"},
         config_file=None,
     )
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"session_id": "../foreign"}, "session identity is invalid"),
+        ({"native_session": b""}, "native session exceeds"),
+        ({"system_message": ""}, "system message exceeds"),
+        ({"system_message": "\ud800"}, "worker input is invalid"),
+        ({"model": ""}, "model identity is invalid"),
+        ({"worker_digest": "0" * 64}, "worker source changed"),
+    ],
+)
+def test_process_preparation_refuses_invalid_private_inputs_before_launch(
+    tmp_path: Path, changes: dict[str, Any], message: str
+) -> None:
+    state = OwnedAttemptState.create(tmp_path / "state", ATTEMPT_ID)
+    worker = _program(tmp_path / "worker.py")
+    arguments: dict[str, Any] = {
+        "runtime": _runtime(tmp_path),
+        "configuration": _configuration(),
+        "native_session": b'{"type":"session"}\n',
+        "session_id": "session-1",
+        "system_message": "Fixture guidance",
+        "model": "fixture-model",
+        "target": "final-response",
+        "worker_source": worker,
+        "worker_digest": program_digest(worker),
+        **changes,
+    }
+    with pytest.raises(CopilotIsolationError, match=message):
+        prepare_copilot_process(state, **arguments)
 
 
 @pytest.mark.parametrize("target", ["final-response", "shell-action"])
@@ -325,6 +361,61 @@ def test_runtime_identity_detects_executable_mutation(tmp_path: Path) -> None:
 
     with pytest.raises(CopilotIsolationError, match="executable changed"):
         runtime.assert_unchanged()
+
+
+def test_runtime_identity_normalizes_sdk_inspection_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = _runtime(tmp_path)
+    monkeypatch.setattr(
+        type(runtime.sdk), "assert_unchanged", Mock(side_effect=ValueError("private-sdk-detail"))
+    )
+    with pytest.raises(CopilotIsolationError, match="SDK runtime changed") as refused:
+        runtime.assert_unchanged()
+    assert "private-sdk-detail" not in str(refused.value)
+
+
+@pytest.mark.parametrize("failure", ["worker-write", "configuration-write", "directory-race"])
+def test_preparation_io_and_serialization_errors_are_content_safe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    state = OwnedAttemptState.create(tmp_path / "state", ATTEMPT_ID)
+    worker = _program(tmp_path / "worker.py")
+    runtime = _runtime(tmp_path)
+    write = isolation.atomic_write_bytes
+
+    def fail_write(path: Path, content: bytes) -> Any:
+        if path.name == ("worker" if failure == "worker-write" else "settings.json"):
+            raise CaseError("private-io-detail")
+        return write(path, content)
+
+    if failure in {"worker-write", "configuration-write"}:
+        monkeypatch.setattr(isolation, "atomic_write_bytes", fail_write)
+    elif failure == "directory-race":
+        mkdir = Path.mkdir
+
+        def replace_directory(
+            path: Path, mode: int = 0o777, parents: bool = False, exist_ok: bool = False
+        ) -> None:
+            mkdir(path, mode=mode, parents=parents, exist_ok=exist_ok)
+            path.rmdir()
+            path.write_bytes(b"fixture replacement")
+
+        monkeypatch.setattr(Path, "mkdir", replace_directory)
+    with pytest.raises(CopilotIsolationError) as refused:
+        prepare_copilot_process(
+            state,
+            runtime=runtime,
+            configuration=_configuration(),
+            native_session=b'{"type":"session"}\n',
+            session_id="session-1",
+            system_message=None,
+            model="fixture-model",
+            target="final-response",
+            worker_source=worker,
+            worker_digest=program_digest(worker),
+        )
+    assert "private-io-detail" not in str(refused.value)
 
 
 def test_runtime_rejects_relative_traversal_and_non_executable_paths(tmp_path: Path) -> None:

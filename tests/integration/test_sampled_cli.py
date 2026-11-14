@@ -12,13 +12,14 @@ import socket
 import stat
 import subprocess
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta, tzinfo
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Self, override
 
 import pytest
+import typer
 from typer.testing import CliRunner, Result
 
 import ithrl.calibration as calibration
@@ -307,6 +308,115 @@ def _assert_no_dispatch(case: OperatorCase) -> None:
     case.assert_sources_unchanged()
 
 
+@pytest.mark.parametrize("missing", ["provider-budget", "wall-budget", "new-dry-run"])
+def test_reduction_refuses_missing_administrative_inputs_before_dispatch(
+    operator_case: OperatorCase, tmp_path: Path, missing: str
+) -> None:
+    arguments = operator_case.command()
+    expected = "sampling-budget-required"
+    if missing == "new-dry-run":
+        arguments += ["--save-preflight", str(tmp_path / "receipt.json")]
+        expected = "invalid-options"
+    else:
+        flag = "--max-provider-calls" if missing == "provider-budget" else "--max-wall-time"
+        index = arguments.index(flag)
+        del arguments[index : index + 2]
+    result = _invoke(arguments)
+    assert result.exit_code == ExitCode.USAGE, result.output
+    assert _json(result)["error_code"] == expected
+    _assert_no_dispatch(operator_case)
+
+
+@pytest.mark.parametrize("sections", [False, True])
+def test_reduction_dry_run_resolves_default_candidate_limit_and_saves_receipt(
+    operator_case: OperatorCase, tmp_path: Path, sections: bool
+) -> None:
+    if sections:
+        _enable_section_search(operator_case)
+    arguments = operator_case.command(
+        "--dry-run", "--save-preflight", str(tmp_path / "receipt.json")
+    )
+    index = arguments.index("--max-candidates")
+    del arguments[index : index + 2]
+    result = _invoke(arguments)
+    assert result.exit_code == ExitCode.SUCCESS, result.output
+    report = _json(result)
+    assert report["max_candidate_comparisons"] == (3 if sections else 100)
+    assert (tmp_path / "receipt.json").is_file()
+    _assert_no_dispatch(operator_case)
+
+
+@pytest.mark.parametrize("changed", ["workspace", "store", "attempt-limits"])
+def test_reduction_resume_rejects_changed_execution_bindings_without_replay(
+    operator_case: OperatorCase, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, changed: str
+) -> None:
+    completed = _invoke(operator_case.command())
+    assert completed.exit_code == ExitCode.SUCCESS, completed.output
+    destination = _json(completed)["result_path"]
+    calls = tuple(operator_case.runner.calls)
+    arguments = [
+        "shrink",
+        destination,
+        "--resume",
+        "--acknowledge-model-execution",
+        "--format",
+        "json",
+    ]
+    if changed == "attempt-limits":
+        limits = operator_case.selection.resource_limits.model_copy(
+            update={"max_wall_time_seconds": 2}
+        )
+        selection = replace(operator_case.selection, resource_limits=limits)
+
+        def changed_selection(*_args: object, **_kwargs: object) -> NativeSelection:
+            return selection
+
+        monkeypatch.setattr(native, "native_selection", changed_selection)
+    else:
+        flag = "--original-workspace" if changed == "workspace" else "--observation-store"
+        arguments += [flag, str(tmp_path / "different")]
+    result = _invoke(arguments)
+    assert result.exit_code == ExitCode.USAGE, result.output
+    assert _json(result)["error_code"] == "sampled-resume-mismatch"
+    assert tuple(operator_case.runner.calls) == calls
+    operator_case.assert_sources_unchanged()
+
+
+@pytest.mark.parametrize("missing", ["workspace", "new-dry-run"])
+def test_reduction_handler_checks_preflight_prerequisites_before_dispatch(
+    operator_case: OperatorCase,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    missing: str,
+) -> None:
+    case = operator_case
+    prepared = workflow.prepare_experiment(
+        case.evidence,
+        registry=case.selection.registry,
+        safety_policy=case.selection.safety_policy,
+        resource_limits=case.selection.resource_limits,
+        experiment=case.selection.experiment,
+    )
+    with pytest.raises(typer.Exit) as refused:
+        sampled_reduction.handle_sampled_reduction(
+            case.workspace,
+            case.evidence,
+            prepared,
+            dry_run=False,
+            acknowledge_model_execution=True,
+            original_workspace=None if missing == "workspace" else case.original,
+            observation_store=case.store_path,
+            limits=sampled_reduction.SampledCommandLimits(100, 200, 20),
+            experiment_path=case.experiment_path,
+            output_format=sampled.OutputFormat.JSON,
+            save_preflight=tmp_path / "receipt.json" if missing == "new-dry-run" else None,
+        )
+    assert refused.value.exit_code == ExitCode.USAGE
+    assert json.loads(capsys.readouterr().out)["error_code"] == "sampled-preflight-invalid"
+    assert not (tmp_path / "receipt.json").exists()
+    _assert_no_dispatch(case)
+
+
 def test_retained_inspection_reads_sampled_snapshot_without_live_run_or_store(
     operator_case: OperatorCase, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -454,6 +564,13 @@ def test_section_search_cli_confirms_selected_edit_and_resumes_without_replay(
     destination = Path(report["result_path"])
     saved = SampledReductionEvidence.model_validate_json((destination / "result.json").read_text())
     checkpoint = saved.checkpoint
+    human = CliRunner().invoke(
+        app,
+        ["inspect", "retained", str(operator_case.workspace.root), "--result", str(destination)],
+    )
+    assert human.exit_code == ExitCode.SUCCESS, human.output
+    assert "removed sections:" in human.stdout
+    assert "section-" in human.stdout
     assert not checkpoint.selected_mutation.is_empty
     assert saved.confirmation is not None
     assert saved.confirmation.evidence.plan.candidate_digest == checkpoint.best_candidate_digest
@@ -1459,6 +1576,22 @@ def test_reserved_dispatch_without_observation_stays_charged_and_never_replays(
         assert run_file.evidence(store) == blocks_before
     assert [a.phase for a in operator_case.runner.calls] == ["calibration"]
     operator_case.assert_sources_unchanged()
+
+
+def test_session_size_limit_preserves_published_resume_metadata(
+    operator_case: OperatorCase, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    result = _invoke(operator_case.command())
+    assert result.exit_code == ExitCode.SUCCESS, result.output
+    root = Path(_json(result)["run_state_path"])
+    session = sampled_session.load_cli_session(root)
+    before = (root / "cli-session.json").read_bytes()
+    calls = tuple(operator_case.runner.calls)
+    monkeypatch.setattr(sampled_session, "_MAX_SESSION_BYTES", 1)
+    with pytest.raises(sampled_session.SampledCliSessionError, match="cannot save private"):
+        sampled_session.save_cli_session(root, session)
+    assert (root / "cli-session.json").read_bytes() == before
+    assert tuple(operator_case.runner.calls) == calls
 
 
 @pytest.mark.parametrize("metadata", ["missing", "malformed"])

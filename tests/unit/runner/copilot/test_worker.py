@@ -16,6 +16,20 @@ import pytest
 from ithrl.runner.copilot import worker
 
 
+@pytest.mark.parametrize(
+    ("detail", "reason"),
+    [
+        ("certificate private-detail", "Copilot TLS certificate validation failed"),
+        ("auth private-detail", "Copilot authentication was unavailable to the SDK session"),
+        ("model private-detail", "Copilot could not initialize the requested model"),
+        ("network private-detail", "Copilot could not establish the required connection"),
+        ("private-detail", "Copilot rejected the SDK operation"),
+    ],
+)
+def test_sdk_failures_have_fixed_content_safe_diagnostics(detail: str, reason: str) -> None:
+    assert worker._failure_reason(RuntimeError(detail)) == reason
+
+
 def _request(tmp_path: Path) -> dict[str, Any]:
     return {
         "commandFlags": ["--no-auto-update"],

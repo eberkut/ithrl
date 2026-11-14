@@ -179,15 +179,12 @@ def _worker_request(
         "target": target,
         "workspace": f"{SANDBOX_ROOT}/workspace",
     }
-    try:
-        return json.dumps(
-            document,
-            allow_nan=False,
-            ensure_ascii=False,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    except (TypeError, UnicodeError, ValueError) as error:
-        raise CopilotIsolationError("Copilot worker input is invalid") from error
+    return json.dumps(
+        document,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
 
 
 def _bubblewrap_argv(

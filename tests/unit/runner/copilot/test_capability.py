@@ -10,10 +10,12 @@ from contextlib import suppress
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import override
+from unittest.mock import Mock
 
 import pytest
 
 import ithrl.runner.copilot.capability as capability
+from ithrl.case import CaseError
 from ithrl.runner.copilot.capability import (
     CopilotCapabilityError,
     CopilotCapabilityErrorCode,
@@ -318,6 +320,21 @@ def test_growth_during_probe_is_bounded_and_stopped(
         detect_copilot_capability(_runtime(fake), _configuration(), target="final-response")
 
 
+def test_probe_state_nesting_is_bounded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path / "state"
+    nested = root / "one" / "two"
+    nested.mkdir(parents=True, mode=0o700)
+    root.chmod(0o700)
+    (root / "one").chmod(0o700)
+    monkeypatch.setattr(capability, "_MAX_PROBE_STATE_DEPTH", 1)
+
+    with pytest.raises(CopilotCapabilityError, match="nesting limit") as refused:
+        capability._require_bounded_probe_state(root)
+
+    assert refused.value.code is CopilotCapabilityErrorCode.PROBE_FAILED
+    assert nested.is_dir()
+
+
 def test_byte_limit_diagnostic_identifies_owned_file_without_contents(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -486,6 +503,158 @@ def test_invalid_version_preserves_bounded_successful_probe_output(tmp_path: Pat
     assert refused.value.stdout
     assert len(refused.value.stdout) <= capability._MAX_PROBE_OUTPUT_BYTES
     assert "private invalid-version" not in str(refused.value)
+
+
+def test_non_utf8_version_preserves_diagnostics_without_exposing_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    result = capability._CommandResult(stdout=b"\xff", stderr=b"private-fixture-diagnostic")
+    monkeypatch.setattr(capability, "_run_discovery", Mock(return_value=result))
+    runtime = _runtime(_fake_copilot(tmp_path))
+    with pytest.raises(CopilotCapabilityError) as refused:
+        capability._probe_version(runtime, {}, tmp_path)
+    assert refused.value.code is CopilotCapabilityErrorCode.UNSUPPORTED_PROTOCOL
+    assert refused.value.probe_stage == "version"
+    assert refused.value.probe_exit_code == 0
+    assert refused.value.stdout == result.stdout
+    assert refused.value.stderr == result.stderr
+    assert "private-fixture-diagnostic" not in str(refused.value)
+
+
+def test_sdk_handshake_refuses_an_unrecognized_success_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    result = capability._CommandResult(
+        stdout=b"unrecognized-fixture\n", stderr=b"private-diagnostic"
+    )
+    monkeypatch.setattr(capability, "_run_probe", Mock(return_value=result))
+    with pytest.raises(CopilotCapabilityError) as refused:
+        _REAL_SDK_PROTOCOL_PROBE(_runtime(_fake_copilot(tmp_path)), {}, workspace, "final-response")
+    assert refused.value.code is CopilotCapabilityErrorCode.UNSUPPORTED_PROTOCOL
+    assert refused.value.probe_stage == "sdk-protocol"
+    assert refused.value.stdout == result.stdout
+    assert "private-diagnostic" not in str(refused.value)
+
+
+def test_isolation_verification_requires_unchanged_host_and_worker_receipts(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    protected = tmp_path / "protected"
+    workspace.mkdir()
+    protected.mkdir()
+    (workspace / "isolation-probe.txt").write_bytes(b"changed fixture")
+    with pytest.raises(CopilotCapabilityError) as refused:
+        capability._verify_isolation_probe(workspace, protected)
+    assert refused.value.code is CopilotCapabilityErrorCode.UNAVAILABLE
+
+
+def test_discovery_refuses_unpreparable_runtime_arguments(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ithrl.runner.copilot.isolation import CopilotIsolationError
+
+    monkeypatch.setattr(
+        capability, "_discovery_argv", Mock(side_effect=CopilotIsolationError("private-detail"))
+    )
+    with pytest.raises(CopilotCapabilityError) as refused:
+        capability._run_discovery(
+            _runtime(_fake_copilot(tmp_path)), ("--version",), {}, tmp_path, probe_stage="version"
+        )
+    assert refused.value.code is CopilotCapabilityErrorCode.UNAVAILABLE
+    assert refused.value.probe_stage == "version"
+    assert "private-detail" not in str(refused.value)
+
+
+def test_capability_refuses_unwritable_isolated_settings_without_starting_a_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        capability, "atomic_write_bytes", Mock(side_effect=CaseError("private-detail"))
+    )
+    probe = Mock(side_effect=AssertionError("probe started before private state was ready"))
+    monkeypatch.setattr(capability, "_probe_version", probe)
+    with pytest.raises(CopilotCapabilityError) as refused:
+        detect_copilot_capability(
+            _runtime(_fake_copilot(tmp_path)), _configuration(), target="final-response"
+        )
+    assert refused.value.code is CopilotCapabilityErrorCode.PROBE_FAILED
+    assert "private-detail" not in str(refused.value)
+    probe.assert_not_called()
+
+
+def test_capability_private_directory_refuses_existing_state(tmp_path: Path) -> None:
+    (tmp_path / "preserved").write_bytes(b"existing fixture state")
+    with pytest.raises(CopilotCapabilityError) as refused:
+        capability._private_directory(tmp_path)
+    assert refused.value.code is CopilotCapabilityErrorCode.PROBE_FAILED
+    assert (tmp_path / "preserved").read_bytes() == b"existing fixture state"
+
+
+def test_capability_state_inspection_refuses_unavailable_state_without_exposing_its_path(
+    tmp_path: Path,
+) -> None:
+    missing = tmp_path / "private-missing-state"
+    with pytest.raises(CopilotCapabilityError) as refused:
+        capability._require_bounded_probe_state(missing)
+    assert refused.value.code is CopilotCapabilityErrorCode.PROBE_FAILED
+    assert str(missing) not in str(refused.value)
+
+
+@pytest.mark.parametrize("failure", ["setup", "verification", "verified-proof"])
+def test_isolation_probe_checks_proof_and_cleans_temporary_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    state = tmp_path / "state"
+    host = tmp_path / "host"
+    state.mkdir()
+    host.mkdir()
+    monkeypatch.setattr(capability, "_ISOLATION_HOST_PARENT", host)
+    if failure == "setup":
+        monkeypatch.setattr(
+            capability,
+            "_prepare_isolation_probe",
+            Mock(side_effect=CaseError("private-setup-detail")),
+        )
+    else:
+
+        def recorded_proof(
+            argv: tuple[str, ...], _environment: dict[str, str], cwd: Path, **_kwargs: object
+        ) -> capability._CommandResult:
+            # Exercise orchestration; the real boundary has its own process test.
+            assert "--unshare-net" in argv
+            assert cwd.is_relative_to(state)
+            (cwd / "isolation-probe.txt").write_bytes(
+                capability._ISOLATION_RESULT if failure == "verified-proof" else b"invalid-proof"
+            )
+            return capability._CommandResult(
+                stdout=b"private-proof-output", stderr=b"private-setup-detail"
+            )
+
+        monkeypatch.setattr(capability, "_run_probe", recorded_proof)
+    if failure == "verified-proof":
+        _REAL_ISOLATION_PROBE(_runtime(_fake_copilot(tmp_path)), state)
+    else:
+        with pytest.raises(CopilotCapabilityError) as refused:
+            _REAL_ISOLATION_PROBE(_runtime(_fake_copilot(tmp_path)), state)
+        assert refused.value.code is CopilotCapabilityErrorCode.UNAVAILABLE
+        assert refused.value.probe_stage == "isolation"
+        assert "private-setup-detail" not in str(refused.value)
+        if failure == "verification":
+            assert refused.value.stdout == b"private-proof-output"
+            assert refused.value.stderr == b"private-setup-detail"
+    assert not tuple(state.iterdir())
+    assert not tuple(host.iterdir())
+
+
+def test_capability_detection_refuses_a_changed_runtime_before_probing(tmp_path: Path) -> None:
+    executable = _fake_copilot(tmp_path)
+    runtime = _runtime(executable)
+    executable.write_text(executable.read_text() + "\n# changed fixture\n")
+    with pytest.raises(CopilotCapabilityError) as refused:
+        detect_copilot_capability(runtime, _configuration(), target="final-response")
+    assert refused.value.code is CopilotCapabilityErrorCode.UNAVAILABLE
+    assert str(refused.value) == "Copilot runtime changed during capability detection"
 
 
 def test_timeout_retains_private_partial_output_after_stopping_probe(

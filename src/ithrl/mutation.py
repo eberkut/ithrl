@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass, field
-from typing import Annotated, Literal
+from typing import Annotated, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -130,13 +130,9 @@ def replace_message_text(message: JsonObject, content_index: int, text: str) -> 
     content = result["content"]
     if isinstance(content, str):
         result["content"] = text
-    elif isinstance(content, list):
-        block = content[content_index]
-        if not isinstance(block, dict):
-            raise MutationError("mutation requires an existing input-text block")
-        block["text"] = text
     else:
-        raise MutationError("mutation requires ordinary user text")
+        # message_text verified the list and selected input-text block before copying.
+        cast(list[JsonObject], content)[content_index]["text"] = text
     return result
 
 

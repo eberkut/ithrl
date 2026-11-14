@@ -27,6 +27,18 @@ def _fixture_payload() -> dict[str, Any]:
     return payload
 
 
+@pytest.mark.parametrize("marker_sets", [[[]], [[""]], [["A", "A"]]])
+def test_malformed_alternative_marker_sets_are_rejected_before_extraction(
+    tmp_path: Path, marker_sets: list[list[str]]
+) -> None:
+    payload = _fixture_payload()
+    payload["inferences"][0]["fake_behavior"]["alternative_marker_sets"] = marker_sets
+    source = tmp_path / "invalid-markers.json"
+    source.write_text(json.dumps(payload))
+    with pytest.raises(SyntheticTraceFormatError, match="marker"):
+        list_inferences(source)
+
+
 def test_list_inferences_summary_fields() -> None:
     summaries = list_inferences(FIXTURE)
 

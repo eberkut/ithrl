@@ -12,11 +12,17 @@ from typer.testing import CliRunner
 
 import ithrl.cli.native as native
 from ithrl.adapters import enumerate_decisions, parse_session
-from ithrl.case import CaseEvidence, CaseWorkspace
+from ithrl.case import CaseEvidence, CaseFormatError, CaseWorkspace
 from ithrl.cli import ExitCode, app
-from ithrl.execution import CapabilityProfile, calibration_budget_bounds
+from ithrl.execution import (
+    CapabilityProfile,
+    PreflightIssue,
+    PreflightReport,
+    calibration_budget_bounds,
+)
 from ithrl.experiment import (
     ExperimentDefinition,
+    FakeRunnerConfig,
     NativeRunnerConfig,
     SampledCalibrationPhase,
     SampledConfirmationPhase,
@@ -24,12 +30,171 @@ from ithrl.experiment import (
     SampledReductionPlan,
     SampledSearchPhase,
     SamplingArmTarget,
+    UnavailableRunnerConfig,
 )
 from ithrl.extraction import extract_decision
+from ithrl.runner.copilot.capability import CopilotCapabilityErrorCode
+from ithrl.workflow import OraclePrerequisiteError, PreflightRefusedError
 
 FIXTURE = Path(__file__).parents[1] / "fixtures/codex-session/rollout.jsonl"
 PHASE = SampledCalibrationPhase(required_valid=2, minimum_matches=1, max_attempts=3)
 _EXECUTABLE = native._executable
+
+
+@pytest.mark.parametrize("limit", [0, 17, True])
+def test_native_selection_rejects_invalid_per_attempt_caps_before_detection(
+    native_case: tuple[CaseWorkspace, CaseEvidence, Path],
+    mocked_runtime: tuple[Mock, Mock],
+    limit: int,
+) -> None:
+    workspace, evidence, original = native_case
+    with pytest.raises(native.NativeSelectionError) as refused:
+        native.native_selection(
+            workspace,
+            evidence,
+            original_workspace=original,
+            calibration=PHASE,
+            max_provider_calls_per_attempt=limit,
+        )
+    assert refused.value.code == "invalid-provider-call-limit"
+    mocked_runtime[0].assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("fault", "code"),
+    [
+        ("fake-runner", "sampled-experiment-required"),
+        ("unknown-harness", "unsupported-harness"),
+        ("copilot-call-cap", "unsupported-provider-call-limit"),
+        ("harness-mismatch", "runner-evidence-mismatch"),
+        ("missing-source", "source-evidence-unavailable"),
+    ],
+)
+def test_native_selection_refuses_incompatible_source_and_runner_inputs(
+    native_case: tuple[CaseWorkspace, CaseEvidence, Path],
+    mocked_runtime: tuple[Mock, Mock],
+    fault: str,
+    code: str,
+) -> None:
+    workspace, evidence, original = native_case
+    experiment = ExperimentDefinition.from_toml(evidence.default_experiment)
+    if fault == "fake-runner":
+        runner = FakeRunnerConfig(required_markers=("fixture",), final_text="Fixture complete.")
+        experiment = experiment.model_copy(update={"runner": runner})
+    elif fault in {"unknown-harness", "copilot-call-cap", "harness-mismatch"}:
+        experiment = experiment.model_copy(
+            update={
+                "runner": UnavailableRunnerConfig(
+                    harness="unknown" if fault == "unknown-harness" else "copilot"
+                )
+            }
+        )
+    elif fault == "missing-source":
+        evidence._source_artifacts = ()
+    evidence._default_experiment = experiment.to_toml()
+    with pytest.raises(native.NativeSelectionError) as refused:
+        native.native_selection(
+            workspace,
+            evidence,
+            original_workspace=original,
+            calibration=PHASE,
+            max_provider_calls_per_attempt=2 if fault == "copilot-call-cap" else None,
+        )
+    assert refused.value.code == code
+    mocked_runtime[0].assert_not_called()
+
+
+def test_native_limits_reject_unknown_harness() -> None:
+    with pytest.raises(ValueError, match="unsupported native harness"):
+        native.native_resource_limits("unknown", max_provider_calls=1)
+
+
+@pytest.mark.parametrize("kind", ["file", "parent-traversal", "symlink"])
+def test_original_workspace_refuses_unsafe_paths(tmp_path: Path, kind: str) -> None:
+    path = tmp_path / "workspace"
+    if kind == "file":
+        path.write_text("fixture")
+    elif kind == "parent-traversal":
+        path = path / ".."
+    else:
+        path.symlink_to(tmp_path, target_is_directory=True)
+    with pytest.raises(native.NativeSelectionError) as refused:
+        native._original_workspace(path)
+    assert refused.value.code == "original-workspace-unavailable"
+
+
+@pytest.mark.parametrize("value", ["", "relative"])
+def test_harness_home_refuses_empty_or_relative_override(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    monkeypatch.setenv("FIXTURE_HARNESS_HOME", value)
+    with pytest.raises(native.NativeSelectionError) as refused:
+        native._harness_home("FIXTURE_HARNESS_HOME", ".fixture")
+    assert refused.value.code == "configuration-home-invalid"
+
+
+@pytest.mark.parametrize(
+    ("error", "code", "exit_code"),
+    [
+        (CaseFormatError("PRIVATE-SELECTION-DETAIL"), "invalid-sampled-input", ExitCode.USAGE),
+        (
+            OraclePrerequisiteError("PRIVATE-SELECTION-DETAIL"),
+            "oracle-prerequisite",
+            ExitCode.UNSUPPORTED,
+        ),
+        (
+            PreflightRefusedError(
+                PreflightReport(
+                    ready=False,
+                    plan=None,
+                    issues=(
+                        PreflightIssue(
+                            code="runner-unavailable", message="PRIVATE-SELECTION-DETAIL"
+                        ),
+                    ),
+                )
+            ),
+            "runner-unavailable",
+            ExitCode.UNSUPPORTED,
+        ),
+        (KeyboardInterrupt(), "native-selection-interrupted", ExitCode.CANCELLED),
+        (RuntimeError("PRIVATE-SELECTION-DETAIL"), "native-selection-internal", ExitCode.INTERNAL),
+    ],
+)
+def test_native_selection_failures_have_safe_structured_diagnostics(
+    native_case: tuple[CaseWorkspace, CaseEvidence, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    error: BaseException,
+    code: str,
+    exit_code: ExitCode,
+) -> None:
+    workspace, _, original = native_case
+    select = Mock(side_effect=error)
+    monkeypatch.setattr(native, "native_selection", select)
+    result = CliRunner().invoke(
+        app,
+        [
+            "shrink",
+            str(workspace.root),
+            "--dry-run",
+            "--original-workspace",
+            str(original),
+            "--required-valid",
+            "2",
+            "--minimum-matches",
+            "1",
+            "--max-attempts",
+            "3",
+            "--format",
+            "json",
+        ],
+    )
+    assert result.exit_code == exit_code, result.output
+    report = json.loads(result.stdout)
+    assert report["error_code"] == code
+    assert report["provider_calls"] == 0
+    assert "PRIVATE-SELECTION-DETAIL" not in result.output
+    select.assert_called_once()
 
 
 @pytest.fixture
@@ -356,6 +521,47 @@ def test_missing_runtime_is_content_safe_and_never_probes(
     assert raised.value.code == "runtime-unavailable"
     assert str(original) not in str(raised.value)
     mocked_runtime[0].assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("owner", "code", "started"),
+    [
+        ("resolve_codex_configuration", "runtime-unavailable", False),
+        ("detect_codex_capability", "codex-probe-failed", None),
+        ("CodexRunner", "runner-unavailable", True),
+    ],
+)
+def test_native_startup_failures_preserve_stage_without_private_exception_text(
+    native_case: tuple[CaseWorkspace, CaseEvidence, Path],
+    mocked_runtime: tuple[Mock, Mock],
+    monkeypatch: pytest.MonkeyPatch,
+    owner: str,
+    code: str,
+    started: bool | None,
+) -> None:
+    workspace, evidence, original = native_case
+    failing = Mock(side_effect=OSError("PRIVATE-STARTUP-DETAIL"))
+    monkeypatch.setattr(native, owner, failing)
+
+    with pytest.raises(native.NativeSelectionError) as refused:
+        native.native_selection(workspace, evidence, original_workspace=original, calibration=PHASE)
+
+    assert refused.value.code == code
+    assert refused.value.harness_started is started
+    assert "PRIVATE-STARTUP-DETAIL" not in str(refused.value)
+    failing.assert_called_once()
+    if owner != "CodexRunner":
+        mocked_runtime[1].assert_not_called()
+
+
+def test_probe_diagnostic_failure_does_not_replace_the_original_refusal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    error = native.CopilotCapabilityError(CopilotCapabilityErrorCode.PROBE_FAILED, "probe failed")
+    monkeypatch.setattr(native, "prepare_private_directory", Mock(side_effect=OSError("private")))
+
+    assert native._copilot_probe_diagnostic(error, tmp_path) is None
+    assert str(error) == "probe failed"
 
 
 def test_native_storage_overlap_refuses_before_probe(

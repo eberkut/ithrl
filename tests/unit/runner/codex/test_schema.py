@@ -31,6 +31,55 @@ def _write(path: Path, document: dict[str, Any]) -> None:
     path.write_text(json.dumps(document, separators=(",", ":")), encoding="utf-8")
 
 
+@pytest.mark.parametrize("content", [b"", b"not json", b"\xff", b"[]"])
+def test_schema_documents_must_be_nonempty_json_objects(tmp_path: Path, content: bytes) -> None:
+    schema = _bundle(tmp_path)
+    (schema / "ClientRequest.json").write_bytes(content)
+    with pytest.raises(CodexSchemaError, match=r"incomplete|invalid JSON|invalid document"):
+        verify_schema_bundle(schema)
+
+
+def test_schema_byte_limit_is_enforced_before_parsing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import ithrl.runner.codex.schema as schema_module
+
+    schema = _bundle(tmp_path)
+    monkeypatch.setattr(schema_module, "_MAX_SCHEMA_BYTES", 1)
+    with pytest.raises(CodexSchemaError, match="incomplete"):
+        verify_schema_bundle(schema)
+
+
+def test_schema_requires_every_action_request_category(tmp_path: Path) -> None:
+    schema = _bundle(tmp_path)
+    path = schema / "ServerRequest.json"
+    document = _load(path)
+    document["oneOf"] = document["oneOf"][1:]
+    _write(path, document)
+    with pytest.raises(CodexSchemaError, match="action requests are not supported"):
+        verify_schema_bundle(schema)
+
+
+@pytest.mark.parametrize(
+    ("definition", "message"),
+    [
+        ("AskForApproval", "no-approval execution"),
+        ("ApprovalsReviewer", "approval reviewer"),
+        ("SandboxMode", "read-only thread sandbox"),
+    ],
+)
+def test_schema_requires_the_exact_safe_policy_values(
+    tmp_path: Path, definition: str, message: str
+) -> None:
+    schema = _bundle(tmp_path)
+    path = schema / "ClientRequest.json"
+    document = _load(path)
+    document["definitions"][definition] = {"type": "string", "enum": ["fixture-unsupported"]}
+    _write(path, document)
+    with pytest.raises(CodexSchemaError, match=message):
+        verify_schema_bundle(schema)
+
+
 def test_schema_and_protocol_notification_contracts_match() -> None:
     # Account/status/warning and terminal error messages are optional on older servers.
     assert (

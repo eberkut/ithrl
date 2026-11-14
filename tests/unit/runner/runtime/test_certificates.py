@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import stat
 from pathlib import Path
 
@@ -54,5 +55,34 @@ def test_invalid_bundle_is_refused_without_exposing_its_path(
     with pytest.raises(ValueError, match="cannot snapshot a configured CA bundle") as refused:
         snapshot_certificate_files(state, {"SSL_CERT_FILE": str(source)}, sandbox_root="/sandbox")
 
+    assert str(source) not in str(refused.value)
+    assert not tuple(state.iterdir())
+
+
+@pytest.mark.parametrize("phase", ["before-read", "after-read"])
+def test_changing_bundle_is_refused_before_any_copy_is_published(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str
+) -> None:
+    source = tmp_path / "private-trust-source"
+    source.write_bytes(b"original bundle")
+    identity = source.stat()
+    state = tmp_path / "state"
+    state.mkdir(mode=0o700)
+    original_fstat = os.fstat
+    reads = 0
+
+    def racing_fstat(descriptor: int) -> os.stat_result:
+        nonlocal reads
+        result = original_fstat(descriptor)
+        if (result.st_dev, result.st_ino) == (identity.st_dev, identity.st_ino):
+            reads += 1
+            if reads == (1 if phase == "before-read" else 2):
+                source.write_bytes(b"changed bundle contents")
+                return original_fstat(descriptor)
+        return result
+
+    monkeypatch.setattr(os, "fstat", racing_fstat)
+    with pytest.raises(ValueError, match="cannot snapshot a configured CA bundle") as refused:
+        snapshot_certificate_files(state, {"SSL_CERT_FILE": str(source)}, sandbox_root="/sandbox")
     assert str(source) not in str(refused.value)
     assert not tuple(state.iterdir())

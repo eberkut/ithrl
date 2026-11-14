@@ -23,6 +23,16 @@ def _capture(*paths: ProtectedPath, max_entries: int = 32, max_bytes: int = 4096
     )
 
 
+@pytest.mark.parametrize("label", [None, "", "unsafe\nlabel"])
+def test_protection_requires_nonempty_paths_and_safe_labels(
+    tmp_path: Path, label: str | None
+) -> None:
+    paths = () if label is None else (ProtectedPath(label, tmp_path),)
+    with pytest.raises(ProtectedPathError) as refused:
+        _capture(*paths)
+    assert refused.value.code is ProtectionErrorCode.INVALID_SPECIFICATION
+
+
 def test_unchanged_tree_ignores_timestamp_updates(tmp_path: Path) -> None:
     protected = tmp_path / "protected"
     protected.mkdir()

@@ -20,8 +20,10 @@ from integration.test_native_calibration import Harness, Scenario, _scenario
 from ithrl.cli import ExitCode, app
 from ithrl.cli.paths import native_storage_paths, observation_storage_paths
 from ithrl.cli.preparation import preparation_destination
+from ithrl.execution import ResolvedExecutionPlan
 from ithrl.experiment import SampledExperimentDefinition, parse_experiment_toml
 from ithrl.observations import ObservationStore
+from ithrl.preparation import NativePreparationReceipt
 from native_support.smoke import protected_tree
 
 _SETTINGS = """schema_version = 1
@@ -108,6 +110,105 @@ def _arguments(scenario: Scenario, receipt: Path, settings: Path, output: Path) 
 
 def _forbidden(*_args: object, **_kwargs: object) -> None:
     raise AssertionError("offline preparation accessed native execution or the observation store")
+
+
+def test_prepare_forwards_a_recorded_input_token_limit_without_probing_its_enforcement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scenario = _scenario(tmp_path, monkeypatch, "codex", "final-response", mode="context-sensitive")
+    receipt_path = tmp_path / "preflight.json"
+    _receipt(scenario, receipt_path)
+    receipt = NativePreparationReceipt.from_json(receipt_path.read_text())
+    # Receipt declarations are unauthenticated; native enforcement is rechecked by --dry-run.
+    plan_data = receipt.source_plan.model_dump()
+    plan_data["capability"]["input_token_limit_enforcement"] = "pre-dispatch"
+    plan_data["resource_limits"]["max_input_tokens"] = 1000
+    plan = ResolvedExecutionPlan.model_validate(plan_data)
+    receipt = NativePreparationReceipt.model_validate(
+        {**receipt.model_dump(), "source_plan": plan, "source_plan_digest": plan.digest}
+    )
+    receipt_path.write_text(receipt.model_dump_json())
+    settings = tmp_path / "settings.toml"
+    settings.write_text(_SETTINGS)
+    settings.chmod(0o600)
+    output = tmp_path / "prepared.toml"
+    monkeypatch.setattr(native, "native_selection", _forbidden)
+    monkeypatch.setattr(subprocess, "Popen", _forbidden)
+
+    result = CliRunner().invoke(app, _arguments(scenario, receipt_path, settings, output))
+
+    assert result.exit_code == ExitCode.SUCCESS, result.output
+    report = json.loads(result.stdout)
+    command = shlex.split(report["next_command"])
+    assert command[command.index("--max-input-tokens") + 1] == "1000"
+    assert report["provider_calls"] == 0
+    assert output.is_file()
+
+
+def test_prepare_refuses_receipt_when_current_administrative_limits_have_changed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scenario = _scenario(tmp_path, monkeypatch, "codex", "final-response", mode="context-sensitive")
+    receipt = tmp_path / "preflight.json"
+    _receipt(scenario, receipt)
+    settings = tmp_path / "settings.toml"
+    settings.write_text(_SETTINGS)
+    settings.chmod(0o600)
+    output = tmp_path / "prepared.toml"
+    monkeypatch.setattr(native, "_MAX_NATIVE_OUTPUT_BYTES", 4096)
+    monkeypatch.setattr(native, "native_selection", _forbidden)
+    monkeypatch.setattr(subprocess, "Popen", _forbidden)
+
+    result = CliRunner().invoke(app, _arguments(scenario, receipt, settings, output))
+
+    assert result.exit_code == ExitCode.USAGE, result.output
+    assert json.loads(result.stdout)["error_code"] == "preflight-limits-mismatch"
+    assert not output.exists()
+
+
+def test_parent_traversal_is_refused_without_creating_destination(tmp_path: Path) -> None:
+    path = tmp_path / "missing" / ".." / "private.json"
+
+    with pytest.raises(ValueError, match="unsafe"):
+        observation_storage_paths(path)
+    with pytest.raises(ValueError, match="unsafe"):
+        preparation_destination(path, protected=())
+
+    assert not (tmp_path / "missing").exists()
+    assert not (tmp_path / "private.json").exists()
+
+
+@pytest.mark.parametrize("provider_calls", [1, 1000])
+def test_prepare_reports_budget_refusal_or_human_success_without_native_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider_calls: int
+) -> None:
+    scenario = _scenario(tmp_path, monkeypatch, "codex", "final-response", mode="context-sensitive")
+    receipt = tmp_path / "preflight.json"
+    _receipt(scenario, receipt)
+    settings = tmp_path / "settings.toml"
+    settings.write_text(_SETTINGS)
+    settings.chmod(0o600)
+    output = tmp_path / "prepared.toml"
+    arguments = _arguments(scenario, receipt, settings, output)
+    arguments[arguments.index("--max-provider-calls") + 1] = str(provider_calls)
+    if provider_calls == 1000:
+        arguments[-1] = "human"
+    monkeypatch.setattr(native, "native_selection", _forbidden)
+    monkeypatch.setattr(subprocess, "Popen", _forbidden)
+    monkeypatch.setattr(ObservationStore, "__init__", _forbidden)
+
+    result = CliRunner().invoke(app, arguments)
+
+    if provider_calls == 1:
+        assert result.exit_code == ExitCode.USAGE, result.output
+        assert json.loads(result.stdout)["error_code"] == "sampling-budget-too-small"
+        assert not output.exists()
+    else:
+        assert result.exit_code == ExitCode.SUCCESS, result.output
+        assert "Private reduction configuration prepared" in result.stdout
+        assert "No harness probes, provider calls or actions were executed." in result.stdout
+        assert isinstance(parse_experiment_toml(output.read_text()), SampledExperimentDefinition)
+    assert not scenario.database.exists()
 
 
 @pytest.mark.parametrize("harness", ["codex", "copilot"])

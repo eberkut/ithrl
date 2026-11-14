@@ -6,12 +6,21 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
+from unittest.mock import Mock
 
 import pytest
+from pydantic import ValidationError
 from typer.testing import CliRunner
 
-from ithrl.cli import app
-from ithrl.cli.fuzz_session import FuzzSessionError, load_fuzz_session
+from ithrl.cli import app, fuzz_run
+from ithrl.cli.fuzz_session import (
+    FuzzProfile,
+    FuzzSession,
+    FuzzSessionError,
+    load_fuzz_profile,
+    load_fuzz_session,
+    save_fuzz_profile,
+)
 from ithrl.cli.output import ExitCode
 from ithrl.observations import ObservationStore
 from ithrl.run_state import SampledRunStateFile
@@ -328,10 +337,16 @@ def test_native_detection_consent_and_saved_profile_dry_run(
     )
     experiment_before = (tmp_path / "case/experiments/default.toml").read_bytes()
     protected = _protected_inputs(tmp_path)
-    preflight = CliRunner().invoke(app, [*args, "--dry-run"])
+    refused = CliRunner().invoke(app, args)
+    assert refused.exit_code == ExitCode.UNSUPPORTED, refused.output
+    assert json.loads(refused.stdout)["error_code"] == "detection-required"
+    preflight = CliRunner().invoke(
+        app, [*args, "--dry-run", "--max-provider-calls-per-attempt", "1"]
+    )
     assert preflight.exit_code == 0, preflight.output
     assert json.loads(preflight.stdout)["status"] == "detection-required"
     assert json.loads(preflight.stdout)["harness"] == harness
+    assert "--max-provider-calls-per-attempt 1" in json.loads(preflight.stdout)["next_command"]
     assert not detections
     assert not runner.calls
     profile = tmp_path / "profile.json"
@@ -767,6 +782,200 @@ def _detected_mock_command(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     detected = CliRunner().invoke(app, [*args, "--detect", "--profile", str(profile)])
     assert detected.exit_code == 0, detected.output
     return [*args, "--profile", str(profile), "--acknowledge-model-execution"], runner
+
+
+def test_profile_report_refuses_an_unbound_campaign_algorithm(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, runner = _detected_mock_command(tmp_path, monkeypatch)
+    profile = load_fuzz_profile(tmp_path / "profile.json")
+    data = profile.model_dump()
+    data["identity"]["algorithm_digest"] = "f" * 64
+    changed = FuzzProfile.model_validate(data)
+    with pytest.raises(ValueError, match="bound campaign policy"):
+        fuzz_run.report_for_profile(changed, harness_started=False)
+    assert runner.calls == []
+
+
+@pytest.mark.parametrize("failure", ["calibration-refusal", "campaign-error"])
+def test_execution_refusals_retain_safe_reports_without_confirmation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    args = inputs(tmp_path)
+    if failure == "calibration-refusal":
+        monkeypatch.setattr(
+            fuzz_run, "run_owned_calibration", Mock(return_value="provider-call-budget")
+        )
+        expected = "provider-call-budget"
+    else:
+        monkeypatch.setattr(
+            fuzz_run,
+            "_initialize_fuzz_campaign_owned",
+            Mock(side_effect=OSError("private-execution-detail")),
+        )
+        expected = "execution-refused"
+    result = CliRunner().invoke(app, args)
+    assert result.exit_code == (
+        ExitCode.BUDGET if failure == "calibration-refusal" else ExitCode.PROVIDER
+    ), result.output
+    report = json.loads(result.stdout)
+    assert report["status"] == "incomplete"
+    assert report["stop_reason"] == expected
+    assert report["confirmation_result"] == "not-run"
+    assert report["actions_executed"] == 0
+    assert "private-execution-detail" not in result.output
+
+
+@pytest.mark.parametrize("operation", ["report", "resume", "missing-preparation"])
+def test_report_and_resume_recheck_frozen_administration_before_dispatch(
+    tmp_path: Path, operation: str
+) -> None:
+    result = CliRunner().invoke(app, inputs(tmp_path))
+    assert result.exit_code == ExitCode.SUCCESS, result.output
+    session = load_fuzz_session(Path(json.loads(result.stdout)["result_path"]))
+    store = ObservationStore(session.observation_store)
+    state_file = SampledRunStateFile.open(session.run_directory)
+    before = store.list_for_experiment(session.profile.experiment.digest)
+    if operation != "missing-preparation":
+        saved = json.loads(state_file.path.read_text())
+        saved["approvals"][0]["allowance"]["max_provider_calls"] += 1
+        state_file.path.write_text(json.dumps(saved))
+        message = "budget differs from its frozen session"
+    else:
+        message = "execution must match the frozen campaign identity"
+    if operation == "report":
+        with state_file.acquire_lock(store), pytest.raises(ValueError, match=message):
+            fuzz_run._report(session, state_file, store, stop_reason=None, dry_run=True)
+    else:
+        with pytest.raises(ValueError, match=message):
+            fuzz_run.execute_fuzz(session, None, dry_run=operation == "resume")
+    assert store.list_for_experiment(session.profile.experiment.digest) == before
+
+
+@pytest.mark.parametrize("changed", ["configuration", "call-cap"])
+def test_saved_fuzz_profile_refuses_changed_operator_inputs_before_dispatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, changed: str
+) -> None:
+    arguments, runner = _detected_mock_command(tmp_path, monkeypatch)
+    expected = "profile-provider-call-limit-mismatch"
+    if changed == "configuration":
+        config = tmp_path / "fuzz.toml"
+        config.write_text(config.read_text().replace("seed = 1", "seed = 2"))
+        expected = "profile-input-mismatch"
+    else:
+        arguments += ["--max-provider-calls-per-attempt", "2"]
+    result = CliRunner().invoke(app, arguments)
+    assert result.exit_code == ExitCode.UNSUPPORTED, result.output
+    assert json.loads(result.stdout)["error_code"] == expected
+    assert runner.calls == []
+
+
+def test_detection_uses_private_default_profile_location_without_dispatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    arguments, runner, _ = mock_native(tmp_path, monkeypatch)
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    result = CliRunner().invoke(app, [*arguments, "--detect"])
+    assert result.exit_code == ExitCode.SUCCESS, result.output
+    path = Path(json.loads(result.stdout)["profile_path"])
+    assert path.parent == tmp_path / "data/ithrl/fuzz-profiles"
+    assert load_fuzz_profile(path).digest == path.stem
+    assert runner.calls == []
+
+
+@pytest.mark.parametrize(
+    "fault", ["relative-case", "identity", "foreign-run", "relative-store", "naive-start"]
+)
+def test_saved_fuzz_contracts_require_bound_identity_and_canonical_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str
+) -> None:
+    _, runner = _detected_mock_command(tmp_path, monkeypatch)
+    profile = load_fuzz_profile(tmp_path / "profile.json")
+    if fault in {"relative-case", "identity"}:
+        data = profile.model_dump()
+        if fault == "relative-case":
+            data["case_path"] = Path("relative")
+        else:
+            data["identity"]["runner_fingerprint"] = "changed-runner"
+        with pytest.raises(
+            ValidationError, match=r"paths must be absolute|execution identities differ"
+        ):
+            FuzzProfile.model_validate(data)
+    else:
+        run_id = "fuzz-" + "a" * 32
+        data = {
+            "run_id": run_id,
+            "run_directory": profile.case_path / ".runs" / run_id,
+            "observation_store": tmp_path / "observations.sqlite",
+            "profile": profile,
+            "started_at": datetime.now(UTC),
+        }
+        if fault == "foreign-run":
+            data["run_directory"] = tmp_path / "other-run"
+        elif fault == "relative-store":
+            data["observation_store"] = Path("relative.sqlite")
+        else:
+            data["started_at"] = datetime(2026, 1, 1, tzinfo=UTC).replace(tzinfo=None)
+        with pytest.raises(
+            ValidationError, match=r"canonical case|absolute without traversal|UTC offset"
+        ):
+            FuzzSession.model_validate(data)
+    assert runner.calls == []
+
+
+def test_saved_fuzz_profile_is_idempotent_and_cannot_be_replaced(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, runner = _detected_mock_command(tmp_path, monkeypatch)
+    path = tmp_path / "profile.json"
+    profile = load_fuzz_profile(path)
+    original = path.read_bytes()
+
+    save_fuzz_profile(path, profile)
+    assert path.read_bytes() == original
+    changed = profile.model_copy(
+        update={"configuration": profile.configuration.model_copy(update={"stale_text": "changed"})}
+    )
+    changed = type(profile).model_validate_json(changed.model_dump_json())
+    with pytest.raises(FuzzSessionError, match="different inputs"):
+        save_fuzz_profile(path, changed)
+
+    assert path.read_bytes() == original
+    assert load_fuzz_profile(path) == profile
+    assert runner.calls == []
+
+
+@pytest.mark.parametrize("tamper", ["session-identity", "unexpected-file"])
+def test_detached_fuzz_receipt_refuses_semantic_tampering_without_touching_live_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tamper: str
+) -> None:
+    args, runner = _detected_mock_command(tmp_path, monkeypatch)
+    completed = CliRunner().invoke(app, args)
+    assert completed.exit_code == 0, completed.output
+    report = json.loads(completed.stdout)
+    receipt = Path(report["result_path"])
+    live = Path(report["run_state_path"])
+    before = {
+        name: (live / name).read_bytes() for name in ("fuzz-session.json", "sampled-state.json")
+    }
+    calls = len(runner.calls)
+    load_fuzz_session(receipt)
+    if tamper == "session-identity":
+        path = receipt / "fuzz-session.json"
+        document = json.loads(path.read_text())
+        document["started_at"] = (
+            datetime.fromisoformat(document["started_at"]) + timedelta(seconds=1)
+        ).isoformat()
+        path.write_text(json.dumps(document))
+    else:
+        (receipt / "unexpected.json").write_text("PRIVATE-CONTENT")
+
+    with pytest.raises(FuzzSessionError, match="cannot load private fuzz session") as refused:
+        load_fuzz_session(receipt)
+
+    assert "PRIVATE-CONTENT" not in str(refused.value)
+    assert {name: (live / name).read_bytes() for name in before} == before
+    assert len(runner.calls) == calls
 
 
 @pytest.mark.parametrize("target", ["session", "state", "snapshot", "summary"])

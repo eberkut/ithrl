@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 import ithrl.runner.codex.protocol as protocol
+import ithrl.runner.codex.protocol_contracts as protocol_contracts
 import ithrl.runner.codex.transcript as transcript
 from ithrl.runner.codex.protocol import (
     ACTION_ITEM_TYPES,
@@ -18,6 +19,7 @@ from ithrl.runner.codex.protocol import (
     ProtocolUsage,
     run_session,
 )
+from ithrl.runner.codex.protocol_contracts import validate_protocol_json
 from ithrl.runner.codex.transcript import parse_transcript, physical_request_counts
 
 THREAD_ID = "thread-fixture-001"
@@ -26,6 +28,102 @@ MODEL = "fixture-model"
 PROVIDER = "fixture-provider"
 FINAL_TEXT = "Final response from the sanitized fixture."
 type Message = dict[str, Any]
+
+
+@pytest.mark.parametrize(
+    ("response", "code"),
+    [
+        ({"id": 1, "error": {"message": "private-detail"}}, "server-error"),
+        ({"id": 1}, "invalid-response"),
+    ],
+)
+def test_rpc_refusal_and_missing_result_are_classified(response: Message, code: str) -> None:
+    outcome, _, _ = _run([response])
+    assert outcome.status == "error"
+    assert outcome.error_code == code
+    assert "private-detail" not in repr(outcome)
+
+
+def test_final_response_can_be_corroborated_by_completed_turn_items() -> None:
+    final_item = _final_item()["params"]["item"]
+    outcome, _, _ = _run(
+        [
+            *_prefix(),
+            _usage(),
+            _turn_completed(items=[{"type": "reasoning", "id": "reasoning-1"}, final_item]),
+        ]
+    )
+    assert outcome.status == "completed"
+    assert outcome.final_text == FINAL_TEXT
+    assert outcome.behavior_output_observed
+
+
+@pytest.mark.parametrize("items", [None, [None]])
+def test_completion_requires_a_list_of_native_item_objects(items: object) -> None:
+    completed = _turn_completed()
+    completed["params"]["turn"]["items"] = items
+    outcome, _, _ = _run([*_prefix(), completed])
+    assert outcome.status == "error"
+    assert outcome.error_code == "invalid-completion"
+
+
+def test_transcript_total_size_is_bounded_before_decoding(monkeypatch: pytest.MonkeyPatch) -> None:
+    _, _, audit = _physical_transcript()
+    monkeypatch.setattr(transcript, "MAX_NATIVE_OUTPUT_BYTES", 1)
+    with pytest.raises(CodexProtocolError, match="byte limit"):
+        parse_transcript(_server_bytes(audit))
+
+
+def test_protocol_json_accepts_finite_numbers_and_nested_json_values() -> None:
+    validate_protocol_json({"values": [0.5, None, True, "fixture", {}]})
+
+
+@pytest.mark.parametrize("invalid", [{1: "value"}, {"value": float("nan")}, {"value": b"bytes"}])
+def test_protocol_json_refuses_non_json_keys_and_values(invalid: object) -> None:
+    with pytest.raises(CodexProtocolError) as caught:
+        validate_protocol_json(invalid)
+
+    assert caught.value.code == "invalid-json"
+
+
+@pytest.mark.parametrize("limit", ["depth", "items"])
+def test_protocol_json_enforces_resource_bounds(
+    monkeypatch: pytest.MonkeyPatch, limit: str
+) -> None:
+    value: object
+    if limit == "depth":
+        monkeypatch.setattr(protocol_contracts, "MAX_PROTOCOL_DEPTH", 1)
+        value = {"outer": {"inner": "value"}}
+    else:
+        monkeypatch.setattr(protocol_contracts, "MAX_PROTOCOL_ITEMS", 1)
+        value = {"one": 1, "two": 2}
+
+    with pytest.raises(CodexProtocolError) as caught:
+        validate_protocol_json(value)
+
+    assert caught.value.code == "json-" + limit
+
+
+@pytest.mark.parametrize(
+    ("started", "completed", "denied", "message"),
+    [
+        (-1, 0, 0, "counts cannot be negative"),
+        (0, 1, 0, "completed provider calls cannot exceed"),
+        (0, 0, 1, "denied actions cannot exceed"),
+    ],
+)
+def test_protocol_outcome_refuses_inconsistent_accounting(
+    started: int, completed: int, denied: int, message: str
+) -> None:
+    outcome, _, _ = _run([*_prefix(), _final_item(), _turn_completed()])
+
+    with pytest.raises(ValueError, match=message):
+        replace(
+            outcome,
+            provider_calls_started=started,
+            provider_calls_completed=completed,
+            actions_denied=denied,
+        )
 
 
 def _request(
@@ -897,6 +995,24 @@ def test_protocol_value_objects_reject_inconsistent_outcomes() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"behavior_output_observed": 1}, "visibility must be a boolean"),
+        ({"status": "error", "error_code": None, "final_text": None}, "failed Codex outcome"),
+        ({"status": "error", "error_code": "failed"}, "failed Codex outcome"),
+    ],
+)
+def test_protocol_outcome_requires_explicit_visibility_and_consistent_error_state(
+    changes: dict[str, Any], message: str
+) -> None:
+    outcome, _, _ = _physical_transcript()
+    arguments: dict[str, Any] = asdict(outcome)
+    arguments.update(changes)
+    with pytest.raises(ValueError, match=message):
+        ProtocolOutcome(**arguments)
+
+
 def _receipt(kind: str, ordinal: int, count: int, status: int = 0) -> Message:
     return {
         "kind": "provider",
@@ -979,7 +1095,17 @@ def test_multiple_usage_increments_preserve_complete_cumulative_usage() -> None:
 
 
 @pytest.mark.parametrize(
-    "mutation", ["summary-count", "missing-start", "duplicate-start", "after-summary", "rejected"]
+    "mutation",
+    [
+        "summary-count",
+        "missing-start",
+        "duplicate-start",
+        "after-summary",
+        "rejected",
+        "invalid-close",
+        "invalid-completion",
+        "invalid-failure",
+    ],
 )
 def test_transcript_requires_ordered_receipts_and_safe_transport(mutation: str) -> None:
     _, _, audit = _physical_transcript()
@@ -992,6 +1118,22 @@ def test_transcript_requires_ordered_receipts_and_safe_transport(mutation: str) 
         audit.insert(provider_index + 2, audit[provider_index + 1])
     elif mutation == "after-summary":
         audit.append({"kind": "client", "value": {}})
+    elif mutation == "invalid-close":
+        next(
+            record
+            for record in audit
+            if record["kind"] == "provider" and record["value"]["kind"] == "closed"
+        )["value"]["status"] = 1
+    elif mutation == "invalid-completion":
+        next(
+            record
+            for record in audit
+            if record["kind"] == "provider" and record["value"]["kind"] == "completed"
+        )["value"]["status"] = 99
+    elif mutation == "invalid-failure":
+        failed = _receipt("failed", 9, 1)
+        failed["value"].update(request_bytes=32, response_bytes=64)
+        audit.insert(-2, failed)
     else:
         rejected = _receipt("rejected", 0, 1, 429)
         rejected["value"].update(request_bytes=32, response_bytes=64)

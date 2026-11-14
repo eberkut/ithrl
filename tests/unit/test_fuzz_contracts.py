@@ -9,7 +9,9 @@ from pydantic import ValidationError
 
 from ithrl.experiment import SampledCalibrationPhase, SamplingArmTarget
 from ithrl.fuzz import FuzzCampaignConfig, FuzzConfirmation, FuzzScreening
-from ithrl.mutation import TextAppend, TextMutation
+from ithrl.fuzz.configuration import FuzzConfiguration
+from ithrl.fuzz.progress import FuzzCampaignProgress, FuzzTrial
+from ithrl.mutation import MAX_MUTATION_TEXT_BYTES, TextAppend, TextMutation
 from ithrl.runner import Candidate
 
 
@@ -46,6 +48,69 @@ def _campaign(**changes: Any) -> FuzzCampaignConfig:
             **changes,
         }
     )
+
+
+def test_configuration_bounds_stress_text_by_utf8_bytes() -> None:
+    settings = _campaign().model_dump(exclude={"original"})
+    settings["limits"] = {
+        "max_provider_calls": 0,
+        "max_wall_time_seconds": 60,
+        "attempt_timeout_seconds": 1,
+    }
+    settings["stale_text"] = "é" * (MAX_MUTATION_TEXT_BYTES // 2)
+    accepted = FuzzConfiguration.model_validate(settings)
+    assert len(accepted.stale_text.encode()) == MAX_MUTATION_TEXT_BYTES
+    settings["stale_text"] += "é"
+    with pytest.raises(ValidationError, match="UTF-8 byte limit"):
+        FuzzConfiguration.model_validate(settings)
+
+
+@pytest.mark.parametrize(
+    ("fault", "message"),
+    [
+        ("proposal-cap", "frozen proposal cap"),
+        ("duplicate-generated", "nonempty and deduplicated"),
+        ("empty-generated", "nonempty and deduplicated"),
+        ("trial-cap", "frozen work limits"),
+        ("repeated-trial", "cannot be sampled twice"),
+        ("terminal", "terminal campaign requires its stop reason"),
+    ],
+)
+def test_persisted_campaign_progress_enforces_frozen_work_and_terminal_state(
+    fault: str, message: str
+) -> None:
+    mutation = TextMutation(
+        edits=(
+            TextAppend(
+                context_id="ctx-a", content_index=0, original_text_digest="d" * 64, text="stress"
+            ),
+        )
+    )
+    trial = FuzzTrial(role="discovery", mutation=mutation, plan=None)
+    progress = FuzzCampaignProgress(
+        config=_campaign(max_simplification_trials=1),
+        implementation_digest="a" * 64,
+        generation_input_digest="b" * 64,
+        stale_text="stress",
+        generated=(mutation,),
+        proposals_examined=1,
+    )
+    assert FuzzCampaignProgress.model_validate_json(progress.model_dump_json()) == progress
+    data = progress.model_dump()
+    if fault == "proposal-cap":
+        data["proposals_examined"] = 0
+    elif fault == "duplicate-generated":
+        data.update(generated=(mutation, mutation), proposals_examined=2)
+    elif fault == "empty-generated":
+        data["generated"] = (TextMutation(),)
+    elif fault == "trial-cap":
+        data["trials"] = (trial,) * 3
+    elif fault == "repeated-trial":
+        data["trials"] = (trial, trial)
+    else:
+        data["stop_reason"] = "no-candidate"
+    with pytest.raises(ValidationError, match=message):
+        FuzzCampaignProgress.model_validate(data)
 
 
 def test_frozen_study_policy_round_trips_and_changes_identity_with_decision_inputs() -> None:

@@ -43,6 +43,23 @@ def test_attempt_state_refuses_to_reuse_an_existing_root(tmp_path: Path) -> None
     assert state.root.is_dir()
 
 
+@pytest.mark.parametrize("fault", ["missing", "public-mode"])
+def test_state_identity_validation_refuses_missing_or_nonprivate_roots(
+    tmp_path: Path, fault: str
+) -> None:
+    state = OwnedAttemptState.create(tmp_path / "attempts", ATTEMPT_1)
+    if fault == "missing":
+        state.root.rmdir()
+        message = "state is unavailable"
+    else:
+        if os.name != "posix":
+            pytest.skip("POSIX permissions")
+        state.root.chmod(0o755)
+        message = "mode 0700"
+    with pytest.raises(AttemptStateError, match=message):
+        state.assert_unchanged()
+
+
 def test_attempt_state_measures_content_and_verifies_cleanup(tmp_path: Path) -> None:
     state = OwnedAttemptState.create(tmp_path / "attempts", ATTEMPT_1)
     state.member("stdout").write_bytes(b"output")

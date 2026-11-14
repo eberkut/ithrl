@@ -125,6 +125,15 @@ def test_captured_json_types_are_not_coerced_by_python_equality() -> None:
     assert group["result_relations"] == [{"scope": "content", "relation": "different"}]
 
 
+def test_nested_native_text_containers_supply_substantive_captured_content() -> None:
+    content: JsonValue = [{"status": "success"}, {"content": [None, {"text": "captured text"}]}]
+    (group,) = _report(_projection(_operation(2, result=content), _operation(12, result=content)))[
+        "groups"
+    ]
+
+    assert group["result_relations"] == [{"scope": "content", "relation": "equal"}]
+
+
 def test_equal_capture_under_different_arguments_keeps_known_operation_difference() -> None:
     report = _report(
         _projection(
@@ -178,6 +187,8 @@ def test_different_native_scopes_cannot_supply_equal_result_fallback() -> None:
         replace(_operation(2), completion=None),
         _operation(2, result=""),
         _operation(2, result=" \n\t"),
+        _operation(2, result={"text": " \n\t"}),
+        _operation(2, result=[None, {"content": []}]),
         _operation(2, result={"status": "success", "exitCode": 0}),
         replace(
             _operation(2),

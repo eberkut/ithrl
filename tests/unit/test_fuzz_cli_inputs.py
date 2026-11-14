@@ -11,8 +11,32 @@ from typer.testing import CliRunner
 
 from ithrl.cli import app
 from ithrl.cli.fuzz_output import FuzzCounts, FuzzOutput, render_fuzz
-from ithrl.cli.output import OutputFormat
+from ithrl.cli.fuzz_run import execute_fuzz
+from ithrl.cli.output import ExitCode, OutputFormat
 from ithrl.fuzz.configuration import FuzzConfigurationError, load_fuzz_configuration
+
+
+def test_new_fuzz_execution_requires_all_prepared_inputs() -> None:
+    with pytest.raises(ValueError, match="complete prepared inputs"):
+        execute_fuzz(None, None)
+
+
+@pytest.mark.parametrize("mode", ["--dry-run", "--resume"])
+def test_detection_refuses_conflicting_modes_before_reading_inputs(
+    tmp_path: Path, mode: str
+) -> None:
+    result = CliRunner().invoke(
+        app, ["fuzz", str(tmp_path / "absent"), "--detect", mode, "--format", "json"]
+    )
+    assert result.exit_code == ExitCode.UNSUPPORTED, result.output
+    assert json.loads(result.stdout)["error_code"] == "conflicting-modes"
+    assert not tuple(tmp_path.iterdir())
+
+
+def test_fuzz_requires_explicit_configuration_before_reading_case(tmp_path: Path) -> None:
+    result = CliRunner().invoke(app, ["fuzz", str(tmp_path / "absent"), "--format", "json"])
+    assert result.exit_code == ExitCode.UNSUPPORTED, result.output
+    assert json.loads(result.stdout)["error_code"] == "fuzz-configuration-required"
 
 
 @pytest.mark.parametrize("unsafe", ["permissions", "symlink", "hardlink", "oversize", "invalid"])

@@ -19,7 +19,7 @@ from ithrl.execution import (
     SafetyPolicy,
     resolve_execution_plan,
 )
-from ithrl.experiment import ExperimentDefinition, FakeRunnerConfig
+from ithrl.experiment import ExperimentDefinition, FakeRunnerConfig, NativeRunnerConfig
 from ithrl.extraction import extract_decision
 from ithrl.observations import (
     Observation,
@@ -50,6 +50,7 @@ from ithrl.runner import (
     validate_runner_error,
 )
 from ithrl.runner.contracts import AttemptArm, AttemptPhase
+from ithrl.runner.registry import _create_fake_runner
 from ithrl.synthetic import extract_inference
 from ithrl.workflow import prepare_experiment
 
@@ -102,6 +103,29 @@ def test_public_runner_imports_execute_a_prepared_candidate(tmp_path: Path) -> N
     assert result.attempt_id == attempt.attempt_id
     assert result.accounting.actions_executed == 0
     assert result.accounting.tool_network_requests == 0
+
+
+@pytest.mark.parametrize("fault", ["provider-calls", "wall-time"])
+def test_successful_result_cannot_exceed_its_frozen_execution_budget(
+    tmp_path: Path, fault: str
+) -> None:
+    runner, attempt = _attempt(_synthetic_evidence(tmp_path))
+    result = asyncio.run(runner.run(attempt))
+    accounting = result.accounting.model_dump()
+    if fault == "provider-calls":
+        accounting.update(provider_calls_started=1, provider_calls_completed=1)
+        code = RunnerErrorCode.SAFETY
+        message = "planned provider-call count"
+    else:
+        accounting["elapsed_milliseconds"] = (
+            attempt.resource_limits.max_wall_time_seconds * 1000 + 1
+        )
+        code = RunnerErrorCode.TIMEOUT
+        message = "wall-time limit"
+    result = RunResult.model_validate({**result.model_dump(), "accounting": accounting})
+    with pytest.raises(RunnerError, match=message) as refused:
+        validate_run_result(attempt, result)
+    assert refused.value.code is code
 
 
 @pytest.mark.parametrize(
@@ -335,6 +359,77 @@ def test_cleanup_or_process_uncertainty_blocks_safe_retry(tmp_path: Path) -> Non
         assert not AttemptEvidence.from_error(attempt, error).automatic_retry_safe
 
 
+@pytest.mark.parametrize("fault", [None, "wall-time", "policy", "missing-output"])
+def test_preaccept_retry_requires_bound_limits_policy_and_output(
+    tmp_path: Path, fault: str | None
+) -> None:
+    _, attempt = _attempt(_synthetic_evidence(tmp_path))
+    accounting = RunAccounting(
+        elapsed_milliseconds=attempt.resource_limits.max_wall_time_seconds * 1000 + 1
+        if fault == "wall-time"
+        else 0,
+        native_output_bytes=1 if fault == "missing-output" else 0,
+    )
+    error = RunnerError(
+        RunnerErrorCode.STARTUP,
+        "fixture startup failure",
+        accounting=accounting,
+        effective_policy_digest="f" * 64 if fault == "policy" else attempt.safety_policy.digest,
+    )
+    evidence = AttemptEvidence.from_error(attempt, error)
+    assert evidence.automatic_retry_safe is (fault is None)
+    assert evidence.accounting == accounting
+    assert evidence.provider_acceptance_state is ProviderAcceptanceState.NOT_STARTED
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        (
+            {
+                "termination_reason": "completed",
+                "effective_policy_digest": "c" * 64,
+                "provider_acceptance_state": ProviderAcceptanceState.UNKNOWN,
+                "provider_calls_possible": 1,
+            },
+            "unknown acceptance",
+        ),
+        ({"provider_acceptance_state": ProviderAcceptanceState.UNKNOWN}, "positive possible"),
+        (
+            {
+                "retry_safe": True,
+                "provider_acceptance_state": ProviderAcceptanceState.ACCEPTED,
+                "accounting": RunAccounting(provider_calls_started=1, provider_calls_completed=1),
+            },
+            "not to have started",
+        ),
+        ({"retry_safe": True, "accounting": None}, "complete effect accounting"),
+        (
+            {
+                "retry_safe": True,
+                "accounting": RunAccounting(actions_requested=1, actions_executed=1),
+            },
+            "external effects",
+        ),
+        ({"overload_replacement_safe": True}, "complete bounded safety evidence"),
+    ],
+)
+def test_persisted_attempt_evidence_refuses_unsupported_safety_claims(
+    changes: dict[str, object], message: str
+) -> None:
+    with pytest.raises(ValidationError, match=message):
+        AttemptEvidence.model_validate(
+            {
+                "attempt_id": "attempt-" + "a" * 32,
+                "attempt_digest": "b" * 64,
+                "termination_reason": "failed",
+                "accounting": RunAccounting(),
+                "provider_acceptance_state": ProviderAcceptanceState.NOT_STARTED,
+                **changes,
+            }
+        )
+
+
 def test_accounting_preserves_uncertain_termination_and_failed_cleanup(tmp_path: Path) -> None:
     _, attempt = _attempt(_synthetic_evidence(tmp_path))
     accounting = RunAccounting(
@@ -439,6 +534,10 @@ def test_source_backed_candidate_retains_native_evidence_without_materializing_i
     )
     assert tuple(artifact.content for artifact in evidence.source_artifacts) == before
     assert attempt.evidence is evidence
+    fake = FakeRunner(required_markers=frozenset({"unused"}), final_text=target.text_equals)
+    with pytest.raises(RunnerError) as failure:
+        asyncio.run(fake.run(attempt))
+    assert failure.value.code is RunnerErrorCode.PREPARATION
 
     class SourceBackedRunner:
         fingerprint = "source-candidate-test"
@@ -686,6 +785,23 @@ def test_runner_factory_can_refuse_incompatible_case_evidence(tmp_path: Path) ->
     assert resolution == RunnerResolution(runner=None, issue=issue)
 
 
+def test_registry_refuses_missing_and_misregistered_factories(tmp_path: Path) -> None:
+    evidence = _native_evidence(tmp_path)
+    config = NativeRunnerConfig(type="codex", required_capability_digest="a" * 64)
+    resolution = built_in_runner_registry().resolve(config, evidence)
+    assert resolution.runner is None
+    assert resolution.issue is not None
+    assert resolution.issue.code == "runner-unavailable"
+
+    fake = FakeRunner(required_markers=frozenset({"A"}), final_text="fixture")
+    registry = RunnerRegistry({"codex": lambda _config, _evidence: fake})
+    with pytest.raises(ValueError, match="wrong runner type"):
+        registry.resolve(config, evidence)
+    registry = RunnerRegistry({"codex": _create_fake_runner})
+    with pytest.raises(TypeError, match="fake runner factory requires FakeRunnerConfig"):
+        registry.resolve(config, evidence)
+
+
 def test_candidate_contract_rejects_overlapping_context_partitions() -> None:
     with pytest.raises(ValueError, match="disjoint"):
         Candidate(
@@ -695,6 +811,45 @@ def test_candidate_contract_rejects_overlapping_context_partitions() -> None:
             removed_context_ids=("ctx-a",),
             materialization="exact-request",
         )
+
+
+@pytest.mark.parametrize("field", ["retained_context_ids", "removed_context_ids"])
+def test_candidate_refuses_duplicate_partition_members(field: str) -> None:
+    data = {
+        "case_digest": "a" * 64,
+        "execution_plan_digest": "b" * 64,
+        "retained_context_ids": (),
+        "removed_context_ids": (),
+        "materialization": "exact-request",
+        field: ("ctx-a", "ctx-a"),
+    }
+    with pytest.raises(ValidationError, match="must not contain duplicates"):
+        Candidate.model_validate(data)
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"reason_code": "failed"}, "cannot have an error reason"),
+        ({"accounting": None}, "requires accounting"),
+        ({"effective_policy_digest": None}, "requires an effective policy"),
+        ({"retry_safe": True}, "do not need a retry-safe marker"),
+    ],
+)
+def test_completed_attempt_evidence_requires_complete_consistent_facts(
+    changes: dict[str, object], message: str
+) -> None:
+    data = {
+        "attempt_id": "attempt-" + "a" * 32,
+        "attempt_digest": "b" * 64,
+        "termination_reason": "completed",
+        "effective_policy_digest": "c" * 64,
+        "provider_acceptance_state": ProviderAcceptanceState.NOT_STARTED,
+        "accounting": RunAccounting(),
+        **changes,
+    }
+    with pytest.raises(ValidationError, match=message):
+        AttemptEvidence.model_validate(data)
 
 
 def test_tool_call_rejects_oversized_or_deep_arguments() -> None:
@@ -782,6 +937,13 @@ def test_fake_runner_preserves_unmatched_and_empty_argument_output(tmp_path: Pat
     "arguments",
     [
         {"required_markers": frozenset(), "tool_name": "shell"},
+        {
+            "required_markers": frozenset({"A"}),
+            "tool_name": "shell",
+            "alternative_marker_sets": (frozenset(),),
+        },
+        {"required_markers": frozenset({"A"}), "tool_name": ""},
+        {"required_markers": frozenset({"A"}), "final_text": "done", "command": "pwd"},
         {"required_markers": frozenset({"A"}), "tool_name": None},
         {
             "required_markers": frozenset({"A"}),
@@ -793,8 +955,14 @@ def test_fake_runner_preserves_unmatched_and_empty_argument_output(tmp_path: Pat
 def test_fake_runner_rejects_invalid_direct_configuration(
     arguments: dict[str, object],
 ) -> None:
-    with pytest.raises(ValueError, match=r"must not be empty|exactly one behavior family"):
+    with pytest.raises(ValueError, match=r"empty|exactly one behavior family|requires tool_name"):
         FakeRunner(**arguments)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("runner_types", [(), ("",)])
+def test_runner_registry_requires_named_factories(runner_types: tuple[str, ...]) -> None:
+    with pytest.raises(ValueError, match="named factories"):
+        RunnerRegistry(dict.fromkeys(runner_types, FakeRunner))  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize("completed", [0, 1])

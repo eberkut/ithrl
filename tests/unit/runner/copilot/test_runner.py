@@ -161,6 +161,49 @@ def _attempt(
     )
 
 
+def test_constructor_requires_protected_source_paths(tmp_path: Path) -> None:
+    source, workspace, _ = _case(tmp_path, "final-response")
+    runner, _ = _runner(tmp_path, source, workspace, target="final-response")
+    detected = DetectedCopilotCapability(
+        profile=runner.capability_profile,
+        runtime=runner._runtime,
+        configuration=runner._configuration,
+    )
+    with pytest.raises(ValueError, match="protected source and workspace paths"):
+        CopilotRunner(
+            detected_capability=detected,
+            state_parent=tmp_path / "other-state",
+            output_root=tmp_path / "other-output",
+            source_paths=(),
+            workspace_paths=runner._workspace_paths,
+        )
+
+
+def test_worker_change_is_refused_before_dispatch(tmp_path: Path) -> None:
+    source, workspace, evidence = _case(tmp_path, "final-response")
+    runner, marker = _runner(tmp_path, source, workspace, target="final-response")
+    attempt = _attempt(evidence, runner)
+    runner._worker_source.write_text("# Changed fixture worker\n")
+    with pytest.raises(RunnerError) as refused:
+        asyncio.run(runner.run(attempt))
+    assert refused.value.code is RunnerErrorCode.PREPARATION
+    assert not marker.exists()
+
+
+def test_missing_requested_model_is_refused_before_dispatch(tmp_path: Path) -> None:
+    source, workspace, evidence = _case(tmp_path, "final-response")
+    runner, marker = _runner(tmp_path, source, workspace, target="final-response")
+    original = _attempt(evidence, runner)
+    plan = ResolvedExecutionPlan.model_validate(
+        {**original.execution_plan.model_dump(), "model_requested": None}
+    )
+    attempt = replace(original, execution_plan=plan, candidate=prepare_candidate(evidence, plan))
+    with pytest.raises(RunnerError) as refused:
+        asyncio.run(runner.run(attempt))
+    assert refused.value.code is RunnerErrorCode.CONTRACT
+    assert not marker.exists()
+
+
 @pytest.mark.parametrize("code", list(CopilotMaterializationErrorCode))
 @pytest.mark.parametrize("change", ["original", "removal", "append"])
 def test_pure_candidate_admission_only_classifies_local_reconstruction_refusals(

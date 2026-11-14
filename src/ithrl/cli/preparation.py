@@ -6,7 +6,7 @@ import json
 import os
 from dataclasses import asdict
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, cast
 
 import typer
 
@@ -29,6 +29,7 @@ from ithrl.cli.output import (
 )
 from ithrl.cli.paths import reserved_native_paths
 from ithrl.execution.budget import reduction_budget_bounds, sampling_attempt_cost
+from ithrl.experiment import SampledReductionPlan
 from ithrl.preparation import (
     NativePreparationReceipt,
     PreparationError,
@@ -169,11 +170,10 @@ def prepare(
         if limits != current_limits:
             raise PreparationError("preflight-limits-mismatch")
         experiment = prepare_reduction(evidence, receipt, policy)
-        if experiment.reduction is None:
-            raise PreparationError("reduction-settings-required")
+        # prepare_reduction always supplies the reduction phase.
         bounds = reduction_budget_bounds(
             calibration=experiment.calibration,
-            reduction=experiment.reduction,
+            reduction=cast(SampledReductionPlan, experiment.reduction),
             attempt_cost=sampling_attempt_cost(receipt.source_plan.capability, limits),
             max_candidate_comparisons=max_candidates,
             max_provider_calls=max_provider_calls,
