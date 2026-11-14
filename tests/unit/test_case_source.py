@@ -97,6 +97,35 @@ def _artifacts() -> tuple[SourceArtifact, ...]:
     )
 
 
+def test_source_manifest_refuses_noncanonical_order_and_excess_total_size() -> None:
+    artifacts = tuple(artifact.identity for artifact in _artifacts())
+    with pytest.raises(ValidationError, match="ordered by path"):
+        case_source.SourceManifest(artifacts=artifacts)
+    maximum_sized = tuple(
+        case_source.SourceArtifactIdentity(
+            path=f"source/artifact-{index}",
+            media_type="application/json",
+            size_bytes=case_source.MAX_SOURCE_ARTIFACT_BYTES,
+            sha256="a" * 64,
+        )
+        for index in range(5)
+    )
+    with pytest.raises(ValidationError, match="total byte limit"):
+        case_source.SourceManifest(artifacts=maximum_sized)
+
+
+def test_source_path_limit_counts_utf8_bytes_across_valid_components() -> None:
+    path = "source/" + "/".join(["é" * 100] * 6)
+    assert len(path) < case_source.MAX_SOURCE_PATH_BYTES
+    with pytest.raises(ValueError, match="path is too long"):
+        case_source.validate_source_path(path)
+
+
+def test_source_collection_refuses_untyped_artifacts() -> None:
+    with pytest.raises(TypeError, match="source artifacts must use SourceArtifact"):
+        case_source.prepare_source_artifacts((object(),))  # type: ignore[arg-type]
+
+
 def _create_case(
     path: Path,
     *,

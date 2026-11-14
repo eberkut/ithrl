@@ -20,8 +20,10 @@ from integration.test_native_calibration import Harness, Scenario, _scenario
 from ithrl.cli import ExitCode, app
 from ithrl.cli.paths import native_storage_paths, observation_storage_paths
 from ithrl.cli.preparation import preparation_destination
+from ithrl.execution import ResolvedExecutionPlan
 from ithrl.experiment import SampledExperimentDefinition, parse_experiment_toml
 from ithrl.observations import ObservationStore
+from ithrl.preparation import NativePreparationReceipt
 from native_support.smoke import protected_tree
 
 _SETTINGS = """schema_version = 1
@@ -108,6 +110,60 @@ def _arguments(scenario: Scenario, receipt: Path, settings: Path, output: Path) 
 
 def _forbidden(*_args: object, **_kwargs: object) -> None:
     raise AssertionError("offline preparation accessed native execution or the observation store")
+
+
+def test_prepare_forwards_a_recorded_input_token_limit_without_probing_its_enforcement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scenario = _scenario(tmp_path, monkeypatch, "codex", "final-response", mode="context-sensitive")
+    receipt_path = tmp_path / "preflight.json"
+    _receipt(scenario, receipt_path)
+    receipt = NativePreparationReceipt.from_json(receipt_path.read_text())
+    # Receipt declarations are unauthenticated; native enforcement is rechecked by --dry-run.
+    plan_data = receipt.source_plan.model_dump()
+    plan_data["capability"]["input_token_limit_enforcement"] = "pre-dispatch"
+    plan_data["resource_limits"]["max_input_tokens"] = 1000
+    plan = ResolvedExecutionPlan.model_validate(plan_data)
+    receipt = NativePreparationReceipt.model_validate(
+        {**receipt.model_dump(), "source_plan": plan, "source_plan_digest": plan.digest}
+    )
+    receipt_path.write_text(receipt.model_dump_json())
+    settings = tmp_path / "settings.toml"
+    settings.write_text(_SETTINGS)
+    settings.chmod(0o600)
+    output = tmp_path / "prepared.toml"
+    monkeypatch.setattr(native, "native_selection", _forbidden)
+    monkeypatch.setattr(subprocess, "Popen", _forbidden)
+
+    result = CliRunner().invoke(app, _arguments(scenario, receipt_path, settings, output))
+
+    assert result.exit_code == ExitCode.SUCCESS, result.output
+    report = json.loads(result.stdout)
+    command = shlex.split(report["next_command"])
+    assert command[command.index("--max-input-tokens") + 1] == "1000"
+    assert report["provider_calls"] == 0
+    assert output.is_file()
+
+
+def test_prepare_refuses_receipt_when_current_administrative_limits_have_changed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scenario = _scenario(tmp_path, monkeypatch, "codex", "final-response", mode="context-sensitive")
+    receipt = tmp_path / "preflight.json"
+    _receipt(scenario, receipt)
+    settings = tmp_path / "settings.toml"
+    settings.write_text(_SETTINGS)
+    settings.chmod(0o600)
+    output = tmp_path / "prepared.toml"
+    monkeypatch.setattr(native, "_MAX_NATIVE_OUTPUT_BYTES", 4096)
+    monkeypatch.setattr(native, "native_selection", _forbidden)
+    monkeypatch.setattr(subprocess, "Popen", _forbidden)
+
+    result = CliRunner().invoke(app, _arguments(scenario, receipt, settings, output))
+
+    assert result.exit_code == ExitCode.USAGE, result.output
+    assert json.loads(result.stdout)["error_code"] == "preflight-limits-mismatch"
+    assert not output.exists()
 
 
 def test_parent_traversal_is_refused_without_creating_destination(tmp_path: Path) -> None:

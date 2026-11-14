@@ -424,9 +424,14 @@ def test_final_sweep_witness_requires_current_candidate_and_exact_coverage() -> 
 
 def test_final_evidence_binds_selection_time_and_forbids_reuse() -> None:
     checkpoint = _checkpoint(_trial(_block()))
+    assert _result(checkpoint).confirmation_result == "not-run"
     result = _result(checkpoint, confirmation=_confirmation())
     assert result.confirmation is not None
     assert SampledReductionEvidence.model_validate_json(result.model_dump_json()) == result
+    data = result.model_dump()
+    data["selected_at"] = FROZEN.replace(tzinfo=None)
+    with pytest.raises(ValidationError, match="offset"):
+        SampledReductionEvidence.model_validate(data)
     data = result.model_dump()
     data["selected_candidate_digest"] = NEIGHBOR
     with pytest.raises(ValidationError, match="checkpoint best"):
@@ -491,6 +496,8 @@ def test_complete_operational_refusal_has_no_statistical_outcome() -> None:
     assert confirmation.evidence.complete
     assert confirmation.outcome is None
     assert confirmation.operational_refusal == "unsafe-attempt"
+    result = _result(_checkpoint(_trial(_block())), confirmation=confirmation)
+    assert result.confirmation_result == "refused"
     with pytest.raises(ValidationError, match="confirmation outcome"):
         SampledConfirmation(evidence=confirmation.evidence, outcome=FixedSampleOutcome.INCOMPLETE)
 
@@ -507,24 +514,29 @@ def test_search_margin_equality_admits_without_a_confidence_claim() -> None:
 
 
 @pytest.mark.parametrize(
-    ("candidate_matches", "original_matches", "expected"),
+    ("candidate_matches", "original_matches", "expected", "label"),
     [
-        (20, 20, FixedSampleOutcome.PRESERVES),
-        (0, 20, FixedSampleOutcome.LOSES),
-        (10, 10, FixedSampleOutcome.INCONCLUSIVE),
+        (20, 20, FixedSampleOutcome.PRESERVES, "confirmed-preserving"),
+        (0, 20, FixedSampleOutcome.LOSES, "loses"),
+        (10, 10, FixedSampleOutcome.INCONCLUSIVE, "inconclusive"),
     ],
 )
 def test_confirmation_complete_outcomes(
-    candidate_matches: int, original_matches: int, expected: FixedSampleOutcome
+    candidate_matches: int, original_matches: int, expected: FixedSampleOutcome, label: str
 ) -> None:
     block = _block(
+        "confirmation-1",
         role="confirmation",
+        frozen_at=FROZEN + timedelta(seconds=100),
         candidate=(ObservationOutcome.MATCH,) * candidate_matches
         + (ObservationOutcome.NO_MATCH,) * (20 - candidate_matches),
         original=(ObservationOutcome.MATCH,) * original_matches
         + (ObservationOutcome.NO_MATCH,) * (20 - original_matches),
     )
-    assert SampledConfirmation(evidence=block, outcome=expected).operational_refusal is None
+    confirmation = SampledConfirmation(evidence=block, outcome=expected)
+    assert confirmation.operational_refusal is None
+    result = _result(_checkpoint(_trial(_block())), confirmation=confirmation)
+    assert result.confirmation_result == label
     wrong = (
         FixedSampleOutcome.LOSES
         if expected != FixedSampleOutcome.LOSES

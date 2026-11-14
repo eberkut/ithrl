@@ -209,6 +209,10 @@ def test_read_refuses_missing_or_replaced_storage(
         store.root.rename(store.root.with_name("old-output"))
         if unavailable == "replaced-root":
             store.root.mkdir(mode=0o700)
+            artifact = f"{reference.artifact_id}.bin"
+            _write_private(
+                store.root / artifact, (store.root.with_name("old-output") / artifact).read_bytes()
+            )
     else:
         if os.name != "posix":
             pytest.skip("private directory modes require POSIX")

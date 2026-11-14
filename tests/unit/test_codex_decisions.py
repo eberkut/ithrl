@@ -141,7 +141,15 @@ def test_source_context_must_precede_its_decision_in_the_same_artifact(
             content=session.native_bytes,
         ),
     )
-    validate_source_references(context, selected, artifacts)
+    derived = ContextNode(
+        id="derived-fact",
+        kind="fixture",
+        path="/derived",
+        mutable=False,
+        source="derived",
+        digest=content_digest("derived"),
+    )
+    validate_source_references(ContextGraph(nodes=(*context.nodes, derived)), selected, artifacts)
     last = context.nodes[-1]
     if invalid == "other-source":
         changed = last.model_copy(update={"source": "source/other.jsonl"})

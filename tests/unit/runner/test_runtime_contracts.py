@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from ithrl.runner import RunAccounting, RunResult, ToolCall
+from ithrl.runner.runtime import contracts as runtime_contracts
 from ithrl.runner.runtime.contracts import ProcessSpec, RuntimeReport, require_process_group_support
 
 
@@ -51,6 +53,8 @@ def test_process_spec_rejects_non_callable_stdout_stop_condition(tmp_path: Path)
 @pytest.mark.parametrize(
     ("argv", "cwd", "environment", "message"),
     [
+        ((), Path.cwd(), {}, "arguments must be strings"),
+        (("/python", 1), Path.cwd(), {}, "arguments must be strings"),
         (("python",), Path("relative"), {}, "executable must be an absolute path"),
         (("/python", ""), Path.cwd(), {}, "arguments must be non-empty"),
         (("/python",), Path("relative"), {}, "working directory must be absolute"),
@@ -74,15 +78,23 @@ def test_process_spec_rejects_ambiguous_invocations(
         ProcessSpec(argv=argv, cwd=cwd, environment=environment)
 
 
-def test_runtime_report_rejects_impossible_sizes() -> None:
-    with pytest.raises(ValueError, match="residual state cannot exceed"):
+@pytest.mark.parametrize(
+    ("dimension", "message"),
+    [
+        ("bytes", "residual state"),
+        ("entries", "residual entries"),
+        ("negative", "cannot be negative"),
+    ],
+)
+def test_runtime_report_rejects_impossible_sizes(dimension: str, message: str) -> None:
+    with pytest.raises(ValueError, match=message):
         RuntimeReport(
-            elapsed_milliseconds=1,
+            elapsed_milliseconds=-1 if dimension == "negative" else 1,
             native_output_bytes=0,
             disposable_state_bytes=1,
-            residual_disposable_state_bytes=2,
+            residual_disposable_state_bytes=2 if dimension == "bytes" else 0,
             disposable_state_entries=0,
-            residual_disposable_state_entries=0,
+            residual_disposable_state_entries=1 if dimension == "entries" else 0,
             process_outcome="not-started",
             forced_termination=False,
             stdout_stop_matched=False,
@@ -111,3 +123,18 @@ def test_process_group_support_matches_the_host() -> None:
     else:
         with pytest.raises(RuntimeError, match="unavailable"):
             require_process_group_support()
+
+
+@pytest.mark.parametrize("platform", ["non-posix", "missing-killpg"])
+def test_process_group_support_refuses_missing_host_capabilities(
+    monkeypatch: pytest.MonkeyPatch, platform: str
+) -> None:
+    # Replace this module's OS view without changing the process-wide os module.
+    host = (
+        SimpleNamespace(name="nt", killpg=object())
+        if platform == "non-posix"
+        else SimpleNamespace(name="posix")
+    )
+    monkeypatch.setattr(runtime_contracts, "os", host)
+    with pytest.raises(RuntimeError, match="isolated process groups are unavailable"):
+        require_process_group_support()

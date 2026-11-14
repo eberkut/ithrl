@@ -21,6 +21,18 @@ def _fixture_document() -> JsonlDocument:
     return read_jsonl(FIXTURE, limits=ParsingLimits())
 
 
+def test_parser_refuses_a_blank_document() -> None:
+    document = JsonlDocument(
+        raw=b"\n",
+        records=(),
+        source=SourceFacts(sha256=hashlib.sha256(b"\n").hexdigest(), size_bytes=1),
+    )
+    assert not PARSER.matches(document)
+    with pytest.raises(AdapterError) as caught:
+        PARSER.parse(document)
+    assert caught.value.code is AdapterErrorCode.UNSUPPORTED_FORMAT
+
+
 def _changed_document(
     *,
     records: tuple[JsonObject, ...] | None = None,

@@ -30,6 +30,10 @@ FINAL_TEXT = "Final response from the sanitized fixture."
 type Message = dict[str, Any]
 
 
+def test_protocol_json_accepts_finite_numbers_and_nested_json_values() -> None:
+    validate_protocol_json({"values": [0.5, None, True, "fixture", {}]})
+
+
 @pytest.mark.parametrize("invalid", [{1: "value"}, {"value": float("nan")}, {"value": b"bytes"}])
 def test_protocol_json_refuses_non_json_keys_and_values(invalid: object) -> None:
     with pytest.raises(CodexProtocolError) as caught:
@@ -945,6 +949,24 @@ def test_protocol_value_objects_reject_inconsistent_outcomes() -> None:
             actions_requested=0,
             actions_denied=0,
         )
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"behavior_output_observed": 1}, "visibility must be a boolean"),
+        ({"status": "error", "error_code": None, "final_text": None}, "failed Codex outcome"),
+        ({"status": "error", "error_code": "failed"}, "failed Codex outcome"),
+    ],
+)
+def test_protocol_outcome_requires_explicit_visibility_and_consistent_error_state(
+    changes: dict[str, Any], message: str
+) -> None:
+    outcome, _, _ = _physical_transcript()
+    arguments: dict[str, Any] = asdict(outcome)
+    arguments.update(changes)
+    with pytest.raises(ValueError, match=message):
+        ProtocolOutcome(**arguments)
 
 
 def _receipt(kind: str, ordinal: int, count: int, status: int = 0) -> Message:

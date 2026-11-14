@@ -548,6 +548,9 @@ def test_malformed_usage_is_not_replaced_with_zero(usage: dict[str, object]) -> 
     "raw",
     [
         b"",
+        b"\n",
+        b'{"type":"assistant.idle","agentId":"other-agent"}\n',
+        b'{"type":"assistant.idle","data":null}\n',
         b'{"type":"assistant.idle","type":"assistant.idle"}\n',
         b'{"type":"assistant.idle","data":{"value":NaN}}\n',
         b"[]\n",
@@ -557,6 +560,41 @@ def test_malformed_usage_is_not_replaced_with_zero(usage: dict[str, object]) -> 
 def test_decoder_bounds_and_strict_json_fail_safely(raw: bytes) -> None:
     with pytest.raises(CopilotProtocolError):
         parse_output(raw, expected="final-response")
+
+
+def test_decoder_refuses_output_and_structure_limits(monkeypatch: pytest.MonkeyPatch) -> None:
+    from ithrl.runner.copilot.protocol import decoding
+
+    raw = b'{"type":"assistant.idle","data":{}}\n'
+    assert decoding.decode_events(raw) == [{"type": "assistant.idle", "data": {}}]
+    with monkeypatch.context() as context:
+        context.setattr(decoding, "MAX_OUTPUT_BYTES", len(raw) - 1)
+        with pytest.raises(CopilotProtocolError) as caught:
+            decoding.decode_events(raw)
+        assert caught.value.code == "output-limit"
+    monkeypatch.setattr(decoding, "MAX_EVENT_ITEMS", 1)
+    with pytest.raises(CopilotProtocolError) as caught:
+        decoding.decode_events(raw)
+    assert caught.value.code == "event-limit"
+
+
+def test_protocol_field_helpers_refuse_malformed_values_without_exposing_them() -> None:
+    from ithrl.runner.copilot.protocol.decoding import event_data
+    from ithrl.runner.copilot.protocol.state import bounded_string, parse_usage
+
+    assert parse_usage({}) is None
+    assert bounded_string("", max_length=1, allow_empty=True) == ""
+    for value in (None, "", "private-fixture-value"):
+        with pytest.raises(CopilotProtocolError) as caught:
+            bounded_string(value, max_length=1)
+        assert caught.value.code == "invalid-field"
+        assert "private-fixture-value" not in str(caught.value)
+    with pytest.raises(CopilotProtocolError) as caught:
+        parse_usage(None)
+    assert caught.value.code == "invalid-usage"
+    with pytest.raises(CopilotProtocolError) as caught:
+        event_data({"data": None})
+    assert caught.value.code == "invalid-event"
 
 
 def test_model_telemetry_is_preserved_without_substituting_lifecycle_evidence() -> None:

@@ -12,6 +12,7 @@ import pytest
 from ithrl.behavior import FinalResponseTarget
 from ithrl.case import CaseEvidence
 from ithrl.context import content_digest
+from ithrl.execution import SafetyPolicy
 from ithrl.experiment import ExperimentDefinition, FakeRunnerConfig
 from ithrl.fuzz import FuzzCampaignConfig
 from ithrl.fuzz.deterministic import DeterministicMutationEvaluator
@@ -83,6 +84,34 @@ def _evidence(tmp_path: Path) -> CaseEvidence:
         inference_call_id="synthetic-ac-001",
         case_path=tmp_path / "case",
     ).load()
+
+
+def test_deterministic_evaluation_refuses_provider_permission(tmp_path: Path) -> None:
+    evidence = _evidence(tmp_path)
+    prepared = prepare_experiment(evidence)
+    policy = SafetyPolicy(
+        provider_transport="allowed",
+        allowed_provider="fixture",
+        allowed_endpoint="https://fixture.invalid",
+    )
+    with pytest.raises(ValueError, match="credential-free runner"):
+        DeterministicMutationEvaluator(evidence, replace(prepared, safety_policy=policy))
+
+
+def test_deterministic_evaluation_refuses_runner_changes_after_preparation(tmp_path: Path) -> None:
+    evidence = _evidence(tmp_path)
+    prepared = prepare_experiment(evidence)
+    evaluator = DeterministicMutationEvaluator(evidence, prepared)
+    original = prepare_candidate(evidence, prepared.execution_plan)
+    mutation = generate_mutations(
+        evidence.editable_text()[:1], _config(original), stale_text="noise"
+    ).mutations[0]
+    assert isinstance(prepared.runner, FakeRunner)
+    prepared.runner.required_markers = frozenset({"changed"})
+
+    with pytest.raises(ValueError, match="identity"):
+        asyncio.run(evaluator.evaluate(mutation))
+    assert evaluator.attempts == 0
 
 
 def test_fake_runner_discovers_and_simplifies_a_change_with_source_unchanged(

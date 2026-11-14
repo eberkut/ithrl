@@ -19,7 +19,7 @@ from ithrl.execution import (
     SafetyPolicy,
     resolve_execution_plan,
 )
-from ithrl.experiment import ExperimentDefinition, FakeRunnerConfig
+from ithrl.experiment import ExperimentDefinition, FakeRunnerConfig, NativeRunnerConfig
 from ithrl.extraction import extract_decision
 from ithrl.observations import (
     Observation,
@@ -50,6 +50,7 @@ from ithrl.runner import (
     validate_runner_error,
 )
 from ithrl.runner.contracts import AttemptArm, AttemptPhase
+from ithrl.runner.registry import _create_fake_runner
 from ithrl.synthetic import extract_inference
 from ithrl.workflow import prepare_experiment
 
@@ -439,6 +440,10 @@ def test_source_backed_candidate_retains_native_evidence_without_materializing_i
     )
     assert tuple(artifact.content for artifact in evidence.source_artifacts) == before
     assert attempt.evidence is evidence
+    fake = FakeRunner(required_markers=frozenset({"unused"}), final_text=target.text_equals)
+    with pytest.raises(RunnerError) as failure:
+        asyncio.run(fake.run(attempt))
+    assert failure.value.code is RunnerErrorCode.PREPARATION
 
     class SourceBackedRunner:
         fingerprint = "source-candidate-test"
@@ -686,6 +691,23 @@ def test_runner_factory_can_refuse_incompatible_case_evidence(tmp_path: Path) ->
     assert resolution == RunnerResolution(runner=None, issue=issue)
 
 
+def test_registry_refuses_missing_and_misregistered_factories(tmp_path: Path) -> None:
+    evidence = _native_evidence(tmp_path)
+    config = NativeRunnerConfig(type="codex", required_capability_digest="a" * 64)
+    resolution = built_in_runner_registry().resolve(config, evidence)
+    assert resolution.runner is None
+    assert resolution.issue is not None
+    assert resolution.issue.code == "runner-unavailable"
+
+    fake = FakeRunner(required_markers=frozenset({"A"}), final_text="fixture")
+    registry = RunnerRegistry({"codex": lambda _config, _evidence: fake})
+    with pytest.raises(ValueError, match="wrong runner type"):
+        registry.resolve(config, evidence)
+    registry = RunnerRegistry({"codex": _create_fake_runner})
+    with pytest.raises(TypeError, match="fake runner factory requires FakeRunnerConfig"):
+        registry.resolve(config, evidence)
+
+
 def test_candidate_contract_rejects_overlapping_context_partitions() -> None:
     with pytest.raises(ValueError, match="disjoint"):
         Candidate(
@@ -782,6 +804,13 @@ def test_fake_runner_preserves_unmatched_and_empty_argument_output(tmp_path: Pat
     "arguments",
     [
         {"required_markers": frozenset(), "tool_name": "shell"},
+        {
+            "required_markers": frozenset({"A"}),
+            "tool_name": "shell",
+            "alternative_marker_sets": (frozenset(),),
+        },
+        {"required_markers": frozenset({"A"}), "tool_name": ""},
+        {"required_markers": frozenset({"A"}), "final_text": "done", "command": "pwd"},
         {"required_markers": frozenset({"A"}), "tool_name": None},
         {
             "required_markers": frozenset({"A"}),
@@ -793,8 +822,14 @@ def test_fake_runner_preserves_unmatched_and_empty_argument_output(tmp_path: Pat
 def test_fake_runner_rejects_invalid_direct_configuration(
     arguments: dict[str, object],
 ) -> None:
-    with pytest.raises(ValueError, match=r"must not be empty|exactly one behavior family"):
+    with pytest.raises(ValueError, match=r"empty|exactly one behavior family|requires tool_name"):
         FakeRunner(**arguments)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("runner_types", [(), ("",)])
+def test_runner_registry_requires_named_factories(runner_types: tuple[str, ...]) -> None:
+    with pytest.raises(ValueError, match="named factories"):
+        RunnerRegistry(dict.fromkeys(runner_types, FakeRunner))  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize("completed", [0, 1])

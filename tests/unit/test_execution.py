@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -20,8 +21,11 @@ from ithrl.experiment import (
     DeterministicPhase,
     ExperimentDefinition,
     FakeRunnerConfig,
+    NativeRunnerConfig,
     SampledCalibrationPhase,
+    SampledExperimentDefinition,
     StructuralOracleConfig,
+    UnavailableRunnerConfig,
 )
 from ithrl.synthetic import extract_inference
 
@@ -100,6 +104,59 @@ def _evidence(tmp_path: Path):
         inference_call_id="synthetic-ac-001",
         case_path=tmp_path / "case",
     ).load()
+
+
+def test_unavailable_runner_refuses_before_resolving_an_execution_plan(tmp_path: Path) -> None:
+    experiment = _shell_experiment()
+    experiment = ExperimentDefinition.model_validate(
+        {**experiment.model_dump(), "runner": UnavailableRunnerConfig(harness="fixture")}
+    )
+    report = resolve_execution_plan(
+        CapabilityProfile.deterministic_fake(),
+        experiment,
+        evidence=_evidence(tmp_path),
+        runner_fingerprint="unavailable",
+        safety_policy=SafetyPolicy.credential_free(),
+        resource_limits=ResourceLimits.credential_free(),
+    )
+    assert not report.ready
+    assert report.plan is None
+    assert [issue.code for issue in report.issues] == ["runner-unavailable"]
+
+
+@pytest.mark.parametrize("native_config", [False, True])
+def test_sampled_preflight_refuses_incompatible_deterministic_profiles(
+    tmp_path: Path, native_config: bool
+) -> None:
+    capability = CapabilityProfile.model_validate(
+        {**CapabilityProfile.deterministic_fake().model_dump(), "runner_type": "codex"}
+    )
+    base = _shell_experiment()
+    assert isinstance(base.runner, FakeRunnerConfig)
+    experiment = SampledExperimentDefinition(
+        target=base.target,
+        oracle=base.oracle,
+        runner=(
+            NativeRunnerConfig(type="codex", required_capability_digest=capability.digest)
+            if native_config
+            else base.runner
+        ),
+        calibration=SampledCalibrationPhase(required_valid=1, minimum_matches=1, max_attempts=1),
+    )
+    arguments: dict[str, Any] = {
+        "evidence": _evidence(tmp_path),
+        "runner_fingerprint": "incompatible-profile",
+        "safety_policy": SafetyPolicy.credential_free(),
+        "resource_limits": ResourceLimits.credential_free(),
+    }
+    if native_config:
+        report = resolve_execution_plan(capability, experiment, **arguments)
+        assert not report.ready
+        assert report.plan is None
+        assert [issue.code for issue in report.issues] == ["sampled-runner-required"]
+    else:
+        with pytest.raises(TypeError, match="native or credential-free fake runner"):
+            resolve_execution_plan(capability, experiment, **arguments)
 
 
 def test_fake_capability_resolves_bounded_credential_free_plan(tmp_path: Path) -> None:

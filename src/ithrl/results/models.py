@@ -224,17 +224,10 @@ class SampledReductionEvidence(_StrictImmutableModel):
             return "not-run"
         from ithrl.statistics import FixedSampleOutcome
 
-        match self.confirmation.outcome:
-            case FixedSampleOutcome.PRESERVES:
-                return "confirmed-preserving"
-            case FixedSampleOutcome.LOSES:
-                return "loses"
-            case FixedSampleOutcome.INCONCLUSIVE:
-                return "inconclusive"
-            case FixedSampleOutcome.INCOMPLETE:
-                return "incomplete"
-            case None:
-                return "refused"
+        outcome = self.confirmation.outcome
+        if outcome is None:
+            return "refused"
+        return "confirmed-preserving" if outcome is FixedSampleOutcome.PRESERVES else outcome.value
 
     @field_validator("selected_at")
     @classmethod
