@@ -1,5 +1,17 @@
 # CHANGELOG
 
+## v0.4.0 (2026-11-14)
+
+### Features
+
+- Inspect recorded operations across compaction ([#69](https://github.com/eberkut/ithrl/pull/69), [`3594d32`](https://github.com/eberkut/ithrl/commit/3594d3212b6dbc92276223f373908529e95a5e9e))
+- Prepare native reduction experiments offline ([#66](https://github.com/eberkut/ithrl/pull/66), [`13c9626`](https://github.com/eberkut/ithrl/commit/13c96260335982a3a3ce52ea9c73b327f649efce))
+- Qualify passive compaction inspection ([#70](https://github.com/eberkut/ithrl/pull/70), [`3b43a1b`](https://github.com/eberkut/ithrl/commit/3b43a1b8ef0c02bfd0182650460e4efed1c13076))
+
+### Performance Improvements
+
+- Reduce workflow overhead and track performance ([#71](https://github.com/eberkut/ithrl/pull/71), [`ae0c8cd`](https://github.com/eberkut/ithrl/commit/ae0c8cd238eff742ec51076a1054007580c9c0db))
+
 ## v0.3.0 (2026-11-10)
 
 ### Features
