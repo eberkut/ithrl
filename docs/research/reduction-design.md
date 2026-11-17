@@ -446,6 +446,119 @@ threshold or silently substitute another source. The optional
 [field-loss stopping rule](../reduction.md#optional-section-removal-settings) can avoid further
 comparisons once all selected fields are removed; it supplies no positive qualification evidence.
 
+## Prospective ordinary-workflow cohort
+
+The [bounded cohort study](https://github.com/eberkut/ithrl/issues/16) asked whether ordinary
+saved sessions yield useful debugging investigations beyond the previously selected examples.
+Its two measured workloads calibrated successfully, but neither retained the selected field
+through coarse search. The study produced no additional confirmed investigation.
+
+### Selection and eligibility
+
+The protocol preceded conversation-content inspection. It sampled the local Codex and Copilot
+stores captured and last modified before **2026-11-17 00:00 UTC**. Each harness contributed eight
+recent sources, captured from November 7 inclusive, and four older sources, ranked within each
+stratum by a frozen hash seed. Sources were not ranked by outcome or replaced after exclusion.
+A metadata-read allowance was increased before selection when the first inventory hit its bound;
+the cutoff, seed, strata and cohort size were unchanged. The
+[frozen method and exclusions](https://github.com/eberkut/ithrl/issues/16#issuecomment-6942564925)
+record the exact ranking, bounds and retained incomplete inventory.
+
+| Stage | Codex | Copilot |
+| --- | ---: | ---: |
+| Eligible logical sessions in the local frame | 3,788 | 101 |
+| Selected and snapshotted | 12 | 12 |
+| Experimental parser accepted, including nonordinary sources | 12 | 8 |
+| Ordinary engineering sources | 2 | 8 |
+| Ordinary sources accepted by parser | 2 | 4 |
+| Ordinary parsed sources with completed final-response targets | 2 | 3 |
+| Prospective predicate and section-removal packages | 1 | 3 |
+| Primary workloads receiving native controls and calibration | 1 | 1 |
+| Selected fields surviving the measured coarse stage | 0 | 0 |
+
+Ten Codex selections were spawned-task or approval-review sessions. Copilot exclusions comprised
+three administrative sessions and one synthetic control. Four ordinary Copilot sources were
+parser-refused: three missing-turn-ID cases and one turn/tool-relationship failure. One parsed
+ordinary Copilot source had no completed final-response target. A bounded decision screen found
+no supported predicate/intervention package for the other ordinary Codex source. Two additional
+Copilot packages passed provider-free materialization but received no native execution; their
+behavior remains unassessed. These are workstation-cohort counts, not population rates.
+
+Neither primary source recorded compaction markers or images. One secondary Copilot source had
+two compaction markers before its selected decision and remained unexecuted. Those markers alone
+establish neither historical input delivery nor experimental reconstruction eligibility.
+
+### Measured outcome and developer conclusion
+
+The primaries asked whether a shorter record could retain a configured documentation-link
+identifier or a checksum-repair command mention. These lexical predicates detect mention, not
+correctness, endorsement or repair success. Quoted or negated mentions can pass; paraphrases can
+fail. The paid experiments used a private candidate wheel with Codex CLI `0.169.0` and Copilot
+CLI `1.0.107` / SDK `1.0.28`, on Python `3.12.3`. Earlier Codex input controls used an isolated
+mock destination; Copilot controls captured native
+requests before inference forwarding. Calibration then used the real providers. These controls
+checked reconstructed requests, not historical request equivalence or provider-internal use.
+
+Each primary collected three matching pilot observations, then three fresh calibration matches
+in its bounded investigation. The first coarse comparison collected one matching original and
+one matching candidate observation. Its exploratory point screen admitted removal of 47 Codex
+or 14 Copilot case-context units, including the selected field. Six Copilot candidates were
+refused by pure admission before comparison; these consumed no model observations or calls.
+
+The prospective field-loss rule stopped both runs at the completed comparison boundary. Neither
+tested its frozen 832-byte or 556-byte section edit, met the additional **512-byte** criterion,
+or entered fresh confirmation. Earlier observations supplied no confirmation credit. Both saved
+results passed offline retained-context inspection, with verified cleanup, unchanged protected
+state, no executed actions and no tool-network effects. The
+[reviewed outcomes](https://github.com/eberkut/ithrl/issues/16#issuecomment-6950495903) retain the
+trial classifications and execution evidence.
+
+A developer can inspect the shorter coarse records and their surviving evidence as hypotheses.
+They are not confirmed reproducers. One matching candidate observation does not establish
+preservation, field necessity, historical cause or minimality. The fine edits remain behaviorally
+untested; their lost eligibility here does not negate the earlier qualified examples. Removing a
+field also does not establish that its information is absent from other visible or opaque inputs.
+
+### Cost and implications
+
+The paid pilot and investigations used **16 attempts and 16 completed inference requests**:
+12 calibration observations and four exploratory observations, with no invalid observations,
+runner errors, additional possible calls or pending reservations in those stages. Prerequisite
+native controls encountered startup/protocol, session-restore, authentication and TLS failures.
+They forwarded no external model inference, but remain part of the investigation's preparation
+cost; the 16-attempt total does not describe all native invocations or overall reliability.
+
+| Harness | Inference requests | Reported input tokens | Reported output tokens | Combined CLI wall time |
+| --- | ---: | ---: | ---: | ---: |
+| Codex | 8 | 1,191,335 | 7,143 | 221 s |
+| Copilot | 8 | 431,481 | 7,785 | 304 s |
+
+These totals include every paid attempt, not just candidate observations. Copilot also reported
+270,795 cached-input tokens, a subset of input tokens. Its optional counters do not qualify
+general telemetry coverage or change the profile's `reports_usage=False` declaration. Token
+counts establish neither monetary cost nor confirmed reduction savings. Authentication and
+metadata traffic are separate and partly uncounted.
+
+Full investigation cost remains unknown: recorded preparation intervals do not cover all native
+compatibility diagnosis, review and publication, human effort or assistant-authoring inference.
+The linked issue preserves failed controls, partial timings and missing data. Execution latency
+alone therefore does not establish an affordable ordinary debugging workflow or context envelope.
+
+The result limits the usefulness claim for this selection: neither chosen field survived the
+normal coarse traversal, so finer reduction could not be evaluated. It does not establish how
+often this occurs for other workloads. Further paid work on these fields is unwarranted without
+a distinct prospective question and eligibility argument. Artificial protection, a lower byte
+threshold or outcome-based source replacement would change the experiment. The separate
+[comparison design](https://github.com/eberkut/ithrl/issues/13) and
+[tool-output assessment](https://github.com/eberkut/ithrl/issues/74) can use the retained evidence;
+this study qualifies neither capability and adds no public support claim.
+
+The follow-up [public benchmark design](https://github.com/eberkut/ithrl/issues/81) assesses
+constructed debugging tasks with real Codex/Copilot traces, independently checked outcomes and
+context-dependence controls. It addresses reproducibility beyond private sessions and the limits
+of mention-based grading. Its prospective task selection and cost recording remain separate from
+this frozen cohort; constructed-task results would not establish ordinary-workflow success rates.
+
 ## Reproducibility and remaining limits
 
 The [reduction study package](https://github.com/eberkut/ithrl/tree/main/research/reduction)

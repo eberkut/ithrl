@@ -54,7 +54,12 @@ assert receive()["method"] == "initialized"
 message = receive()
 assert message["method"] == "thread/start"
 model = message["params"]["model"]
-send({"id": message["id"], "result": {"thread": {"id": "thread-1", "model": model, "serviceTier": "default"}}})
+send({"id": message["id"], "result": {
+    "thread": {"id": "thread-1", "model": model, "serviceTier": "default"},
+    "model": model, "modelProvider": message["params"]["modelProvider"],
+    "cwd": message["params"]["cwd"], "approvalPolicy": "never", "approvalsReviewer": "user",
+    "sandbox": {"type": "readOnly", "networkAccess": False},
+}})
 message = receive()
 if message["method"] == "thread/inject_items":
     send({"id": message["id"], "result": {}})

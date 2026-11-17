@@ -86,6 +86,8 @@ class _SessionState:
     actions_denied: int = 0
     final_messages: dict[str, tuple[str | None, str]] = field(default_factory=dict)
     behavior_output_observed: bool = False
+    thread_policy_verified: bool = False
+    pending_thread_id: str | None = None
 
 
 class _Transport:
@@ -235,11 +237,13 @@ def _run_session(
         transport.request("thread/start", thread_params, state),
         "thread start response",
     )
+    _validate_thread_policy(thread_result, request)
     thread = _require_object(thread_result.get("thread"), "thread start response")
     state.thread_id = _require_string(thread.get("id"), "thread start response")
-    state.model_returned = _optional_string(thread_result.get("model")) or _optional_string(
-        thread.get("model")
-    )
+    if state.pending_thread_id is not None and state.pending_thread_id != state.thread_id:
+        raise CodexProtocolError("identity-mismatch", "Codex thread identity changed")
+    state.thread_policy_verified = True
+    state.model_returned = _require_string(thread_result.get("model"), "thread start response")
     state.service_tier = _optional_string(thread_result.get("serviceTier")) or _optional_string(
         thread.get("serviceTier")
     )
@@ -330,6 +334,17 @@ def _handle_server_request(
 
 
 def _validate_notification(method: str, params: dict[str, object], state: _SessionState) -> None:
+    if method == "configWarning":
+        _validate_config_warning(params)
+        # Startup warnings can precede the thread/start response. Its returned
+        # policy must be verified before history injection or turn dispatch.
+        # A later warning could invalidate that check, so it remains terminal.
+        if state.thread_policy_verified:
+            raise CodexProtocolError(
+                "configuration-warning",
+                "Codex reported a configuration warning after policy verification",
+            )
+        return
     if method == "remoteControl/status/changed":
         if params.get("status") != "disabled":
             raise CodexProtocolError(
@@ -349,8 +364,14 @@ def _validate_notification(method: str, params: dict[str, object], state: _Sessi
             raise CodexProtocolError("provider-overloaded", "Codex provider reported overload")
         raise CodexProtocolError("native-error", "Codex app-server reported a native error")
     if method == "warning":
-        _require_identity(params, state, require_turn=False)
         _require_string(params.get("message"), "warning notification")
+        if not state.thread_policy_verified:
+            # A startup warning may be global or refer to the new thread before
+            # thread/start returns. Bind that identity to its eventual response.
+            if params.get("threadId") is not None:
+                _record_startup_thread_identity(params["threadId"], state)
+        else:
+            _require_identity(params, state, require_turn=False)
         return
     if method == "account/updated":
         if "authMode" not in params:
@@ -391,6 +412,50 @@ def _validate_notification(method: str, params: dict[str, object], state: _Sessi
         "unsupported-notification",
         "Codex app-server sent an unsupported notification",
     )
+
+
+def _validate_thread_policy(result: dict[str, object], request: dict[str, object]) -> None:
+    expected = {
+        "approvalPolicy": "never",
+        "approvalsReviewer": "user",
+        "cwd": SANDBOX_WORKSPACE,
+        "model": request["model"],
+        "modelProvider": request["provider"],
+    }
+    sandbox = result.get("sandbox")
+    if (
+        any(result.get(name) != value for name, value in expected.items())
+        or not isinstance(sandbox, dict)
+        or set(sandbox) - {"type", "networkAccess"}
+        or sandbox.get("type") != "readOnly"
+        or sandbox.get("networkAccess") is not False
+    ):
+        raise CodexProtocolError(
+            "unsafe-thread-policy", "Codex returned an incompatible thread policy"
+        )
+
+
+def _validate_config_warning(params: dict[str, object]) -> None:
+    _require_string(params.get("summary"), "configuration warning")
+    if set(params) - {"summary", "details", "path", "range"}:
+        raise CodexProtocolError("invalid-message", "Codex configuration warning is invalid")
+    for name in ("details", "path"):
+        if params.get(name) is not None and not isinstance(params[name], str):
+            raise CodexProtocolError("invalid-message", "Codex configuration warning is invalid")
+    if params.get("range") is not None:
+        location = _require_object(params["range"], "configuration warning range")
+        if set(location) != {"start", "end"}:
+            raise CodexProtocolError(
+                "invalid-message", "Codex configuration warning range is invalid"
+            )
+        for name in ("start", "end"):
+            position = _require_object(location[name], "configuration warning position")
+            if set(position) != {"line", "column"} or any(
+                type(value) is not int or value < 1 for value in position.values()
+            ):
+                raise CodexProtocolError(
+                    "invalid-message", "Codex configuration warning position is invalid"
+                )
 
 
 def _record_token_usage(params: dict[str, object], state: _SessionState) -> None:
@@ -528,8 +593,18 @@ def _validate_passive_notification(
 def _validate_thread_started(params: dict[str, object], state: _SessionState) -> None:
     thread = _require_object(params.get("thread"), "thread started notification")
     thread_id = _require_string(thread.get("id"), "thread started notification")
+    if not state.thread_policy_verified:
+        _record_startup_thread_identity(thread_id, state)
+        return
     if state.thread_id is None or thread_id != state.thread_id:
         raise CodexProtocolError("identity-mismatch", "Codex thread identity changed")
+
+
+def _record_startup_thread_identity(value: object, state: _SessionState) -> None:
+    thread_id = _require_string(value, "startup thread identity")
+    if state.pending_thread_id is not None and state.pending_thread_id != thread_id:
+        raise CodexProtocolError("identity-mismatch", "Codex thread identity changed")
+    state.pending_thread_id = thread_id
 
 
 def _record_model_reroute(params: dict[str, object], state: _SessionState) -> None:

@@ -84,9 +84,23 @@ def test_schema_and_protocol_notification_contracts_match() -> None:
     # Account/status/warning and terminal error messages are optional on older servers.
     assert (
         _NOTIFICATION_METHODS
-        | {"account/updated", "error", "remoteControl/status/changed", "warning"}
+        | {"account/updated", "configWarning", "error", "remoteControl/status/changed", "warning"}
         == SUPPORTED_NOTIFICATION_METHODS
     )
+
+
+@pytest.mark.parametrize(
+    "field", ["approvalPolicy", "approvalsReviewer", "cwd", "modelProvider", "sandbox"]
+)
+def test_schema_requires_observable_thread_policy(tmp_path: Path, field: str) -> None:
+    schema = _bundle(tmp_path)
+    path = schema / "v2/ThreadStartResponse.json"
+    document = _load(path)
+    del document["properties"][field]
+    _write(path, document)
+
+    with pytest.raises(CodexSchemaError, match="thread/start"):
+        verify_schema_bundle(schema)
 
 
 def test_accepts_supported_structural_contract_and_added_optional_fields(
