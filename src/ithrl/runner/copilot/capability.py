@@ -182,6 +182,7 @@ def _profile(
     action_denial = "enforced"
     deviations = [
         "context is restored from the native evidence prefix without adding a user message",
+        "native session resume bookkeeping is suppressed",
         "Copilot custom instructions and skill retrieval are disabled; "
         "captured system guidance is restored exactly when available",
         "remote session sync and export are disabled",

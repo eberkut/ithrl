@@ -6,6 +6,9 @@ the OpenAI Codex app-server protocol schemas, maintained for ithrl contract test
 They retain selected protocol methods, fields and enum values; they are not a
 complete or verbatim generated schema bundle.
 
+The ThreadStartResponse policy fields were checked against the schema exported
+by Codex CLI 0.169.0 using app-server generate-json-schema.
+
 Upstream source (Codex 0.156.1):
 https://github.com/openai/codex/tree/rust-v0.156.1/codex-rs/app-server-protocol
 Upstream attribution notice:

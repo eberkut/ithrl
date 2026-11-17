@@ -136,6 +136,9 @@ def parse_output(
             "model-catalog-connection",
             "model-catalog-tls",
             "model-catalog-failed",
+            "session-metadata-connection",
+            "session-metadata-tls",
+            "session-metadata-failed",
         }
     ):
         raise CopilotProtocolError(failure_code, "Copilot worker refused native execution")

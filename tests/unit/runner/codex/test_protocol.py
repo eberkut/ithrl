@@ -154,6 +154,11 @@ def _prefix(*, history: bool = False) -> list[Message]:
             "id": 2,
             "result": {
                 "model": MODEL,
+                "modelProvider": PROVIDER,
+                "approvalPolicy": "never",
+                "approvalsReviewer": "user",
+                "cwd": protocol_contracts.SANDBOX_WORKSPACE,
+                "sandbox": {"type": "readOnly", "networkAccess": False},
                 "serviceTier": "standard",
                 "thread": {
                     "id": THREAD_ID,
@@ -188,6 +193,136 @@ def _usage() -> Message:
             },
         },
     }
+
+
+@pytest.mark.parametrize(
+    "warning",
+    [
+        {"summary": "Private warning."},
+        {"summary": "Private warning.", "details": None, "path": None, "range": None},
+        {
+            "summary": "Private warning.",
+            "details": "Private detail.",
+            "path": "/private/config",
+            "range": {"start": {"line": 1, "column": 1}, "end": {"line": 1, "column": 2}},
+        },
+    ],
+)
+def test_startup_configuration_warning_requires_safe_returned_policy(warning: Message) -> None:
+    messages = _prefix()
+    messages.insert(1, {"method": "configWarning", "params": warning})
+    outcome, client, audit = _run([*messages, _usage(), _final_item(), _turn_completed()])
+
+    assert outcome.status == "completed"
+    assert any(message.get("method") == "turn/start" for message in client)
+    assert "Private warning." not in repr(outcome)
+    assert any(record["value"].get("method") == "configWarning" for record in audit)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("approvalPolicy", "on-request"),
+        ("approvalsReviewer", "auto_review"),
+        ("cwd", "/unexpected-workspace"),
+        ("model", "unexpected-model"),
+        ("modelProvider", "unexpected-provider"),
+        ("sandbox", {"type": "dangerFullAccess"}),
+        ("sandbox", {"type": "readOnly"}),
+        ("sandbox", {"type": "readOnly", "networkAccess": True}),
+        ("sandbox", {"type": "readOnly", "networkAccess": 0}),
+        ("sandbox", {"type": "readOnly", "writableRoots": []}),
+        ("sandbox", None),
+    ],
+)
+def test_incompatible_returned_policy_stops_before_history_or_turn(
+    field: str, value: object
+) -> None:
+    messages = _prefix(history=True)
+    messages[1]["result"][field] = value
+    messages.insert(1, {"method": "configWarning", "params": {"summary": "Private warning."}})
+    outcome, client, _ = _run(
+        messages, request=_request(history=[{"type": "message", "role": "user", "content": []}])
+    )
+
+    assert outcome.error_code == "unsafe-thread-policy"
+    assert outcome.provider_acceptance == "not-started"
+    assert client[-1]["method"] == "thread/start"
+
+
+@pytest.mark.parametrize(
+    "field", ["approvalPolicy", "approvalsReviewer", "cwd", "model", "modelProvider", "sandbox"]
+)
+def test_missing_returned_policy_stops_before_turn(field: str) -> None:
+    messages = _prefix()
+    del messages[1]["result"][field]
+    outcome, client, _ = _run(messages)
+
+    assert outcome.error_code == "unsafe-thread-policy"
+    assert outcome.provider_acceptance == "not-started"
+    assert client[-1]["method"] == "thread/start"
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {},
+        {"summary": None},
+        {"summary": "Warning", "details": []},
+        {"summary": "Warning", "path": False},
+        {"summary": "Warning", "futurePolicy": "unverified"},
+        {
+            "summary": "Warning",
+            "range": {"start": {"line": 0, "column": 1}, "end": {"line": 1, "column": 1}},
+        },
+    ],
+)
+def test_malformed_startup_configuration_warning_stops_before_thread(params: Message) -> None:
+    messages = _prefix()
+    messages.insert(0, {"method": "configWarning", "params": params})
+    outcome, client, _ = _run(messages)
+
+    assert outcome.error_code == "invalid-message"
+    assert client[-1]["method"] == "initialize"
+
+
+def test_configuration_warning_after_policy_verification_stops_before_turn() -> None:
+    messages = _prefix(history=True)
+    messages.insert(3, {"method": "configWarning", "params": {"summary": "Private warning."}})
+    outcome, client, _ = _run(
+        messages, request=_request(history=[{"type": "message", "role": "user", "content": []}])
+    )
+
+    assert outcome.error_code == "configuration-warning"
+    assert outcome.provider_acceptance == "not-started"
+    assert client[-1]["method"] == "thread/inject_items"
+
+
+@pytest.mark.parametrize("thread_id", [None, THREAD_ID])
+def test_startup_warning_can_precede_thread_response(thread_id: str | None) -> None:
+    messages = _prefix()
+    messages.insert(
+        1, {"method": "warning", "params": {"message": "Private warning.", "threadId": thread_id}}
+    )
+    outcome, _, _ = _run([*messages, _usage(), _final_item(), _turn_completed()])
+
+    assert outcome.status == "completed"
+
+
+@pytest.mark.parametrize("method", ["warning", "thread/started"])
+def test_startup_notification_thread_must_match_returned_thread(method: str) -> None:
+    params = (
+        {"message": "Private warning.", "threadId": "unexpected-thread"}
+        if method == "warning"
+        else {"thread": {"id": "unexpected-thread"}}
+    )
+    messages = _prefix()
+    messages.insert(1, {"method": method, "params": params})
+    outcome, client, _ = _run(messages)
+
+    assert outcome.error_code == "identity-mismatch"
+    assert outcome.provider_acceptance == "not-started"
+    assert client[-1]["method"] == "thread/start"
 
 
 def _final_item(text: str = FINAL_TEXT) -> Message:
