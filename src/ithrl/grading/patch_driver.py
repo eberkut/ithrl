@@ -81,9 +81,12 @@ def apply_patch(root: Path, patch: Path, editable: list[str]) -> int:
             or fields[2] not in allowed
         ):
             return 1
-    code = git([]).returncode
+    code = git(["--check"]).returncode
     if code:
         return code
+    if git([]).returncode:
+        # A checked patch that cannot be written is an operational failure.
+        raise OSError("patch application failed")
     try:
         if tree_structure(root) != before:
             return 1

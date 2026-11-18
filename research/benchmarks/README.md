@@ -3,6 +3,8 @@
 Reproduce two pinned public Python defects and check repairs against independent verifiers.
 [Issue #81](https://github.com/eberkut/ithrl/issues/81) tracks the study and native investigations.
 The offline commands start no coding agent and make no provider calls.
+Grades assume cooperative repairs: patched code shares the verifier's interpreter and can alter
+test reporting. Independent checks are separately authored, not isolated from the candidate.
 
 ## Findings and decision
 
@@ -172,8 +174,8 @@ new output directory.
 
 Expect fifteen reference variants across the two tasks, matching
 [verification.json](verification.json). The replay accepts only reviewed fixtures from `tasks.json`.
-The product grader below separately checks seventeen repairs across four bundles, using an
-independent test-reporting path to expose implementation disagreements.
+The product grader below replays seventeen repairs across four bundles through a separate
+test-reporting implementation to expose implementation disagreements.
 
 The control and budget helpers import ithrl. First prepare its development environment using
 the [contributor setup](../../CONTRIBUTING.md#development-setup):
@@ -277,8 +279,9 @@ are rejected before testing. The upstream migration repair's changelog edit is o
 proposed patch and recorded as a non-code adaptation; its source repair and original dataset patch
 remain preserved.
 
-Generated Python can inspect the read-only verifiers and its test process. These task scores
-assume ordinary repair attempts; deliberate grader manipulation is outside their validity claim.
+Generated Python can inspect the read-only verifiers and alter their in-process assertions, counters
+or report. These task scores assume cooperative repairs; deliberate grader manipulation is outside
+their validity claim. The report nonce does not authenticate counts against candidate code.
 Native input visibility and effective permissions need separate controls before paid execution.
 
 ### Budgets and recorded cost

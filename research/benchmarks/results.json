@@ -13,7 +13,7 @@
     "source_generation": "Native ACK and repair turns; reference material and fixed verifiers excluded from model input.",
     "calibration": "Three fresh valid passing repairs required; no source response reuse credit.",
     "controls": "One exploratory observation per prescribed removal or changed-defect replay; separate from both normal-CLI investigations and their independent fresh confirmations.",
-    "patch_grading": "Existing allowlisted regular-file content only; source and independent verifier suites. Grader/application revisions remain separate."
+    "patch_grading": "Existing allowlisted regular-file content only; source and separately authored verifier suites. Candidate code shares the verifier interpreter and can alter assertions or reports; grades assume cooperative repairs. Grader/application revisions remain separate."
   },
   "output_contracts": {
     "initial": {

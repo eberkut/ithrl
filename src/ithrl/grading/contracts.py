@@ -35,7 +35,7 @@ class _Contract(BaseModel):
 
 
 class PatchGradingConfig(_Contract):
-    """An explicitly selected, immutable task bundle and prepared Python environment."""
+    """An immutable task bundle and Python environment for grading cooperative repairs."""
 
     type: Literal["python-patch-tests"] = "python-patch-tests"
     bundle_path: str = Field(min_length=1, max_length=4096, repr=False)

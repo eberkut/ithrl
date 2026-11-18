@@ -9,12 +9,13 @@ import json
 import resource
 import sys
 import unittest
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast, override
 
 
 class _UnittestCounts(unittest.TextTestResult):
-    """Count test methods through public lifecycle hooks; subtests share their parent."""
+    """Separate fixture errors from test failures; subtests share their parent method."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
@@ -23,17 +24,64 @@ class _UnittestCounts(unittest.TextTestResult):
         self.excluded_count = 0
         self.accounted_events = 0
         self.before = (0, 0)
+        self.fixture_events = 0
+        self.in_test = False
 
     def _events(self) -> tuple[int, int]:
         return (
-            len(self.failures) + len(self.errors) + len(self.unexpectedSuccesses),
-            len(self.skipped) + len(self.expectedFailures),
+            len(self.failures)
+            + len(self.errors)
+            + len(self.unexpectedSuccesses)
+            - self.fixture_events,
+            len(self.skipped) + len(self.expectedFailures) + self.fixture_events,
         )
 
     @override
     def startTest(self, test: unittest.TestCase) -> None:
         self.before = self._events()
+        self.in_test = False
+        # TestResult does not expose phases. These hooks distinguish synchronous
+        # and asynchronous test bodies from setup, teardown and cleanups. They
+        # exist on TestCase but are omitted from its public typing interface.
+        case = cast(Any, test)
+        self.test_method = case._callTestMethod
+        self.tear_down = case._callTearDown
+        self.cleanups = case.doCleanups
+
+        def call_test_method(method: Callable[..., Any]) -> None:
+            self.in_test = True
+            self.test_method(method)
+
+        def call_tear_down() -> None:
+            self.in_test = False
+            self.tear_down()
+
+        def do_cleanups() -> bool:
+            in_test, self.in_test = self.in_test, False
+            try:
+                return self.cleanups()
+            finally:
+                self.in_test = in_test
+
+        case._callTestMethod = call_test_method
+        case._callTearDown = call_tear_down
+        case.doCleanups = do_cleanups
         super().startTest(test)
+
+    @override
+    def addError(self, test: unittest.TestCase, err: Any) -> None:
+        self.fixture_events += int(not self.in_test)
+        super().addError(test, err)
+
+    @override
+    def addFailure(self, test: unittest.TestCase, err: Any) -> None:
+        self.fixture_events += int(not self.in_test)
+        super().addFailure(test, err)
+
+    @override
+    def addSubTest(self, test: unittest.TestCase, subtest: unittest.TestCase, err: Any) -> None:
+        self.fixture_events += int(err is not None and not self.in_test)
+        super().addSubTest(test, subtest, err)
 
     @override
     def stopTest(self, test: unittest.TestCase) -> None:
@@ -41,9 +89,13 @@ class _UnittestCounts(unittest.TextTestResult):
         failed -= self.before[0]
         excluded -= self.before[1]
         self.failed_count += int(failed > 0)
-        self.excluded_count += int(not failed and excluded > 0)
+        self.excluded_count += int(excluded > 0)
         self.passed_count += int(not failed and not excluded)
         self.accounted_events += failed + excluded
+        case = cast(Any, test)
+        case._callTestMethod = self.test_method
+        case._callTearDown = self.tear_down
+        case.doCleanups = self.cleanups
         super().stopTest(test)
 
 

@@ -151,7 +151,7 @@ async def _grade(
         )
         (driver / "patch.py").write_bytes(inputs.patch_driver)
         patch_file = root / "repair.patch"
-        patch_file.write_text(patch)
+        patch_file.write_text(patch, encoding="utf-8")
         command = _namespace(source, writable=True)
         command += ["--ro-bind", str(patch_file), "/repair.patch"]
         command += ["--ro-bind", str(driver), "/driver"]

@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import unittest
 from pathlib import Path
-from typing import Any
+from types import ModuleType
+from typing import Any, override
 from unittest.mock import Mock
 
 import pytest
@@ -198,6 +200,43 @@ def test_patch_driver_keeps_io_errors_operational(
         patch_driver.apply_patch(tmp_path, tmp_path / "repair.patch", ["app.py"])
 
 
+@pytest.mark.parametrize("phase", ["setup", "body", "teardown", "cleanup", "early-cleanup"])
+@pytest.mark.parametrize("exception", [AssertionError, OSError])
+def test_unittest_fixture_exceptions_are_operational(
+    monkeypatch: pytest.MonkeyPatch, phase: str, exception: type[Exception]
+) -> None:
+    from ithrl.grading.driver import _unittest
+
+    def fail_in(stage: str) -> None:
+        if phase == stage or (phase == "early-cleanup" and stage == "cleanup"):
+            raise exception("inert failure")
+
+    class Case(unittest.TestCase):
+        @override
+        def setUp(self) -> None:
+            self.addCleanup(fail_in, "cleanup")
+            fail_in("setup")
+
+        def test_repair(self) -> None:
+            if phase == "early-cleanup":
+                self.doCleanups()
+            fail_in("body")
+
+        @override
+        def tearDown(self) -> None:
+            fail_in("teardown")
+
+    module = ModuleType("grading_fixture")
+    module.__dict__["Case"] = Case
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    assert _unittest({"selector": "grading_fixture.Case"}, False) == {
+        "collected": 1,
+        "passed": 0,
+        "failed": int(phase == "body"),
+        "errors": int(phase != "body"),
+    }
+
+
 def test_bundle_rejects_a_missing_independent_verifier() -> None:
     from ithrl.grading.contracts import BundleManifest
 
@@ -229,7 +268,8 @@ def test_report_failure_closes_the_subprocess_pipe(
             return process
 
         monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
-        code = "import sys,time;sys.stdout.write('x'*262144);sys.stdout.flush();time.sleep(60)"
+        size = 262144 if failure == "overflow" else 1
+        code = f"import sys,time;sys.stdout.write('x'*{size});sys.stdout.flush();time.sleep(60)"
         task = asyncio.create_task(_execute([sys.executable, "-I", "-c", code], capture=True))
         async with asyncio.timeout(5):
             await launched.wait()

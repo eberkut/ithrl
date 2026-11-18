@@ -7,6 +7,7 @@ import difflib
 import hashlib
 import json
 import os
+import select
 import socket
 import subprocess
 import time
@@ -125,7 +126,12 @@ def test_correct_and_incorrect_repairs_have_durable_suite_counts(
     ]
     rejected = grade(grading_config, PATCH.replace("+    return a + b", "+    return a + b + 1"))
     assert rejected.status == "fail"
-    assert all(suite.failed == 1 for suite in rejected.suites)
+    assert [
+        (suite.role, suite.collected, suite.passed, suite.failed) for suite in rejected.suites
+    ] == [
+        ("source", 1, 0, 1),
+        ("independent", 1, 0, 1),
+    ]
     assert accepted.response_digest != rejected.response_digest
 
 
@@ -137,6 +143,23 @@ def test_wrong_direction_patch_is_not_automatically_reversed(
     )
     result = grade(grading_config, reversed_patch)
     assert result.status == "fail"
+    assert result.suites == ()
+
+
+def test_patch_write_failure_is_operational(
+    grading_config: PatchGradingConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import ithrl.grading.runtime as runtime
+
+    original = runtime._namespace
+
+    def readonly(source: Path, *, writable: bool) -> list[str]:
+        return original(source, writable=False)
+
+    monkeypatch.setattr(runtime, "_namespace", readonly)
+    result = grade(grading_config)
+    assert result.status == "error"
+    assert result.reason_code == "grading-patch-runtime-failed"
     assert result.suites == ()
 
 
@@ -165,6 +188,22 @@ def test_validated_package_bytes_are_snapshotted(
     assert status == "pass"
     assert len(results) == 2
     assert grade(config).reason_code == "grading-environment-changed"
+
+
+@pytest.mark.parametrize("name", ["pyvenv.cfg", "python-binary", "git-binary", "bubblewrap-binary"])
+def test_package_names_cannot_collide_with_environment_metadata(
+    grading_config: PatchGradingConfig, name: str
+) -> None:
+    from ithrl.grading.bundle import GradingError, validate_grading
+
+    environment = Path(grading_config.environment_path)
+    package_file = next((environment / "lib").glob("python*/site-packages")) / name
+    package_file.write_bytes(b"original")
+    config = grading_config.model_copy(update={"environment_digest": bind_environment(environment)})
+    assert validate_grading(config).packages[name] == b"original"
+    package_file.write_bytes(b"changed")
+    with pytest.raises(GradingError, match="grading-environment-changed"):
+        validate_grading(config)
 
 
 @pytest.mark.parametrize("late_validation", [False, True])
@@ -322,35 +361,81 @@ def test_only_bounded_scratch_filesystems_are_writable(
 
 
 def test_cancelled_grade_reaps_its_namespace(
-    grading_config: PatchGradingConfig, monkeypatch: pytest.MonkeyPatch
+    grading_config: PatchGradingConfig, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    import ithrl.grading.runtime as runtime
+
     original_spawn = asyncio.create_subprocess_exec
+    original_namespace = runtime._namespace
     processes: list[asyncio.subprocess.Process] = []
+    signal_directory = tmp_path / "signal"
+    signal_directory.mkdir()
+    started = signal_directory / "started"
+
+    def namespace(source: Path, *, writable: bool) -> list[str]:
+        return [
+            *original_namespace(source, writable=writable),
+            "--bind",
+            str(signal_directory),
+            "/signal",
+        ]
+
+    monkeypatch.setattr(runtime, "_namespace", namespace)
+
+    def descendants(pid: int) -> list[int]:
+        children = [
+            int(value) for value in Path(f"/proc/{pid}/task/{pid}/children").read_text().split()
+        ]
+        return [*children, *(child for value in children for child in descendants(value))]
+
+    def verifier_pid(pid: int) -> int:
+        for child in descendants(pid):
+            command = Path(f"/proc/{child}/cmdline").read_bytes().split(b"\0")
+            if (
+                Path(os.fsdecode(command[0])).name.startswith("python3.")
+                and b"/driver/run.py" in command
+            ):
+                return child
+        raise AssertionError("sandboxed verifier not found")
 
     async def exercise() -> None:
-        launched = asyncio.Event()
-
         async def spawn(*args: str, **kwargs: Any) -> asyncio.subprocess.Process:
             process = await original_spawn(*args, **kwargs)
             processes.append(process)
-            if "/driver/run.py" in args:
-                launched.set()
             return process
 
         monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
         task = asyncio.create_task(
             grade_response(
                 grading_config,
-                PATCH.replace("+    return a + b", "+    while True: pass"),
+                patch_body(
+                    "    from pathlib import Path\n"
+                    "    Path('/signal/started').write_text('ready')\n"
+                    "    while True: pass\n"
+                ),
                 candidate_digest="b" * 64,
                 attempt_id="attempt-" + "a" * 32,
             )
         )
-        async with asyncio.timeout(3):
-            await launched.wait()
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
+        try:
+            async with asyncio.timeout(5):
+                while not started.exists():
+                    if task.done():
+                        pytest.fail(f"verifier did not start: {(await task).reason_code}")
+                    await asyncio.sleep(0.01)
+            descriptor = os.pidfd_open(verifier_pid(processes[-1].pid))
+            try:
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+                assert select.select([descriptor], [], [], 2)[0] == [descriptor]
+            finally:
+                os.close(descriptor)
+        finally:
+            if not task.done():
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
 
     asyncio.run(exercise())
     assert processes
@@ -435,6 +520,8 @@ def test_tree_changes_are_refused_before_compilation(
     def fake_apply(command: list[str], **kwargs: object) -> SimpleNamespace:
         if "--numstat" in command:
             return SimpleNamespace(returncode=0, stdout=b"1\t1\tapp.py\0")
+        if "--check" in command:
+            return SimpleNamespace(returncode=0)
         if change == "mode":
             target.chmod(0o755)
         elif change == "symlink":
@@ -500,7 +587,8 @@ def test_git_refuses_nonregular_index_types(grading_config: PatchGradingConfig, 
 
 
 @pytest.mark.parametrize(
-    "comment", ["-- SQL comment", "unicode \u2028 inside a line", "carriage \r inside a line"]
+    "comment",
+    ["-- SQL comment", "café", "unicode \u2028 inside a line", "carriage \r inside a line"],
 )
 def test_git_parses_hunk_content_without_treating_it_as_headers(
     grading_config: PatchGradingConfig,

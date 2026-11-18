@@ -157,13 +157,19 @@ Sampled experiments can attach `python-patch-tests` grading to an unconstrained 
 target. `grading/` binds the implementation, reviewed task bundle and prepared system-Python
 environment. Git applies content-only changes to existing allowlisted regular files with isolated
 configuration and attributes. Paths, file types and modes are checked before compilation; fixed
-source and independent suites run in disposable namespaces without network access.
+source and separately authored verifier suites run in disposable namespaces without network access.
+Each suite imports the patched code in the interpreter that runs assertions and reports counts.
+Read-only mounts protect verifier files; they do not prevent the candidate from reading those files
+or altering in-process reporting. Grades assume cooperative repairs that leave the verifier and its
+reporting intact. The report nonce checks association, not authenticity against candidate code.
 
 Grading shares the native attempt deadline. The grade, response digest and suite counts stay with
 the completed attempt. Rejected or failing repairs are nonmatches. Operational grading errors retain
 the native request charge and stop collection without entering behavioral counts or authorizing
-another inference. Task grades establish the declared test outcomes; native input visibility and
-runtime qualification require separate evidence.
+another inference. Under that cooperative assumption, task grades record the declared test
+outcomes. Native input visibility and runtime qualification require separate evidence. Exceptions
+in setup, teardown or cleanup are operational errors, including those caused by candidate code;
+assertion failures and other exceptions in the test body are behavioral failures.
 
 Deterministic reduction and sampled reduction share dependency-valid candidate construction but
 make different claims. The deterministic reducer can establish `search-1-minimal` through a

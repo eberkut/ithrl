@@ -133,16 +133,23 @@ def _environment(path: Path) -> tuple[str, str, dict[str, bytes]]:
     ):
         raise GradingError("grading-system-python-required")
     files = _read_tree(path / f"lib/python{short}/site-packages")
-    bindings = _hash_files(files)
-    bindings["pyvenv.cfg"] = hashlib.sha256(cfg_bytes).hexdigest()
+    executables = {}
     for name, executable in (
         ("python-binary", interpreter),
         ("git-binary", Path("/usr/bin/git")),
         ("bubblewrap-binary", Path("/usr/bin/bwrap")),
     ):
         with executable.open("rb") as stream:
-            bindings[name] = hashlib.file_digest(stream, "sha256").hexdigest()
-    return short, content_digest({"python": version, "files": bindings}), files
+            executables[name] = hashlib.file_digest(stream, "sha256").hexdigest()
+    identity = content_digest(
+        {
+            "python": version,
+            "packages": _hash_files(files),
+            "metadata": {"pyvenv.cfg": hashlib.sha256(cfg_bytes).hexdigest()},
+            "executables": executables,
+        }
+    )
+    return short, identity, files
 
 
 def bind_environment(path: Path) -> str:
