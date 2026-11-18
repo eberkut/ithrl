@@ -130,6 +130,10 @@ requires system Python **3.12.3** at `/usr/bin/python3.12`. Verify that version 
 The research environment is separate from ithrl's development environment. It imports the pinned
 source trees directly; no upstream setup script, database service or native coding agent is needed.
 
+`tasks.json` and `verification.json` describe the offline replay environment. Native observations
+remain bound to the environment recorded in `results.json`; refreshing replay dependencies does not
+replace those observations or add qualification credit.
+
 Create disposable directories and install the hash-locked research requirements:
 
 ```sh

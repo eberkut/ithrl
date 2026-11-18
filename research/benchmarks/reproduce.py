@@ -21,6 +21,10 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parent
+ARCHIVE_NAMES = {
+    "iniconfig": "iniconfig-source.tar.gz",
+    "migration-linter": "migration-source.tar.gz",
+}
 MAX_ARCHIVE_BYTES = 20 * 1024 * 1024
 MAX_SOURCE_BYTES = 50 * 1024 * 1024
 CONTROL_SUITE = """
@@ -45,14 +49,22 @@ def contained(root: Path, relative: str) -> Path:
     path = Path(relative)
     if path.is_absolute() or ".." in path.parts:
         raise ValueError("file path must stay inside its owning directory")
-    target = root / path
-    if not target.resolve().is_relative_to(root.resolve()):
+    base = os.path.realpath(root)
+    target = os.path.realpath(Path(base) / path)
+    if target != base and not target.startswith(base.rstrip(os.sep) + os.sep):
         raise ValueError("file path escapes its owning directory")
-    return target
+    return Path(target)
 
 
-def archive_bytes(archive: Path) -> bytes:
-    descriptor = os.open(archive, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+def archive_bytes(cache: Path, task_key: str) -> bytes:
+    if task_key not in ARCHIVE_NAMES:
+        raise ValueError("source archive is not a reviewed task")
+    name = ARCHIVE_NAMES[task_key]
+    directory = os.open(cache, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+    finally:
+        os.close(directory)
     with os.fdopen(descriptor, "rb") as stream:
         before = os.fstat(stream.fileno())
         if not stat.S_ISREG(before.st_mode) or before.st_size > MAX_ARCHIVE_BYTES:
@@ -238,7 +250,9 @@ def prepare_task(
 ) -> tuple[Path, Path]:
     """Bind and prepare one original source for either independent replay path."""
 
-    content = archive_bytes(contained(cache, task["archive"]["file"]))
+    if task["archive"]["file"] != ARCHIVE_NAMES.get(task["key"]):
+        raise ValueError("source archive name differs from its reviewed task")
+    content = archive_bytes(cache, task["key"])
     archive_digest = hashlib.sha256(content).hexdigest()
     if archive_digest != task["archive"]["sha256"]:
         raise ValueError("task source archive differs from its frozen identity")

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import sys
 from pathlib import Path
+from typing import Any
 from unittest.mock import Mock
 
 import pytest
@@ -208,3 +209,40 @@ def test_bundle_rejects_a_missing_independent_verifier() -> None:
             source_suite=TestSuite(kind="unittest", selector="tests", expected_count=1),
             independent_suite=TestSuite(kind="unittest", selector="test_app.py", expected_count=1),
         )
+
+
+@pytest.mark.parametrize("failure", ["overflow", "cancel"])
+def test_report_failure_closes_the_subprocess_pipe(
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    original = asyncio.create_subprocess_exec
+    processes: list[asyncio.subprocess.Process] = []
+
+    async def exercise() -> None:
+        launched = asyncio.Event()
+
+        async def spawn(*args: str, **kwargs: Any) -> asyncio.subprocess.Process:
+            process = await original(*args, **kwargs)
+            processes.append(process)
+            launched.set()
+            return process
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+        code = "import sys,time;sys.stdout.write('x'*262144);sys.stdout.flush();time.sleep(60)"
+        task = asyncio.create_task(_execute([sys.executable, "-I", "-c", code], capture=True))
+        async with asyncio.timeout(5):
+            await launched.wait()
+            if failure == "cancel":
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+            else:
+                with pytest.raises(GradingError, match="grading-report-limit"):
+                    await task
+        process = processes[0]
+        assert process.returncode is not None
+        assert process.stdout is not None
+        assert process.stdout.at_eof()
+
+    asyncio.run(exercise())

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import importlib.util
 import sys
@@ -168,3 +169,64 @@ def test_patch_receipt_hashes_the_bytes_actually_applied(
     with pytest.raises(ValueError, match="fixture changed"):
         replay.apply_changes(source, {"patches": [{"file": "repair.patch"}]}, hashes)
     assert applied == [original]
+
+
+def test_contained_returns_the_checked_normalized_path(
+    helpers: tuple[ModuleType, ModuleType],
+    tmp_path: Path,
+) -> None:
+    replay, _prepare = helpers
+    root = tmp_path / "owned"
+    root.mkdir()
+    (root / "nested").mkdir()
+    assert replay.contained(root, "nested/file") == root / "nested/file"
+    assert replay.contained(root, ".") == root
+    (root / "alias").symlink_to(root / "nested", target_is_directory=True)
+    assert replay.contained(root, "alias/file") == root / "nested/file"
+    sibling = tmp_path / "owned-other"
+    sibling.mkdir()
+    (root / "escape").symlink_to(sibling, target_is_directory=True)
+    with pytest.raises(ValueError, match="escapes"):
+        replay.contained(root, "escape/secret")
+
+
+@pytest.mark.parametrize("name", ["../secret", "/secret"])
+def test_contained_refuses_absolute_and_parent_paths(
+    helpers: tuple[ModuleType, ModuleType],
+    tmp_path: Path,
+    name: str,
+) -> None:
+    replay, _prepare = helpers
+    with pytest.raises(ValueError, match="owning directory"):
+        replay.contained(tmp_path, name)
+
+
+def test_archive_is_bound_to_a_reviewed_leaf_in_the_selected_cache(
+    helpers: tuple[ModuleType, ModuleType],
+    tmp_path: Path,
+) -> None:
+    replay, _prepare = helpers
+    archive = tmp_path / "iniconfig-source.tar.gz"
+    archive.write_bytes(b"reviewed archive bytes")
+    assert replay.archive_bytes(tmp_path, "iniconfig") == archive.read_bytes()
+    target = tmp_path / "other"
+    target.write_bytes(archive.read_bytes())
+    archive.unlink()
+    archive.symlink_to(target)
+    with pytest.raises(OSError, check=lambda error: error.errno == errno.ELOOP):
+        replay.archive_bytes(tmp_path, "iniconfig")
+
+
+def test_task_cannot_supply_an_archive_path(
+    helpers: tuple[ModuleType, ModuleType],
+    tmp_path: Path,
+) -> None:
+    replay, _prepare = helpers
+    with pytest.raises(ValueError, match="reviewed task"):
+        replay.prepare_task(
+            tmp_path,
+            {"key": "iniconfig", "archive": {"file": "other-source.tar.gz"}},
+            tmp_path,
+            {},
+            {},
+        )

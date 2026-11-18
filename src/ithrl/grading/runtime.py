@@ -107,6 +107,11 @@ async def _execute(command: list[str], *, capture: bool = False) -> tuple[int, b
             os.killpg(process.pid, signal.SIGKILL)
         try:
             async with asyncio.timeout(GRADING_CLEANUP_SECONDS):
+                # Discard remaining output in bounded chunks so the pipe transport
+                # reaches EOF before the event loop can close.
+                if process.stdout is not None:
+                    while await process.stdout.read(MAX_REPORT_BYTES + 1):
+                        pass
                 await process.wait()
         except TimeoutError:
             raise GradingError("grading-cleanup-failed") from None

@@ -22,11 +22,11 @@ def replay() -> ModuleType:
 
 
 def test_archive_is_bounded_before_reading(replay: ModuleType, tmp_path: Path) -> None:
-    archive = tmp_path / "oversized.tar"
+    archive = tmp_path / "iniconfig-source.tar.gz"
     with archive.open("wb") as stream:
         stream.truncate(replay.MAX_ARCHIVE_BYTES + 1)
     with pytest.raises(ValueError, match="compressed-size limit"):
-        replay.archive_bytes(archive)
+        replay.archive_bytes(tmp_path, "iniconfig")
 
 
 def test_environment_probe_ignores_pth_startup_code(replay: ModuleType, tmp_path: Path) -> None:
