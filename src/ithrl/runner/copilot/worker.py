@@ -23,6 +23,7 @@ _MAX_MODEL_BYTES = 1024
 _MAX_SHELL_ACTIONS = 32  # BehaviorObservation limit; worker runs without project imports.
 _MAX_TOOL_ID_LENGTH = 512
 _MAX_CATALOG_ATTEMPTS = 3
+_MAX_METADATA_REQUESTS = 2
 _SESSION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,255}$")
 
 # Explicitly interpreted event classes. Session/model telemetry and sandbox decisions
@@ -202,6 +203,28 @@ def _is_model_catalog_request(request: Any, context: Any) -> bool:
     )
 
 
+def _is_session_metadata_request(request: Any, context: Any, *, session_id: str) -> bool:
+    """Recognize managed model metadata needed before native context proof."""
+
+    url = urlsplit(str(request.url))
+    return (
+        request.method == "GET"
+        and not request.content
+        and context.session_id == session_id
+        and context.parent_agent_id is None
+        and context.transport == "http"
+        and url.scheme == "https"
+        and url.username is None
+        and url.password is None
+        and url.port in {None, 443}
+        and url.hostname is not None
+        and (url.hostname == "api.githubcopilot.com" or url.hostname.endswith(".githubcopilot.com"))
+        and url.path == "/meta"
+        and not url.query
+        and not url.fragment
+    )
+
+
 def _is_certificate_error(error: BaseException) -> bool:
     seen: set[int] = set()
     current: BaseException | None = error
@@ -232,7 +255,11 @@ class ForwardGate:
 
 
 def _resume_options(
-    request: dict[str, Any], *, on_event: Any, on_permission_request: Any
+    request: dict[str, Any],
+    *,
+    on_event: Any,
+    on_permission_request: Any,
+    github_token: str | None = None,
 ) -> dict[str, Any]:
     # Empty mode already disables hooks, host Git, skills, instruction discovery,
     # session telemetry and session storage. Empty extension collections are omitted
@@ -254,6 +281,8 @@ def _resume_options(
         "additional_directories": [],
         "allow_transcript_recovery": False,
         "continue_pending_work": False,
+        # Avoid native resume bookkeeping without modifying the restored evidence.
+        "suppress_resume_event": True,
         "autopilot": {"continuation_enabled": False, "max_continues": 0},
         "streaming": False,
         "capi": {"enable_web_socket_responses": False},
@@ -262,10 +291,14 @@ def _resume_options(
     }
     if request["systemMessage"] is not None:
         options["system_message"] = {"mode": "replace", "content": request["systemMessage"]}
+    if github_token is not None:
+        options["github_token"] = github_token
     return options
 
 
-async def _run_session(executable: Path, request: dict[str, Any]) -> int:
+async def _run_session(
+    executable: Path, request: dict[str, Any], *, github_token: str | None = None
+) -> int:
     # -S disables site initialization and all ambient .pth/import hooks. Only the
     # explicitly mounted installed SDK requirements enter the import search path.
     sys.path.insert(0, f"{_SANDBOX_ROOT}/runner/sdk-packages")
@@ -284,6 +317,7 @@ async def _run_session(executable: Path, request: dict[str, Any]) -> int:
     gate = ForwardGate()
     catalog_gate = ForwardGate()
     catalog_requests_started = 0
+    metadata_requests_started = 0
     done = asyncio.Event()
     policy_proof = asyncio.Event()
     context_proof = asyncio.Event()
@@ -319,7 +353,7 @@ async def _run_session(executable: Path, request: dict[str, Any]) -> int:
         @override
         async def send_request(self, request: Any, ctx: Any) -> Any:
             nonlocal failed, dispatch_digest, failure_stage, failure_reason, failure_code
-            nonlocal catalog_requests_started
+            nonlocal catalog_requests_started, metadata_requests_started
             if denied_target:
                 # The selected shell request is already visible and denied. A
                 # native follow-up is outside this observation and never forwarded.
@@ -331,6 +365,7 @@ async def _run_session(executable: Path, request: dict[str, Any]) -> int:
                 gate.reserve()
                 raise WorkerError("Copilot attempted more than one physical inference request")
             catalog = False
+            metadata = False
             try:
                 await policy_proof.wait()
                 if failed or not effective_policy_verified:
@@ -351,14 +386,24 @@ async def _run_session(executable: Path, request: dict[str, Any]) -> int:
                             if _is_certificate_error(error) or index == _MAX_CATALOG_ATTEMPTS - 1:
                                 raise
                             await asyncio.sleep(0.5 * 2**index)
-                await context_proof.wait()
-                if failed or not system_message_verified or not model_verified:
-                    raise WorkerError("Copilot native inference context is unverified")
+                metadata = _is_session_metadata_request(
+                    request, ctx, session_id=settings["sessionId"]
+                )
+                if metadata:
+                    if gate.forwarded or metadata_requests_started >= _MAX_METADATA_REQUESTS:
+                        raise WorkerError("Copilot exceeded its session metadata request limit")
+                    # Session metadata precedes model.call_start on cold resume.
+                    # Each GET is forwarded once; only /models permits recovery.
+                    metadata_requests_started += 1
+                    return await super().send_request(request, ctx)
                 content = _managed_request(
                     request,
                     ctx,
                     session_id=settings["sessionId"],
                 )
+                await context_proof.wait()
+                if failed or not system_message_verified or not model_verified:
+                    raise WorkerError("Copilot native inference context is unverified")
                 if not gate.reserve():
                     raise WorkerError("Copilot attempted more than one physical inference request")
                 dispatch_digest = _digest(content)
@@ -374,7 +419,13 @@ async def _run_session(executable: Path, request: dict[str, Any]) -> int:
             except Exception as error:
                 failed = True
                 if failure_stage is None:
-                    failure_stage = "model-catalog" if catalog else "inference-request"
+                    failure_stage = (
+                        "model-catalog"
+                        if catalog
+                        else "session-metadata"
+                        if metadata
+                        else "inference-request"
+                    )
                     failure_reason = _failure_reason(error)
                     if catalog:
                         if _is_certificate_error(error):
@@ -383,6 +434,13 @@ async def _run_session(executable: Path, request: dict[str, Any]) -> int:
                             failure_code = "model-catalog-connection"
                         else:
                             failure_code = "model-catalog-failed"
+                    elif metadata:
+                        if _is_certificate_error(error):
+                            failure_code = "session-metadata-tls"
+                        elif isinstance(error, (httpx.ConnectError, httpx.ConnectTimeout)):
+                            failure_code = "session-metadata-connection"
+                        else:
+                            failure_code = "session-metadata-failed"
                     elif not effective_policy_verified:
                         failure_code = "managed-policy-unverified"
                     elif not system_message_verified or not model_verified:
@@ -558,7 +616,12 @@ async def _run_session(executable: Path, request: dict[str, Any]) -> int:
     try:
         await client.start()
         stage = "resume-session"
-        options = _resume_options(request, on_event=on_event, on_permission_request=deny_permission)
+        options = _resume_options(
+            request,
+            on_event=on_event,
+            on_permission_request=deny_permission,
+            github_token=github_token,
+        )
         # Native history can carry prior grants. Host managed policy composes
         # restrictively with them and applies before any tool permission callback.
         options["managed_settings"] = ManagedSettings(
@@ -593,6 +656,7 @@ async def _run_session(executable: Path, request: dict[str, Any]) -> int:
                 "schema_version": 1,
                 "provider_calls_started": gate.forwarded,
                 "catalog_requests_started": catalog_requests_started,
+                "metadata_requests_started": metadata_requests_started,
                 "requests_rejected": gate.rejected,
                 "websockets_rejected": gate.websockets_rejected,
                 "permissions_denied": permission_denials,
@@ -636,7 +700,17 @@ def main(argv: list[str] | None = None) -> int:
         executable = Path(_SANDBOX_ROOT) / "runner" / "copilot"
         if not executable.is_file() or executable.stat().st_mode & 0o111 == 0:
             raise WorkerError("Copilot executable is unavailable")
-        return asyncio.run(_run_session(executable, request))
+        # The parent isolates exactly one selected credential source. Empty SDK
+        # mode needs an explicit session token; omission keeps managed-login auth.
+        github_token = next(
+            (
+                value
+                for name in ("COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN")
+                if (value := os.environ.get(name))
+            ),
+            None,
+        )
+        return asyncio.run(_run_session(executable, request, github_token=github_token))
     except (WorkerError, OSError, ValueError):
         sys.stderr.write("Copilot native SDK execution failed\n")
         return 70

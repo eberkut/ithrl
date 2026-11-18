@@ -331,7 +331,16 @@ def _verify_notification_contract(
 def _verify_response_contract(documents: dict[str, dict[str, object]]) -> None:
     _require_properties(
         documents["v2/ThreadStartResponse.json"],
-        {"model", "serviceTier", "thread"},
+        {
+            "approvalPolicy",
+            "approvalsReviewer",
+            "cwd",
+            "model",
+            "modelProvider",
+            "sandbox",
+            "serviceTier",
+            "thread",
+        },
         "thread/start",
     )
     thread_start = documents["v2/ThreadStartResponse.json"]

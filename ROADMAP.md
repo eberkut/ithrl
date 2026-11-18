@@ -47,12 +47,12 @@ and release evidence.
 Ablation, alternative reproducers, interaction analysis and statistically confirmed single-removal
 minimality remain deferred beyond v0.3.
 
-## Awaiting release: v0.4 preparation and passive compaction inspection
+## Completed: v0.4 preparation and passive compaction inspection
 
 [Experiment preparation](https://github.com/eberkut/ithrl/issues/48) is implemented in
 [PR #66](https://github.com/eberkut/ithrl/pull/66), keeping statistical choices, source identities
-and execution limits explicit. It is merged on main and awaits release in
-[v0.4.0](https://github.com/eberkut/ithrl/milestone/3).
+and execution limits explicit. It is published in
+[v0.4.0](https://github.com/eberkut/ithrl/releases/tag/v0.4.0).
 
 Passive compaction inspection for ordinary Codex and Copilot evidence is implemented under #15,
 with implementation in #64 and qualification in #65. Its
@@ -64,42 +64,64 @@ operations and equal or changed captured results without inferring avoidable wor
 savings.
 
 The project-wide documentation review is complete in
-[PR #72](https://github.com/eberkut/ithrl/pull/72). All assigned v0.4 issues are complete on main;
-release preparation and publication remain. The investigations below have no release assignment and
-do not expand v0.4 scope.
+[PR #72](https://github.com/eberkut/ithrl/pull/72). All assigned issues in the
+[v0.4.0 milestone](https://github.com/eberkut/ithrl/milestone/3) are complete.
 
 | Scope | Issue | Expected outcome |
 | --- | --- | --- |
-| Completed on main; awaiting v0.4 | [#48: experiment preparation](https://github.com/eberkut/ithrl/issues/48) | Generate and inspect private native reduction configurations without copying target/oracle blocks or digests by hand |
-| Completed on main; awaiting v0.4 | [#15: passive compaction inspection](https://github.com/eberkut/ithrl/issues/15) | Useful provider-free reports for both harnesses, with explicit operation/result relations and interpretation limits |
-| Completed on main; awaiting v0.4 | [#64: implement passive inspection](https://github.com/eberkut/ithrl/issues/64) | Bounded source projections, matching/report contracts and `inspect reacquire`; experimental reconstruction support is unchanged |
-| Qualification complete; awaiting v0.4 | [#65: qualify passive inspection](https://github.com/eberkut/ithrl/issues/65) | Ordinary sources, counterexamples and both installed-artifact origins validated; worked interpretation recorded |
-| Completed on main; awaiting v0.4 | [#67: performance and simplification](https://github.com/eberkut/ithrl/issues/67) | Project-wide performance fixes, permanent local-workload benchmarks and durable coding guidance, merged in [PR #71](https://github.com/eberkut/ithrl/pull/71) |
-| Completed on main; awaiting v0.4 | [#68: documentation and writing guidance](https://github.com/eberkut/ithrl/issues/68) | Project-wide documentation corrections and concise writing guidance, merged in [PR #72](https://github.com/eberkut/ithrl/pull/72) |
-| Research; no release assigned | [#16: broader workloads and costs](https://github.com/eberkut/ithrl/issues/16) | Measure source eligibility, useful developer conclusions, reliability and full costs, including unsuccessful sources and runs |
-| Candidate; no release assigned | [#13: comparative debugging](https://github.com/eberkut/ithrl/issues/13) | A comparability contract, paired workloads, interaction example and bounded validation proposal; decide whether to implement or defer |
-| Candidate; no release assigned | [#73: sampled inspection metadata](https://github.com/eberkut/ithrl/issues/73) | Persist reconstruction and policy metadata bound to plan identity for offline reports, distinguishing declarations from recorded attempt evidence |
-| Assessment; no release assigned | [#74: tool-output interventions](https://github.com/eberkut/ithrl/issues/74) | Assess native output visibility, source bindings and a useful localized intervention before proposing a new edit domain |
-| Deferred; no release assigned | [#14: additional harnesses](https://github.com/eberkut/ithrl/issues/14) | Assess Claude Code, OpenCode and Pi before choosing an integration order and qualification scope |
-| Deferred; no release assigned | [#18: portable archives and privacy](https://github.com/eberkut/ithrl/issues/18) | Define a useful sharing workflow, archive format and deliberate privacy review before implementation |
-| Research; no release assigned | [#17: baseline sharing](https://github.com/eberkut/ithrl/issues/17) | Reconsider reuse only if useful complete-workflow savings justify the statistical and recovery complexity |
-| Deferred research; no release assigned | [#61: ablation](https://github.com/eberkut/ithrl/issues/61) | Define retained-reproducer and full-original ablation, with distinct baselines and justified claims |
-| Deferred research; no release assigned | [#62: alternative reproducers and interactions](https://github.com/eberkut/ithrl/issues/62) | Assess useful differences between preserving contexts, redundancy and joint effects, with bounded discovery and confirmation |
-| Deferred research; no release assigned | [#63: confirmed single-removal minimality](https://github.com/eberkut/ithrl/issues/63) | Define the neighbor family, statistical claim, error allocation and complete comparison budget |
+| Released in v0.4 | [#48: experiment preparation](https://github.com/eberkut/ithrl/issues/48) | Generate and inspect private native reduction configurations without copying target/oracle blocks or digests by hand |
+| Released in v0.4 | [#15: passive compaction inspection](https://github.com/eberkut/ithrl/issues/15) | Useful provider-free reports for both harnesses, with explicit operation/result relations and interpretation limits |
+| Released in v0.4 | [#64: implement passive inspection](https://github.com/eberkut/ithrl/issues/64) | Bounded source projections, matching/report contracts and `inspect reacquire`; experimental reconstruction support is unchanged |
+| Released in v0.4 | [#65: qualify passive inspection](https://github.com/eberkut/ithrl/issues/65) | Ordinary sources, counterexamples and both installed-artifact origins validated; worked interpretation recorded |
+| Released in v0.4 | [#67: performance and simplification](https://github.com/eberkut/ithrl/issues/67) | Project-wide performance fixes, permanent local-workload benchmarks and durable coding guidance, merged in [PR #71](https://github.com/eberkut/ithrl/pull/71) |
+| Released in v0.4 | [#68: documentation and writing guidance](https://github.com/eberkut/ithrl/issues/68) | Project-wide documentation corrections and concise writing guidance, merged in [PR #72](https://github.com/eberkut/ithrl/pull/72) |
+
+## Planned: v0.5 investigation reports and comparative debugging
+
+The [v0.5.0 milestone](https://github.com/eberkut/ithrl/milestone/4) groups broader
+ordinary-workflow evidence, public benchmark feasibility, self-describing sampled reports, cost
+estimates, a first-party agent skill and comparative-debugging design. A qualified first comparison
+workflow is the intended feature, conditional on the design evidence.
+Implementation and qualification issues follow an implement decision; design completion alone does
+not establish a shipped `compare` command. Record an explicit release-scope decision if comparison
+is deferred.
+
+| Scope | Issue | Expected outcome |
+| --- | --- | --- |
+| Measured; publication pending | [#16: broader workloads and costs](https://github.com/eberkut/ithrl/issues/16) | Publish the frozen cohort's limiting outcome, selection funnel, developer conclusions, recorded costs and explicit gaps |
+| Committed design and feasibility | [#81: public debugging benchmark](https://github.com/eberkut/ithrl/issues/81) | Review a small public task package, graders and context-dependence controls; assess bounded Codex/Copilot feasibility and recommend adopt, revise or reject |
+| Committed implementation | [#73: sampled inspection metadata](https://github.com/eberkut/ithrl/issues/73) | Offline reports explain digest-bound reconstruction and policy declarations separately from recorded attempt evidence |
+| Committed implementation | [#77: model cost estimates](https://github.com/eberkut/ithrl/issues/77) | Offline pricing with genai-prices, usage/rate provenance and explicit coverage; estimates and scenarios remain distinct from actual billing |
+| Committed implementation | [#78: first-party agent skill](https://github.com/eberkut/ithrl/issues/78) | One skill source distributed through Library Skills and Vercel Skills, with Python artifact and installed-copy validation |
+| Committed design | [#13: comparative debugging](https://github.com/eberkut/ithrl/issues/13) | A comparability contract, ordinary paired evidence, interaction example and bounded validation proposal; decide whether to implement or defer |
+| Committed assessment | [#74: tool-output interventions](https://github.com/eberkut/ithrl/issues/74) | Establish native output visibility, source bindings and a useful localized intervention before deciding whether to add an edit domain |
 
 ## Next investigations
 
-Start with #16's provider-free workload preparation for both harnesses. Freeze debugging questions
-and selection criteria before choosing successful examples; retain exclusions and unsuccessful
-investigations.
-[ctx](https://github.com/ctxrs/ctx/blob/33ba4645b620fd89d138c6db1fabf33096a0ee16/docs/search.md) may
-help locate sessions, but ithrl must independently snapshot and validate native evidence. Measure
-useful developer conclusions alongside reduction, reliability and cost.
+[#16's frozen cohort](https://github.com/eberkut/ithrl/issues/16) completed native controls and
+approved measurements. Both primary workloads calibrated, but their selected fields were removed
+in coarse search; neither reached fine search or fresh confirmation. Canonical report publication
+remains pending. Its retained evidence informs #13 and #74 without establishing either capability.
 
-Use the initial cohort to inform #13's good/bad-case comparison design and #74's tool-output
-assessment; neither must wait for the entire study. #74 must distinguish original output,
-delivered representation and saved evidence before proposing edits. #73's reporting improvement
-is independent. Execution and release scope remain separate decisions in the owning issues.
+[#81](https://github.com/eberkut/ithrl/issues/81) assesses public constructed tasks with real native
+traces, independently checked outcomes and context-dependence controls. Start with Codex and
+Copilot; reusable tasks may later inform #14's additional integrations. Keep constructed-task
+evidence distinct from ordinary-workflow usefulness and statistical simulations. Freeze selection,
+graders, usefulness criteria and cost recording before paid observations; retain unsuccessful
+outcomes. A large corpus and additional harness support require separate decisions.
+
+[ctx](https://github.com/ctxrs/ctx/blob/33ba4645b620fd89d138c6db1fabf33096a0ee16/docs/search.md)
+can help locate further sources, but ithrl must independently snapshot and validate native
+evidence. Future ordinary cohorts must freeze selection rules before inspection and measure useful
+developer conclusions alongside reduction, reliability and cost.
+
+Neither #13 nor #74 waits for #16's publication or #81's completion. #73, #77 and #78 are
+independent implementation items. Cost estimates need verified usage and pricing coverage. The agent
+skill covers implemented workflows and must follow later release decisions. #74 must distinguish
+original output, delivered representation and saved evidence before proposing edits. Its v0.5
+commitment is the assessment; tool-output implementation requires a separate decision and need not
+block comparison within existing edit domains. Native probes and provider execution require separate
+approval.
 
 The review of
 [SkillOpt's training method](https://github.com/microsoft/SkillOpt/blob/45f65ca04f5f6713bca7b9797b495696ba812751/docs/guide/training-loop.md)
@@ -110,6 +132,19 @@ output-size results do not establish ithrl's debugging usefulness. No search eng
 optimizer is planned. Fuzzing already accepts supplied `stale_text`; #16 should establish a need for
 distinct proposals tied to specific fields before creating further work. Passive inspection retains
 its qualified exact-comparison contract; decoded or normalized matching needs a separate policy.
+
+## Deferred work
+
+These issues remain outside v0.5 without a release assignment.
+
+| Scope | Issue | Expected outcome |
+| --- | --- | --- |
+| Deferred; no release assigned | [#14: additional harnesses](https://github.com/eberkut/ithrl/issues/14) | Assess Claude Code, OpenCode and Pi before choosing an integration order and qualification scope |
+| Deferred; no release assigned | [#18: portable archives and privacy](https://github.com/eberkut/ithrl/issues/18) | Define a useful sharing workflow, archive format and deliberate privacy review before implementation |
+| Research; no release assigned | [#17: baseline sharing](https://github.com/eberkut/ithrl/issues/17) | Reconsider reuse only if useful complete-workflow savings justify the statistical and recovery complexity |
+| Deferred research; no release assigned | [#61: ablation](https://github.com/eberkut/ithrl/issues/61) | Define retained-reproducer and full-original ablation, with distinct baselines and justified claims |
+| Deferred research; no release assigned | [#62: alternative reproducers and interactions](https://github.com/eberkut/ithrl/issues/62) | Assess useful differences between preserving contexts, redundancy and joint effects, with bounded discovery and confirmation |
+| Deferred research; no release assigned | [#63: confirmed single-removal minimality](https://github.com/eberkut/ithrl/issues/63) | Define the neighbor family, statistical claim, error allocation and complete comparison budget |
 
 ## Release history and current scope
 

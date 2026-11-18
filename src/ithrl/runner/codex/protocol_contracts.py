@@ -79,6 +79,7 @@ SUPPORTED_NOTIFICATION_METHODS = frozenset(
         *THREAD_PASSIVE_NOTIFICATIONS,
         "account/rateLimits/updated",
         "account/updated",
+        "configWarning",
         "error",
         "item/completed",
         "item/started",

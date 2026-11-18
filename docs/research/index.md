@@ -9,6 +9,7 @@ capabilities. A research result can precede a supported integration.
 | --- | --- |
 | [Feasibility and portability](feasibility.md) | Historical evidence and reconstruction mechanisms across four harnesses, including negative and unassessed paths |
 | [Reduction design](reduction-design.md) | Statistical choices, failed cost/usefulness combinations, fresh confirmation, baseline-sharing alternatives and remaining measurement limits |
+| [Prospective ordinary-workflow cohort](reduction-design.md#prospective-ordinary-workflow-cohort) | Selection funnel, exclusions, field-loss outcomes, recorded inference usage and cost gaps |
 | [Native measurements](../measurements.md) | Synthetic qualification, saved-session outcomes, confirmation, execution failures and measured costs |
 | [Ordinary-session investigation](ordinary-session-investigation.md) | A sanitized Codex debugging question, paragraph intervention, fresh confirmation, cost and limits of interpretation |
 | [Passive compaction investigation](passive-compaction-investigation.md) | Ordinary Codex/Copilot repeated and changed captures, source-bound interpretation and provider-free installed-artifact qualification |

@@ -128,6 +128,10 @@ continues without duplicating it as new input. Current preflight reports
 `codex-app-server-inject-checkpoint-v1`; older saved reconstruction profiles require a new
 experiment. The private qualification auditor is not part of the shipped runner.
 
+Codex verifies the returned thread policy and identity before inserting history or starting a
+turn. Startup warnings are retained in private native output. A policy mismatch or a configuration
+warning after verification stops the attempt.
+
 Local operation, permission, isolation and action-denial checks plus calibration determine whether
 a run can proceed. Public support also requires a qualified live workflow for that profile; see
 [supported inputs](https://github.com/eberkut/ithrl/blob/main/README.md#supported-inputs). Versions
