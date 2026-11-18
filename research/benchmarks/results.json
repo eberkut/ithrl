@@ -430,7 +430,7 @@
     "Native traces, credentials, responses and exact private profiles are not distributed; the public package reproduces fixture checks, not retained paid responses."
   ],
   "next_decision": "Use iniconfig as a supplementary constructed evaluation workload; preserve migration-linter as a limiting outcome. Broader tasks, changed profiles, additional harnesses and ordinary-workflow qualification need separate evidence and execution approval.",
-  "tasks_sha256": "fd7c22311078783121be7598c8eb1d32b23fdbfa22f78922a50aaff98dddd6af",
+  "native_tasks_sha256": "fd7c22311078783121be7598c8eb1d32b23fdbfa22f78922a50aaff98dddd6af",
   "maintenance": [
     "Review pinned task source, dependency versions and licenses when updating the package.",
     "Replay correct alternatives and negative grading fixtures after source, verifier or grader changes.",

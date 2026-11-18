@@ -61,7 +61,9 @@ class FuzzRunner:
     def fingerprint(self) -> str:
         return "synthetic-fuzz-sampling:1"
 
-    async def run(self, attempt: PreparedAttempt) -> RunResult:
+    async def run(
+        self, attempt: PreparedAttempt, *, runtime_deadline: float | None = None
+    ) -> RunResult:
         self.calls.append(attempt)
         attempt.evidence.materialize(mutation=attempt.candidate.mutation)
         if self.fail:

@@ -162,8 +162,11 @@ Each suite imports the patched code in the interpreter that runs assertions and 
 Read-only mounts protect verifier files; they do not prevent the candidate from reading those files
 or altering in-process reporting. Grades assume cooperative repairs that leave the verifier and its
 reporting intact. The report nonce checks association, not authenticity against candidate code.
+Preflight and pre-dispatch checks start an inert grader namespace with a timeout of at most two
+seconds; they import no task code and make no provider calls.
 
-Grading shares the native attempt deadline. The grade, response digest and suite counts stay with
+An absolute native deadline reaches the runtime's prelaunch checks, reserving time for grading and
+cleanup without changing the frozen attempt. The grade, response digest and suite counts stay with
 the completed attempt. Rejected or failing repairs are nonmatches. Operational grading errors retain
 the native request charge and stop collection without entering behavioral counts or authorizing
 another inference. Under that cooperative assumption, task grades record the declared test

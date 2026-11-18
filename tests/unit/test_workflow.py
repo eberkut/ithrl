@@ -124,7 +124,9 @@ def test_prepare_checks_original_reconstruction_without_executing_a_runner(
                 refusals.append(error.code.value)
                 raise CopilotMaterializationError(error.code, "private-native-diagnostic") from None
 
-        async def run(self, attempt: PreparedAttempt) -> RunResult:
+        async def run(
+            self, attempt: PreparedAttempt, *, runtime_deadline: float | None = None
+        ) -> RunResult:
             pytest.fail("preparation must not execute a runner")
 
     runner = AdmissionRunner()
@@ -210,7 +212,9 @@ def test_concurrent_measurements_keep_both_completed_runner_results(tmp_path: Pa
         def fingerprint(self) -> str:
             return prepared.runner.fingerprint
 
-        async def run(self, attempt: PreparedAttempt) -> RunResult:
+        async def run(
+            self, attempt: PreparedAttempt, *, runtime_deadline: float | None = None
+        ) -> RunResult:
             self.calls += 1
             if self.calls == 2:
                 self._both_started.set()
@@ -289,7 +293,9 @@ def test_observation_enforces_the_shared_wall_time_limit(
         fingerprint = prepared.runner.fingerprint
         capability_profile = prepared.runner.capability_profile
 
-        async def run(self, attempt: PreparedAttempt) -> RunResult:
+        async def run(
+            self, attempt: PreparedAttempt, *, runtime_deadline: float | None = None
+        ) -> RunResult:
             try:
                 await asyncio.sleep(2)
             except asyncio.CancelledError:
@@ -362,7 +368,9 @@ def test_cancellation_grace_does_not_extend_the_execution_deadline(tmp_path: Pat
         def fingerprint(self) -> str:
             return fingerprint
 
-        async def run(self, attempt: PreparedAttempt) -> RunResult:
+        async def run(
+            self, attempt: PreparedAttempt, *, runtime_deadline: float | None = None
+        ) -> RunResult:
             try:
                 await asyncio.sleep(10)
             except asyncio.CancelledError:
@@ -436,7 +444,9 @@ def test_incomplete_provider_attempt_blocks_automatic_retry(
         fingerprint = "ambiguous-test"
         capability_profile = profile
 
-        async def run(self, attempt: PreparedAttempt) -> RunResult:
+        async def run(
+            self, attempt: PreparedAttempt, *, runtime_deadline: float | None = None
+        ) -> RunResult:
             del attempt
             nonlocal calls
             calls += 1
@@ -527,7 +537,9 @@ def test_inconsistent_provider_accounting_blocks_automatic_retry(
         fingerprint = "accounting-test"
         capability_profile = profile
 
-        async def run(self, attempt: PreparedAttempt) -> RunResult:
+        async def run(
+            self, attempt: PreparedAttempt, *, runtime_deadline: float | None = None
+        ) -> RunResult:
             nonlocal calls
             calls += 1
             return RunResult(
@@ -617,7 +629,9 @@ def test_partial_error_effects_block_retry_and_are_reclassified(
         fingerprint = prepared.runner.fingerprint
         capability_profile = prepared.runner.capability_profile
 
-        async def run(self, attempt: PreparedAttempt) -> RunResult:
+        async def run(
+            self, attempt: PreparedAttempt, *, runtime_deadline: float | None = None
+        ) -> RunResult:
             del attempt
             nonlocal calls
             calls += 1
@@ -667,7 +681,9 @@ def test_clean_pre_dispatch_failure_can_be_retried(tmp_path: Path) -> None:
         fingerprint = prepared.runner.fingerprint
         capability_profile = prepared.runner.capability_profile
 
-        async def run(self, attempt: PreparedAttempt) -> RunResult:
+        async def run(
+            self, attempt: PreparedAttempt, *, runtime_deadline: float | None = None
+        ) -> RunResult:
             nonlocal calls
             calls += 1
             if calls == 1:
@@ -731,7 +747,9 @@ def test_measurement_refuses_identity_or_capability_change_after_preflight(
             else prepared.runner.capability_profile
         )
 
-        async def run(self, attempt: PreparedAttempt) -> RunResult:
+        async def run(
+            self, attempt: PreparedAttempt, *, runtime_deadline: float | None = None
+        ) -> RunResult:
             pytest.fail("mismatched measurement inputs must fail before execution")
 
     store = ObservationStore(tmp_path / "changed-profile.sqlite")
@@ -771,7 +789,9 @@ def test_runner_timeout_error_is_recorded_as_an_internal_failure(tmp_path: Path)
         fingerprint = prepared.runner.fingerprint
         capability_profile = prepared.runner.capability_profile
 
-        async def run(self, attempt: PreparedAttempt) -> RunResult:
+        async def run(
+            self, attempt: PreparedAttempt, *, runtime_deadline: float | None = None
+        ) -> RunResult:
             raise TimeoutError("private-timeout-detail")
 
     store = ObservationStore(tmp_path / "internal-timeout.sqlite")
@@ -809,7 +829,9 @@ def test_cancelled_attempt_is_persisted_before_cancellation_propagates(tmp_path:
         fingerprint = prepared.runner.fingerprint
         capability_profile = prepared.runner.capability_profile
 
-        async def run(self, attempt: PreparedAttempt) -> RunResult:
+        async def run(
+            self, attempt: PreparedAttempt, *, runtime_deadline: float | None = None
+        ) -> RunResult:
             del attempt
             raise asyncio.CancelledError
 
@@ -847,7 +869,9 @@ def test_cancelled_attempt_preserves_runner_cleanup_evidence(tmp_path: Path) -> 
         fingerprint = prepared.runner.fingerprint
         capability_profile = prepared.runner.capability_profile
 
-        async def run(self, attempt: PreparedAttempt) -> RunResult:
+        async def run(
+            self, attempt: PreparedAttempt, *, runtime_deadline: float | None = None
+        ) -> RunResult:
             raise RunnerCancelled(
                 RunnerError(
                     RunnerErrorCode.CANCELLED,

@@ -25,6 +25,7 @@ from ithrl.grading.contracts import (
     TestSuite,
     current_implementation_digest,
 )
+from ithrl.path_safety import validate_directory_chain
 
 
 def repair_patch(
@@ -140,11 +141,14 @@ async def replay(
 
 
 def prepare(cache: Path, python: Path, output: Path) -> dict[str, Any]:
+    validate_directory_chain(output)
+    if not output.parent.is_dir():
+        raise ValueError("grading output requires an existing parent directory")
     task_bytes = (ROOT / "tasks.json").read_bytes()
     data = json.loads(task_bytes)
     environment_digest = bind_environment(python.parent.parent)
     _, actual_environment = environment(python, data["environment"])
-    output.mkdir(mode=0o700, parents=True, exist_ok=False)
+    output.mkdir(mode=0o700)
     (output / "patches").mkdir(mode=0o700)
     receipt: dict[str, Any] = {
         "tasks_sha256": hashlib.sha256(task_bytes).hexdigest(),

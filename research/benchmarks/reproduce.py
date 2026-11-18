@@ -27,16 +27,50 @@ ARCHIVE_NAMES = {
 }
 MAX_ARCHIVE_BYTES = 20 * 1024 * 1024
 MAX_SOURCE_BYTES = 50 * 1024 * 1024
-CONTROL_SUITE = """
+UNITTEST_SUITE = """
 import sys
 import unittest
 
+
+class ReferenceResult(unittest.TextTestResult):
+    fixture_error = False
+
+    def _classify(self, error, method):
+        body = getattr(method, '__code__', None)
+        trace = error[2]
+        while trace is not None:
+            if body is not None and trace.tb_frame.f_code is body:
+                return
+            trace = trace.tb_next
+        self.fixture_error = True
+
+    def addError(self, test, error):
+        self._classify(error, getattr(type(test), '_callTestMethod', None))
+        super().addError(test, error)
+
+    def addFailure(self, test, error):
+        self._classify(error, getattr(type(test), '_callTestMethod', None))
+        super().addFailure(test, error)
+
+    def addSubTest(self, test, subtest, error):
+        if error is not None:
+            method = getattr(test, test._testMethodName)
+            self._classify(error, method)
+        super().addSubTest(test, subtest, error)
+
+
 loader = unittest.TestLoader()
-suite = loader.discover('/checks', pattern=sys.argv[1])
+if sys.argv[1] == 'discover':
+    suite = loader.discover('/checks', pattern=sys.argv[2])
+else:
+    suite = loader.loadTestsFromNames(sys.argv[2:])
 if loader.errors:
-    sys.stderr.write('Reference control discovery failed\\n')
+    sys.stderr.write('Reference test loading failed\\n')
     sys.exit(2)
-result = unittest.TextTestRunner(verbosity=0).run(suite)
+result = unittest.TextTestRunner(verbosity=0, resultclass=ReferenceResult).run(suite)
+if result.fixture_error:
+    sys.stderr.write('Reference test fixture failed\\n')
+    sys.exit(2)
 sys.exit(0 if result.wasSuccessful() else 1)
 """
 
@@ -69,7 +103,7 @@ def archive_bytes(cache: Path, task_key: str) -> bytes:
         before = os.fstat(stream.fileno())
         if not stat.S_ISREG(before.st_mode) or before.st_size > MAX_ARCHIVE_BYTES:
             raise ValueError("source archive exceeds the compressed-size limit or is not regular")
-        content = stream.read(MAX_ARCHIVE_BYTES + 1)
+        content = stream.read(before.st_size + 1)
         after = os.fstat(stream.fileno())
     if (
         len(content) != before.st_size
@@ -197,7 +231,12 @@ def run_suite(
     }
     for name, value in settings.items():
         command += ["--setenv", name, value]
-    command += ["/env/bin/python", *arguments]
+    invocation = arguments
+    if arguments[:2] == ["-m", "unittest"]:
+        if len(arguments) != 4 or arguments[-1] != "-q":
+            raise ValueError("reference unittest suite has no reviewed fixed invocation")
+        invocation = ["-c", UNITTEST_SUITE, "names", arguments[2]]
+    command += ["/env/bin/python", *invocation]
     result = subprocess.run(  # noqa: S603 - fixed sandbox command; reviewed fixtures only.
         command, capture_output=True, text=True, timeout=30
     )
@@ -300,7 +339,7 @@ def main() -> None:
                 suites = {
                     "official": (task["official_command"], task["official_test_count"]),
                     "independent": (
-                        ["-c", CONTROL_SUITE, check.name],
+                        ["-c", UNITTEST_SUITE, "discover", check.name],
                         task["independent_test_count"],
                     ),
                 }

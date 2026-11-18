@@ -26,7 +26,6 @@ from ithrl.observations import ObservationOutcome, ObservationStore
 from ithrl.runner import (
     PreparedAttempt,
     RunAccounting,
-    Runner,
     RunnerRegistry,
     RunResult,
     prepare_candidate,
@@ -83,6 +82,7 @@ class RecordedRunner:
 
     def __init__(self) -> None:
         self.calls = 0
+        self.runtime_deadline: float | None = None
         self.capability_profile = CapabilityProfile.model_validate(
             {
                 **CapabilityProfile.deterministic_fake().model_dump(),
@@ -95,8 +95,11 @@ class RecordedRunner:
             }
         )
 
-    async def run(self, attempt: PreparedAttempt) -> RunResult:
+    async def run(
+        self, attempt: PreparedAttempt, *, runtime_deadline: float | None = None
+    ) -> RunResult:
         self.calls += 1
+        self.runtime_deadline = runtime_deadline
         return RunResult(
             attempt_id=attempt.attempt_id,
             effective_policy_digest=attempt.safety_policy.digest,
@@ -109,11 +112,13 @@ class RecordedRunner:
 
 
 def _attempt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    def validate(_config: PatchGradingConfig) -> None:
+    def validate(_input: object, *, timeout_seconds: float | None = None) -> None:
         return None
 
     monkeypatch.setattr(preflight, "validate_grading", validate)
+    monkeypatch.setattr(preflight, "validate_grading_runtime", validate)
     monkeypatch.setattr(measurement, "validate_grading", validate)
+    monkeypatch.setattr(measurement, "validate_grading_runtime", validate)
     evidence = extract_inference(
         FIXTURE, inference_call_id="synthetic-ac-001", case_path=tmp_path / "case"
     ).load()
@@ -375,12 +380,48 @@ def test_slow_predispatch_validation_cannot_start_inference_after_the_deadline(
     def slow(_config: PatchGradingConfig) -> None:
         clock[0] += 30
 
+    def probe(_inputs: object, *, timeout_seconds: float) -> None:
+        pytest.fail("grader probe started after input validation exhausted the deadline")
+
     monkeypatch.setattr(measurement, "validate_grading", slow)
+    monkeypatch.setattr(measurement, "validate_grading_runtime", probe)
     store = ObservationStore(tmp_path / "slow-preparation.sqlite")
     with pytest.raises(RunnerExecutionError) as stopped:
         asyncio.run(
             observe_once(runner=runner, identity=prepared.identity, store=store, attempt=attempt)
         )
+    assert runner.calls == 0
+    observation = stopped.value.observation
+    assert observation is not None
+    assert observation.error_category == "timeout"
+    assert observation.attempt_evidence.reason_code == "grading-preparation-timeout"
+    assert observation.attempt_evidence.provider_call_charge(1) == 0
+
+
+def test_predispatch_probe_uses_remaining_preparation_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from types import SimpleNamespace
+
+    runner, prepared, attempt = _attempt(tmp_path, monkeypatch)
+    clock = [0.0]
+    monkeypatch.setattr(measurement, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+
+    def slow(_config: PatchGradingConfig) -> None:
+        clock[0] += 26.75
+
+    def probe(_inputs: object, *, timeout_seconds: float) -> None:
+        assert timeout_seconds == 0.25
+        clock[0] += timeout_seconds
+
+    monkeypatch.setattr(measurement, "validate_grading", slow)
+    monkeypatch.setattr(measurement, "validate_grading_runtime", probe)
+    store = ObservationStore(tmp_path / "slow-probe.sqlite")
+    with pytest.raises(RunnerExecutionError) as stopped:
+        asyncio.run(
+            observe_once(runner=runner, identity=prepared.identity, store=store, attempt=attempt)
+        )
+    assert clock[0] == 27.0
     assert runner.calls == 0
     observation = stopped.value.observation
     assert observation is not None
@@ -416,18 +457,8 @@ def test_native_deadline_uses_only_the_allowance_left_after_preparation_and_grad
             attempt_id=attempt_id,
         )
 
-    budgets: list[float | None] = []
-    original = measurement._run_with_deadlines
-
-    async def run(
-        runner: Runner, attempt: PreparedAttempt, *, wall_time_seconds: float | None = None
-    ) -> RunResult:
-        budgets.append(wall_time_seconds)
-        return await original(runner, attempt, wall_time_seconds=wall_time_seconds)
-
     monkeypatch.setattr(measurement, "validate_grading", slow)
     monkeypatch.setattr(measurement, "grade_response", grade)
-    monkeypatch.setattr(measurement, "_run_with_deadlines", run)
     observed = asyncio.run(
         observe_once(
             runner=runner,
@@ -437,7 +468,8 @@ def test_native_deadline_uses_only_the_allowance_left_after_preparation_and_grad
         )
     )
     assert observed.valid
-    assert budgets == [22.0]  # 30 seconds minus 5 preparation, 1 grading and 2 cleanup.
+    assert runner.runtime_deadline == 27.0  # 30 seconds minus 1 grading and 2 cleanup.
+    assert clock[0] == 5.0  # Five seconds spent preparing leave 22 for the native runner.
 
 
 def test_grading_error_elapsed_time_excludes_native_execution(
@@ -451,8 +483,10 @@ def test_grading_error_elapsed_time_excludes_native_execution(
     monkeypatch.setattr(measurement, "time", SimpleNamespace(monotonic=lambda: clock[0]))
     original = runner.run
 
-    async def native(prepared_attempt: PreparedAttempt) -> RunResult:
-        result = await original(prepared_attempt)
+    async def native(
+        prepared_attempt: PreparedAttempt, *, runtime_deadline: float | None = None
+    ) -> RunResult:
+        result = await original(prepared_attempt, runtime_deadline=runtime_deadline)
         clock[0] += 5
         return result
 

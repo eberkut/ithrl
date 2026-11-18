@@ -543,7 +543,9 @@ def test_source_backed_candidate_retains_native_evidence_without_materializing_i
         fingerprint = "source-candidate-test"
         capability_profile = profile
 
-        async def run(self, prepared_attempt: PreparedAttempt) -> RunResult:
+        async def run(
+            self, prepared_attempt: PreparedAttempt, *, runtime_deadline: float | None = None
+        ) -> RunResult:
             assert prepared_attempt.candidate.materialization == "source-backed"
             assert prepared_attempt.evidence.source_artifacts
             return RunResult(

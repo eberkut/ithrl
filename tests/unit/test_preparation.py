@@ -434,13 +434,15 @@ def test_copilot_shell_whole_record_remains_supported(tmp_path: Path) -> None:
         )
 
 
+@pytest.mark.parametrize("runtime_available", [True, False])
 def test_graded_receipt_overrides_only_the_extracted_response_predicate(
     recorded_case: tuple[CaseEvidence, NativePreparationReceipt],
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    runtime_available: bool,
 ) -> None:
     import ithrl.execution.preflight as preflight
-    from ithrl.grading import PatchGradingConfig
+    from ithrl.grading import GradingError, PatchGradingConfig
 
     evidence, receipt = recorded_case
     default = parse_experiment_toml(evidence.default_experiment)
@@ -452,10 +454,19 @@ def test_graded_receipt_overrides_only_the_extracted_response_predicate(
         environment_digest="b" * 64,
     )
 
-    def validate_fixture(_config: PatchGradingConfig) -> None:
-        pass
+    inputs = object()
+
+    def validate_fixture(config: PatchGradingConfig) -> object:
+        assert config == grading
+        return inputs
+
+    def probe_fixture(validated_inputs: object) -> None:
+        assert validated_inputs is inputs
+        if not runtime_available:
+            raise GradingError("grading-runtime-unavailable")
 
     monkeypatch.setattr(preflight, "validate_grading", validate_fixture)
+    monkeypatch.setattr(preflight, "validate_grading_runtime", probe_fixture)
     source = receipt.source_plan
     calibration = SampledExperimentDefinition(
         target=FinalResponseTarget(),
@@ -475,6 +486,11 @@ def test_graded_receipt_overrides_only_the_extracted_response_predicate(
         safety_policy=source.safety_policy,
         resource_limits=source.resource_limits,
     )
+    if not runtime_available:
+        assert not resolved.ready
+        assert resolved.plan is None
+        assert [issue.code for issue in resolved.issues] == ["grading-unavailable"]
+        return
     assert resolved.ready
     assert resolved.plan is not None
     graded_receipt = NativePreparationReceipt.create(

@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import signal
+import subprocess
 import tempfile
 import time
 from collections import deque
@@ -32,6 +33,7 @@ from ithrl.grading.contracts import (
 
 MAX_RESPONSE_BYTES = 64 * 1024
 MAX_REPORT_BYTES = 4096
+RUNTIME_STARTUP_TIMEOUT_SECONDS = 2
 
 
 def _patch_text(response: str | None) -> str | None:
@@ -81,6 +83,43 @@ def _namespace(source: Path, *, writable: bool) -> list[str]:
     command += ["--setenv", "PYTHONDONTWRITEBYTECODE", "1"]
     command += ["--setenv", "PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1"]
     return command
+
+
+def _isolated_python(inputs: ValidatedGrading) -> list[str]:
+    return [
+        "--remount-ro",
+        "/dev",
+        "--remount-ro",
+        "/",
+        f"/usr/bin/python{inputs.python_version}",
+        "-I",
+        "-S",
+    ]
+
+
+def validate_grading_runtime(
+    inputs: ValidatedGrading, *, timeout_seconds: float = RUNTIME_STARTUP_TIMEOUT_SECONDS
+) -> None:
+    """Start the configured grader namespace without loading task files or packages."""
+
+    if not timeout_seconds > 0:
+        raise GradingError("grading-runtime-unavailable")
+    try:
+        with tempfile.TemporaryDirectory(prefix="ithrl-grade-probe-") as temporary:
+            command = _namespace(Path(temporary), writable=False)
+            command += [*_isolated_python(inputs), "-c", "pass"]
+            subprocess.run(  # noqa: S603 - fixed system interpreter in the grading namespace.
+                command,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"},
+                timeout=min(timeout_seconds, RUNTIME_STARTUP_TIMEOUT_SECONDS),
+                check=True,
+                start_new_session=True,
+            )
+    except (OSError, subprocess.SubprocessError):
+        raise GradingError("grading-runtime-unavailable") from None
 
 
 async def _execute(command: list[str], *, capture: bool = False) -> tuple[int, bytes]:
@@ -155,8 +194,7 @@ async def _grade(
         command = _namespace(source, writable=True)
         command += ["--ro-bind", str(patch_file), "/repair.patch"]
         command += ["--ro-bind", str(driver), "/driver"]
-        command += ["--remount-ro", "/dev", "--remount-ro", "/"]
-        command += [f"/usr/bin/python{inputs.python_version}", "-I", "-S", "/driver/patch.py"]
+        command += [*_isolated_python(inputs), "/driver/patch.py"]
         _check_deadline(deadline)
         code, raw = await _execute(command, capture=True)
         try:
@@ -207,8 +245,7 @@ async def _grade(
             ]
             command += ["--ro-bind", str(checks), "/checks"]
             command += ["--ro-bind", str(driver), "/driver"]
-            command += ["--remount-ro", "/dev", "--remount-ro", "/"]
-            command += [f"/usr/bin/python{inputs.python_version}", "-I", "-S", "/driver/run.py"]
+            command += [*_isolated_python(inputs), "/driver/run.py"]
             _check_deadline(deadline)
             code, raw = await _execute(command, capture=True)
             if code != 0:

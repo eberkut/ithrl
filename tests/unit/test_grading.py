@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import stat
+import subprocess
 import sys
+import tracemalloc
 import unittest
 from pathlib import Path
 from types import ModuleType
@@ -16,6 +20,7 @@ from pydantic import ValidationError
 from ithrl.grading import GradeEvidence, PatchGradingConfig, TestSuite, write_bundle
 from ithrl.grading.bundle import GradingError, _read_tree
 from ithrl.grading.runtime import _execute, _patch_text
+from ithrl.path_safety import UnsafePathError
 
 
 def test_grading_evidence_is_content_safe_and_errors_are_distinct() -> None:
@@ -69,6 +74,86 @@ def test_bundle_snapshots_and_rejects_links(tmp_path: Path) -> None:
     (source / "link").symlink_to(checks / "test_value.py")
     with pytest.raises(OSError, match="Too many levels of symbolic links"):
         _read_tree(source)
+
+
+def test_snapshot_allocates_for_file_size(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import ithrl.grading.bundle as bundle
+
+    (tmp_path / "small").write_bytes(b"x")
+    monkeypatch.setattr(bundle, "MAX_BYTES", 8 * 1024 * 1024)
+    tracemalloc.start()
+    try:
+        assert _read_tree(tmp_path) == {"small": b"x"}
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert peak < bundle.MAX_BYTES
+
+
+def test_bundle_requires_an_existing_controlled_parent_and_uses_private_modes(
+    tmp_path: Path,
+) -> None:
+    source, checks = tmp_path / "source", tmp_path / "checks"
+    (source / "nested/deeper").mkdir(parents=True)
+    (source / "nested/deeper/app.py").write_bytes(b"source")
+    (checks / "nested").mkdir(parents=True)
+    (checks / "nested/test_app.py").write_bytes(b"checks")
+
+    def publish(destination: Path) -> None:
+        write_bundle(
+            source=source,
+            checks=checks,
+            destination=destination,
+            editable_paths=("nested/deeper/app.py",),
+            python_path=".",
+            source_suite=TestSuite(kind="unittest", selector="tests", expected_count=1),
+            independent_suite=TestSuite(
+                kind="unittest", selector="nested/test_app.py", expected_count=1
+            ),
+        )
+
+    missing = tmp_path / "missing"
+    unsafe = tmp_path / "unsafe"
+    unsafe.mkdir()
+    unsafe.chmod(0o777)
+    linked = tmp_path / "linked"
+    linked.symlink_to(tmp_path, target_is_directory=True)
+    destination = tmp_path / "bundle"
+    previous_umask = os.umask(0)
+    try:
+        with pytest.raises(FileNotFoundError):
+            publish(missing / "bundle")
+        assert not missing.exists()
+        for parent in (unsafe, linked):
+            with pytest.raises(UnsafePathError):
+                publish(parent / "bundle")
+        publish(destination)
+    finally:
+        os.umask(previous_umask)
+    assert stat.S_IMODE(destination.stat().st_mode) == 0o700
+    for path in destination.rglob("*"):
+        assert stat.S_IMODE(path.stat().st_mode) == (0o700 if path.is_dir() else 0o600)
+
+
+@pytest.mark.parametrize(("timeout", "expected"), [(0, None), (0.25, 0.25), (10, 2)])
+def test_grading_runtime_probe_timeout_is_content_safe(
+    monkeypatch: pytest.MonkeyPatch, timeout: float, expected: float | None
+) -> None:
+    from ithrl.grading import runtime
+    from ithrl.grading.bundle import ValidatedGrading
+
+    inputs = Mock(spec=ValidatedGrading, python_version="3.12")
+    run = Mock(side_effect=subprocess.TimeoutExpired("private command", 2, stderr=b"private"))
+    monkeypatch.setattr(runtime.subprocess, "run", run)
+    with pytest.raises(GradingError, match=r"^grading-runtime-unavailable$"):
+        runtime.validate_grading_runtime(inputs, timeout_seconds=timeout)
+    if expected is None:
+        run.assert_not_called()
+        return
+    (command,), options = run.call_args
+    assert command[-5:] == ["/usr/bin/python3.12", "-I", "-S", "-c", "pass"]
+    assert options["timeout"] == expected
+    assert options["stdout"] == options["stderr"] == subprocess.DEVNULL
 
 
 @pytest.mark.parametrize(

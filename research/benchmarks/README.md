@@ -132,9 +132,10 @@ requires system Python **3.12.3** at `/usr/bin/python3.12`. Verify that version 
 The research environment is separate from ithrl's development environment. It imports the pinned
 source trees directly; no upstream setup script, database service or native coding agent is needed.
 
-`tasks.json` and `verification.json` describe the offline replay environment. Native observations
-remain bound to the environment recorded in `results.json`; refreshing replay dependencies does not
-replace those observations or add qualification credit.
+`tasks.json` and `verification.json` describe the offline replay environment. In `results.json`,
+`native_tasks_sha256` identifies the manifest used for native execution, and
+`native_execution_environment` records its Python and package versions. Refreshing replay
+dependencies leaves those observations and their qualification scope unchanged.
 
 Create disposable directories and install the hash-locked research requirements:
 
@@ -168,9 +169,9 @@ Run the replay with the explicit research interpreter:
 The replay checks source hashes and the complete installed-package/version map, then runs the
 reviewed fixtures with network access denied, a fixed environment, read-only source/environment
 mounts and private temporary filesystems. The host checkout, home directory and credentials are
-not mounted. Each suite has a 30-second timeout; an import failure or missing test count cannot
-stand in for a reproduced behavioral failure. Logs and a semantic result receipt remain in the
-new output directory.
+not mounted. Each suite has a 30-second timeout. Import, setup, teardown and cleanup failures stop
+verification; body exceptions can establish a behavioral failure. Every declared test must run.
+Logs and a semantic result receipt remain in the new output directory.
 
 Expect fifteen reference variants across the two tasks, matching
 [verification.json](verification.json). The replay accepts only reviewed fixtures from `tasks.json`.
@@ -263,6 +264,8 @@ patch equality, keyword mentions and model-provided success claims do not establ
 
 The [grading contract](../../docs/architecture.md#measurement-search-and-confirmation) defines
 content-only Git application, fixed verifiers, isolation and operational-error handling.
+Bundle and grading-output parents must already exist and pass controlling-directory validation;
+new output directories are private.
 
 Prepare the four task bundles and replay the reviewed repairs through the product grader:
 

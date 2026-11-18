@@ -315,7 +315,9 @@ class _InteractionRunner(FakeRunner):
         return f"fixture-ordered-interaction:{self.failing}:{super().fingerprint}"
 
     @override
-    async def run(self, attempt: PreparedAttempt) -> RunResult:
+    async def run(
+        self, attempt: PreparedAttempt, *, runtime_deadline: float | None = None
+    ) -> RunResult:
         if self.failing and not attempt.candidate.mutation.is_empty:
             raise RuntimeError("synthetic runner failure")
         request = attempt.evidence.materialize(mutation=attempt.candidate.mutation)

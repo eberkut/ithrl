@@ -1319,10 +1319,11 @@ def test_fuzz_preparation_preserves_a_sampled_task_grader(
     )
     (workspace.root / "experiments/default.toml").write_text(experiment.to_toml())
 
-    def available(_config: PatchGradingConfig) -> None:
+    def available(_input: object) -> None:
         pass
 
     monkeypatch.setattr(preflight, "validate_grading", available)
+    monkeypatch.setattr(preflight, "validate_grading_runtime", available)
     config = FuzzConfiguration.from_toml(
         CONFIGURATION.replace("attempt_timeout_seconds = 1", "attempt_timeout_seconds = 10")
     )

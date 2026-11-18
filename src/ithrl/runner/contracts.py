@@ -364,7 +364,11 @@ class Runner(Protocol):
     @property
     def capability_profile(self) -> CapabilityProfile: ...
 
-    async def run(self, attempt: PreparedAttempt) -> RunResult: ...
+    async def run(
+        self, attempt: PreparedAttempt, *, runtime_deadline: float | None = None
+    ) -> RunResult:
+        """Execute an attempt, checking the optional monotonic deadline before native launch."""
+        ...
 
 
 class CandidateInvalidError(ValueError):

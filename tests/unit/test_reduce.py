@@ -506,7 +506,9 @@ def test_failed_candidate_attempt_counts_against_resume_budget(tmp_path: Path) -
         def capability_profile(self) -> CapabilityProfile:
             return CapabilityProfile.deterministic_fake(runner_version="fail-once-v1")
 
-        async def run(self, attempt: PreparedAttempt) -> RunResult:
+        async def run(
+            self, attempt: PreparedAttempt, *, runtime_deadline: float | None = None
+        ) -> RunResult:
             self.calls += 1
             if self.calls == 1:
                 raise RunnerError(
@@ -552,7 +554,9 @@ def test_blocked_retry_does_not_change_candidate_budget_or_checkpoint(tmp_path: 
         fingerprint = "unsafe-v1"
         capability_profile = CapabilityProfile.deterministic_fake(runner_version="unsafe-v1")
 
-        async def run(self, attempt: PreparedAttempt) -> RunResult:
+        async def run(
+            self, attempt: PreparedAttempt, *, runtime_deadline: float | None = None
+        ) -> RunResult:
             del attempt
             self.calls += 1
             raise RunnerError(

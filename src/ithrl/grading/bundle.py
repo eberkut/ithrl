@@ -68,7 +68,7 @@ def _read_tree(root: Path) -> dict[str, bytes]:
                     raise GradingError("grading-unsafe-file")
                 if len(files) >= MAX_FILES or total + before.st_size > MAX_BYTES:
                     raise GradingError("grading-input-limit")
-                data = stream.read(MAX_BYTES - total + 1)
+                data = stream.read(before.st_size + 1)
                 after = os.fstat(stream.fileno())
             if (
                 len(data) != before.st_size
@@ -220,7 +220,7 @@ def write_bundle(
     source_suite: TestSuite,
     independent_suite: TestSuite,
 ) -> str:
-    """Publish a new reviewed bundle; existing destinations are never overwritten."""
+    """Publish a new private bundle under an existing controlled directory."""
 
     files = {
         **{f"source/{name}": data for name, data in _read_tree(source).items()},
@@ -243,12 +243,13 @@ def write_bundle(
     ):
         raise GradingError("grading-input-limit")
     validate_directory_chain(destination.parent)
-    destination.mkdir(mode=0o700, parents=True, exist_ok=False)
+    destination.mkdir(mode=0o700)
+    for directory in sorted(directories):
+        (destination / directory).mkdir(mode=0o700)
+    files["manifest.json"] = manifest_bytes
     for name, data in files.items():
-        path = destination / name
-        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        path.write_bytes(data)
-        path.chmod(0o600)
-    (destination / "manifest.json").write_bytes(manifest_bytes)
-    (destination / "manifest.json").chmod(0o600)
+        fd = os.open(destination / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as stream:
+            os.fchmod(stream.fileno(), 0o600)
+            stream.write(data)
     return manifest.digest

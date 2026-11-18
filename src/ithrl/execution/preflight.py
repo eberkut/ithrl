@@ -21,7 +21,7 @@ from ithrl.experiment import (
     SampledExperimentDefinition,
     UnavailableRunnerConfig,
 )
-from ithrl.grading import validate_grading
+from ithrl.grading import validate_grading, validate_grading_runtime
 from ithrl.grading.contracts import GRADING_CLEANUP_SECONDS
 
 
@@ -118,12 +118,12 @@ def resolve_execution_plan(
                 >= resource_limits.max_wall_time_seconds
             ):
                 raise ValueError("grading exceeds the attempt limit")
-            validate_grading(experiment.grading)
+            validate_grading_runtime(validate_grading(experiment.grading))
         except (OSError, ValueError):
             issues.append(
                 PreflightIssue(
                     code="grading-unavailable",
-                    message="grading inputs, environment or bounds do not match the frozen configuration",
+                    message="grading inputs, runtime or attempt bounds are unavailable or incompatible",
                 )
             )
     if issues:

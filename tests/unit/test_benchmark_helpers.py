@@ -5,7 +5,9 @@ from __future__ import annotations
 import errno
 import hashlib
 import importlib.util
+import subprocess
 import sys
+import textwrap
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import Mock
@@ -98,6 +100,110 @@ def test_reference_unittest_rejects_excluded_results(
             2,
             tmp_path / "log",
         )
+
+
+@pytest.mark.parametrize("selection", ["names", "discover"])
+@pytest.mark.parametrize(
+    ("methods", "result"),
+    [
+        ("def test_control(self): pass", True),
+        ("def test_control(self): raise TypeError('broken candidate')", False),
+        ("def test_control(self): self.fail('regression')", False),
+        ("async def test_control(self): self.fail('regression')", False),
+        ("async def test_control(self): raise TypeError('broken candidate')", False),
+        (
+            "def test_control(self):\n    with self.subTest():\n        self.fail('regression')",
+            False,
+        ),
+        ("def setUp(self): raise TypeError('broken fixture')\ndef test_control(self): pass", None),
+        (
+            "async def asyncSetUp(self): self.fail('broken fixture')\n"
+            "async def test_control(self): pass",
+            None,
+        ),
+        ("def tearDown(self): self.fail('broken fixture')\ndef test_control(self): pass", None),
+        (
+            "def test_control(self): self.addCleanup(self.fail, 'broken fixture')",
+            None,
+        ),
+        (
+            "def setUp(self):\n    with self.subTest():\n        self.fail('broken fixture')\n"
+            "def test_control(self): pass",
+            None,
+        ),
+    ],
+)
+def test_reference_unittest_classifies_failures_by_phase(
+    helpers: tuple[ModuleType, ModuleType],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    selection: str,
+    methods: str,
+    result: bool | None,
+) -> None:
+    replay, _prepare = helpers
+    check = tmp_path / "test_control.py"
+    base = "IsolatedAsyncioTestCase" if "async def" in methods else "TestCase"
+    check.write_text(
+        f"import unittest\nclass Control(unittest.{base}):\n" + textwrap.indent(methods, "    ")
+    )
+    run = subprocess.run
+
+    def run_fixture(
+        command: list[str], *, capture_output: bool, text: bool, timeout: int
+    ) -> subprocess.CompletedProcess[str]:
+        assert text
+        invocation = command[command.index("/env/bin/python") + 1 :]
+        invocation[1] = invocation[1].replace("'/checks'", repr(str(tmp_path)))
+        return run(
+            [sys.executable, "-B", *invocation],
+            cwd=tmp_path,
+            capture_output=capture_output,
+            text=True,
+            timeout=timeout,
+        )
+
+    monkeypatch.setattr(replay.subprocess, "run", run_fixture)
+    arguments = (
+        ["-m", "unittest", "test_control", "-q"]
+        if selection == "names"
+        else ["-c", replay.UNITTEST_SUITE, "discover", check.name]
+    )
+    args = (
+        tmp_path / "env/bin/python",
+        Path("/usr"),
+        tmp_path,
+        check,
+        ".",
+        arguments,
+        1,
+        tmp_path / "log",
+    )
+    if result is None:
+        with pytest.raises(ValueError, match="did not return a behavioral pass/failure"):
+            replay.run_suite(*args)
+        assert "Reference test fixture failed" in (tmp_path / "log").read_text()
+    else:
+        assert replay.run_suite(*args) is result
+
+
+@pytest.mark.parametrize("layout", ["missing", "symlink", "writable"])
+def test_prepare_refuses_unsafe_output_parent(
+    helpers: tuple[ModuleType, ModuleType], tmp_path: Path, layout: str
+) -> None:
+    _replay, prepare = helpers
+    parent = tmp_path / "output-parent"
+    if layout == "symlink":
+        parent.symlink_to(tmp_path, target_is_directory=True)
+    elif layout == "writable":
+        parent.mkdir()
+        parent.chmod(0o777)
+
+    with pytest.raises(ValueError, match=r"existing parent|symlink|writable by other users"):
+        prepare.prepare(tmp_path, tmp_path / "env/bin/python", parent / "grading")
+    assert not (parent / "grading").exists()
+    if layout == "missing":
+        assert not parent.exists()
 
 
 @pytest.mark.parametrize("separator", ["\u2028", "\x85", "\r"])

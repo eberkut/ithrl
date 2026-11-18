@@ -140,7 +140,9 @@ class CopilotRunner:
                 raise CandidateInvalidError("candidate cannot be reconstructed") from error
             raise
 
-    async def run(self, attempt: PreparedAttempt) -> RunResult:
+    async def run(
+        self, attempt: PreparedAttempt, *, runtime_deadline: float | None = None
+    ) -> RunResult:
         """Execute one prepared source-backed Copilot attempt."""
 
         self._validate_attempt(attempt)
@@ -177,6 +179,7 @@ class CopilotRunner:
                 workspace_paths=self._workspace_paths,
                 max_protected_entries=DEFAULT_MAX_PROTECTED_ENTRIES,
                 max_protected_bytes=DEFAULT_MAX_PROTECTED_BYTES,
+                runtime_deadline=runtime_deadline,
             )
         except ProcessRuntimeCancelled as cancelled:
             error = _runtime_error(

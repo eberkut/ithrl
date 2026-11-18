@@ -18,10 +18,13 @@ from typing import Any
 import pytest
 
 from ithrl.grading import (
+    GradingError,
     PatchGradingConfig,
     TestSuite,
     bind_environment,
     grade_response,
+    validate_grading,
+    validate_grading_runtime,
     write_bundle,
 )
 from ithrl.grading.contracts import SuiteEvidence
@@ -102,6 +105,32 @@ def grade(config: PatchGradingConfig, patch: str = PATCH):
     return asyncio.run(
         grade_response(config, patch, candidate_digest="b" * 64, attempt_id="attempt-" + "a" * 32)
     )
+
+
+def test_grading_runtime_starts_without_task_code(grading_config: PatchGradingConfig) -> None:
+    validate_grading_runtime(validate_grading(grading_config))
+
+
+@pytest.mark.parametrize("failure", ["missing-mount", "unsupported-option"])
+def test_grading_runtime_refuses_startup_failures(
+    grading_config: PatchGradingConfig,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    from ithrl.grading import runtime
+
+    namespace = runtime._namespace
+
+    def unavailable(source: Path, *, writable: bool) -> list[str]:
+        command = namespace(source, writable=writable)
+        if failure == "missing-mount":
+            return [*command, "--ro-bind", str(tmp_path / "missing"), "/missing"]
+        return [*command, "--ithrl-invalid-test-option"]
+
+    monkeypatch.setattr(runtime, "_namespace", unavailable)
+    with pytest.raises(GradingError, match=r"^grading-runtime-unavailable$"):
+        validate_grading_runtime(validate_grading(grading_config))
 
 
 def patch_body(body: str) -> str:

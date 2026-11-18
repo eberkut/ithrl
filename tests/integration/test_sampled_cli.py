@@ -105,7 +105,9 @@ class OperatorRunner:
     def fingerprint(self) -> str:
         return "credential-free-operator-workflow-v1"
 
-    async def run(self, attempt: PreparedAttempt) -> RunResult:
+    async def run(
+        self, attempt: PreparedAttempt, *, runtime_deadline: float | None = None
+    ) -> RunResult:
         self.calls.append(attempt)
         confirmation_index = (
             sum(call.phase == "confirmation" and call.arm == "candidate" for call in self.calls) - 1
@@ -1996,7 +1998,7 @@ def _configure_operator_grading(
         timeout_seconds=1,
     )
 
-    def validate(_config: PatchGradingConfig) -> None:
+    def validate(_input: object, *, timeout_seconds: float | None = None) -> None:
         return None
 
     async def grade(
@@ -2036,7 +2038,9 @@ def _configure_operator_grading(
         )
 
     monkeypatch.setattr(grading_preflight, "validate_grading", validate)
+    monkeypatch.setattr(grading_preflight, "validate_grading_runtime", validate)
     monkeypatch.setattr(measurement, "validate_grading", validate)
+    monkeypatch.setattr(measurement, "validate_grading_runtime", validate)
     monkeypatch.setattr(measurement, "grade_response", grade)
     experiment = operator_case.selection.experiment
     assert experiment.reduction is not None
@@ -2115,11 +2119,11 @@ def test_predispatch_grading_refusal_clears_sampling_reservation_without_call_ch
 
     _configure_operator_grading(operator_case, monkeypatch)
 
-    def changed(_config: PatchGradingConfig) -> None:
+    def changed(_inputs: object, *, timeout_seconds: float | None = None) -> None:
         if operator_case.runner.calls:
             raise ValueError("private changed environment")
 
-    monkeypatch.setattr(measurement, "validate_grading", changed)
+    monkeypatch.setattr(measurement, "validate_grading_runtime", changed)
     result = _invoke(operator_case.command("--attempt-timeout", "10"))
     assert result.exit_code != ExitCode.SUCCESS, result.output
     report = _json(result)
