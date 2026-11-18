@@ -100,7 +100,9 @@ def test_worker_entrypoint_uses_owned_paths_and_refuses_caller_selected_files(
     foreign.chmod(0o600)
     calls: list[tuple[Path, dict[str, Any]]] = []
 
-    async def observe(path: Path, settings: dict[str, Any]) -> int:
+    async def observe(
+        path: Path, settings: dict[str, Any], *, github_token: str | None = None
+    ) -> int:
         calls.append((path, settings))
         return 0
 
@@ -114,6 +116,51 @@ def test_worker_entrypoint_uses_owned_paths_and_refuses_caller_selected_files(
     assert calls == [(executable, request)]
     assert not owned_request.exists()
     assert foreign.read_text() == "private foreign input"
+
+
+@pytest.mark.parametrize(
+    ("environment", "selected"),
+    [
+        ({"COPILOT_GITHUB_TOKEN": "first", "GH_TOKEN": "second", "GITHUB_TOKEN": "third"}, "first"),
+        ({"COPILOT_GITHUB_TOKEN": "", "GH_TOKEN": "second", "GITHUB_TOKEN": "third"}, "second"),
+        ({"GITHUB_TOKEN": "third"}, "third"),
+        ({}, None),
+    ],
+)
+def test_worker_selects_private_session_authentication_only_at_entrypoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    environment: dict[str, str],
+    selected: str | None,
+) -> None:
+    for name in ("COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    request = _request(tmp_path)
+    private_request = tmp_path / "request.json"
+    private_request.write_text(json.dumps(request))
+    private_request.chmod(0o600)
+    executable = tmp_path / "runner" / "copilot"
+    executable.parent.mkdir()
+    executable.write_text("owned executable")
+    executable.chmod(0o500)
+    observed: list[str | None] = []
+
+    async def observe(
+        path: Path, settings: dict[str, Any], *, github_token: str | None = None
+    ) -> int:
+        assert path == executable
+        assert settings == request
+        observed.append(github_token)
+        return 0
+
+    monkeypatch.setattr(worker, "_SANDBOX_ROOT", str(tmp_path))
+    monkeypatch.setattr(worker, "_run_session", observe)
+    assert worker.main([]) == 0
+    assert observed == [selected]
+    assert capsys.readouterr() == ("", "")
 
 
 def test_private_file_is_bounded_and_unlinked_after_checked_read(tmp_path: Path) -> None:
@@ -160,6 +207,7 @@ def test_sdk_restore_options_clear_ambient_surfaces_and_preserve_system(
     assert options["available_tools"] == tools
     assert options["system_message"] == {"mode": "replace", "content": request["systemMessage"]}
     assert options["continue_pending_work"] is options["allow_transcript_recovery"] is False
+    assert options["suppress_resume_event"] is True
     assert options["autopilot"] == {"continuation_enabled": False, "max_continues": 0}
     for name in (
         "enable_config_discovery",
@@ -169,6 +217,25 @@ def test_sdk_restore_options_clear_ambient_surfaces_and_preserve_system(
     ):
         assert options[name] is False
     assert options["capi"]["enable_web_socket_responses"] is False
+
+
+def test_session_auth_options_use_only_explicit_token_and_keep_managed_login_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("COPILOT_GITHUB_TOKEN", "ambient-fixture-token")
+    request = _request(tmp_path)
+    options = worker._resume_options(request, on_event=None, on_permission_request=None)
+    assert "github_token" not in options
+    assert "use_logged_in_user" not in options
+    explicit = worker._resume_options(
+        request, on_event=None, on_permission_request=None, github_token="selected-fixture-token"
+    )
+    assert explicit["github_token"] == "selected-fixture-token"
+    assert "ambient-fixture-token" not in repr(explicit)
+    assert "selected-fixture-token" not in json.dumps(request)
+    request["githubToken"] = "selected-fixture-token"
+    with pytest.raises(worker.WorkerError, match="unsupported shape"):
+        worker._parse_request(json.dumps(request).encode())
 
 
 def _outgoing(*, url: str = "https://api.githubcopilot.com/responses") -> httpx.Request:
@@ -280,6 +347,40 @@ def test_model_catalogue_access_requires_the_managed_read_only_route() -> None:
         assert not worker._is_model_catalog_request(httpx.Request("GET", url), context)
     assert not worker._is_model_catalog_request(
         httpx.Request("POST", "https://api.githubcopilot.com/models"), context
+    )
+
+
+@pytest.mark.parametrize(
+    ("url", "method", "content", "changes", "allowed"),
+    [
+        ("https://api.enterprise.githubcopilot.com/meta", "GET", b"", {}, True),
+        ("https://api.githubcopilot.com:443/meta", "GET", b"", {}, True),
+        ("http://api.githubcopilot.com/meta", "GET", b"", {}, False),
+        ("https://api.githubcopilot.com:8443/meta", "GET", b"", {}, False),
+        ("https://user@api.githubcopilot.com/meta", "GET", b"", {}, False),
+        ("https://user:password@api.githubcopilot.com/meta", "GET", b"", {}, False),
+        ("https://api.githubcopilot.com.attacker.example/meta", "GET", b"", {}, False),
+        ("https://githubcopilot.com/meta", "GET", b"", {}, False),
+        ("https://api.githubcopilot.com/meta?destination=other", "GET", b"", {}, False),
+        ("https://api.githubcopilot.com/meta#other", "GET", b"", {}, False),
+        ("https://api.githubcopilot.com/meta/", "GET", b"", {}, False),
+        ("https://api.githubcopilot.com/models", "GET", b"", {}, False),
+        ("https://api.githubcopilot.com/meta", "POST", b"", {}, False),
+        ("https://api.githubcopilot.com/meta", "GET", b"private", {}, False),
+        ("https://api.githubcopilot.com/meta", "GET", b"", {"session_id": None}, False),
+        ("https://api.githubcopilot.com/meta", "GET", b"", {"session_id": "other"}, False),
+        ("https://api.githubcopilot.com/meta", "GET", b"", {"parent_agent_id": "parent"}, False),
+        ("https://api.githubcopilot.com/meta", "GET", b"", {"transport": "websocket"}, False),
+    ],
+)
+def test_session_metadata_access_requires_strict_managed_route_and_selected_context(
+    url: str, method: str, content: bytes, changes: dict[str, object], allowed: bool
+) -> None:
+    assert (
+        worker._is_session_metadata_request(
+            httpx.Request(method, url, content=content), _context(**changes), session_id="session-1"
+        )
+        is allowed
     )
 
 
@@ -400,6 +501,135 @@ def test_catalogue_recovery_is_bounded_and_never_replays_inference(
             if scenario == "inference-failed"
             else "model-catalog"
         )
+
+
+@pytest.mark.parametrize(
+    ("scenario", "metadata_calls", "inference_calls", "reason"),
+    [
+        ("one", 1, 1, None),
+        ("two", 2, 1, None),
+        ("third", 2, 0, "session-metadata-failed"),
+        ("connection", 1, 0, "session-metadata-connection"),
+        ("certificate", 1, 0, "session-metadata-tls"),
+        ("policy-refused", 0, 0, "managed-policy-unverified"),
+        ("wrong-session", 0, 0, "native-context-unverified"),
+        ("unknown-get", 0, 0, "native-context-unverified"),
+        ("missing-model", 1, 0, "native-context-unverified"),
+        ("wrong-system", 1, 0, "native-context-unverified"),
+        ("after-inference", 1, 1, "session-metadata-failed"),
+        ("second-inference", 1, 1, "inference-request-refused"),
+    ],
+)
+def test_metadata_precedes_context_proof_with_independent_bounded_accounting(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    scenario: str,
+    metadata_calls: int,
+    inference_calls: int,
+    reason: str | None,
+) -> None:
+    request = _request(tmp_path)
+    native = Path(request["nativeSession"])
+    native.write_bytes(b'{"type":"session.start"}\n')
+    native.chmod(0o600)
+    recorded: dict[str, Any] = {"metadata": 0, "inference": 0}
+    token = "private-session-fixture-token"
+
+    def emit(document: dict[str, object]) -> None:
+        recorded["on_event"](SimpleNamespace(to_dict=lambda: document))
+
+    class Session:
+        def __init__(self) -> None:
+            self.rpc = self
+
+        async def send_messages(self, message: SimpleNamespace) -> SimpleNamespace:
+            assert message.messages == []
+            handler = recorded["handler"]
+            metadata = httpx.Request("GET", "https://api.enterprise.githubcopilot.com/meta")
+            context = _context(session_id="other") if scenario == "wrong-session" else _context()
+            if scenario == "unknown-get":
+                metadata = httpx.Request("GET", "https://api.githubcopilot.com/unknown")
+            pending = asyncio.create_task(handler.send_request(metadata, context))
+            await asyncio.sleep(0)
+            assert recorded["metadata"] == recorded["inference"] == 0
+            emit(_permission_event(scenario != "policy-refused"))
+            await pending
+            if scenario in {"two", "third"}:
+                await handler.send_request(metadata, context)
+            if scenario == "third":
+                await handler.send_request(metadata, context)
+            emit(
+                {
+                    "type": "system.message",
+                    "data": {
+                        "content": "wrong guidance"
+                        if scenario == "wrong-system"
+                        else request["systemMessage"]
+                    },
+                }
+            )
+            if scenario != "missing-model":
+                emit({"type": "model.call_start", "data": {"model": request["model"]}})
+            inference = asyncio.create_task(handler.send_request(_outgoing(), _context()))
+            await asyncio.sleep(0)
+            if scenario in {"missing-model", "wrong-system"}:
+                assert recorded["inference"] == 0
+                emit({"type": "assistant.idle", "data": {}})
+            await inference
+            if scenario == "after-inference":
+                await handler.send_request(metadata, context)
+            if scenario == "second-inference":
+                await handler.send_request(_outgoing(), _context())
+            emit({"type": "assistant.idle", "data": {}})
+            return SimpleNamespace(message_ids=[])
+
+    class Client:
+        def __init__(self, **options: Any) -> None:
+            assert "github_token" not in options
+            recorded["handler"] = options["request_handler"]
+
+        async def start(self) -> None:
+            pass
+
+        async def stop(self) -> None:
+            recorded["stopped"] = True
+
+        async def resume_session(self, session_id: str, **options: Any) -> Session:
+            assert options["github_token"] == token
+            assert options["suppress_resume_event"] is True
+            recorded["on_event"] = options["on_event"]
+            return Session()
+
+    class Handler:
+        async def send_request(self, outgoing: httpx.Request, context: object) -> httpx.Response:
+            if outgoing.method == "GET":
+                recorded["metadata"] += 1
+                if scenario == "connection":
+                    raise httpx.ConnectError(token)
+                if scenario == "certificate":
+                    raise ssl.SSLCertVerificationError(token)
+            else:
+                recorded["inference"] += 1
+            return httpx.Response(200, request=outgoing, content=b"{}")
+
+    _install_sdk(monkeypatch, client=Client, handler=Handler)
+
+    async def run() -> int:
+        return await asyncio.wait_for(
+            worker._run_session(Path("/fixture/copilot"), request, github_token=token), timeout=2
+        )
+
+    assert asyncio.run(run()) == (0 if reason is None else 70)
+    output = capsys.readouterr().out
+    assert token not in output
+    complete = json.loads(output.splitlines()[-1])
+    assert recorded["metadata"] == complete["metadata_requests_started"] == metadata_calls
+    assert recorded["inference"] == complete["provider_calls_started"] == inference_calls
+    assert complete["catalog_requests_started"] == 0
+    assert complete["failure_code"] == reason
+    assert recorded["stopped"] is True
+    assert native.read_bytes() == b'{"type":"session.start"}\n'
 
 
 @pytest.mark.parametrize(

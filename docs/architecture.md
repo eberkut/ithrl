@@ -235,13 +235,17 @@ but a turn may need several requests. HTTP completion alone proves neither model
 native turn completion.
 
 Copilot's Python SDK drives the CLI over stdio, resuming the copied prefix at the selected model
-turn, including after tool results, without a new user message. When present, captured system
+turn, including after tool results, without a new user message or resume bookkeeping event.
+Selected environment tokens are passed explicitly to the SDK session; managed login uses the
+isolated configuration. When present, captured system
 guidance is restored and verified before inference; current custom-instruction and skill retrieval
 are disabled. A managed-request gate
 allows one inference request, verifies policy and denies shell execution before continuation.
 
-The model-catalogue GET allows three connection attempts within the outer timeout, counted
-separately from inference; certificate failures remain terminal. Inference is never retried.
+After policy verification, up to two same-session `/meta` GETs may precede model-context
+verification. Their count is retained in native output. The model-catalogue GET allows three
+connection attempts within the outer timeout, counted separately from inference; certificate
+failures remain terminal. Inference is never retried.
 Uncaptured historical guidance
 and harness-added context remain limits of the controlled prefix and policy.
 
