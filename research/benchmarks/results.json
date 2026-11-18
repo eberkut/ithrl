@@ -1,0 +1,458 @@
+{
+  "schema_version": 1,
+  "kind": "public-task-feasibility-summary",
+  "decision": "adopt",
+  "decision_scope": "Adopt iniconfig and its patch grader as a supplementary constructed workload for bounded investigations on the tested Codex and Copilot profiles. Retain migration-linter as a baseline-calibration limiting case. Both installed-CLI investigations reached fresh preservation confirmation; this establishes neither ordinary-workflow usefulness nor a general benchmark.",
+  "conditions": {
+    "task_count": 2,
+    "codex_cli": "0.169.0",
+    "copilot_cli": "1.0.104",
+    "copilot_sdk": "1.0.28",
+    "python": "3.12.3",
+    "provider_model_comparability": "Different routes/models; no harness or model comparison. Private profile identities are retained separately.",
+    "source_generation": "Native ACK and repair turns; reference material and fixed verifiers excluded from model input.",
+    "calibration": "Three fresh valid passing repairs required; no source response reuse credit.",
+    "controls": "One exploratory observation per prescribed removal or changed-defect replay; separate from both normal-CLI investigations and their independent fresh confirmations.",
+    "patch_grading": "Existing allowlisted regular-file content only; source and separately authored verifier suites. Candidate code shares the verifier interpreter and can alter assertions or reports; grades assume cooperative repairs. Grader/application revisions remain separate."
+  },
+  "output_contracts": {
+    "initial": {
+      "controls_sha256": "a29f8950f0d871de1489968dab46dfabde13191eec6622b84312341f29434591",
+      "fixed_trigger": "Diagnose the reported behavior and return a unified diff that repairs it. Preserve the documented behavior and existing tests. Work from the supplied snapshots; do not call tools. Return only the diff."
+    },
+    "existing_files": {
+      "controls_sha256": "d35b226a3378faa2beba6e7be60803a1ca810aba6d424b9b18b0c80d6c996ba6",
+      "fixed_trigger": "Diagnose the reported behavior and return a unified diff that repairs it. Preserve the documented behavior and existing tests. Work from the supplied snapshots; do not call tools. Return one applicable unified diff with correct hunk counts. Modify only existing files shown in the snapshots. Do not create, delete or rename files.",
+      "first_used_for": "copilot-migration-applicator",
+      "first_message_unchanged": true
+    }
+  },
+  "cells": [
+    {
+      "task": "iniconfig",
+      "harness": "codex",
+      "fresh_calibration": {
+        "valid": 3,
+        "passes": 3
+      },
+      "fine_control": {
+        "observations": 1,
+        "passes": 1,
+        "removed_utf8_bytes": 1354
+      },
+      "withheld_control": {
+        "observations": 1,
+        "passes": 0,
+        "operational_errors": 0
+      },
+      "changed_defect_replay": {
+        "observations": 1,
+        "passes": 1
+      },
+      "checks_per_passing_repair": {
+        "source": 42,
+        "independent": 8
+      },
+      "result": "confirmed-bounded-reduction",
+      "normal_cli_investigation": {
+        "grading_implementation_digest": "2a2cfd0421999853e329390c92a9ae1f816f78171960bcabe9982903c382e91c",
+        "fresh_calibration": {
+          "valid": 3,
+          "passes": 3,
+          "required_passes": 3
+        },
+        "coarse_screen": {
+          "original": {
+            "valid": 3,
+            "passes": 3
+          },
+          "candidate": {
+            "valid": 3,
+            "passes": 0
+          },
+          "decision": "retain-field",
+          "completed_comparisons": 1,
+          "removed_context_records": 2,
+          "candidate_scope": "Grouped removal including the task field; nonmatches do not isolate either record.",
+          "candidate_replies_reaching_verifiers": 0
+        },
+        "fine_screen": {
+          "original": {
+            "valid": 3,
+            "passes": 3
+          },
+          "candidate": {
+            "valid": 3,
+            "passes": 3
+          },
+          "decision": "select-removal",
+          "completed_comparisons": 1
+        },
+        "confirmation": {
+          "original": {
+            "valid": 11,
+            "passes": 11
+          },
+          "candidate": {
+            "valid": 11,
+            "passes": 11
+          },
+          "result": "confirmed-preserving",
+          "method": "newcombe-method-10",
+          "nominal_one_sided_confidence": 0.95,
+          "margin": 0.2,
+          "difference": 0.0,
+          "lower_bound": -0.1974050473195177,
+          "upper_bound": 0.1974050473195177,
+          "prior_observation_credit": 0,
+          "difference_definition": "candidate minus original"
+        },
+        "additional_removed_utf8_bytes": 1354,
+        "minimum_removed_utf8_bytes": 512,
+        "additional_reduction_result": "criterion-met",
+        "search_result": "search-incomplete",
+        "coarse_final_sweep_complete": false,
+        "fine_search_complete": true,
+        "whole_context_records_removed": 0,
+        "retained_context_records": 18,
+        "developer_conclusion": "The task field remained after the tested grouped-removal comparison. Its overload-declaration sections could be removed while freshly generated repairs passed all 42 source and eight independent checks within the declared valid-outcome preservation margin. Retained incident/source evidence is a sufficient tested input; the result establishes neither minimality nor the unique evidence used by the model.",
+        "safety": {
+          "native_cleanup_verified_attempts": 37,
+          "protected_state_unchanged_attempts": 37,
+          "residual_disposable_entries": 0,
+          "actions_executed": 0,
+          "tool_network_requests": 0
+        },
+        "retained_inspection": "Normal installed CLI succeeded with network denied, zero provider requests and no text disclosure.",
+        "coarse_stop_reason": "candidate-limit"
+      }
+    },
+    {
+      "task": "iniconfig",
+      "harness": "copilot",
+      "fresh_calibration": {
+        "valid": 3,
+        "passes": 3
+      },
+      "fine_control": {
+        "observations": 1,
+        "passes": 1,
+        "removed_utf8_bytes": 1354
+      },
+      "withheld_control": {
+        "observations": 1,
+        "passes": 0,
+        "operational_errors": 0
+      },
+      "changed_defect_replay": {
+        "observations": 1,
+        "passes": 1
+      },
+      "checks_per_passing_repair": {
+        "source": 42,
+        "independent": 8
+      },
+      "result": "confirmed-bounded-reduction",
+      "normal_cli_investigation": {
+        "grading_implementation_digest": "2a2cfd0421999853e329390c92a9ae1f816f78171960bcabe9982903c382e91c",
+        "fresh_calibration": {
+          "valid": 3,
+          "passes": 3,
+          "required_passes": 3
+        },
+        "coarse_screen": {
+          "original": {
+            "valid": 3,
+            "passes": 3
+          },
+          "candidate": {
+            "valid": 3,
+            "passes": 0
+          },
+          "decision": "retain-field",
+          "completed_comparisons": 1,
+          "removed_context_records": 2,
+          "candidate_scope": "Grouped removal including the task field; nonmatches do not isolate either record.",
+          "candidate_replies_reaching_verifiers": 0
+        },
+        "fine_screen": {
+          "original": {
+            "valid": 3,
+            "passes": 3
+          },
+          "candidate": {
+            "valid": 3,
+            "passes": 3
+          },
+          "decision": "select-removal",
+          "completed_comparisons": 1
+        },
+        "confirmation": {
+          "original": {
+            "valid": 11,
+            "passes": 11
+          },
+          "candidate": {
+            "valid": 11,
+            "passes": 11
+          },
+          "result": "confirmed-preserving",
+          "method": "newcombe-method-10",
+          "nominal_one_sided_confidence": 0.95,
+          "margin": 0.2,
+          "difference": 0.0,
+          "lower_bound": -0.1974050473195177,
+          "upper_bound": 0.1974050473195177,
+          "prior_observation_credit": 0,
+          "difference_definition": "candidate minus original"
+        },
+        "additional_removed_utf8_bytes": 1354,
+        "minimum_removed_utf8_bytes": 512,
+        "additional_reduction_result": "criterion-met",
+        "search_result": "search-incomplete",
+        "coarse_final_sweep_complete": false,
+        "fine_search_complete": true,
+        "whole_context_records_removed": 0,
+        "retained_context_records": 10,
+        "developer_conclusion": "The task field remained after the tested grouped-removal comparison. Its overload-declaration sections could be removed while freshly generated repairs passed all 42 source and eight independent checks within the declared valid-outcome preservation margin. Retained incident/source evidence is a sufficient tested input; the result establishes neither minimality nor the unique evidence used by the model.",
+        "safety": {
+          "native_cleanup_verified_attempts": 37,
+          "protected_state_unchanged_attempts": 37,
+          "residual_disposable_entries": 0,
+          "actions_executed": 0,
+          "tool_network_requests": 0
+        },
+        "retained_inspection": "Normal installed CLI succeeded with network denied, zero provider requests and no text disclosure.",
+        "coarse_stop_reason": "candidate-limit"
+      }
+    },
+    {
+      "task": "migration-linter",
+      "harness": "copilot",
+      "fresh_calibration": {
+        "valid": 3,
+        "passes": 2,
+        "runner_errors": 0,
+        "invalid": 0,
+        "required_passes": 3,
+        "cli_status": "inconclusive",
+        "cli_wall_seconds": 291.61652405100176
+      },
+      "fine_control": null,
+      "withheld_control": null,
+      "changed_defect_replay": null,
+      "checks_per_passing_repair": {
+        "source": 31,
+        "independent": 1,
+        "independent_sql_subcases": 14
+      },
+      "rejected_repair": "Envelope accepted; Git could not apply context; verifier suites not executed; response not repaired.",
+      "result": "stopped-at-calibration-gate"
+    },
+    {
+      "task": "migration-linter",
+      "harness": "codex",
+      "result": "not-run"
+    }
+  ],
+  "request_accounting": {
+    "runs": [
+      {
+        "id": "codex-source-ack",
+        "task": "iniconfig",
+        "harness": "codex",
+        "actual_inference_requests": 1,
+        "additional_possible_requests": 0,
+        "pending_requests": 0,
+        "result": "source acknowledgement gate",
+        "recorded_elapsed_seconds": 11.637,
+        "search_completed": false,
+        "preservation_confirmed": false
+      },
+      {
+        "id": "codex-source-controller",
+        "task": "iniconfig",
+        "harness": "codex",
+        "actual_inference_requests": 1,
+        "additional_possible_requests": 0,
+        "pending_requests": 0,
+        "result": "source controller failure",
+        "recorded_elapsed_seconds": 10.978,
+        "search_completed": false,
+        "preservation_confirmed": false
+      },
+      {
+        "id": "codex-iniconfig-pilot",
+        "task": "iniconfig",
+        "harness": "codex",
+        "actual_inference_requests": 10,
+        "additional_possible_requests": 0,
+        "pending_requests": 0,
+        "result": "completed exploratory pilot",
+        "recorded_elapsed_seconds": 113.761,
+        "search_completed": false,
+        "preservation_confirmed": false
+      },
+      {
+        "id": "copilot-iniconfig-protocol",
+        "task": "iniconfig",
+        "harness": "copilot",
+        "actual_inference_requests": 6,
+        "additional_possible_requests": 0,
+        "pending_requests": 0,
+        "result": "unsupported native diagnostic at fine control",
+        "recorded_elapsed_seconds": null,
+        "search_completed": false,
+        "preservation_confirmed": false
+      },
+      {
+        "id": "copilot-iniconfig-pilot",
+        "task": "iniconfig",
+        "harness": "copilot",
+        "actual_inference_requests": 8,
+        "additional_possible_requests": 0,
+        "pending_requests": 0,
+        "result": "completed exploratory continuation",
+        "recorded_elapsed_seconds": 153.73,
+        "search_completed": false,
+        "preservation_confirmed": false
+      },
+      {
+        "id": "copilot-migration-file-scope",
+        "task": "migration-linter",
+        "harness": "copilot",
+        "actual_inference_requests": 2,
+        "additional_possible_requests": 0,
+        "pending_requests": 0,
+        "result": "repair outside existing-file allowlist",
+        "recorded_elapsed_seconds": null,
+        "search_completed": false,
+        "preservation_confirmed": false
+      },
+      {
+        "id": "copilot-migration-applicator",
+        "task": "migration-linter",
+        "harness": "copilot",
+        "actual_inference_requests": 2,
+        "additional_possible_requests": 0,
+        "pending_requests": 0,
+        "result": "valid repair rejected by frozen GNU patch context handling",
+        "recorded_elapsed_seconds": 105.844,
+        "search_completed": false,
+        "preservation_confirmed": false
+      },
+      {
+        "id": "copilot-migration-calibration",
+        "task": "migration-linter",
+        "harness": "copilot",
+        "actual_inference_requests": 3,
+        "additional_possible_requests": 0,
+        "pending_requests": 0,
+        "result": "two of three calibration repairs passed; controls not admitted",
+        "recorded_elapsed_seconds": null,
+        "search_completed": false,
+        "preservation_confirmed": false
+      },
+      {
+        "id": "codex-iniconfig-cli",
+        "task": "iniconfig",
+        "harness": "codex",
+        "actual_inference_requests": 37,
+        "additional_possible_requests": 0,
+        "pending_requests": 0,
+        "result": "bounded coarse/fine search and fresh preservation confirmation",
+        "recorded_elapsed_seconds": 377.170199,
+        "elapsed_scope": "normal CLI wall time; preparation and authoring excluded",
+        "native_runner_seconds": 251.122,
+        "grading_seconds": 84.261,
+        "usage": {
+          "input_tokens": 266584,
+          "output_tokens": 5265,
+          "cached_input_tokens": 0,
+          "attempts_with_usage": 37,
+          "total_attempts": 37
+        },
+        "search_completed": false,
+        "fine_search_completed": true,
+        "preservation_confirmed": true
+      },
+      {
+        "id": "copilot-iniconfig-cli",
+        "task": "iniconfig",
+        "harness": "copilot",
+        "actual_inference_requests": 37,
+        "additional_possible_requests": 0,
+        "pending_requests": 0,
+        "result": "bounded coarse/fine search and fresh preservation confirmation",
+        "recorded_elapsed_seconds": 839.940848,
+        "elapsed_scope": "normal CLI wall time; preparation and authoring excluded",
+        "native_runner_seconds": 740.641,
+        "grading_seconds": 70.094,
+        "usage_as_reported": {
+          "input_tokens": 159721,
+          "output_tokens": 10054,
+          "cached_input_tokens": 153697
+        },
+        "usage_coverage_attempts_by_field": {
+          "input_tokens": 37,
+          "output_tokens": 37,
+          "cached_input_tokens": 37
+        },
+        "total_attempts": 37,
+        "search_completed": false,
+        "fine_search_completed": true,
+        "preservation_confirmed": true
+      }
+    ],
+    "actual_inference_requests": 107,
+    "additional_possible_requests": 0,
+    "pending_requests": 0,
+    "aggregate_tokens": null,
+    "billing": null,
+    "total_investigation_cost": null,
+    "unknowns": [
+      "Complete preparation/authoring effort and all provider-free control invocation costs were not measured.",
+      "Recorded token usage has varying coverage and provider-specific cache semantics; no combined token or monetary estimate.",
+      "Native authentication/catalogue/metadata traffic outside inference enforcement is not a complete network-traffic count."
+    ],
+    "unused_approved_requests_by_run": {
+      "copilot-migration-calibration": 5,
+      "codex-iniconfig-cli": 0,
+      "copilot-iniconfig-cli": 0
+    }
+  },
+  "limitations": [
+    "Selected constructed tasks, not ordinary-workflow prevalence or a population success rate.",
+    "Separate confirmations cover one section-removal edit in each tested native profile at margin 0.20; neither coarse sweep completed. These are not joint or campaign-wide confidence claims.",
+    "Single control observations show task outcomes under these inputs, not statistical context dependence.",
+    "A rejected patch does not establish that its intended diagnosis is wrong.",
+    "Public task contamination and opaque captured native state are not causally excluded.",
+    "Native traces, credentials, responses and exact private profiles are not distributed; the public package reproduces fixture checks, not retained paid responses."
+  ],
+  "next_decision": "Use iniconfig as a supplementary constructed evaluation workload; preserve migration-linter as a limiting outcome. Broader tasks, changed profiles, additional harnesses and ordinary-workflow qualification need separate evidence and execution approval.",
+  "native_tasks_sha256": "fd7c22311078783121be7598c8eb1d32b23fdbfa22f78922a50aaff98dddd6af",
+  "maintenance": [
+    "Review pinned task source, dependency versions and licenses when updating the package.",
+    "Replay correct alternatives and negative grading fixtures after source, verifier or grader changes.",
+    "Bind current runtime, native input and safety policy before new execution; changed profiles need their own qualification."
+  ],
+  "separate_work": [
+    "Broader task/corpus selection requires a separately reviewed study.",
+    "Additional harnesses require their own adapters, reconstruction, isolation and qualification.",
+    "Ordinary-workflow usefulness remains a separate evidence requirement; preserve the unchanged issue16 limiting outcome."
+  ],
+  "native_execution_environment": {
+    "python": "3.12.3",
+    "packages": {
+      "packaging": "26.3",
+      "asgiref": "3.13.0",
+      "pytest": "8.3.5",
+      "iniconfig": "2.3.1",
+      "appdirs": "1.4.4",
+      "toml": "0.10.2",
+      "pluggy": "1.7.0",
+      "django": "4.2.27",
+      "sqlparse": "0.6.1"
+    }
+  }
+}

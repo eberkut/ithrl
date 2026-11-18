@@ -26,16 +26,24 @@ from ithrl.observations import Observation, ObservationOutcome
 def last_runner_error(
     observations: Sequence[Observation],
 ) -> tuple[str | None, str | None]:
-    """Return only fixed diagnostics from the latest runner-error observation."""
+    """Return fixed diagnostics from the latest runner or grading error."""
     errors = (
         item
         for item in observations
         if getattr(item, "outcome", None) is ObservationOutcome.RUNNER_ERROR
+        or (
+            getattr(item, "outcome", None) is ObservationOutcome.INVALID_OBSERVATION
+            and item.attempt_evidence.grading is not None
+            and item.attempt_evidence.grading.status == "error"
+        )
     )
     latest = max(errors, key=lambda item: item.recorded_at, default=None)
     if latest is None:
         return None, None
-    return latest.error_category, latest.attempt_evidence.reason_code
+    if latest.outcome is ObservationOutcome.RUNNER_ERROR:
+        return latest.error_category, latest.attempt_evidence.reason_code
+    grading = latest.attempt_evidence.grading
+    return latest.error_category, grading.reason_code if grading is not None else None
 
 
 class ExitCode(IntEnum):

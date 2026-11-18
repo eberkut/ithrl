@@ -6,7 +6,7 @@ import json
 import socket
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, cast
 
 import pytest
 from pydantic import ValidationError
@@ -432,3 +432,75 @@ def test_copilot_shell_whole_record_remains_supported(tmp_path: Path) -> None:
             receipt,
             ReductionPreparationSettings.from_toml(SETTINGS + _sections(evidence)),
         )
+
+
+@pytest.mark.parametrize("runtime_available", [True, False])
+def test_graded_receipt_overrides_only_the_extracted_response_predicate(
+    recorded_case: tuple[CaseEvidence, NativePreparationReceipt],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    runtime_available: bool,
+) -> None:
+    import ithrl.execution.preflight as preflight
+    from ithrl.grading import GradingError, PatchGradingConfig
+
+    evidence, receipt = recorded_case
+    default = parse_experiment_toml(evidence.default_experiment)
+    assert default.target != FinalResponseTarget()
+    grading = PatchGradingConfig(
+        bundle_path=str(tmp_path / "bundle"),
+        bundle_digest="a" * 64,
+        environment_path=str(tmp_path / "environment"),
+        environment_digest="b" * 64,
+    )
+
+    inputs = object()
+
+    def validate_fixture(config: PatchGradingConfig) -> object:
+        assert config == grading
+        return inputs
+
+    def probe_fixture(validated_inputs: object) -> None:
+        assert validated_inputs is inputs
+        if not runtime_available:
+            raise GradingError("grading-runtime-unavailable")
+
+    monkeypatch.setattr(preflight, "validate_grading", validate_fixture)
+    monkeypatch.setattr(preflight, "validate_grading_runtime", probe_fixture)
+    source = receipt.source_plan
+    calibration = SampledExperimentDefinition(
+        target=FinalResponseTarget(),
+        oracle=default.oracle,
+        runner=NativeRunnerConfig(
+            type=cast(Literal["codex", "copilot"], source.capability.runner_type),
+            required_capability_digest=source.capability.digest,
+        ),
+        calibration=ReductionPreparationSettings.from_toml(SETTINGS).calibration,
+        grading=grading,
+    )
+    resolved = resolve_execution_plan(
+        source.capability,
+        calibration,
+        evidence=evidence,
+        runner_fingerprint=source.runner_fingerprint,
+        safety_policy=source.safety_policy,
+        resource_limits=source.resource_limits,
+    )
+    if not runtime_available:
+        assert not resolved.ready
+        assert resolved.plan is None
+        assert [issue.code for issue in resolved.issues] == ["grading-unavailable"]
+        return
+    assert resolved.ready
+    assert resolved.plan is not None
+    graded_receipt = NativePreparationReceipt.create(
+        resolved.plan, calibration, tmp_path / "original"
+    )
+    experiment = prepare_reduction(
+        evidence,
+        graded_receipt,
+        ReductionPreparationSettings.from_toml(SETTINGS),
+    )
+    assert experiment.target == FinalResponseTarget()
+    assert experiment.grading == grading
+    assert parse_experiment_toml(evidence.default_experiment) == default

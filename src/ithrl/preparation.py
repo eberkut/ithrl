@@ -216,13 +216,14 @@ def _prepare_reduction(
         )
     runner_type = cast(Literal["codex", "copilot"], source.capability.runner_type)
     experiment = SampledExperimentDefinition(
-        target=default.target,
+        target=FinalResponseTarget() if source.grading is not None else default.target,
         oracle=default.oracle,
         runner=NativeRunnerConfig(
             type=runner_type, required_capability_digest=source.capability.digest
         ),
         calibration=settings.calibration,
         reduction=reduction,
+        grading=source.grading,
     )
     if evidence.decision is not None:
         try:

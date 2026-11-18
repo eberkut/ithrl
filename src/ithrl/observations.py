@@ -96,6 +96,10 @@ class ObservationOutcome(StrEnum):
     INVALID_OBSERVATION = "invalid_observation"
     RUNNER_ERROR = "runner_error"
 
+    @classmethod
+    def from_grading(cls, status: Literal["pass", "fail", "error"]) -> ObservationOutcome:
+        return {"pass": cls.MATCH, "fail": cls.NO_MATCH, "error": cls.INVALID_OBSERVATION}[status]
+
 
 class ObservationIdentity(BaseModel):
     """All identities that must match before observations can be reused."""
@@ -156,6 +160,13 @@ class Observation(BaseModel):
             raise ValueError("runner errors require incomplete attempt evidence")
         if self.valid and not completed:
             raise ValueError("behavior outcomes require completed attempt evidence")
+        grading = self.attempt_evidence.grading
+        if grading is not None:
+            if grading.candidate_digest != self.candidate_digest:
+                raise ValueError("grading evidence belongs to another context candidate")
+            expected = ObservationOutcome.from_grading(grading.status)
+            if self.outcome is not expected:
+                raise ValueError("observation outcome contradicts grading evidence")
         if self.attempt_evidence.overload_replacement_safe and (
             self.outcome is not ObservationOutcome.RUNNER_ERROR
             or self.error_category != "provider-overloaded"

@@ -699,3 +699,40 @@ def test_verbose_native_telemetry_keeps_a_finite_record_bound() -> None:
     with pytest.raises(CopilotProtocolError) as refused:
         _parse(events)
     assert refused.value.code == "event-limit"
+
+
+def test_prompt_cache_break_is_opaque_and_does_not_replace_completion_evidence() -> None:
+    events = _events()
+    events.insert(
+        7,
+        _event(
+            "prompt_cache_break",
+            beforeRequest={"messages": ["private-fixture-request"]},
+            afterRequest={"messages": ["changed-fixture-request"]},
+            primaryReason="fixture-reason",
+            inputTokens=999,
+        ),
+    )
+    assert _parse(events) == _parse(_events())
+    events = [event for event in events if event["type"] != "model.call_finished"]
+    with pytest.raises(CopilotProtocolError) as refused:
+        _parse(events)
+    assert "private-fixture-request" not in str(refused.value)
+
+
+@pytest.mark.parametrize(
+    ("changes", "code"),
+    [
+        ({"data": None}, "invalid-event"),
+        ({"agentId": "other-agent"}, "subagent-event"),
+        ({"type": "prompt_cache_break.future"}, "unsupported-event"),
+    ],
+)
+def test_prompt_cache_diagnostic_keeps_native_event_guards(
+    changes: dict[str, object], code: str
+) -> None:
+    events = _events()
+    events.insert(7, {**_event("prompt_cache_break"), **changes})
+    with pytest.raises(CopilotProtocolError) as refused:
+        _parse(events)
+    assert refused.value.code == code

@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from ithrl.behavior import BehaviorType
 from ithrl.context import content_digest
+from ithrl.grading.contracts import GRADING_CLEANUP_SECONDS, PatchGradingConfig
 
 type CaptureType = Literal[
     "provider-request",
@@ -227,6 +228,7 @@ class ResolvedExecutionPlan(_ImmutableContract):
     experiment_digest: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
     target_digest: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
     target_type: BehaviorType
+    grading: PatchGradingConfig | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @model_validator(mode="after")
     def validate_plan(self) -> ResolvedExecutionPlan:
@@ -236,6 +238,12 @@ class ResolvedExecutionPlan(_ImmutableContract):
         _validate_resolved_transport(self)
         _validate_resolved_effects(self)
         _validate_resolved_limits(self)
+        if self.grading is not None and (
+            self.target_type != "final-response"
+            or self.grading.timeout_seconds + GRADING_CLEANUP_SECONDS
+            >= self.resource_limits.max_wall_time_seconds
+        ):
+            raise ValueError("grading requires a final response and time within the attempt limit")
         return self
 
     @property
@@ -268,6 +276,7 @@ type PreflightIssueCode = Literal[
     "timeout-unsupported",
     "cancellation-unsupported",
     "runner-unavailable",
+    "grading-unavailable",
 ]
 
 

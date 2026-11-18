@@ -8,6 +8,7 @@ import stat
 import subprocess
 import sys
 import threading
+import time
 from collections.abc import Generator
 from contextlib import contextmanager
 from copy import deepcopy
@@ -15,12 +16,14 @@ from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from importlib.metadata import version as distribution_version
 from pathlib import Path
-from types import MappingProxyType
+from types import MappingProxyType, SimpleNamespace
 from typing import Any, override
 
 import pytest
 
+import ithrl.measurement as measurement
 import ithrl.runner.codex.runner as codex_runner_module
+import ithrl.runner.runtime.process as runtime_process
 from ithrl.case import CaseEvidence, CaseWorkspace
 from ithrl.context import content_digest
 from ithrl.execution import (
@@ -30,7 +33,9 @@ from ithrl.execution import (
     SafetyPolicy,
 )
 from ithrl.experiment import ExperimentDefinition
+from ithrl.grading.contracts import PatchGradingConfig
 from ithrl.mutation import TextAppend, TextMutation
+from ithrl.observations import ObservationIdentity, ObservationStore
 from ithrl.runner import (
     PreparedAttempt,
     ProviderAcceptanceState,
@@ -197,6 +202,7 @@ def _attempt(
     *,
     max_wall_time_seconds: int = 5,
     max_native_output_bytes: int = 1024 * 1024,
+    grading: PatchGradingConfig | None = None,
 ) -> PreparedAttempt:
     experiment = ExperimentDefinition.from_toml(evidence.default_experiment)
     policy = SafetyPolicy(
@@ -229,6 +235,7 @@ def _attempt(
         experiment_digest=experiment.digest,
         target_digest=experiment.target.digest,
         target_type="final-response",
+        grading=grading,
     )
     return PreparedAttempt(
         evidence=evidence,
@@ -845,6 +852,80 @@ def test_maps_protocol_failure_without_exposing_native_output(tmp_path: Path) ->
     assert "not-json" not in str(refused.value)
     assert refused.value.accounting is not None
     assert refused.value.accounting.cleanup_outcome == "verified"
+
+
+@pytest.mark.parametrize("stage", ["materialization", "process-preparation"])
+def test_graded_deadline_blocks_process_launch_after_synchronous_preparation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stage: str
+) -> None:
+    workspace, evidence = _case(tmp_path)
+    runner = _runner(tmp_path, workspace)
+    attempt = _attempt(
+        evidence,
+        runner,
+        grading=PatchGradingConfig(
+            bundle_path=str(tmp_path / "task"),
+            bundle_digest="a" * 64,
+            environment_path=str(tmp_path / "env"),
+            environment_digest="b" * 64,
+            timeout_seconds=1,
+        ),
+    )
+    plan = attempt.execution_plan
+    identity = ObservationIdentity(
+        case_digest=plan.case_digest,
+        experiment_digest=plan.experiment_digest,
+        runner_fingerprint=plan.runner_fingerprint,
+        execution_plan_digest=plan.digest,
+        target_digest=plan.target_digest,
+        algorithm_digest="graded-timeout-test",
+    )
+    clock = [100.0]
+    fake_time = SimpleNamespace(monotonic=lambda: clock[0], monotonic_ns=time.monotonic_ns)
+    monkeypatch.setattr(measurement, "time", fake_time)
+    monkeypatch.setattr(runtime_process, "time", fake_time)
+
+    def validate(_input: object, *, timeout_seconds: float | None = None) -> None:
+        pass
+
+    monkeypatch.setattr(measurement, "validate_grading", validate)
+    monkeypatch.setattr(measurement, "validate_grading_runtime", validate)
+
+    attribute = (
+        "materialize_codex_attempt" if stage == "materialization" else "prepare_codex_process"
+    )
+    original = getattr(codex_runner_module, attribute)
+
+    def prepare_slowly(*args: Any, **kwargs: Any) -> Any:
+        result = original(*args, **kwargs)
+        clock[0] += 2.5  # Past the two seconds available to the native runner.
+        return result
+
+    starts: list[object] = []
+
+    def forbid_launch(spec: object) -> None:
+        starts.append(spec)
+        raise AssertionError("the native process must not start after the graded deadline")
+
+    monkeypatch.setattr(codex_runner_module, attribute, prepare_slowly)
+    monkeypatch.setattr(runtime_process, "_start_process", forbid_launch)
+    store = ObservationStore(tmp_path / "graded-deadline.sqlite")
+    with pytest.raises(measurement.RunnerExecutionError) as stopped:
+        asyncio.run(
+            measurement.observe_once(runner=runner, identity=identity, store=store, attempt=attempt)
+        )
+
+    assert clock[0] == 102.5
+    assert not starts
+    observation = stopped.value.observation
+    assert observation is not None
+    assert observation.execution_plan_digest == plan.digest
+    assert observation.error_category == "timeout"
+    assert (
+        observation.attempt_evidence.provider_acceptance_state
+        is ProviderAcceptanceState.NOT_STARTED
+    )
+    assert observation.attempt_evidence.provider_call_charge(MAX_INFERENCE_REQUESTS) == 0
 
 
 def test_maps_timeout_after_verified_cleanup(tmp_path: Path) -> None:

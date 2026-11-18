@@ -1,0 +1,39 @@
+{
+  "instance_id": "pytest-dev__iniconfig.16793ead.func_basic__4oga9t8l",
+  "patch": "diff --git a/src/iniconfig/__init__.py b/src/iniconfig/__init__.py\nindex 3c40bc9..aa6d6a0 100644\n--- a/src/iniconfig/__init__.py\n+++ b/src/iniconfig/__init__.py\n@@ -84,7 +84,7 @@ class SectionWrapper:\n         default: _D | None = None,\n         convert: Callable[[str], _T] | None = None,\n     ) -> _D | _T | str | None:\n-        return self.config.get(self.name, key, convert=convert, default=default)\n+        return self.config.get(self.name, key, convert=default, default=convert)\n \n     def __getitem__(self, key: str) -> str:\n         return self.config.sections[self.name][key]\n",
+  "FAIL_TO_PASS": [
+    "testing/test_iniconfig.py::test_section_get"
+  ],
+  "PASS_TO_PASS": [
+    "testing/test_iniconfig.py::test_tokenize[comment]",
+    "testing/test_iniconfig.py::test_tokenize[comment2]",
+    "testing/test_iniconfig.py::test_tokenize[section]",
+    "testing/test_iniconfig.py::test_tokenize[value]",
+    "testing/test_iniconfig.py::test_parse_empty",
+    "testing/test_iniconfig.py::test_ParseError",
+    "testing/test_iniconfig.py::test_continuation_needs_perceeding_token",
+    "testing/test_iniconfig.py::test_continuation_cant_be_after_section",
+    "testing/test_iniconfig.py::test_section_cant_be_empty",
+    "testing/test_iniconfig.py::test_error_on_weird_lines[!!]",
+    "testing/test_iniconfig.py::test_iniconfig_from_file",
+    "testing/test_iniconfig.py::test_iniconfig_section_first",
+    "testing/test_iniconfig.py::test_iniconig_section_duplicate_fails",
+    "testing/test_iniconfig.py::test_iniconfig_duplicate_key_fails",
+    "testing/test_iniconfig.py::test_iniconfig_lineof",
+    "testing/test_iniconfig.py::test_iniconfig_get_convert",
+    "testing/test_iniconfig.py::test_iniconfig_get_missing",
+    "testing/test_iniconfig.py::test_missing_section",
+    "testing/test_iniconfig.py::test_section_getitem",
+    "testing/test_iniconfig.py::test_section_iter",
+    "testing/test_iniconfig.py::test_config_iter",
+    "testing/test_iniconfig.py::test_config_contains",
+    "testing/test_iniconfig.py::test_iter_file_order",
+    "testing/test_iniconfig.py::test_example_pypirc",
+    "testing/test_iniconfig.py::test_api_import",
+    "testing/test_iniconfig.py::test_iscommentline_true[#qwe]",
+    "testing/test_iniconfig.py::test_iscommentline_true[;qwe]"
+  ],
+  "image_name": "swebench/swesmith.x86_64.pytest-dev_1776_iniconfig.16793ead",
+  "repo": "swesmith/pytest-dev__iniconfig.16793ead",
+  "problem_statement": "SectionWrapper.get() swaps convert and default parameters\n\nI noticed that the `get()` method in `SectionWrapper` class is not working as expected. It seems like the parameters are being passed in the wrong order.\n\nMinimal example to reproduce:\n\n```python\nfrom iniconfig import IniConfig\n\n# Create a simple config\nconfig = IniConfig('test.ini', data='[section]\\nvalue=1')\nsection = config['section']\n\n# This should convert the value to int, but doesn't work\nresult = section.get('value', convert=int)\nprint(f\"Expected: 1 (as int), Got: {result} (as {type(result).__name__})\")\n\n# This should return the default value for a missing key, but doesn't work\nresult = section.get('missing', 42)\nprint(f\"Expected: 42, Got: {result}\")\n```\n\nWhen running this code, the parameters seem to be swapped internally. The `convert` function is being treated as the default value, and the default value is being treated as the conversion function.\n\nThis is inconsistent with the behavior documented and expected from the `get()` method, which should apply the conversion function to the value if it exists, or return the default value if the key is missing."
+}

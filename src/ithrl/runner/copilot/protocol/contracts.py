@@ -31,6 +31,7 @@ SUPPORTED_EVENTS = frozenset(
         "session.managed_settings_resolved",
         "session.usage_info",
         "pending_messages.modified",
+        "prompt_cache_break",
         "system.message",
         "assistant.idle",
         "assistant.message",

@@ -14,6 +14,7 @@ capabilities. A research result can precede a supported integration.
 | [Ordinary-session investigation](ordinary-session-investigation.md) | A sanitized Codex debugging question, paragraph intervention, fresh confirmation, cost and limits of interpretation |
 | [Passive compaction investigation](passive-compaction-investigation.md) | Ordinary Codex/Copilot repeated and changed captures, source-bound interpretation and provider-free installed-artifact qualification |
 | [Context fuzzing](context-fuzzing.md) | A bounded synthetic discovery/simplification/confirmation design, exact inference and validity sensitivities |
+| [Public debugging tasks](https://github.com/eberkut/ithrl/tree/main/research/benchmarks) | Pinned tasks, offline repair graders and bounded Codex/Copilot CLI reductions with fresh confirmation |
 
 ## Reproduce the synthetic studies
 

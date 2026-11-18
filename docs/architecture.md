@@ -153,6 +153,27 @@ outcomes. Invalid observations and runner errors retain execution evidence witho
 behavioral losses. The oracle recognizes the configured final response or shell request; it does
 not judge why the model produced it.
 
+Sampled experiments can attach `python-patch-tests` grading to an unconstrained final-response
+target. `grading/` binds the implementation, reviewed task bundle and prepared system-Python
+environment. Git applies content-only changes to existing allowlisted regular files with isolated
+configuration and attributes. Paths, file types and modes are checked before compilation; fixed
+source and separately authored verifier suites run in disposable namespaces without network access.
+Each suite imports the patched code in the interpreter that runs assertions and reports counts.
+Read-only mounts protect verifier files; they do not prevent the candidate from reading those files
+or altering in-process reporting. Grades assume cooperative repairs that leave the verifier and its
+reporting intact. The report nonce checks association, not authenticity against candidate code.
+Preflight and pre-dispatch checks start an inert grader namespace with a timeout of at most two
+seconds; they import no task code and make no provider calls.
+
+An absolute native deadline reaches the runtime's prelaunch checks, reserving time for grading and
+cleanup without changing the frozen attempt. The grade, response digest and suite counts stay with
+the completed attempt. Rejected or failing repairs are nonmatches. Operational grading errors retain
+the native request charge and stop collection without entering behavioral counts or authorizing
+another inference. Under that cooperative assumption, task grades record the declared test
+outcomes. Native input visibility and runtime qualification require separate evidence. Exceptions
+in setup, teardown or cleanup are operational errors, including those caused by candidate code;
+assertion failures and other exceptions in the test body are behavioral failures.
+
 Deterministic reduction and sampled reduction share dependency-valid candidate construction but
 make different claims. The deterministic reducer can establish `search-1-minimal` through a
 completed final single-group sweep. Sampled search uses exploratory screens and reports its
@@ -294,6 +315,7 @@ Python module names are not public API commitments.
 | `runner/runtime/` | Shared bounded process, state, protection and output lifecycle |
 | `runner/fake.py`, `synthetic.py` | Provider-free deterministic runner and bundled example |
 | `measurement.py`, `calibration.py`, `observations.py` | One-attempt measurement, calibration and append-only SQLite observation/block evidence |
+| `grading/` | Bound Python repair tasks, isolated patch application and test grading; no native action execution |
 | `sampling.py`, `run_state.py` | Shared frozen-block collection, private run state, reservations, reconciliation and accounting |
 | `reduce/contracts.py`, `reduce/engine.py`, `reduce/search.py` | Deterministic and exploratory sampled reduction, checkpoints and final sweep coverage |
 | `statistics.py` | Independent-arm preservation interval and confirmation classification |

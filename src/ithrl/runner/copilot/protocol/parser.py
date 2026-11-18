@@ -94,7 +94,14 @@ def parse_output(
                 invalid_sequence()
             state.forwarded = True
             continue
-        if event_type in {"pending_messages.modified", "session.usage_info", "sandbox.decision"}:
+        if event_type in {
+            "pending_messages.modified",
+            "prompt_cache_break",
+            "session.usage_info",
+            "sandbox.decision",
+        }:
+            # Cache diagnostics may include request snapshots. Keep them opaque;
+            # they establish neither response content nor token usage.
             event_data(event)
             continue
         if event_type == "session.idle" and state.idle_seen:

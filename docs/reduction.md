@@ -178,10 +178,11 @@ admission bounds, not expected usage. A two-comparison limit could end coarse se
 search starts. For a smaller plan, reduce stage ceilings and recalculate administrative budgets
 together. Field survival and preservation remain untested until execution.
 
-`prepare` preserves the target, oracle and protected IDs, binds the recorded capability digest and
-calculates the budget. It starts no harness, reads no authentication, opens no observation store
-and inspects no original workspace. Output is private and bounded; an existing file is never
-overwritten. Changed settings require a new output path.
+`prepare` binds the recorded capability, target and grading configuration, preserves the oracle and
+protected IDs, and calculates the budget. Task grading uses an unconstrained final-response target.
+`prepare` starts no harness, reads no authentication, opens no observation store and inspects no
+original workspace. Output is private and bounded; an existing file is never overwritten. Changed
+settings require a new output path.
 
 Settings define statistical policy; command arguments set administrative ceilings and pacing.
 Per-attempt timeout, request and optional token bounds come from the receipt. Changed fixed native
@@ -226,7 +227,7 @@ The current profiles have these operating limits:
 | Physical inference requests per attempt | 1–16; default 16 | 1 |
 | Inter-attempt delay | Defaults to zero; measured examples use 15 seconds | Defaults to zero; measured examples use zero |
 | Native output per attempt | 8 MiB | 8 MiB |
-| Disposable files per attempt | 64 MiB; 10,000 entries | 256 MiB; 10,000 entries |
+| Runner disposable state per attempt | 64 MiB; 10,000 entries | 512 MiB; 10,000 entries |
 | Token usage | Reported for completed observations in the measured profiles | Available when native events report it; unknown usage remains explicit |
 | Hard input-token cap | Unavailable | Unavailable |
 

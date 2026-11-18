@@ -1,0 +1,342 @@
+{
+  "schema_version": 1,
+  "purpose": "Provider-free reference-task and grader replay; no native experiment or executable-grader product support is claimed.",
+  "environment": {
+    "python": "3.12.3",
+    "packages": {
+      "packaging": "26.3",
+      "asgiref": "3.13.0",
+      "pytest": "9.2.0",
+      "iniconfig": "2.3.1",
+      "appdirs": "1.4.4",
+      "toml": "0.10.2",
+      "pluggy": "1.7.0",
+      "django": "5.2.19",
+      "sqlparse": "0.6.1",
+      "pygments": "2.21.0"
+    }
+  },
+  "tasks": [
+    {
+      "key": "iniconfig",
+      "instance_id": "pytest-dev__iniconfig.16793ead.func_basic__4oga9t8l",
+      "dataset": {
+        "id": "SWE-bench/SWE-smith-py",
+        "revision": "77cab9055d42ab4a5c25c89a8f937096db13558e",
+        "license": "MIT",
+        "row": "data/iniconfig-row.json",
+        "shard_sha256": "302a383bb9229c42063ff2364b2ea637e9e7a20d82e0d566614d3aba9234833d"
+      },
+      "source": {
+        "repository": "pytest-dev/iniconfig",
+        "commit": "16793eaddac67de0b8d621ae4e42e05b927e8d67",
+        "license": "MIT"
+      },
+      "archive": {
+        "file": "iniconfig-source.tar.gz",
+        "url": "https://codeload.github.com/pytest-dev/iniconfig/tar.gz/16793eaddac67de0b8d621ae4e42e05b927e8d67",
+        "sha256": "219919f81985b6148dbb23c67e437e861d995360856c5e38812f7553f522a45d"
+      },
+      "dataset_image": "docker.io/swebench/swesmith.x86_64.pytest-dev_1776_iniconfig.16793ead@sha256:d737c0b8e456fffbef75601a79b820c6f7bda4191c416afd173c7c233310a2cd",
+      "image_executed": false,
+      "python_path": "src",
+      "base_patches": [
+        {
+          "file": "data/iniconfig-injection.patch",
+          "reverse": false
+        }
+      ],
+      "official_command": [
+        "-m",
+        "pytest",
+        "-o",
+        "addopts=",
+        "-p",
+        "no:cacheprovider",
+        "testing/test_iniconfig.py",
+        "-q"
+      ],
+      "official_test_count": 42,
+      "independent_file": "data/test_get_controls.py",
+      "independent_test_count": 8,
+      "variants": [
+        {
+          "name": "buggy",
+          "patches": [],
+          "replacements": [],
+          "expected": {
+            "official": false,
+            "independent": false
+          }
+        },
+        {
+          "name": "reference",
+          "patches": [
+            {
+              "file": "data/iniconfig-injection.patch",
+              "reverse": true
+            }
+          ],
+          "replacements": [],
+          "expected": {
+            "official": true,
+            "independent": true
+          }
+        },
+        {
+          "name": "alternative-positional",
+          "patches": [],
+          "replacements": [
+            {
+              "path": "src/iniconfig/__init__.py",
+              "old": "return self.config.get(self.name, key, convert=default, default=convert)",
+              "new": "return self.config.get(self.name, key, default, convert)"
+            }
+          ],
+          "expected": {
+            "official": true,
+            "independent": true
+          }
+        },
+        {
+          "name": "no-conversion",
+          "patches": [],
+          "replacements": [
+            {
+              "path": "src/iniconfig/__init__.py",
+              "old": "return self.config.get(self.name, key, convert=default, default=convert)",
+              "new": "return self.config.get(self.name, key, default=default)"
+            }
+          ],
+          "expected": {
+            "official": false,
+            "independent": false
+          }
+        },
+        {
+          "name": "convert-default",
+          "patches": [],
+          "replacements": [
+            {
+              "path": "src/iniconfig/__init__.py",
+              "old": "return self.config.get(self.name, key, convert=default, default=convert)",
+              "new": "value = self.config.get(self.name, key, default=default)\n        return convert(value) if convert is not None else value"
+            }
+          ],
+          "expected": {
+            "official": true,
+            "independent": false
+          }
+        },
+        {
+          "name": "changed-defect",
+          "patches": [
+            {
+              "file": "data/iniconfig-injection.patch",
+              "reverse": true
+            }
+          ],
+          "replacements": [
+            {
+              "path": "src/iniconfig/__init__.py",
+              "old": "return convert(value)",
+              "new": "return value"
+            }
+          ],
+          "expected": {
+            "official": false,
+            "independent": false
+          }
+        },
+        {
+          "name": "changed-reference",
+          "patches": [
+            {
+              "file": "data/iniconfig-injection.patch",
+              "reverse": true
+            }
+          ],
+          "replacements": [],
+          "expected": {
+            "official": true,
+            "independent": true
+          }
+        }
+      ],
+      "input_intro": {
+        "buggy": "Incident: section-level configuration reads no longer honor value conversion.\n\nThe public API returns stored values as text unless a converter is supplied. A missing key returns the supplied default unchanged; its converter must not run. A conversion failure on a present value propagates. A stored empty value remains distinct from a missing key.\n\nWith data `[worker]\\nretries=7`, requesting `config[\"worker\"].get(\"retries\", convert=int)` returns the string `\"7\"`, although an integer is required. The snapshots below are the code under investigation. Repair the cause while preserving the API behavior, rather than special-casing the example.\n",
+        "changed-defect": "Incident: section-level configuration reads no longer honor value conversion.\n\nThe public API returns stored values as text unless a converter is supplied. A missing key returns the supplied default unchanged; its converter must not run. A conversion failure on a present value propagates. A stored empty value remains distinct from a missing key.\n\nWith data `[worker]\\nretries=7`, requesting `config[\"worker\"].get(\"retries\", convert=int)` returns the string `\"7\"`, although an integer is required. The snapshots below are the code under investigation. Repair the cause while preserving the API behavior, rather than special-casing the example.\n"
+      },
+      "context_files": [
+        "src/iniconfig/__init__.py"
+      ],
+      "nondiagnostic_section_contains": "@overload"
+    },
+    {
+      "key": "migration-linter",
+      "instance_id": "3yourmind__django-migration-linter-186",
+      "dataset": {
+        "id": "ibragim-bad/SWE-rebench-V2.1",
+        "revision": "26c0145ded93168b0d5d095420155901ad2d5a2f",
+        "license": "CC-BY-4.0",
+        "row": "data/migration-row.json",
+        "shard_sha256": "9a4a24b796d29498053380c876d8c1edbbad53d6c302b654b152aaf242f40c61"
+      },
+      "source": {
+        "repository": "3YOURMIND/django-migration-linter",
+        "commit": "aef3db3e4198d06c38bc4b0874e72ed657891eea",
+        "license": "Apache-2.0"
+      },
+      "archive": {
+        "file": "migration-source.tar.gz",
+        "url": "https://codeload.github.com/3YOURMIND/django-migration-linter/tar.gz/aef3db3e4198d06c38bc4b0874e72ed657891eea",
+        "sha256": "8aa289e4dffdd79545f646c5ce863254daaa14fcdc7a5908427093c6575d627e"
+      },
+      "dataset_image": "docker.io/swerebenchv2/3yourmind-django-migration-linter@sha256:6e86ff38498edd885c6231ca408cf7d401cc3cac993afdf2c41d5032ac521106",
+      "image_executed": false,
+      "python_path": ".",
+      "base_patches": [
+        {
+          "file": "data/migration-tests.patch",
+          "reverse": false
+        }
+      ],
+      "official_command": [
+        "-m",
+        "unittest",
+        "tests.unit.test_sql_analyser",
+        "-q"
+      ],
+      "official_test_count": 31,
+      "independent_file": "data/test_index_controls.py",
+      "independent_test_count": 1,
+      "independent_subcases": 14,
+      "variants": [
+        {
+          "name": "buggy",
+          "patches": [],
+          "replacements": [],
+          "expected": {
+            "official": false,
+            "independent": false
+          }
+        },
+        {
+          "name": "upstream-reference",
+          "patches": [
+            {
+              "file": "data/migration-upstream.patch",
+              "reverse": false
+            }
+          ],
+          "replacements": [],
+          "expected": {
+            "official": true,
+            "independent": false
+          }
+        },
+        {
+          "name": "reference",
+          "patches": [
+            {
+              "file": "data/migration-complete-loop.patch",
+              "reverse": false
+            }
+          ],
+          "replacements": [],
+          "expected": {
+            "official": true,
+            "independent": true
+          }
+        },
+        {
+          "name": "alternative-all",
+          "patches": [
+            {
+              "file": "data/migration-alternative-all.patch",
+              "reverse": false
+            }
+          ],
+          "replacements": [],
+          "expected": {
+            "official": true,
+            "independent": true
+          }
+        },
+        {
+          "name": "disable-warning",
+          "patches": [
+            {
+              "file": "data/migration-disable-warning.patch",
+              "reverse": false
+            }
+          ],
+          "replacements": [],
+          "expected": {
+            "official": false,
+            "independent": false
+          }
+        },
+        {
+          "name": "global-create-exemption",
+          "patches": [
+            {
+              "file": "data/migration-global-create-exemption.patch",
+              "reverse": false
+            }
+          ],
+          "replacements": [],
+          "expected": {
+            "official": false,
+            "independent": false
+          }
+        },
+        {
+          "name": "changed-defect",
+          "patches": [
+            {
+              "file": "data/migration-complete-loop.patch",
+              "reverse": false
+            }
+          ],
+          "replacements": [
+            {
+              "path": "django_migration_linter/sql_analyser/postgresql.py",
+              "old": "\"code\": \"DROP_INDEX\",\n            \"fn\": lambda sql, **kw: re.search(\"DROP INDEX\", sql)\n            and not re.search(\"INDEX CONCURRENTLY\", sql),",
+              "new": "\"code\": \"DROP_INDEX\",\n            \"fn\": lambda sql, **kw: re.search(\"DROP INDEX\", sql)\n            and re.search(\"INDEX CONCURRENTLY\", sql),"
+            }
+          ],
+          "expected": {
+            "official": false,
+            "independent": true
+          }
+        },
+        {
+          "name": "changed-reference",
+          "patches": [
+            {
+              "file": "data/migration-complete-loop.patch",
+              "reverse": false
+            }
+          ],
+          "replacements": [],
+          "expected": {
+            "official": true,
+            "independent": true
+          }
+        }
+      ],
+      "input_intro": {
+        "buggy": "Incident: index-warning classification is inconsistent with the migration's table operations.\n\nThe analyser examines literal SQL; this investigation does not connect to a database. Non-concurrent index creation on an existing table must retain its warning. An index on a table created in the same migration should be exempt, and this must hold when a migration indexes several tables. Preserve the other analyser rules and concurrent-index behavior.\n\nA capture containing `CREATE TABLE \"films\" (\"title\" text);` followed by `CREATE INDEX ON \"films\" ((lower(\"title\")));` reports `CREATE_INDEX`. The same index without a corresponding table creation must continue to warn. The snapshots below are the code under investigation.\n",
+        "changed-defect": "Incident: index-warning classification is inconsistent with concurrent operations.\n\nThe analyser examines literal SQL; this investigation does not connect to a database. Non-concurrent index creation on an existing table must retain its warning. An index on a table created in the same migration should be exempt, and this must hold when a migration indexes several tables. Preserve the other analyser rules and concurrent-index behavior.\n\nThe current capture reports `DROP_INDEX` for `DROP INDEX CONCURRENTLY ON films;`, but gives no warning for `DROP INDEX ON films`. The snapshots below are the code under investigation.\n"
+      },
+      "context_files": [
+        "django_migration_linter/sql_analyser/postgresql.py",
+        "django_migration_linter/sql_analyser/base.py",
+        "django_migration_linter/sql_analyser/utils.py",
+        "django_migration_linter/utils.py"
+      ],
+      "nondiagnostic_context_file": "django_migration_linter/utils.py"
+    }
+  ]
+}

@@ -8,6 +8,7 @@ from typing import Annotated
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ithrl.execution import MAX_PROVIDER_CALLS_PER_ATTEMPT
+from ithrl.grading.contracts import GradeEvidence
 from ithrl.runner.contracts import (
     NativeOutputReference,
     PreparedAttempt,
@@ -47,6 +48,7 @@ class AttemptEvidence(BaseModel):
     native_output: NativeOutputReference | None = None
     retry_safe: bool = False
     overload_replacement_safe: bool = False
+    grading: GradeEvidence | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @field_validator("reason_code", mode="before")
     @classmethod
@@ -62,6 +64,10 @@ class AttemptEvidence(BaseModel):
     def validate_completion(self) -> AttemptEvidence:
         self._validate_completed_attempt()
         self._validate_provider_acceptance()
+        if self.grading is not None and (
+            self.termination_reason != "completed" or self.grading.attempt_id != self.attempt_id
+        ):
+            raise ValueError("grading evidence requires the matching completed native attempt")
         if self.retry_safe:
             self._validate_safe_retry()
         if self.overload_replacement_safe:
@@ -149,10 +155,15 @@ class AttemptEvidence(BaseModel):
     def automatic_retry_safe(self) -> bool:
         """Return whether this evidence permits an automatic repeat attempt."""
 
-        return self.termination_reason == "completed" or self.retry_safe
+        return (
+            self.termination_reason == "completed"
+            and (self.grading is None or self.grading.status != "error")
+        ) or self.retry_safe
 
     @classmethod
-    def from_result(cls, attempt: PreparedAttempt, result: RunResult) -> AttemptEvidence:
+    def from_result(
+        cls, attempt: PreparedAttempt, result: RunResult, grading: GradeEvidence | None = None
+    ) -> AttemptEvidence:
         """Create persisted evidence from a validated runner result."""
 
         return cls(
@@ -173,6 +184,7 @@ class AttemptEvidence(BaseModel):
             usage=result.usage,
             accounting=result.accounting,
             native_output=result.native_output,
+            grading=grading,
         )
 
     @classmethod
@@ -185,7 +197,7 @@ class AttemptEvidence(BaseModel):
             attempt_digest=attempt.digest,
             termination_reason=_termination_reason(error.code),
             provider_acceptance_state=acceptance,
-            **({"reason_code": error.reason_code} if error.reason_code is not None else {}),
+            reason_code=error.reason_code,
             provider_calls_possible=(
                 _possible_provider_calls(attempt, error)
                 if acceptance is ProviderAcceptanceState.UNKNOWN

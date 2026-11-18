@@ -108,7 +108,9 @@ class SequenceRunner:
     def fingerprint(self) -> str:
         return "credential-free-sampled-v1"
 
-    async def run(self, attempt: PreparedAttempt) -> RunResult:
+    async def run(
+        self, attempt: PreparedAttempt, *, runtime_deadline: float | None = None
+    ) -> RunResult:
         outcome = self.outcomes[self.calls]
         self.calls += 1
         if isinstance(outcome, RunnerErrorCode):

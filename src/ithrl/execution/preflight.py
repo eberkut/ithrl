@@ -21,6 +21,8 @@ from ithrl.experiment import (
     SampledExperimentDefinition,
     UnavailableRunnerConfig,
 )
+from ithrl.grading import validate_grading, validate_grading_runtime
+from ithrl.grading.contracts import GRADING_CLEANUP_SECONDS
 
 
 def resolve_execution_plan(
@@ -109,6 +111,21 @@ def resolve_execution_plan(
             )
     _check_transport(capability, safety_policy, resource_limits, issues)
     _check_effects(capability, safety_policy, experiment.target.type, issues)
+    if isinstance(experiment, SampledExperimentDefinition) and experiment.grading is not None:
+        try:
+            if (
+                experiment.grading.timeout_seconds + GRADING_CLEANUP_SECONDS
+                >= resource_limits.max_wall_time_seconds
+            ):
+                raise ValueError("grading exceeds the attempt limit")
+            validate_grading_runtime(validate_grading(experiment.grading))
+        except (OSError, ValueError):
+            issues.append(
+                PreflightIssue(
+                    code="grading-unavailable",
+                    message="grading inputs, runtime or attempt bounds are unavailable or incompatible",
+                )
+            )
     if issues:
         return PreflightReport(ready=False, plan=None, issues=tuple(issues))
     return _resolved_report(
@@ -150,6 +167,9 @@ def _resolved_report(
         experiment_digest=experiment.digest,
         target_digest=experiment.target.digest,
         target_type=experiment.target.type,
+        grading=(
+            experiment.grading if isinstance(experiment, SampledExperimentDefinition) else None
+        ),
     )
     return PreflightReport(ready=True, plan=plan)
 

@@ -217,7 +217,7 @@ def test_dry_run_uses_harness_specific_state_budget_without_dispatch(
     assert result.exit_code == ExitCode.SUCCESS, result.output
     report = json.loads(result.stdout)
     assert (
-        report["max_disposable_state_bytes"] == (256 if harness == "copilot" else 64) * 1024 * 1024
+        report["max_disposable_state_bytes"] == (512 if harness == "copilot" else 64) * 1024 * 1024
     )
     assert report["provider_calls"] == report["actions_executed"] == 0
     start.assert_not_called()

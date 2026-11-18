@@ -65,7 +65,9 @@ class FakeRunner:
         }
         return f"fake-v3:{content_digest(payload)}"
 
-    async def run(self, attempt: PreparedAttempt) -> RunResult:
+    async def run(
+        self, attempt: PreparedAttempt, *, runtime_deadline: float | None = None
+    ) -> RunResult:
         if attempt.candidate.materialization != "exact-request":
             raise RunnerError(
                 RunnerErrorCode.PREPARATION,

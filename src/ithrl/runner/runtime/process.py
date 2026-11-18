@@ -101,6 +101,7 @@ async def run_isolated_process(
     workspace_paths: Iterable[ProtectedPath],
     max_protected_entries: int,
     max_protected_bytes: int,
+    runtime_deadline: float | None = None,
 ) -> ProcessExecution:
     """Run one direct child in fresh state, then preserve output and verify cleanup."""
 
@@ -108,6 +109,9 @@ async def run_isolated_process(
     require_safe_attempt_state_support()
     started = time.monotonic_ns()
     deadline = time.monotonic() + resource_limits.max_wall_time_seconds
+    if runtime_deadline is not None:
+        # Synchronous setup can consume time while the caller's asyncio timer is idle.
+        deadline = min(deadline, runtime_deadline)
     try:
         source_snapshot = ProtectedPathSnapshot.capture(
             source_paths,

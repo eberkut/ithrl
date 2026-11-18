@@ -1,0 +1,160 @@
+{
+  "tasks_sha256": "fc69affe29b901f75515efb289faff57cf6e8f6abece62ebf51bc3892c80d491",
+  "reproducer_sha256": "15133de48432804da2c5ce9ce2f6c421dfc1d834ed54d27a51acd5381d9fb473",
+  "environment": {
+    "python": "3.12.3",
+    "packages": {
+      "packaging": "26.3",
+      "pytest": "9.2.0",
+      "asgiref": "3.13.0",
+      "pygments": "2.21.0",
+      "django": "5.2.19",
+      "iniconfig": "2.3.1",
+      "appdirs": "1.4.4",
+      "toml": "0.10.2",
+      "pluggy": "1.7.0",
+      "sqlparse": "0.6.1"
+    }
+  },
+  "source_archives_sha256": {
+    "iniconfig-source.tar.gz": "219919f81985b6148dbb23c67e437e861d995360856c5e38812f7553f522a45d",
+    "migration-source.tar.gz": "8aa289e4dffdd79545f646c5ce863254daaa14fcdc7a5908427093c6575d627e"
+  },
+  "fixtures_sha256": {
+    "data/test_get_controls.py": "4aa56f73098e6ba386be08b7c9332c8c5db6e4d3fbaa6d7149174a64a39e59df",
+    "data/iniconfig-injection.patch": "c5d6dd85fb24e08a2e56b2de3fdcb0b3f33133a40af30e53082e019f00c83448",
+    "data/test_index_controls.py": "4d8cf211a799cbd112a2d670a4b74b285b84c1a22c862fb1e8ee104d5f5a609b",
+    "data/migration-tests.patch": "d6075a745d95745077711d9cc4fe0e1499db6466283b0c32add02ea700135b12",
+    "data/migration-upstream.patch": "ca67a40109897c45071cded8c8f24df120204da6c5fedcb305ae2e24f998d3ba",
+    "data/migration-complete-loop.patch": "4d9ed86577bc2dc2ce870be5e9526d68fc64f9763e6b31466ccbfd33e9a67904",
+    "data/migration-alternative-all.patch": "e51399268a8c3183f391308bd1bd6986fb145e692c95419166218fe399dc2dfc",
+    "data/migration-disable-warning.patch": "38db3bb26b827b98580eb2b9e91f9b5527ffecb34d7e8217650dd4c29f5b1564",
+    "data/migration-global-create-exemption.patch": "afee6783f900a890227cdecaecdf0c8201cdcce67f6accbb8864de8929531926"
+  },
+  "incident_inputs": {
+    "inputs/iniconfig-buggy.md": {
+      "sha256": "2079d0e6172bd0ad54e75ae1402b209822be83544c3c57c7587ac032f3b0ce86",
+      "source_files_sha256": {
+        "src/iniconfig/__init__.py": "b460888d19fd146f4beded094f72cdfa8ca09228b6576545fe6e1705f2d40983"
+      }
+    },
+    "inputs/iniconfig-changed-defect.md": {
+      "sha256": "f837d5cccaa3f4cb365fa529c0ca11a1d14eaeeef54d4906aeb2764b5c6b5f48",
+      "source_files_sha256": {
+        "src/iniconfig/__init__.py": "2475c59b7515f738e22c0724abefc534fd35df849165b4e8ef3d24b24432a6e6"
+      }
+    },
+    "inputs/migration-linter-buggy.md": {
+      "sha256": "8fce13c375c78e16becac7f97e3d000c6881fbe89639f47744244dfe548f9fde",
+      "source_files_sha256": {
+        "django_migration_linter/sql_analyser/postgresql.py": "40f330b1fed9f157429fea099bd272aeda465315361313c36ce29980c49899e5",
+        "django_migration_linter/sql_analyser/base.py": "da2767cdb6dd705485df01b160d6d4dbe1fa6e7ae8ca0b8fd1d98c78f55a9030",
+        "django_migration_linter/sql_analyser/utils.py": "35600286f1362cdd296519427cbad2e04e7a996380437e1102534a8b0af16d49",
+        "django_migration_linter/utils.py": "56809a1917bae5538126691a24930513610ffa74ccdaf40885a4b9691ec51ad6"
+      }
+    },
+    "inputs/migration-linter-changed-defect.md": {
+      "sha256": "3d21985bf11f1e96ee90e67c3736647722fba477f32fc46f09449032c9f2950f",
+      "source_files_sha256": {
+        "django_migration_linter/sql_analyser/postgresql.py": "86c5145ac0b3d35f108dceb98585347976d63ecd5fd436aaf36f7735928b6d7c",
+        "django_migration_linter/sql_analyser/base.py": "da2767cdb6dd705485df01b160d6d4dbe1fa6e7ae8ca0b8fd1d98c78f55a9030",
+        "django_migration_linter/sql_analyser/utils.py": "35600286f1362cdd296519427cbad2e04e7a996380437e1102534a8b0af16d49",
+        "django_migration_linter/utils.py": "56809a1917bae5538126691a24930513610ffa74ccdaf40885a4b9691ec51ad6"
+      }
+    }
+  },
+  "results": [
+    {
+      "task": "iniconfig",
+      "variant": "buggy",
+      "official": false,
+      "independent": false
+    },
+    {
+      "task": "iniconfig",
+      "variant": "reference",
+      "official": true,
+      "independent": true
+    },
+    {
+      "task": "iniconfig",
+      "variant": "alternative-positional",
+      "official": true,
+      "independent": true
+    },
+    {
+      "task": "iniconfig",
+      "variant": "no-conversion",
+      "official": false,
+      "independent": false
+    },
+    {
+      "task": "iniconfig",
+      "variant": "convert-default",
+      "official": true,
+      "independent": false
+    },
+    {
+      "task": "iniconfig",
+      "variant": "changed-defect",
+      "official": false,
+      "independent": false
+    },
+    {
+      "task": "iniconfig",
+      "variant": "changed-reference",
+      "official": true,
+      "independent": true
+    },
+    {
+      "task": "migration-linter",
+      "variant": "buggy",
+      "official": false,
+      "independent": false
+    },
+    {
+      "task": "migration-linter",
+      "variant": "upstream-reference",
+      "official": true,
+      "independent": false
+    },
+    {
+      "task": "migration-linter",
+      "variant": "reference",
+      "official": true,
+      "independent": true
+    },
+    {
+      "task": "migration-linter",
+      "variant": "alternative-all",
+      "official": true,
+      "independent": true
+    },
+    {
+      "task": "migration-linter",
+      "variant": "disable-warning",
+      "official": false,
+      "independent": false
+    },
+    {
+      "task": "migration-linter",
+      "variant": "global-create-exemption",
+      "official": false,
+      "independent": false
+    },
+    {
+      "task": "migration-linter",
+      "variant": "changed-defect",
+      "official": false,
+      "independent": true
+    },
+    {
+      "task": "migration-linter",
+      "variant": "changed-reference",
+      "official": true,
+      "independent": true
+    }
+  ],
+  "native_agents_started": 0,
+  "provider_inference_requests": 0
+}

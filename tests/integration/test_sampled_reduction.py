@@ -114,7 +114,9 @@ class ScreenRunner:
         if self.admission is not None:
             self.admission(attempt)
 
-    async def run(self, attempt: PreparedAttempt) -> RunResult:
+    async def run(
+        self, attempt: PreparedAttempt, *, runtime_deadline: float | None = None
+    ) -> RunResult:
         self.calls.append(attempt)
         key = (attempt.phase, attempt.arm, attempt.candidate.digest)
         index = self.counts[key]

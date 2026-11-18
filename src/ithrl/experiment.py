@@ -18,6 +18,7 @@ from ithrl.behavior import (
     parse_behavior_target,
 )
 from ithrl.context import content_digest
+from ithrl.grading.contracts import PatchGradingConfig
 from ithrl.text_sections import TextSectionRemoval
 
 
@@ -296,6 +297,23 @@ class SampledExperimentDefinition(_ImmutableContract):
     runner: Annotated[NativeRunnerConfig | FakeRunnerConfig, Field(discriminator="type")]
     calibration: SampledCalibrationPhase
     reduction: SampledReductionPlan | None = None
+    grading: PatchGradingConfig | None = Field(default=None, exclude_if=lambda value: value is None)
+
+    @model_validator(mode="after")
+    def validate_grading_target(self) -> SampledExperimentDefinition:
+        if self.grading is not None and (
+            not isinstance(self.target, FinalResponseTarget)
+            or any(
+                value is not None
+                for value in (
+                    self.target.text_equals,
+                    self.target.text_contains,
+                    self.target.text_contains_any,
+                )
+            )
+        ):
+            raise ValueError("patch grading requires an unconstrained final-response target")
+        return self
 
     @property
     def digest(self) -> str:
@@ -408,6 +426,11 @@ def _render_experiment(experiment: AnyExperimentDefinition) -> str:
         _append_optional_string(lines, "command_contains", target.command_contains)
         if target.count is not None:
             lines.append(f"count = {target.count}")
+
+    if isinstance(experiment, SampledExperimentDefinition) and experiment.grading is not None:
+        lines.extend(("", "[grading]"))
+        for name, value in experiment.grading.model_dump(mode="json").items():
+            lines.append(f"{name} = {json.dumps(value, ensure_ascii=False)}")
 
     lines.extend(("", "[oracle]", 'type = "structural"'))
     lines.append(f"protected_context_ids = {_toml_value(experiment.oracle.protected_context_ids)}")

@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import time
 
 from ithrl.behavior import BehaviorObservation, ShellAction, evaluate_target
 from ithrl.experiment import SamplingEligibilityPolicy
+from ithrl.grading import grade_response, validate_grading, validate_grading_runtime
+from ithrl.grading.contracts import GRADING_CLEANUP_SECONDS, GradeEvidence
 from ithrl.observations import (
     Observation,
     ObservationArm,
@@ -18,6 +22,7 @@ from ithrl.runner import (
     AttemptEvidence,
     PreparedAttempt,
     ProviderAcceptanceState,
+    RunAccounting,
     Runner,
     RunnerCancelled,
     RunnerError,
@@ -63,10 +68,42 @@ async def observe_once(
         runner, identity, store, attempt, eligibility_policy
     )
     result: RunResult | None = None
+    grading: GradeEvidence | None = None
+    started = time.monotonic()
+    grading_deadline = (
+        started + attempt.resource_limits.max_wall_time_seconds - GRADING_CLEANUP_SECONDS
+    )
+    observed = False
+    runtime_deadline: float | None = None
     try:
-        result = await _run_with_deadlines(runner, attempt)
+        if attempt.execution_plan.grading is not None:
+            runtime_deadline = grading_deadline - attempt.execution_plan.grading.timeout_seconds
+            try:
+                inputs = validate_grading(attempt.execution_plan.grading)
+                validate_grading_runtime(
+                    inputs,
+                    timeout_seconds=_remaining_grading_preparation_time(attempt, runtime_deadline),
+                )
+                del inputs
+            except (OSError, ValueError):
+                # A caller may already have published a dispatch reservation. Save
+                # proven zero-call evidence so reconciliation never invents an
+                # unresolved provider request for this local contract refusal.
+                raise RunnerError(
+                    RunnerErrorCode.CONTRACT,
+                    "frozen task grading inputs or runtime are unavailable",
+                    reason_code="grading-unavailable",
+                    provider_acceptance_state=ProviderAcceptanceState.NOT_STARTED,
+                    provider=attempt.execution_plan.capability.provider,
+                    endpoint=attempt.execution_plan.capability.endpoint,
+                    model_requested=attempt.execution_plan.model_requested,
+                    accounting=RunAccounting(),
+                ) from None
+            _remaining_grading_preparation_time(attempt, runtime_deadline)
+        result = await _run_with_deadlines(runner, attempt, runtime_deadline=runtime_deadline)
         validate_run_result(attempt, result)
-        observed = evaluate_target(attempt.target, normalize_run_result(result))
+        if attempt.execution_plan.grading is None:
+            observed = evaluate_target(attempt.target, normalize_run_result(result))
     except asyncio.CancelledError as cancelled:
         error = (
             cancelled.error
@@ -107,14 +144,50 @@ async def observe_once(
             f"runner failed with {failed_observation.error_category}", failed_observation
         ) from error
 
-    return store.record_attempt(
-        identity=identity,
+    if attempt.execution_plan.grading is not None:
+        grading_started = time.monotonic()
+        try:
+            grading = await _grade_with_remaining_time(
+                attempt, result, grading_deadline, grading_started, candidate_digest
+            )
+        except asyncio.CancelledError:
+            _record_result(
+                store,
+                identity,
+                attempt,
+                result,
+                _grading_error(attempt, result, "cancelled", grading_started),
+                candidate_digest=candidate_digest,
+            )
+            raise
+    observation = _record_result(
+        store,
+        identity,
+        attempt,
+        result,
+        grading,
         candidate_digest=candidate_digest,
-        role=role,
-        arm=arm,
-        outcome=(ObservationOutcome.MATCH if observed else ObservationOutcome.NO_MATCH),
-        attempt_evidence=AttemptEvidence.from_result(attempt, result),
+        observed=observed,
     )
+    if grading is not None and grading.status == "error":
+        raise RunnerExecutionError("task grading failed; native result retained", observation)
+    return observation
+
+
+def _remaining_grading_preparation_time(attempt: PreparedAttempt, deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise RunnerError(
+            RunnerErrorCode.TIMEOUT,
+            "task grading preparation exhausted the attempt deadline",
+            reason_code="grading-preparation-timeout",
+            provider_acceptance_state=ProviderAcceptanceState.NOT_STARTED,
+            provider=attempt.execution_plan.capability.provider,
+            endpoint=attempt.execution_plan.capability.endpoint,
+            model_requested=attempt.execution_plan.model_requested,
+            accounting=RunAccounting(),
+        )
+    return remaining
 
 
 def _prepare_observation(
@@ -164,8 +237,103 @@ def _prepare_observation(
     return role, arm, candidate_digest
 
 
-async def _run_with_deadlines(runner: Runner, attempt: PreparedAttempt) -> RunResult:
-    wall_time = attempt.resource_limits.max_wall_time_seconds
+def _grading_error(
+    attempt: PreparedAttempt, result: RunResult, reason: str, started: float
+) -> GradeEvidence:
+    config = attempt.execution_plan.grading
+    if config is None:
+        raise ValueError("grading requires a frozen configuration")
+    return GradeEvidence(
+        config_digest=config.digest,
+        candidate_digest=attempt.candidate.digest,
+        response_digest=hashlib.sha256((result.final_text or "").encode()).hexdigest(),
+        attempt_id=attempt.attempt_id,
+        status="error",
+        reason_code=reason,
+        elapsed_milliseconds=max(0, round((time.monotonic() - started) * 1000)),
+    )
+
+
+async def _grade_with_remaining_time(
+    attempt: PreparedAttempt,
+    result: RunResult,
+    deadline: float,
+    grading_started: float,
+    candidate_digest: str,
+) -> GradeEvidence:
+    config = attempt.execution_plan.grading
+    if config is None:
+        raise ValueError("grading requires a frozen configuration")
+    # Reserve cleanup inside the attempt's existing wall-time allowance. A completed
+    # native call is retained even when insufficient time remains to grade it.
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return _grading_error(attempt, result, "timeout", grading_started)
+    try:
+        grading = await grade_response(
+            config,
+            result.final_text,
+            candidate_digest=candidate_digest,
+            attempt_id=attempt.attempt_id,
+            timeout_seconds=remaining,
+        )
+        if (
+            grading.config_digest != config.digest
+            or grading.candidate_digest != candidate_digest
+            or grading.response_digest
+            != hashlib.sha256((result.final_text or "").encode()).hexdigest()
+            or grading.attempt_id != attempt.attempt_id
+        ):
+            return _grading_error(attempt, result, "identity-mismatch", grading_started)
+        if grading.status != "error" and time.monotonic() > deadline:
+            return grading.model_copy(
+                update={"status": "error", "reason_code": "timeout", "report_digest": None}
+            )
+        return grading
+    except TimeoutError:
+        return _grading_error(attempt, result, "timeout", grading_started)
+    except Exception:
+        return _grading_error(attempt, result, "unavailable", grading_started)
+
+
+def _record_result(
+    store: ObservationStore,
+    identity: ObservationIdentity,
+    attempt: PreparedAttempt,
+    result: RunResult,
+    grading: GradeEvidence | None,
+    *,
+    candidate_digest: str,
+    observed: bool = False,
+) -> Observation:
+    outcome = (
+        ObservationOutcome.from_grading(grading.status)
+        if grading is not None
+        else ObservationOutcome.MATCH
+        if observed
+        else ObservationOutcome.NO_MATCH
+    )
+    return store.record_attempt(
+        identity=identity,
+        candidate_digest=candidate_digest,
+        role=ObservationRole(attempt.phase),
+        arm=ObservationArm(attempt.arm),
+        outcome=outcome,
+        error_category="grading-error"
+        if grading is not None and grading.status == "error"
+        else None,
+        attempt_evidence=AttemptEvidence.from_result(attempt, result, grading),
+    )
+
+
+async def _run_with_deadlines(
+    runner: Runner, attempt: PreparedAttempt, *, runtime_deadline: float | None = None
+) -> RunResult:
+    wall_time = (
+        attempt.resource_limits.max_wall_time_seconds
+        if runtime_deadline is None
+        else runtime_deadline - time.monotonic()
+    )
     cancellation_deadline = wall_time + runner.capability_profile.cancellation_grace_seconds
     cancellation_error: RunnerError | None = None
     execution_timer: asyncio.Timeout | None = None
@@ -174,7 +342,10 @@ async def _run_with_deadlines(runner: Runner, attempt: PreparedAttempt) -> RunRe
         async with asyncio.timeout(cancellation_deadline) as cleanup_timer:
             async with asyncio.timeout(wall_time) as execution_timer:
                 try:
-                    result = await runner.run(attempt)
+                    if runtime_deadline is None:
+                        result = await runner.run(attempt)
+                    else:
+                        result = await runner.run(attempt, runtime_deadline=runtime_deadline)
                 except RunnerCancelled as cancelled:
                     cancellation_error = cancelled.error
                     if _deadline_expired(execution_timer, cleanup_timer):
