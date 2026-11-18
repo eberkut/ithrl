@@ -24,7 +24,7 @@ SANDBOX_ROOT = "/tmp/ithrl-state"  # noqa: S108 - private tmpfs path inside Bubb
 MAX_NATIVE_SESSION_BYTES = 64 * 1024 * 1024
 # Bundled tooling is extracted into each isolated cache before even --version.
 # Reserve room for those assets as well as the bounded semantic session and output.
-DEFAULT_DISPOSABLE_STATE_BYTES = 256 * 1024 * 1024
+DEFAULT_DISPOSABLE_STATE_BYTES = 512 * 1024 * 1024
 _MAX_MODEL_BYTES = 1024
 
 

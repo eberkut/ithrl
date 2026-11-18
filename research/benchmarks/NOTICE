@@ -1,0 +1,20 @@
+The research helpers and independent controls are part of ithrl (Apache-2.0).
+
+iniconfig source mutation and task record:
+  Source: pytest-dev/iniconfig, commit 16793eaddac67de0b8d621ae4e42e05b927e8d67.
+  Copyright (c) 2010 - 2023 Holger Krekel and others; see data/iniconfig-LICENSE.
+  Dataset: SWE-bench/SWE-smith-py, revision 77cab9055d42ab4a5c25c89a8f937096db13558e.
+  https://huggingface.co/datasets/SWE-bench/SWE-smith-py
+  Dataset card license: MIT. The included patch introduces the original dataset defect.
+
+django-migration-linter patches and task record:
+  Source: 3YOURMIND/django-migration-linter, commit aef3db3e4198d06c38bc4b0874e72ed657891eea.
+  Source and original patches are Apache-2.0; see the repository LICENSE.
+  Dataset: ibragim-bad/SWE-rebench-V2.1, revision 26c0145ded93168b0d5d095420155901ad2d5a2f.
+  https://huggingface.co/datasets/ibragim-bad/SWE-rebench-V2.1
+  Dataset compilation license: CC-BY-4.0, https://creativecommons.org/licenses/by/4.0/.
+  Source repository licenses continue to apply to repository-derived material.
+  Additional mixed-index controls and alternative repairs are ithrl adaptations.
+
+Original dataset statements and reference patches are preserved separately from proposed
+incident captures and strengthened grading checks. No model-generated trajectory is included.

@@ -88,7 +88,7 @@ is deferred.
 
 | Scope | Issue | Expected outcome |
 | --- | --- | --- |
-| Measured; publication pending | [#16: broader workloads and costs](https://github.com/eberkut/ithrl/issues/16) | Publish the frozen cohort's limiting outcome, selection funnel, developer conclusions, recorded costs and explicit gaps |
+| Completed in [#82](https://github.com/eberkut/ithrl/pull/82) | [#16: broader workloads and costs](https://github.com/eberkut/ithrl/issues/16) | Published the frozen cohort's limiting outcome, selection funnel, developer conclusions, recorded costs and explicit gaps |
 | Committed design and feasibility | [#81: public debugging benchmark](https://github.com/eberkut/ithrl/issues/81) | Review a small public task package, graders and context-dependence controls; assess bounded Codex/Copilot feasibility and recommend adopt, revise or reject |
 | Committed implementation | [#73: sampled inspection metadata](https://github.com/eberkut/ithrl/issues/73) | Offline reports explain digest-bound reconstruction and policy declarations separately from recorded attempt evidence |
 | Committed implementation | [#77: model cost estimates](https://github.com/eberkut/ithrl/issues/77) | Offline pricing with genai-prices, usage/rate provenance and explicit coverage; estimates and scenarios remain distinct from actual billing |
@@ -99,16 +99,18 @@ is deferred.
 ## Next investigations
 
 [#16's frozen cohort](https://github.com/eberkut/ithrl/issues/16) completed native controls and
-approved measurements. Both primary workloads calibrated, but their selected fields were removed
-in coarse search; neither reached fine search or fresh confirmation. Canonical report publication
-remains pending. Its retained evidence informs #13 and #74 without establishing either capability.
+approved measurements. Both primary workloads calibrated, but their selected fields were removed in
+coarse search; neither reached fine search or fresh confirmation. The
+[canonical report](docs/research/reduction-design.md#prospective-ordinary-workflow-cohort) is merged
+in [#82](https://github.com/eberkut/ithrl/pull/82). Its retained evidence informs #13 and #74
+without establishing either capability.
 
-[#81](https://github.com/eberkut/ithrl/issues/81) assesses public constructed tasks with real native
-traces, independently checked outcomes and context-dependence controls. Start with Codex and
-Copilot; reusable tasks may later inform #14's additional integrations. Keep constructed-task
-evidence distinct from ordinary-workflow usefulness and statistical simulations. Freeze selection,
-graders, usefulness criteria and cost recording before paid observations; retain unsuccessful
-outcomes. A large corpus and additional harness support require separate decisions.
+[#81's public task package](research/benchmarks/README.md) recommends iniconfig as a supplementary
+constructed workload. Bounded Codex and Copilot CLI reductions each completed fresh confirmation;
+both coarse sweeps remain incomplete. Migration-linter remains a baseline-calibration limiting
+case. The report owns outcomes, costs and maintenance requirements. Broader tasks, changed profiles
+and additional harnesses require separate evidence; constructed results do not establish
+ordinary-workflow usefulness.
 
 [ctx](https://github.com/ctxrs/ctx/blob/33ba4645b620fd89d138c6db1fabf33096a0ee16/docs/search.md)
 can help locate further sources, but ithrl must independently snapshot and validate native

@@ -153,6 +153,18 @@ outcomes. Invalid observations and runner errors retain execution evidence witho
 behavioral losses. The oracle recognizes the configured final response or shell request; it does
 not judge why the model produced it.
 
+Sampled experiments can attach `python-patch-tests` grading to an unconstrained final-response
+target. `grading/` binds the implementation, reviewed task bundle and prepared system-Python
+environment. Git applies content-only changes to existing allowlisted regular files with isolated
+configuration and attributes. Paths, file types and modes are checked before compilation; fixed
+source and independent suites run in disposable namespaces without network access.
+
+Grading shares the native attempt deadline. The grade, response digest and suite counts stay with
+the completed attempt. Rejected or failing repairs are nonmatches. Operational grading errors retain
+the native request charge and stop collection without entering behavioral counts or authorizing
+another inference. Task grades establish the declared test outcomes; native input visibility and
+runtime qualification require separate evidence.
+
 Deterministic reduction and sampled reduction share dependency-valid candidate construction but
 make different claims. The deterministic reducer can establish `search-1-minimal` through a
 completed final single-group sweep. Sampled search uses exploratory screens and reports its
@@ -294,6 +306,7 @@ Python module names are not public API commitments.
 | `runner/runtime/` | Shared bounded process, state, protection and output lifecycle |
 | `runner/fake.py`, `synthetic.py` | Provider-free deterministic runner and bundled example |
 | `measurement.py`, `calibration.py`, `observations.py` | One-attempt measurement, calibration and append-only SQLite observation/block evidence |
+| `grading/` | Bound Python repair tasks, isolated patch application and test grading; no native action execution |
 | `sampling.py`, `run_state.py` | Shared frozen-block collection, private run state, reservations, reconciliation and accounting |
 | `reduce/contracts.py`, `reduce/engine.py`, `reduce/search.py` | Deterministic and exploratory sampled reduction, checkpoints and final sweep coverage |
 | `statistics.py` | Independent-arm preservation interval and confirmation classification |

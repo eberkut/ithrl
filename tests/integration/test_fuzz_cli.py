@@ -1282,3 +1282,52 @@ def test_saved_native_per_attempt_limit_is_reused_and_conflicting_override_never
         )
         assert resumed.exit_code == expected, resumed.output
         assert len(runner.calls) == before
+
+
+def test_fuzz_preparation_preserves_a_sampled_task_grader(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ithrl.execution.preflight as preflight
+    from ithrl.case import CaseWorkspace
+    from ithrl.cli.fuzz import prepare_fuzz_profile
+    from ithrl.experiment import (
+        FakeRunnerConfig,
+        FinalResponseTarget,
+        SampledCalibrationPhase,
+        SampledExperimentDefinition,
+        StructuralOracleConfig,
+    )
+    from ithrl.fuzz.configuration import FuzzConfiguration
+    from ithrl.grading.contracts import PatchGradingConfig
+
+    inputs(tmp_path)
+    workspace = CaseWorkspace.open(tmp_path / "case")
+    grading = PatchGradingConfig(
+        bundle_path=str(tmp_path / "task"),
+        bundle_digest="a" * 64,
+        environment_path=str(tmp_path / "env"),
+        environment_digest="b" * 64,
+        timeout_seconds=1,
+    )
+    experiment = SampledExperimentDefinition(
+        target=FinalResponseTarget(),
+        oracle=StructuralOracleConfig(),
+        runner=FakeRunnerConfig(required_markers=("fixture",), final_text="patch"),
+        calibration=SampledCalibrationPhase(required_valid=1, minimum_matches=1, max_attempts=1),
+        grading=grading,
+    )
+    (workspace.root / "experiments/default.toml").write_text(experiment.to_toml())
+
+    def available(_config: PatchGradingConfig) -> None:
+        pass
+
+    monkeypatch.setattr(preflight, "validate_grading", available)
+    config = FuzzConfiguration.from_toml(
+        CONFIGURATION.replace("attempt_timeout_seconds = 1", "attempt_timeout_seconds = 10")
+    )
+    profile, prepared = prepare_fuzz_profile(workspace, config, None, detect=False)
+    assert isinstance(prepared.experiment, SampledExperimentDefinition)
+    assert prepared.experiment.grading == profile.execution_plan.grading == grading
+    assert prepared.execution_plan.grading is not None
+    assert prepared.execution_plan.grading.digest == grading.digest

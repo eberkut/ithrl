@@ -1,0 +1,128 @@
+{
+  "base_commit": "aef3db3e4198d06c38bc4b0874e72ed657891eea",
+  "created_at": "2021-12-20 21:27:38",
+  "image_name": "docker.io/swerebenchv2/3yourmind-django-migration-linter@sha256:6e86ff38498edd885c6231ca408cf7d401cc3cac993afdf2c41d5032ac521106",
+  "instance_id": "3yourmind__django-migration-linter-186",
+  "interface": "Function: has_create_index(sql_statements, **kwargs)\nLocation: django_migration_linter/sql_analyser/postgresql.py\nInputs: \n- sql_statements (Iterable[str]): list (or any iterable) of SQL statements that belong to a single migration transaction. \n- **kwargs: additional keyword arguments passed by the analyser (currently unused).\nOutputs: bool \u2013\u202fTrue when a non\u2011concurrent CREATE INDEX statement is found that would lock a table, False otherwise (e.g., when the index is created CONCURRENTLY or the indexed table is also created within the same transaction).\nDescription: Scans the supplied statements for a CREATE INDEX (excluding CREATE INDEX CONCURRENTLY). If such an index is detected, it checks whether the table referenced by the index is also created in the same transaction; if the table is created, the function returns False (no warning), otherwise it returns True to trigger the \u201cCREATE INDEX locks table\u201d warning.\n",
+  "language": "python",
+  "license": "Apache-2.0",
+  "patch": "diff --git a/CHANGELOG.md b/CHANGELOG.md\nindex d1ec8e5..15fefc0 100644\n--- a/CHANGELOG.md\n+++ b/CHANGELOG.md\n@@ -1,7 +1,8 @@\n-## 4.0.0\n+## 4.0.0 (unreleased)\n \n - Drop support for Python 2.7 and 3.5\n - Drop support for Django 1.11, 2.0, 2.1, 3.0\n+- Fix index creation detection when table is being created in the transaction (issue #178)\n \n ## 3.0.1\n \ndiff --git a/django_migration_linter/sql_analyser/postgresql.py b/django_migration_linter/sql_analyser/postgresql.py\nindex 140aba3..3eb18a5 100644\n--- a/django_migration_linter/sql_analyser/postgresql.py\n+++ b/django_migration_linter/sql_analyser/postgresql.py\n@@ -3,14 +3,32 @@ import re\n from .base import BaseAnalyser\n \n \n+def has_create_index(sql_statements, **kwargs):\n+    regex_result = None\n+    for sql in sql_statements:\n+        regex_result = re.search(r\"CREATE (UNIQUE )?INDEX.*ON (.*) \\(\", sql)\n+        if re.search(\"INDEX CONCURRENTLY\", sql):\n+            regex_result = None\n+        elif regex_result:\n+            break\n+    if not regex_result:\n+        return False\n+\n+    concerned_table = regex_result.group(2)\n+    table_is_added_in_transaction = any(\n+        sql.startswith(\"CREATE TABLE {}\".format(concerned_table))\n+        for sql in sql_statements\n+    )\n+    return not table_is_added_in_transaction\n+\n+\n class PostgresqlAnalyser(BaseAnalyser):\n     migration_tests = [\n         {\n             \"code\": \"CREATE_INDEX\",\n-            \"fn\": lambda sql, **kw: re.search(\"CREATE (UNIQUE )?INDEX\", sql)\n-            and not re.search(\"INDEX CONCURRENTLY\", sql),\n+            \"fn\": has_create_index,\n             \"msg\": \"CREATE INDEX locks table\",\n-            \"mode\": \"one_liner\",\n+            \"mode\": \"transaction\",\n             \"type\": \"warning\",\n         },\n         {\n",
+  "pr_description": "Fix #178 -- Don't detect an index creation when the table is being created\nFixes #178 ",
+  "problem_statement": "Linter fails on CREATE INDEX when creating a new table\nHere is an example `CreateModel` from Django:\n\n```python\nmigrations.CreateModel(\n    name='ShipmentMetadataAlert',\n    fields=[\n        ('deleted_at', models.DateTimeField(blank=True, db_index=True, null=True)),\n        ('created_at', common.fields.CreatedField(default=django.utils.timezone.now, editable=False)),\n        ('updated_at', common.fields.LastModifiedField(default=django.utils.timezone.now, editable=False)),\n        ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False, verbose_name='ID')),\n        ('message', models.TextField(blank=True, null=True)),\n        ('level', models.CharField(blank=True, choices=[('HIGH', 'high'), ('MEDIUM', 'medium'), ('LOW', 'low')], max_length=16, null=True)),\n        ('type', models.CharField(blank=True, choices=[('MOBILE_DEVICE_ALERT', 'MOBILE_DEVICE_ALERT'), ('NON_ACTIVE_CARRIER', 'NON_ACTIVE_CARRIER'), ('OTHER', 'OTHER')], max_length=32, null=True)),\n        ('subtype', models.CharField(blank=True, choices=[('DRIVER_PERMISSIONS', 'DRIVER_PERMISSIONS'), ('DRIVER_LOCATION', 'DRIVER_LOCATION'), ('OTHER', 'OTHER')], max_length=32, null=True)),\n        ('occurred_at', models.DateTimeField(null=True)),\n        ('clear_alert_job_id', models.UUIDField(default=None, null=True)),\n        ('metadata', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='alerts', to='shipments.ShipmentMetadata')),\n    ],\n    options={\n        'abstract': False,\n    }\n)\n```\n\nHere are the SQL statements that this spits out in `sqlmigrate`:\n\n```sql\nBEGIN;\n--\n-- Create model ShipmentMetadataAlert\n--\nCREATE TABLE \"shipments_shipmentmetadataalert\" (\"deleted_at\" timestamp with time zone NULL, \"created_at\" timestamp with time zone NOT NULL, \"updated_at\" timestamp with time zone NOT NULL, \"id\" uuid NOT NULL PRIMARY KEY, \"message\" text NULL, \"level\" varchar(16) NULL, \"type\" varchar(32) NULL, \"subtype\" varchar(32) NULL, \"occurred_at\" timestamp with time zone NULL, \"clear_alert_job_id\" uuid NULL, \"metadata_id\" uuid NOT NULL);\nALTER TABLE \"shipments_shipmentmetadataalert\" ADD CONSTRAINT \"shipments_shipmentme_metadata_id_f20850e8_fk_shipments\" FOREIGN KEY (\"metadata_id\") REFERENCES \"shipments_shipmentmetadata\" (\"id\") DEFERRABLE INITIALLY DEFERRED;\nCREATE INDEX \"shipments_shipmentmetadataalert_deleted_at_c9a93342\" ON \"shipments_shipmentmetadataalert\" (\"deleted_at\");\nCREATE INDEX \"shipments_shipmentmetadataalert_metadata_id_f20850e8\" ON \"shipments_shipmentmetadataalert\" (\"metadata_id\");\nCOMMIT;\n```\n\nThis is an error from the linter as it outputs the error `CREATE INDEX locks table`. But the table is being created within the migration, it just needs to recognize that.\n\nIt seems like the `CREATE INDEX` detection should work the same way that the `ADD_UNIQUE` detection works where it detects that the create table is happening in the same migration:\n\nhttps://github.com/3YOURMIND/django-migration-linter/blob/db71a9db23746f64d41d681f3fecb9b066c87338/django_migration_linter/sql_analyser/base.py#L26-L40\n",
+  "repo": "3YOURMIND/django-migration-linter",
+  "test_patch": "diff --git a/tests/unit/test_sql_analyser.py b/tests/unit/test_sql_analyser.py\nindex 00dd50e..65ab7f0 100644\n--- a/tests/unit/test_sql_analyser.py\n+++ b/tests/unit/test_sql_analyser.py\n@@ -233,6 +233,23 @@ class PostgresqlAnalyserTestCase(SqlAnalyserTestCase):\n         sql = \"CREATE UNIQUE INDEX title_idx ON films (title);\"\n         self.assertWarningSql(sql)\n \n+    def test_create_index_non_concurrently_with_table_creation(self):\n+        sql = [\n+            'CREATE TABLE \"films\" (\"title\" text);',\n+            'CREATE INDEX ON \"films\" ((lower(\"title\")));',\n+        ]\n+        self.assertValidSql(sql)\n+        sql = [\n+            'CREATE TABLE \"some_table\" (\"title\" text);',\n+            'CREATE INDEX ON \"films\" ((lower(\"title\")));',\n+        ]\n+        self.assertWarningSql(sql)\n+        sql = [\n+            'CREATE TABLE \"films\" (\"title\" text);',\n+            'CREATE INDEX ON \"some_table\" ((lower(\"title\")));',\n+        ]\n+        self.assertWarningSql(sql)\n+\n     def test_create_index_concurrently(self):\n         sql = \"CREATE INDEX CONCURRENTLY ON films (lower(title));\"\n         self.assertValidSql(sql)\n",
+  "FAIL_TO_PASS": [
+    "tests/unit/test_sql_analyser.py::PostgresqlAnalyserTestCase::test_create_index_non_concurrently_with_table_creation"
+  ],
+  "PASS_TO_PASS": [
+    "tests/unit/test_sql_analyser.py::MySqlAnalyserTestCase::test_add_many_to_many_field",
+    "tests/unit/test_sql_analyser.py::MySqlAnalyserTestCase::test_add_not_null",
+    "tests/unit/test_sql_analyser.py::MySqlAnalyserTestCase::test_add_not_null_followed_by_default",
+    "tests/unit/test_sql_analyser.py::MySqlAnalyserTestCase::test_alter_column",
+    "tests/unit/test_sql_analyser.py::MySqlAnalyserTestCase::test_drop_not_null",
+    "tests/unit/test_sql_analyser.py::MySqlAnalyserTestCase::test_make_column_not_null_with_django_default",
+    "tests/unit/test_sql_analyser.py::MySqlAnalyserTestCase::test_make_column_not_null_with_lib_default",
+    "tests/unit/test_sql_analyser.py::MySqlAnalyserTestCase::test_unique_together",
+    "tests/unit/test_sql_analyser.py::PostgresqlAnalyserTestCase::test_add_many_to_many_field",
+    "tests/unit/test_sql_analyser.py::PostgresqlAnalyserTestCase::test_alter_column",
+    "tests/unit/test_sql_analyser.py::PostgresqlAnalyserTestCase::test_create_index_concurrently",
+    "tests/unit/test_sql_analyser.py::PostgresqlAnalyserTestCase::test_create_index_non_concurrently",
+    "tests/unit/test_sql_analyser.py::PostgresqlAnalyserTestCase::test_drop_index_concurrently",
+    "tests/unit/test_sql_analyser.py::PostgresqlAnalyserTestCase::test_drop_index_non_concurrently",
+    "tests/unit/test_sql_analyser.py::PostgresqlAnalyserTestCase::test_drop_not_null",
+    "tests/unit/test_sql_analyser.py::PostgresqlAnalyserTestCase::test_field_to_not_null_with_dropped_default",
+    "tests/unit/test_sql_analyser.py::PostgresqlAnalyserTestCase::test_make_column_not_null_with_django_default",
+    "tests/unit/test_sql_analyser.py::PostgresqlAnalyserTestCase::test_make_column_not_null_with_lib_default",
+    "tests/unit/test_sql_analyser.py::PostgresqlAnalyserTestCase::test_not_null_followed_by_default",
+    "tests/unit/test_sql_analyser.py::PostgresqlAnalyserTestCase::test_onetoonefield_to_not_null",
+    "tests/unit/test_sql_analyser.py::PostgresqlAnalyserTestCase::test_reindex",
+    "tests/unit/test_sql_analyser.py::PostgresqlAnalyserTestCase::test_unique_together",
+    "tests/unit/test_sql_analyser.py::SqliteAnalyserTestCase::test_add_many_to_many_field",
+    "tests/unit/test_sql_analyser.py::SqliteAnalyserTestCase::test_add_not_null",
+    "tests/unit/test_sql_analyser.py::SqliteAnalyserTestCase::test_alter_column",
+    "tests/unit/test_sql_analyser.py::SqliteAnalyserTestCase::test_alter_column_after_django22",
+    "tests/unit/test_sql_analyser.py::SqliteAnalyserTestCase::test_create_table_with_not_null",
+    "tests/unit/test_sql_analyser.py::SqliteAnalyserTestCase::test_drop_not_null",
+    "tests/unit/test_sql_analyser.py::SqliteAnalyserTestCase::test_rename_table",
+    "tests/unit/test_sql_analyser.py::SqliteAnalyserTestCase::test_unique_together"
+  ],
+  "install_config": {
+    "base_image_name": "python_base_310",
+    "docker_specs": {
+      "_variant": null,
+      "bazel_version": null,
+      "bun_version": null,
+      "cargo_version": null,
+      "deno_version": null,
+      "docker_version": null,
+      "erlang_version": null,
+      "gcc_version": null,
+      "go_version": null,
+      "helm_version": null,
+      "java_version": null,
+      "jdk_version": null,
+      "llvm_version": null,
+      "lua_version": null,
+      "luajit_version": null,
+      "neovim_version": null,
+      "node_version": null,
+      "npm_version": null,
+      "nvim_version": null,
+      "pnpm_version": null,
+      "python_image": "python_base_310",
+      "python_version": null,
+      "redis_version": null,
+      "ruby_version": null,
+      "rust_version": null,
+      "rustc_version": null,
+      "solana_version": null,
+      "sqlite_version": null
+    },
+    "install": [
+      "export DEBIAN_FRONTEND=noninteractive && apt-get update -y -qq && apt-get install -y -qq default-libmysqlclient-dev build-essential pkg-config libpq-dev",
+      "pip install -q -e .",
+      "pip install -q mysqlclient psycopg2 appdirs toml django_add_default_value coverage"
+    ],
+    "log_parser": "parse_log_pytest",
+    "test_cmd": "pytest --no-header -rA --tb=line --color=no -p no:cacheprovider -W ignore::DeprecationWarning tests/unit/test_sql_analyser.py"
+  },
+  "meta": {
+    "llm_metadata": {
+      "code": "A",
+      "confidence": 0.97,
+      "detected_issues": {
+        "B1": false,
+        "B2": false,
+        "B3": false,
+        "B4": false,
+        "B5": false,
+        "B6": false
+      },
+      "difficulty": "medium",
+      "external_urls": [],
+      "intent_completeness": "complete",
+      "pr_categories": [
+        "minor_bug"
+      ],
+      "reasoning": "The issue reports that the linter incorrectly warns on CREATE INDEX when the index is created in the same migration that creates the table, and requests detection similar to ADD_UNIQUE. The provided tests check that such scenarios are considered valid and that unrelated cases still warn, aligning with the described behavior. There are no signs of missing specifications, external dependencies, or naming constraints, so the task is well\u2011specified and solvable (code A).",
+      "test_alignment_issues": []
+    },
+    "num_modified_files": 2,
+    "num_modified_lines": 23,
+    "pr_author": "David-Wobrock",
+    "pr_labels": [],
+    "pr_url": null
+  },
+  "tags": [
+    "swe-rebench",
+    "swe-rebench-v2.1",
+    "python"
+  ],
+  "workdir": "/django-migration-linter",
+  "env": [],
+  "test_files": [
+    "tests/unit/test_sql_analyser.py"
+  ],
+  "test_env": [],
+  "quality_flags": []
+}

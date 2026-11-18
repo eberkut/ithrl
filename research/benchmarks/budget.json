@@ -1,0 +1,67 @@
+{
+  "status": "proposal-not-runtime-admitted",
+  "tasks": 2,
+  "harnesses": [
+    "codex",
+    "copilot"
+  ],
+  "task_harness_cells": 4,
+  "calibration_per_cell": {
+    "role": "calibration",
+    "required_valid": 3,
+    "minimum_matches": 3,
+    "max_attempts": 3
+  },
+  "attempts_per_cell_by_stage": {
+    "original_source_generation_turns": 2,
+    "changed_defect_source_generation_turns": 2,
+    "fresh_original_calibration_replays": 3,
+    "irrelevant_section_removal_screens": 1,
+    "withheld_case_evidence_removal_screens": 1,
+    "changed_defect_replays": 1
+  },
+  "total_attempts_by_stage": {
+    "original_source_generation_turns": 8,
+    "changed_defect_source_generation_turns": 8,
+    "fresh_original_calibration_replays": 12,
+    "irrelevant_section_removal_screens": 4,
+    "withheld_case_evidence_removal_screens": 4,
+    "changed_defect_replays": 4
+  },
+  "maximum_generation_turns": 16,
+  "maximum_replay_attempts": 24,
+  "maximum_native_attempts": 40,
+  "maximum_provider_inference_requests": 40,
+  "per_attempt": {
+    "maximum_provider_inference_requests": 1,
+    "timeout_seconds": 120,
+    "cleanup_grace_seconds": 3
+  },
+  "maximum_runner_seconds": 4920,
+  "maximum_task_grade_runs": 32,
+  "task_grade_timeout_seconds": 10,
+  "maximum_task_grading_seconds": 320,
+  "grading_within_attempt_timeout": true,
+  "maximum_runner_and_grading_seconds": 4920,
+  "provider_window_seconds": 6600,
+  "input_token_cap": null,
+  "monetary_cap": null,
+  "search_comparisons": 0,
+  "preservation_confirmation_observations": 0,
+  "automatic_extensions": false,
+  "replacement_attempts": false,
+  "changed_defect_is_separately_generated_source": true,
+  "excluded_from_runner_bound": [
+    "task preparation",
+    "native structural and input-visibility controls",
+    "persistence and other orchestration overhead",
+    "authentication, catalogue and metadata traffic"
+  ],
+  "execution_prerequisites": [
+    "bind current native capabilities, policy and resource limits",
+    "verify one physical inference request per native attempt",
+    "verify the task grader integration, 10-second grading bound and context controls",
+    "verify the 110-minute provider window across generation, replays and grading",
+    "obtain separate native and provider execution approval"
+  ]
+}

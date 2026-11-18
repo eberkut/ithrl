@@ -61,6 +61,9 @@ def prepare_fuzz_profile(
             oracle=persisted.oracle,
             runner=persisted.runner,
             calibration=config.calibration,
+            grading=persisted.grading
+            if isinstance(persisted, SampledExperimentDefinition)
+            else None,
         )
     )
     if experiment is not None and isinstance(experiment.runner, FakeRunnerConfig):

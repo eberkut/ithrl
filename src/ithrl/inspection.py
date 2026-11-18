@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ithrl.case import CaseEvidence
 from ithrl.context import JsonValue, decode_pointer
-from ithrl.experiment import SampledReductionPlan
+from ithrl.experiment import SampledExperimentDefinition, SampledReductionPlan
 from ithrl.mutation import TextMutation
 from ithrl.observations import SamplingArmCounts, SamplingBlockEvidence
 from ithrl.reduce import (
@@ -189,6 +189,7 @@ class RetainedInspection(_InspectionModel):
         "source-records-before-section-edits"
     )
     target_type: Literal["final-response", "shell-action"]
+    grading_config_digest: str | None = Field(default=None, exclude_if=lambda value: value is None)
     reconstruction_method: str | None
     safety_policy_digest: str | None
     action_execution: Literal["denied"] | None
@@ -330,6 +331,12 @@ def build_retained_inspection(
         original_canonical_json_bytes=sum(sizes.values()),
         retained_canonical_json_bytes=sum(sizes[node_id] for node_id in retained),
         target_type=loaded.experiment.target.type,
+        grading_config_digest=(
+            loaded.experiment.grading.digest
+            if isinstance(loaded.experiment, SampledExperimentDefinition)
+            and loaded.experiment.grading is not None
+            else None
+        ),
         reconstruction_method=_metadata_label(reconstruction),
         safety_policy_digest=policy_digest,
         action_execution=plan.safety_policy.action_execution if plan is not None else None,

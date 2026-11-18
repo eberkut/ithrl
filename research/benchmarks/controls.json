@@ -1,0 +1,136 @@
+{
+  "binding_scope": "provider-free incident prototypes; not extracted native cases",
+  "paragraph_policy_digest": "0d4e5d894c08b2f9902f0364d364ed099c0d7492ef26999e6bc9fcefe138f389",
+  "source_acknowledgement": "ACK",
+  "source_generation_first_message": "Keep the following incident capture for the next request. Reply with exactly ACK and nothing else. Do not diagnose it or call tools.\n\n{incident}",
+  "fixed_trigger": "Diagnose the reported behavior and return a unified diff that repairs it. Preserve the documented behavior and existing tests. Work from the supplied snapshots; do not call tools. Return only the diff.",
+  "cell_order": [
+    "iniconfig/codex",
+    "iniconfig/copilot",
+    "migration-linter/copilot",
+    "migration-linter/codex"
+  ],
+  "native_rebinding_required": true,
+  "native_context_dependence_observed": false,
+  "search_or_confirmation_included": false,
+  "controls": [
+    {
+      "task": "iniconfig",
+      "original_input": "inputs/iniconfig-buggy.md",
+      "original_input_sha256": "2079d0e6172bd0ad54e75ae1402b209822be83544c3c57c7587ac032f3b0ce86",
+      "section_control": {
+        "selector": "@overload",
+        "removed_utf8_bytes": 1354,
+        "source_codepoint_ranges": [
+          [
+            1582,
+            1652
+          ],
+          [
+            1652,
+            1782
+          ],
+          [
+            1782,
+            1935
+          ],
+          [
+            1935,
+            2038
+          ],
+          [
+            2038,
+            2187
+          ],
+          [
+            4517,
+            4633
+          ],
+          [
+            4633,
+            4786
+          ],
+          [
+            4786,
+            4962
+          ],
+          [
+            4962,
+            5094
+          ],
+          [
+            5094,
+            5266
+          ]
+        ],
+        "candidate_sha256": "445c6a1265c38f2da96a4d2310a0884c74c6195aad355de7bb26e7ed14524995",
+        "expected_task_grade": "preserved; model invariance is untested"
+      },
+      "withheld_control": "remove the whole prior-user incident, including symptoms",
+      "changed_defect_input": "inputs/iniconfig-changed-defect.md",
+      "changed_defect_sha256": "f837d5cccaa3f4cb365fa529c0ca11a1d14eaeeef54d4906aeb2764b5c6b5f48",
+      "changed_defect_requires_new_source_generation": true
+    },
+    {
+      "task": "migration-linter",
+      "original_input": "inputs/migration-linter-buggy.md",
+      "original_input_sha256": "8fce13c375c78e16becac7f97e3d000c6881fbe89639f47744244dfe548f9fde",
+      "section_control": {
+        "selector": "django_migration_linter/utils.py",
+        "removed_utf8_bytes": 1544,
+        "source_codepoint_ranges": [
+          [
+            8018,
+            8055
+          ],
+          [
+            8055,
+            8105
+          ],
+          [
+            8105,
+            8153
+          ],
+          [
+            8153,
+            8575
+          ],
+          [
+            8575,
+            8683
+          ],
+          [
+            8683,
+            8793
+          ],
+          [
+            8793,
+            9015
+          ],
+          [
+            9015,
+            9099
+          ],
+          [
+            9099,
+            9214
+          ],
+          [
+            9214,
+            9399
+          ],
+          [
+            9399,
+            9562
+          ]
+        ],
+        "candidate_sha256": "47104036d8fc0b5c75679b132d5a0cb858fdcfbf6ad24ff87d17024ac0d352b6",
+        "expected_task_grade": "preserved; model invariance is untested"
+      },
+      "withheld_control": "remove the whole prior-user incident, including symptoms",
+      "changed_defect_input": "inputs/migration-linter-changed-defect.md",
+      "changed_defect_sha256": "3d21985bf11f1e96ee90e67c3736647722fba477f32fc46f09449032c9f2950f",
+      "changed_defect_requires_new_source_generation": true
+    }
+  ]
+}

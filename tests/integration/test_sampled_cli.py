@@ -49,6 +49,7 @@ from ithrl.experiment import (
     TextSectionSearchPlan,
 )
 from ithrl.extraction import extract_decision
+from ithrl.grading.contracts import PatchGradingConfig
 from ithrl.observations import ObservationStore
 from ithrl.results import SampledReductionEvidence, load_sampling_snapshot
 from ithrl.run_state import SampledRunState, SampledRunStateFile
@@ -1974,3 +1975,179 @@ def test_per_attempt_provider_call_limit_is_terminal_budget_exhaustion(
     )
     assert resumed.exit_code == ExitCode.BUDGET, resumed.output
     assert len(operator_case.runner.calls) == 1
+
+
+def _configure_operator_grading(
+    operator_case: OperatorCase, monkeypatch: pytest.MonkeyPatch
+) -> PatchGradingConfig:
+    """Exercise workflow composition; isolated executable grading has its own integration tests."""
+    import hashlib
+
+    import ithrl.execution.preflight as grading_preflight
+    import ithrl.measurement as measurement
+    from ithrl.behavior import FinalResponseTarget
+    from ithrl.grading.contracts import GradeEvidence, PatchGradingConfig, SuiteEvidence
+
+    config = PatchGradingConfig(
+        bundle_path=str(operator_case.workspace.root.parent / "grader"),
+        bundle_digest="a" * 64,
+        environment_path=str(operator_case.workspace.root.parent / "grader-env"),
+        environment_digest="b" * 64,
+        timeout_seconds=1,
+    )
+
+    def validate(_config: PatchGradingConfig) -> None:
+        return None
+
+    async def grade(
+        frozen: PatchGradingConfig,
+        response: str | None,
+        *,
+        candidate_digest: str,
+        attempt_id: str,
+        timeout_seconds: float | None = None,
+    ) -> GradeEvidence:
+        passed = response == "Fixture complete."
+        return GradeEvidence(
+            config_digest=frozen.digest,
+            candidate_digest=candidate_digest,
+            response_digest=hashlib.sha256((response or "").encode()).hexdigest(),
+            attempt_id=attempt_id,
+            status="pass" if passed else "fail",
+            elapsed_milliseconds=1,
+            suites=(
+                SuiteEvidence(
+                    role="source",
+                    expected=1,
+                    collected=1,
+                    passed=int(passed),
+                    failed=int(not passed),
+                    errors=0,
+                ),
+                SuiteEvidence(
+                    role="independent",
+                    expected=1,
+                    collected=1,
+                    passed=int(passed),
+                    failed=int(not passed),
+                    errors=0,
+                ),
+            ),
+        )
+
+    monkeypatch.setattr(grading_preflight, "validate_grading", validate)
+    monkeypatch.setattr(measurement, "validate_grading", validate)
+    monkeypatch.setattr(measurement, "grade_response", grade)
+    experiment = operator_case.selection.experiment
+    assert experiment.reduction is not None
+    _write_operator_experiment(
+        operator_case,
+        experiment.model_copy(
+            update={
+                "target": FinalResponseTarget(),
+                "grading": config,
+                "reduction": experiment.reduction.model_copy(update={"freshness_seconds": 600}),
+            }
+        ),
+    )
+    return config
+
+
+def test_task_grading_composes_with_search_confirmation_resume_and_offline_inspection(
+    operator_case: OperatorCase, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import ithrl.execution.preflight as grading_preflight
+    import ithrl.measurement as measurement
+
+    config = _configure_operator_grading(operator_case, monkeypatch)
+    arguments = operator_case.command("--attempt-timeout", "10")
+    completed = _invoke(arguments)
+    assert completed.exit_code == 0, completed.output
+    saved = _json(completed)
+    calls = len(operator_case.runner.calls)
+    store = ObservationStore(operator_case.store_path)
+    recorded = store.list_for_experiment(
+        operator_case.runner.calls[0].execution_plan.experiment_digest
+    )
+    assert recorded
+    assert all(item.attempt_evidence.grading is not None for item in recorded)
+    assert sum(item.attempt_evidence.provider_call_charge(1) for item in recorded) == calls
+    assert all(item.valid for item in recorded)
+    resumed = _invoke(
+        [
+            "shrink",
+            saved["run_state_path"],
+            "--resume",
+            "--acknowledge-model-execution",
+            "--format",
+            "json",
+        ]
+    )
+    assert resumed.exit_code == completed.exit_code, resumed.output
+    assert len(operator_case.runner.calls) == calls
+
+    def forbidden(_config: PatchGradingConfig) -> None:
+        raise AssertionError("offline inspection tried to reopen an executable grader")
+
+    monkeypatch.setattr(grading_preflight, "validate_grading", forbidden)
+    monkeypatch.setattr(measurement, "validate_grading", forbidden)
+    inspected = _invoke(
+        [
+            "inspect",
+            "retained",
+            str(operator_case.workspace.root),
+            "--result",
+            saved["result_path"],
+            "--format",
+            "json",
+        ]
+    )
+    assert inspected.exit_code == 0, inspected.output
+    assert _json(inspected)["grading_config_digest"] == config.digest
+    assert len(operator_case.runner.calls) == calls
+    operator_case.assert_sources_unchanged()
+
+
+def test_predispatch_grading_refusal_clears_sampling_reservation_without_call_charge(
+    operator_case: OperatorCase, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import ithrl.measurement as measurement
+
+    _configure_operator_grading(operator_case, monkeypatch)
+
+    def changed(_config: PatchGradingConfig) -> None:
+        if operator_case.runner.calls:
+            raise ValueError("private changed environment")
+
+    monkeypatch.setattr(measurement, "validate_grading", changed)
+    result = _invoke(operator_case.command("--attempt-timeout", "10"))
+    assert result.exit_code != ExitCode.SUCCESS, result.output
+    report = _json(result)
+    assert len(operator_case.runner.calls) == 1  # Calibration only; no search inference.
+    assert report["actual_provider_calls"] == report["charged_provider_calls"] == 1
+    assert report["pending_provider_calls"] == report["possible_provider_calls"] == 0
+    store = ObservationStore(operator_case.store_path)
+    state_file = SampledRunStateFile.open(Path(report["run_state_path"]))
+    with state_file.acquire_lock(store):
+        state = state_file.load(store)
+    assert state.pending is None
+    [refused] = [
+        item
+        for item in store.list_for_experiment(state.original_identity.experiment_digest)
+        if item.error_category == "contract"
+    ]
+    assert refused.attempt_evidence.reason_code == "grading-unavailable"
+    assert refused.attempt_evidence.provider_call_charge(1) == 0
+    resumed = _invoke(
+        [
+            "shrink",
+            report["run_state_path"],
+            "--resume",
+            "--acknowledge-model-execution",
+            "--format",
+            "json",
+        ]
+    )
+    assert resumed.exit_code != ExitCode.SUCCESS, resumed.output
+    assert len(operator_case.runner.calls) == 1
+    operator_case.assert_sources_unchanged()

@@ -801,3 +801,32 @@ def test_sdk_protocol_probe_is_isolated_and_uses_public_client_lifecycle(
     assert "await client.start()" in source
     assert 'await client.ping("ithrl-credential-free-protocol")' in source
     assert "finally:\n        await client.stop()" in source
+
+
+def test_bundled_assets_fit_discovery_and_attempt_defaults_without_unbounded_growth(
+    tmp_path: Path,
+) -> None:
+    from ithrl.cli.native import native_resource_limits
+    from ithrl.runner.runtime.state import AttemptStateLimitError, OwnedAttemptState
+
+    state = OwnedAttemptState.create(tmp_path, "attempt-" + "a" * 32)
+    assets = state.member("bundled-assets")
+    # Exercise logical-byte accounting without allocating hundreds of MiB in CI.
+    # The asset size is a measured standalone bundle; reserve room for session/output state.
+    with assets.open("wb") as stream:
+        stream.truncate(294_474_199 + 64 * 1024 * 1024)
+    limits = native_resource_limits("copilot", max_provider_calls=1)
+    capability._require_bounded_probe_state(state.root)
+    state.measure(
+        max_bytes=limits.max_disposable_state_bytes, max_entries=limits.max_disposable_state_entries
+    )
+
+    with assets.open("r+b") as stream:
+        stream.truncate(limits.max_disposable_state_bytes + 1)
+    with pytest.raises(CopilotCapabilityError, match="byte limit"):
+        capability._require_bounded_probe_state(state.root)
+    with pytest.raises(AttemptStateLimitError):
+        state.measure(
+            max_bytes=limits.max_disposable_state_bytes,
+            max_entries=limits.max_disposable_state_entries,
+        )

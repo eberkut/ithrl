@@ -652,6 +652,7 @@ def test_metadata_precedes_context_proof_with_independent_bounded_accounting(
         ("future.essential", 70, 0),
         ("model.future_telemetry", 0, 0),
         ("session.future_telemetry", 0, 0),
+        ("prompt_cache_break", 0, 1),
         ("sandbox.decision", 0, 0),
         ("user.message", 70, 0),
     ],
@@ -817,7 +818,10 @@ def test_sdk_worker_empty_batch_adds_no_messages_and_emits_native_events(
                     emit("assistant.idle", {})
             else:
                 emit(event_kind, {})
-            if event_kind.startswith(("model.", "session.")) or event_kind == "sandbox.decision":
+            if event_kind.startswith(("model.", "session.")) or event_kind in {
+                "sandbox.decision",
+                "prompt_cache_break",
+            }:
                 self.callback(
                     SimpleNamespace(to_dict=lambda: {"type": "assistant.idle", "data": {}})
                 )

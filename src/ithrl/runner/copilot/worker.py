@@ -42,6 +42,7 @@ _ALLOWED_EVENTS = frozenset(
         "session.mcp_servers_loaded",
         "system.message",
         "pending_messages.modified",
+        "prompt_cache_break",
         "session.usage_info",
         "assistant.turn_start",
         "model.call_start",

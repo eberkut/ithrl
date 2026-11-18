@@ -1,0 +1,25 @@
+--- a/django_migration_linter/sql_analyser/postgresql.py
++++ b/django_migration_linter/sql_analyser/postgresql.py
+@@ -1,16 +1,19 @@
+ import re
+ 
+ from .base import BaseAnalyser
++
++
++def has_create_index(sql_statements, **kwargs):
++    return False
+ 
+ 
+ class PostgresqlAnalyser(BaseAnalyser):
+     migration_tests = [
+         {
+             "code": "CREATE_INDEX",
+-            "fn": lambda sql, **kw: re.search("CREATE (UNIQUE )?INDEX", sql)
+-            and not re.search("INDEX CONCURRENTLY", sql),
++            "fn": has_create_index,
+             "msg": "CREATE INDEX locks table",
+-            "mode": "one_liner",
++            "mode": "transaction",
+             "type": "warning",
+         },
+         {
