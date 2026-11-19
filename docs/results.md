@@ -359,21 +359,25 @@ ithrl inspect costs costs.json --format json
 
 The report covers recorded observations for that case and experiment, including failed attempts.
 It counts a repeated physical attempt once and refuses conflicting copies. This scope can include
-several runs that used the same case and configuration. Pending reservations and cap-dependent
-additional calls are outside the database and remain unknown; the subtotal is not a complete
+several runs that used the same case and configuration. `provider_calls_possible_recorded`
+preserves possible-call counts present in the evidence, including cap-based counts. Pending
+reservations and further cap-dependent exposure remain unknown; the subtotal is not a complete
 investigation cost or a monetary execution limit.
 
-Private deployment identifiers appear only as digests in the report. Known and possible calls
-overlap rather than add. Missing usage stays unpriced; verified zero-provider work has a zero
-subtotal. Multi-request attempts remain unpriced because their aggregate counts do not identify
-each request's model and context threshold.
+Private deployment identifiers and recorded service tiers appear only as digests in the report. When
+a recorded tier conflicts with the selected reference tier, the attempt stays unpriced with
+`service-tier-unmatched`. A missing tier remains an explicit reference-price assumption. Known and
+possible calls overlap rather than add. Missing usage stays unpriced; verified zero-provider work
+has a zero subtotal. Multi-request attempts remain unpriced because their aggregate counts do not
+identify each request's model and context threshold.
 
 ### Read coverage and rates
 
-`subtotal_usd` sums priced components. `null` means no amount could be established. Partial reports
-list `unpriced_reasons`; a priced output or cached-input component does not imply complete input
-coverage. The JSON view includes at most 20 observation details and counts omissions. The saved
-report retains every included observation, up to the selected row limit.
+`subtotal_usd` sums priced components. `null` means no amount could be established. Recorded reports
+list `unpriced_reasons`; hypothetical reports put reasons in `scenario.components[].reason`.
+A priced output or cached-input component does not imply complete input coverage.
+The JSON view includes at most 20 observation details and counts omissions. The saved report
+retains every included observation, up to the selected row limit.
 Human output also groups unpriced token components by dimension and reason across the full report.
 
 Diagnostics identify the failing input: `cost-pricing-invalid` for the pricing specification,
@@ -385,6 +389,12 @@ Input totals include cached reads and writes; output totals include reasoning to
 subtracted rather than charged twice. Missing cache counts or write durations can leave input
 components unpriced. Contradictory counts refuse estimation. Context thresholds apply to the full
 prompt and may change output rates too.
+An absent cache-write rate does not establish zero writes; supply an explicit zero count when
+writes are known not to apply. Supplying both five-minute and one-hour counts declares an exhaustive
+breakdown; their sum must equal any supplied write total. A partial breakdown does not identify
+the remainder's retention, so missing duration counts are not inferred. OpenAI catalog write
+rates require retention evidence and stay unpriced with `cache-retention-unknown` when it is
+unavailable; explicit custom rates record the operator's pricing assumption.
 
 The report saves the selected date/context, package and catalog identity, effective component
 rates, counts and amounts. Inspection validates its digest and arithmetic without the source

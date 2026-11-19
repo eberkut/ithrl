@@ -14,6 +14,7 @@ import pytest
 from typer.testing import CliRunner
 
 from ithrl.cli import app
+from ithrl.context import content_digest
 from ithrl.cost_reporting import CostReport, recorded_report, write_cost_report
 from ithrl.costs import PriceBook, PricingSpec, RecordedSource
 from ithrl.observations import (
@@ -100,8 +101,9 @@ def test_read_only_report_preserves_errors_and_counts_each_resumed_attempt_once(
     before = hashlib.sha256(store.path.read_bytes()).hexdigest()
     report = recorded_report(store, case_digest="a" * 64, experiment_digest="c" * 64, book=book())
     assert hashlib.sha256(store.path.read_bytes()).hexdigest() == before
-    assert report.summary()["subtotal_usd"] == "0.00524"
-    assert report.summary()["priced_observations"] == 2
+    assert report.summary()["subtotal_usd"] == "0.00204"
+    assert report.summary()["priced_observations"] == 0
+    assert report.summary()["partially_priced_observations"] == 2
     assert report.summary()["known_zero_provider_observations"] == 1
     assert report.summary()["unpriced_observations"] == 1
     assert report.summary()["attempts_with_unknown_additional_calls"] == 1
@@ -119,7 +121,51 @@ def test_repeated_physical_attempt_is_not_charged_twice(tmp_path: Path) -> None:
     store.append_many((first, first.model_copy(update={"observation_id": "reused", "attempt": 2})))
     report = recorded_report(store, case_digest="a" * 64, experiment_digest="c" * 64, book=book())
     assert len(report.observations) == 1
-    assert report.summary()["subtotal_usd"] == "0.00262"
+    assert report.summary()["subtotal_usd"] == "0.00102"
+
+
+@pytest.mark.parametrize("failed", [False, True])
+def test_conflicting_outcomes_or_errors_for_one_attempt_refuse(
+    tmp_path: Path, failed: bool
+) -> None:
+    first = observation(1, failed=failed)
+    changes = {"observation_id": "conflict", "attempt": 2}
+    if failed:
+        changes["error_category"] = "transport-error"
+    else:
+        changes["outcome"] = ObservationOutcome.NO_MATCH
+    store = ObservationStore(tmp_path / "observations.sqlite")
+    store.append_many((first, first.model_copy(update=changes)))
+    before = store.path.read_bytes()
+    with pytest.raises(ValueError, match="conflicting evidence"):
+        recorded_report(store, case_digest="a" * 64, experiment_digest="c" * 64, book=book())
+    assert store.path.read_bytes() == before
+
+
+@pytest.mark.parametrize("tier", [None, "priority", "default", "private-tier-secret"])
+def test_recorded_service_tier_is_bound_without_disclosing_native_values(
+    tmp_path: Path, tier: str | None
+) -> None:
+    first = observation(1)
+    evidence = first.attempt_evidence.model_copy(update={"service_tier": tier})
+    store = ObservationStore(tmp_path / "observations.sqlite")
+    store.append(first.model_copy(update={"attempt_evidence": evidence}))
+    pricing = PriceBook(book().spec.model_copy(update={"context": {"service_tier": "priority"}}))
+    report = recorded_report(store, case_digest="a" * 64, experiment_digest="c" * 64, book=pricing)
+    row = report.observations[0]
+    assert row.service_tier_digest == (content_digest(tier) if tier is not None else None)
+    assert row.usage is not None
+    if tier in (None, "priority"):
+        assert row.charges is not None
+        assert row.reason is None
+        data = report.model_dump(mode="json")
+        data["observations"][0]["service_tier_digest"] = content_digest("default")
+        with pytest.raises(ValueError, match="single-call attribution"):
+            CostReport.model_validate_json(json.dumps(data))
+    else:
+        assert row.charges is None
+        assert row.reason == "service-tier-unmatched"
+    assert "private-tier-secret" not in report.model_dump_json()
 
 
 def test_multiple_requests_are_unpriced_without_a_request_level_breakdown(tmp_path: Path) -> None:
@@ -189,7 +235,7 @@ def test_uncertain_acceptance_does_not_discard_other_priced_attempts(tmp_path: P
         )
     )
     report = recorded_report(store, case_digest="a" * 64, experiment_digest="c" * 64, book=book())
-    assert report.summary()["subtotal_usd"] == "0.00262"
+    assert report.summary()["subtotal_usd"] == "0.00102"
     assert report.observations[1].reason == "incomplete-provider-request"
     assert report.observations[1].usage is not None
     assert report.observations[1].provider_calls_possible == 1
@@ -312,7 +358,7 @@ def test_normal_cli_saves_and_inspects_without_the_store_or_price_library(
     )
     assert created.exit_code == 0, created.output
     data = json.loads(created.output)
-    assert data["summary"]["subtotal_usd"] == "0.00262"
+    assert data["summary"]["subtotal_usd"] == "0.00102"
     assert data["provider_calls"] == 0
     assert "private" not in created.output
     store.path.unlink()
@@ -373,7 +419,7 @@ def test_cli_scenario_is_explicit_and_cannot_mix_with_recorded_inputs(tmp_path: 
     result = runner.invoke(app, ["cost", "--scenario", str(usage), *common])
     assert result.exit_code == 0, result.output
     assert json.loads(result.output)["mode"] == "hypothetical"
-    assert json.loads(result.output)["summary"]["subtotal_usd"] == "0.00262"
+    assert json.loads(result.output)["summary"]["subtotal_usd"] == "0.00102"
     assert (
         runner.invoke(
             app, ["inspect", "costs", str(tmp_path / "missing.json"), "--format", "json"]

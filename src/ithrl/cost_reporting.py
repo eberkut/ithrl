@@ -36,6 +36,7 @@ class RecordedCost(_Contract):
     observation_digest: Digest
     attempt_digest: Digest
     attribution_digest: Digest
+    service_tier_digest: Digest | None
     recorded_at: datetime
     outcome: Literal["match", "no_match", "invalid_observation", "runner_error"]
     usage_provenance: Literal["runner-reported-attempt"] = "runner-reported-attempt"
@@ -52,6 +53,7 @@ class RecordedCost(_Contract):
             "no-provider-calls",
             "usage-unavailable",
             "attribution-unmatched",
+            "service-tier-unmatched",
             "multiple-provider-requests",
             "incomplete-provider-request",
         ]
@@ -98,6 +100,7 @@ class CostReport(_Contract):
                 or row.provider_calls_started != 1
                 or row.provider_calls_completed != 1
                 or row.attribution_digest != self.pricing.recorded_source_digest
+                or _tier_conflicts(row.service_tier_digest, self.pricing)
             ):
                 raise ValueError("priced usage requires matching single-call attribution")
             if row.charges is not None and row.usage is not None:
@@ -181,6 +184,11 @@ def _amount(value: Decimal | None) -> str | None:
     return str(value) if value is not None else None
 
 
+def _tier_conflicts(digest: str | None, pricing: PricingProvenance) -> bool:
+    selected = pricing.context.get("service_tier")
+    return digest is not None and selected is not None and digest != content_digest(selected)
+
+
 def _record(observation: Observation, book: PriceBook) -> RecordedCost:
     evidence = observation.attempt_evidence
     accounting = evidence.accounting
@@ -190,6 +198,9 @@ def _record(observation: Observation, book: PriceBook) -> RecordedCost:
         "endpoint": evidence.endpoint,
     }
     attribution = content_digest(source)
+    service_tier = (
+        content_digest(evidence.service_tier) if evidence.service_tier is not None else None
+    )
     acceptance = evidence.provider_acceptance_state
     if accounting is not None:
         started, completed = accounting.provider_calls_started, accounting.provider_calls_completed
@@ -213,6 +224,8 @@ def _record(observation: Observation, book: PriceBook) -> RecordedCost:
         reason = "usage-unavailable"
     elif attribution != book.provenance.recorded_source_digest:
         reason = "attribution-unmatched"
+    elif _tier_conflicts(service_tier, book.provenance):
+        reason = "service-tier-unmatched"
     elif started is not None and started > 1:
         reason = "multiple-provider-requests"
     elif acceptance is not ProviderAcceptanceState.ACCEPTED or started != 1 or completed != 1:
@@ -232,6 +245,7 @@ def _record(observation: Observation, book: PriceBook) -> RecordedCost:
         observation_digest=content_digest(observation.model_dump(mode="json")),
         attempt_digest=evidence.attempt_digest,
         attribution_digest=attribution,
+        service_tier_digest=service_tier,
         recorded_at=observation.recorded_at,
         outcome=observation.outcome.value,
         usage=usage,
@@ -268,6 +282,8 @@ def recorded_report(
             if (
                 previous.attempt_evidence != observation.attempt_evidence
                 or previous.candidate_digest != observation.candidate_digest
+                or previous.outcome != observation.outcome
+                or previous.error_category != observation.error_category
             ):
                 raise ValueError("duplicate attempt has conflicting evidence")
         else:

@@ -39,6 +39,7 @@ def test_cached_and_reasoning_subsets_are_not_charged_twice() -> None:
         CostUsage(
             input_tokens=1000,
             cached_input_tokens=200,
+            cache_write_tokens=0,
             output_tokens=100,
             reasoning_output_tokens=70,
         )
@@ -49,6 +50,7 @@ def test_cached_and_reasoning_subsets_are_not_charged_twice() -> None:
         ("input_tokens", 800),
         ("output_tokens", 100),
         ("cached_input_tokens", 200),
+        ("cache_write_tokens", 0),
     ]
 
 
@@ -77,7 +79,91 @@ def test_unknown_cache_counts_leave_input_unpriced_but_preserve_output_subtotal(
     assert {c.dimension for c in result.components if c.reason == "usage-unknown"} == {
         "input_tokens",
         "cached_input_tokens",
+        "cache_write_tokens",
     }
+
+
+def test_missing_write_count_stays_unknown_when_custom_rates_omit_writes() -> None:
+    book = PriceBook(spec())
+    usage = CostUsage(input_tokens=1000, output_tokens=100, cached_input_tokens=200)
+    result = book.estimate(usage)
+    assert result.subtotal_usd == Decimal("0.00102")
+    assert not result.complete
+    unknown = {c.dimension for c in result.components if c.reason == "usage-unknown"}
+    assert unknown == {"input_tokens", "cache_write_tokens"}
+    explicit = book.estimate(usage.model_copy(update={"cache_write_tokens": 0}))
+    assert explicit.complete
+    assert explicit.subtotal_usd == Decimal("0.00262")
+
+
+@pytest.mark.parametrize("model", ["gpt-6.1-sol", "gpt-6.1-terra", "gpt-6.2-astra", "gpt-6.2-sol"])
+def test_retention_specific_catalog_write_rate_needs_retention_evidence(model: str) -> None:
+    book = PriceBook(spec(custom_rates=None, model=model))
+    usage = CostUsage(
+        input_tokens=1000, output_tokens=100, cached_input_tokens=100, cache_write_tokens=100
+    )
+    result = book.estimate(usage)
+    write = next(c for c in result.components if c.dimension == "cache_write_tokens")
+    assert write.reason == "cache-retention-unknown"
+    assert write.tokens == 100
+    assert write.amount_usd is None
+    assert write.usd_per_million is None
+    assert all(c.amount_usd is not None for c in result.components if c is not write)
+    assert not result.complete
+    zero = book.estimate(usage.model_copy(update={"cache_write_tokens": 0}))
+    assert zero.complete
+    assert (
+        next(c for c in zero.components if c.dimension == "cache_write_tokens").usd_per_million
+        is None
+    )
+
+
+def test_explicit_custom_write_rate_remains_an_operator_assumption() -> None:
+    book = PriceBook(
+        spec(
+            model="gpt-6.1-terra",
+            custom_rates={
+                "input_mtok": Decimal(2),
+                "output_mtok": Decimal(10),
+                "cache_read_mtok": Decimal("0.1"),
+                "cache_write_mtok": Decimal(3),
+            },
+        )
+    )
+    result = book.estimate(
+        CostUsage(
+            input_tokens=1000, output_tokens=100, cached_input_tokens=100, cache_write_tokens=100
+        )
+    )
+    assert result.complete
+    assert result.subtotal_usd == Decimal("0.00291")
+
+
+def test_generic_write_remainder_does_not_establish_a_missing_duration() -> None:
+    book = PriceBook(
+        spec(
+            custom_rates={
+                "input_mtok": Decimal(2),
+                "output_mtok": Decimal(10),
+                "cache_read_mtok": Decimal("0.1"),
+                "cache_write_5m_mtok": Decimal("2.5"),
+                "cache_write_1h_mtok": Decimal(4),
+            }
+        )
+    )
+    result = book.estimate(
+        CostUsage(
+            input_tokens=100,
+            output_tokens=0,
+            cached_input_tokens=0,
+            cache_write_tokens=50,
+            cache_write_5m_tokens=20,
+        )
+    )
+    hour = next(c for c in result.components if c.dimension == "cache_write_1h_tokens")
+    assert hour.tokens is None
+    assert hour.reason == "usage-unknown"
+    assert not result.complete
 
 
 def test_empty_usage_never_becomes_zero() -> None:
@@ -103,7 +189,9 @@ def test_explicit_zero_usage_and_zero_rates_remain_distinct_from_missing() -> No
     )
     assert (
         free.estimate(
-            CostUsage(input_tokens=10, output_tokens=10, cached_input_tokens=0)
+            CostUsage(
+                input_tokens=10, output_tokens=10, cached_input_tokens=0, cache_write_tokens=0
+            )
         ).subtotal_usd
         == 0
     )
@@ -150,8 +238,12 @@ def test_context_threshold_changes_all_tokens_and_output_rate() -> None:
             custom_rates={"input_mtok": price, "output_mtok": price, "cache_read_mtok": Decimal(0)}
         )
     )
-    before = book.estimate(CostUsage(input_tokens=100, output_tokens=10, cached_input_tokens=0))
-    after = book.estimate(CostUsage(input_tokens=101, output_tokens=10, cached_input_tokens=0))
+    before = book.estimate(
+        CostUsage(input_tokens=100, output_tokens=10, cached_input_tokens=0, cache_write_tokens=0)
+    )
+    after = book.estimate(
+        CostUsage(input_tokens=101, output_tokens=10, cached_input_tokens=0, cache_write_tokens=0)
+    )
     assert before.subtotal_usd == Decimal("0.00022")
     assert after.subtotal_usd == Decimal("0.000444")
     unknown = book.estimate(CostUsage(output_tokens=10, cached_input_tokens=0))
@@ -272,7 +364,8 @@ def test_extreme_rates_refuse_before_decimal_arithmetic(rate: str) -> None:
 def test_rehashed_report_cannot_change_component_counts_independently(tmp_path: Path) -> None:
     path = tmp_path / "cost.json"
     report = hypothetical_report(
-        CostUsage(input_tokens=100, output_tokens=10, cached_input_tokens=0), PriceBook(spec())
+        CostUsage(input_tokens=100, output_tokens=10, cached_input_tokens=0, cache_write_tokens=0),
+        PriceBook(spec()),
     )
     write_cost_report(path, report)
     envelope = json.loads(path.read_text())

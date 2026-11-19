@@ -34,7 +34,7 @@ type TokenDimension = Literal[
     "cache_write_5m_tokens",
     "cache_write_1h_tokens",
 ]
-type WriteMode = Literal["none", "generic", "durations"]
+type WriteMode = Literal["generic", "durations"]
 _DIMENSIONS: dict[PriceKey, TokenDimension] = {
     "input_mtok": "input_tokens",
     "output_mtok": "output_tokens",
@@ -98,27 +98,16 @@ class CostUsage(_Contract):
         cached, writes = self.cached_input_tokens, self.cache_write_total
         if self.input_tokens == 0:
             cached, writes = 0, 0
-        if mode == "none" and any(
-            value not in (None, 0)
-            for value in (
-                self.cache_write_tokens,
-                self.cache_write_5m_tokens,
-                self.cache_write_1h_tokens,
-            )
-        ):
-            raise ValueError("billable counts cannot discard known cache writes")
         counts: dict[TokenDimension, int | None] = {
-            "input_tokens": self.input_tokens - cached - (writes or 0)
-            if self.input_tokens is not None
-            and cached is not None
-            and (mode == "none" or writes is not None)
+            "input_tokens": self.input_tokens - cached - writes
+            if self.input_tokens is not None and cached is not None and writes is not None
             else None,
             "output_tokens": self.output_tokens,
             "cached_input_tokens": cached,
         }
         if mode == "generic":
             counts["cache_write_tokens"] = writes
-        elif mode == "durations":
+        else:
             counts["cache_write_5m_tokens"] = 0 if writes == 0 else self.cache_write_5m_tokens
             counts["cache_write_1h_tokens"] = 0 if writes == 0 else self.cache_write_1h_tokens
         return counts
@@ -209,7 +198,15 @@ class CostComponent(_Contract):
     tokens: Count | None
     usd_per_million: Rate | None
     amount_usd: Money | None
-    reason: Literal["usage-unknown", "rate-unavailable", "request-context-unknown"] | None = None
+    reason: (
+        Literal[
+            "usage-unknown",
+            "rate-unavailable",
+            "request-context-unknown",
+            "cache-retention-unknown",
+        ]
+        | None
+    ) = None
 
     @model_validator(mode="after")
     def arithmetic(self) -> CostComponent:
@@ -343,6 +340,13 @@ class PriceBook:
                     for name in ("data.py", "data_units.py")
                 }
             )
+        # OpenAI write rates depend on retention, which a generic count does not identify.
+        # https://developers.openai.com/api/docs/guides/prompt-caching
+        self._write_retention_unknown = (
+            spec.custom_rates is None
+            and spec.provider == "openai"
+            and self.prices.cache_write_mtok is not None
+        )
         self.provenance = PricingProvenance(
             provider=spec.provider,
             model=spec.model,
@@ -370,24 +374,21 @@ class PriceBook:
             or usage.cache_write_5m_tokens is not None
             or usage.cache_write_1h_tokens is not None
         )
-        mode: WriteMode = (
-            "durations"
-            if has_durations
-            else "generic"
-            if (self.prices.cache_write_mtok is not None or usage.cache_write_tokens is not None)
-            else "none"
-        )
+        mode: WriteMode = "durations" if has_durations else "generic"
         counts = usage.billable_counts(mode)
         components = []
         for key, dimension in _DIMENSIONS.items():
             if dimension not in counts:
                 continue
             price, count = getattr(self.prices, key), counts[dimension]
+            retention_unknown = key == "cache_write_mtok" and self._write_retention_unknown
+            if retention_unknown:
+                price = None
             reason = None
             if count is None:
                 reason = "usage-unknown"
             elif price is None and count != 0:
-                reason = "rate-unavailable"
+                reason = "cache-retention-unknown" if retention_unknown else "rate-unavailable"
             elif isinstance(price, TieredPrices) and usage.input_tokens is None and count != 0:
                 reason = "request-context-unknown"
             with localcontext() as context:
