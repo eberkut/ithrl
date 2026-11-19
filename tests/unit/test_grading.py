@@ -19,6 +19,7 @@ from pydantic import ValidationError
 
 from ithrl.grading import GradeEvidence, PatchGradingConfig, TestSuite, write_bundle
 from ithrl.grading.bundle import GradingError, _read_tree
+from ithrl.grading.contracts import BundleManifest
 from ithrl.grading.runtime import _execute, _patch_text
 from ithrl.path_safety import UnsafePathError
 
@@ -323,8 +324,6 @@ def test_unittest_fixture_exceptions_are_operational(
 
 
 def test_bundle_rejects_a_missing_independent_verifier() -> None:
-    from ithrl.grading.contracts import BundleManifest
-
     with pytest.raises(ValidationError, match="independent verifier"):
         BundleManifest(
             files={"source/app.py": "a" * 64},
@@ -333,6 +332,126 @@ def test_bundle_rejects_a_missing_independent_verifier() -> None:
             source_suite=TestSuite(kind="unittest", selector="tests", expected_count=1),
             independent_suite=TestSuite(kind="unittest", selector="test_app.py", expected_count=1),
         )
+
+
+@pytest.mark.parametrize(
+    ("update", "message"),
+    [
+        ({"python_path": "../outside"}, "remain relative"),
+        ({"editable_paths": ("app.py", "app.py")}, "must be unique"),
+        ({"files": {"other/app.py": "a" * 64}}, "belong to source or checks"),
+        ({"editable_paths": ("missing.py",)}, "must exist in source"),
+        (
+            {
+                "independent_suite": TestSuite(
+                    kind="pytest", selector="test_app.py", expected_count=1
+                )
+            },
+            "use unittest discovery",
+        ),
+    ],
+)
+def test_bundle_manifest_rejects_unsafe_or_inconsistent_paths(
+    update: dict[str, object], message: str
+) -> None:
+    manifest = {
+        "files": {"source/app.py": "a" * 64, "checks/test_app.py": "b" * 64},
+        "editable_paths": ("app.py",),
+        "python_path": ".",
+        "source_suite": TestSuite(kind="unittest", selector="tests", expected_count=1),
+        "independent_suite": TestSuite(kind="unittest", selector="test_app.py", expected_count=1),
+    }
+    with pytest.raises(ValidationError, match=message):
+        BundleManifest.model_validate({**manifest, **update})
+
+
+def test_passing_grade_requires_two_complete_successful_suites() -> None:
+    with pytest.raises(ValidationError, match="both complete successful suites"):
+        GradeEvidence(
+            config_digest="a" * 64,
+            candidate_digest="b" * 64,
+            response_digest="c" * 64,
+            attempt_id="attempt-" + "d" * 32,
+            status="pass",
+            elapsed_milliseconds=0,
+        )
+
+
+@pytest.mark.parametrize("limit", ["MAX_DEPTH", "MAX_FILES", "MAX_BYTES"])
+def test_snapshot_refuses_excessive_depth_entries_and_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, limit: str
+) -> None:
+    from ithrl.grading import bundle
+
+    (tmp_path / "nested/deeper").mkdir(parents=True)
+    (tmp_path / "nested/deeper/app.py").write_bytes(b"source")
+    monkeypatch.setattr(bundle, limit, 0)
+    with pytest.raises(GradingError, match="grading-input-limit"):
+        _read_tree(tmp_path)
+
+
+def test_snapshot_refuses_special_files_without_blocking(tmp_path: Path) -> None:
+    os.mkfifo(tmp_path / "pipe")
+    with pytest.raises(GradingError, match="grading-unsafe-file"):
+        _read_tree(tmp_path)
+
+
+def test_snapshot_refuses_a_file_changed_during_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from types import SimpleNamespace
+
+    (tmp_path / "app.py").write_bytes(b"source")
+    original = os.fstat
+    calls = 0
+
+    def changed(fd: int):
+        nonlocal calls
+        calls += 1
+        result = original(fd)
+        return SimpleNamespace(
+            st_mode=result.st_mode,
+            st_size=result.st_size,
+            st_mtime_ns=result.st_mtime_ns,
+            st_ctime_ns=result.st_ctime_ns + int(calls == 2),
+        )
+
+    monkeypatch.setattr(os, "fstat", changed)
+    with pytest.raises(GradingError, match="grading-input-changed"):
+        _read_tree(tmp_path)
+
+
+@pytest.mark.parametrize("metadata", [None, "home = /elsewhere\nversion = 3.12.0\n"])
+def test_environment_refuses_missing_metadata_or_non_system_python(
+    tmp_path: Path, metadata: str | None
+) -> None:
+    from ithrl.grading.bundle import bind_environment
+
+    if metadata is not None:
+        (tmp_path / "pyvenv.cfg").write_text(metadata)
+        (tmp_path / "bin").mkdir()
+        (tmp_path / "bin/python").symlink_to(sys.executable)
+    reason = "grading-unsafe-environment" if metadata is None else "grading-system-python-required"
+    with pytest.raises(GradingError, match=reason):
+        bind_environment(tmp_path)
+
+
+@pytest.mark.parametrize("manifest", [None, b"not json"])
+def test_invalid_bundle_manifest_is_refused_before_environment_access(
+    tmp_path: Path, manifest: bytes | None
+) -> None:
+    from ithrl.grading.bundle import validate_grading
+
+    if manifest is not None:
+        (tmp_path / "manifest.json").write_bytes(manifest)
+    config = PatchGradingConfig(
+        bundle_path=str(tmp_path),
+        bundle_digest="a" * 64,
+        environment_path=str(tmp_path / "missing-environment"),
+        environment_digest="b" * 64,
+    )
+    with pytest.raises(GradingError, match="grading-invalid-manifest"):
+        validate_grading(config)
 
 
 @pytest.mark.parametrize("failure", ["overflow", "cancel"])
