@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from ithrl.execution import ResourceLimits
+from ithrl.execution import ExecutionPlanMetadata, ResourceLimits
 from ithrl.experiment import SampledExperimentDefinition
 from ithrl.observations import ObservationIdentity
 from ithrl.timestamps import validate_rfc3339_timestamp
@@ -32,7 +32,7 @@ class SampledRunMetadata(BaseModel):
     original_workspace: Path = Field(repr=False)
     observation_store: Path = Field(repr=False)
     experiment: SampledExperimentDefinition = Field(repr=False)
-    resource_limits: ResourceLimits
+    execution_metadata: ExecutionPlanMetadata
     original_identity: ObservationIdentity
     started_at: datetime = Field(strict=True)
 
@@ -68,7 +68,15 @@ class SampledRunMetadata(BaseModel):
             raise ValueError("session requires a sampled reduction plan")
         if self.original_identity.experiment_digest != self.experiment.digest:
             raise ValueError("session experiment must match its original identity")
+        if self.execution_metadata.digest != self.original_identity.execution_plan_digest:
+            raise ValueError("session execution metadata must match its original identity")
         return self
+
+    @property
+    def resource_limits(self) -> ResourceLimits:
+        """Per-attempt limits bound by the execution identity."""
+
+        return self.execution_metadata.resource_limits
 
     def matches_state(self, state: SampledRunState) -> bool:
         """Compare frozen metadata with saved state without accessing recorded paths."""

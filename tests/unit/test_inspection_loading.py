@@ -18,7 +18,7 @@ from ithrl.adapters import enumerate_decisions, parse_session
 from ithrl.case import CaseEvidence, CaseWorkspace
 from ithrl.cli import app
 from ithrl.context import ContextGraphError, content_digest
-from ithrl.execution import ResourceLimits
+from ithrl.execution import ExecutionPlanMetadata, ResourceLimits, SafetyPolicyDeclarations
 from ithrl.experiment import (
     ExperimentDefinition,
     NativeRunnerConfig,
@@ -117,11 +117,21 @@ def _sampled(
         calibration=SampledCalibrationPhase(required_valid=1, minimum_matches=1, max_attempts=2),
         reduction=reduction,
     )
+    metadata = ExecutionPlanMetadata(
+        plan_content_digest="b" * 64,
+        capability_digest="a" * 64,
+        safety_policy_digest="c" * 64,
+        capture_type="provider-request" if evidence.has_request else "logical-session",
+        candidate_materialization="exact-request" if evidence.has_request else "source-backed",
+        reconstruction_method=f"{harness}-offline-fixture-v1",
+        declared_policy=SafetyPolicyDeclarations(provider_transport="allowed"),
+        resource_limits=ResourceLimits(max_provider_calls=1),
+    )
     identity = ObservationIdentity(
         case_digest=evidence.digest,
         experiment_digest=experiment.digest,
         runner_fingerprint="offline-inspection-fixture",
-        execution_plan_digest="b" * 64,
+        execution_plan_digest=metadata.digest,
         target_digest=experiment.target.digest,
         algorithm_digest="d" * 64,
     )
@@ -219,7 +229,7 @@ def _sampled(
             "original_workspace": str((tmp_path / "missing-workspace").absolute()),
             "observation_store": state.observation_store,
             "experiment": experiment.model_dump(mode="json"),
-            "resource_limits": ResourceLimits(max_provider_calls=1).model_dump(mode="json"),
+            "execution_metadata": metadata.model_dump(mode="json"),
             "original_identity": identity.model_dump(mode="json"),
             "started_at": _TIME.isoformat(),
         },
@@ -379,8 +389,8 @@ def test_detached_sampled_snapshot_loads_without_live_state_or_store(
     loaded = load_retained_result(case, result)
     assert loaded.sampled is not None
     assert loaded.deterministic is None
-    assert loaded.execution_plan is None
-    assert not loaded.recorded_metadata
+    assert loaded.execution_metadata is not None
+    assert loaded.execution_metadata.reconstruction_method == f"{harness}-offline-fixture-v1"
     assert loaded.retained_ids == tuple(n.id for n in loaded.evidence.context.nodes)
     assert any("observation database" in line for line in loaded.validation_limits)
     assert {p: p.read_bytes() for p in before} == before
@@ -419,6 +429,54 @@ def test_recorded_candidate_refusal_is_inspectable_without_reconstruction(
     assert loaded.sampled.checkpoint.trials == (trial,)
     assert loaded.retained_ids == tuple(node.id for node in loaded.evidence.context.nodes)
     assert not (tmp_path / "missing-observations.sqlite").exists()
+
+
+@pytest.mark.parametrize(
+    "fault",
+    ["missing", "null", "method", "policy", "limits", "content-digest", "private-field"],
+)
+def test_sampled_inspection_rejects_missing_or_altered_execution_metadata(
+    tmp_path: Path, fault: str
+) -> None:
+    case, result = _sampled(tmp_path)
+    path = result / "cli-session.json"
+    session = json.loads(path.read_text())
+    metadata = session["execution_metadata"]
+    if fault == "missing":
+        del session["execution_metadata"]
+    elif fault == "null":
+        session["execution_metadata"] = None
+    elif fault == "method":
+        metadata["reconstruction_method"] = "another-valid-method-v1"
+    elif fault == "policy":
+        metadata["declared_policy"]["provider_transport"] = "forbidden"
+    elif fault == "limits":
+        metadata["resource_limits"]["max_wall_time_seconds"] += 1
+    elif fault == "content-digest":
+        metadata["plan_content_digest"] = "f" * 64
+    else:
+        metadata["prompt"] = "PRIVATE_UNTRUSTED_METADATA"
+    _write(path, session)
+    with pytest.raises(ResultSnapshotError) as error:
+        load_retained_result(case, result)
+    assert str(error.value) == "cannot inspect a valid reduction snapshot for this case"
+
+
+def test_zero_block_snapshot_rejects_rebound_session_and_outer_state(tmp_path: Path) -> None:
+    case, result = _sampled(tmp_path)
+    session_path = result / "cli-session.json"
+    session = json.loads(session_path.read_text())
+    session["execution_metadata"]["reconstruction_method"] = "unrelated-valid-method-v1"
+    changed = ExecutionPlanMetadata.model_validate(session["execution_metadata"])
+    session["original_identity"]["execution_plan_digest"] = changed.digest
+    _write(session_path, session)
+    state_path = result / "sampling/sampling-state.json"
+    state = json.loads(state_path.read_text())
+    assert not state["blocks"]
+    state["original_identity"]["execution_plan_digest"] = changed.digest
+    _write(state_path, state)
+    with pytest.raises(ResultSnapshotError, match="cannot inspect a valid reduction snapshot"):
+        load_retained_result(case, result)
 
 
 def test_deterministic_snapshot_uses_case_bound_trials(tmp_path: Path) -> None:

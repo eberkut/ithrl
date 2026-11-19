@@ -8,12 +8,15 @@ from pydantic import ValidationError
 
 import ithrl.execution as execution_module
 from ithrl.behavior import ShellActionTarget
+from ithrl.context import content_digest
 from ithrl.execution import (
     CapabilityProfile,
+    ExecutionPlanMetadata,
     PreflightIssue,
     PreflightReport,
     ResourceLimits,
     SafetyPolicy,
+    SafetyPolicyDeclarations,
     calibration_budget_bounds,
     resolve_execution_plan,
 )
@@ -209,6 +212,46 @@ def test_capability_requires_explicit_state_limit_and_process_cancellation_facts
         CapabilityProfile.model_validate({**payload, "disposable_state_effect": "writes"})
     with pytest.raises(ValueError, match="cancellation grace"):
         CapabilityProfile.model_validate({**payload, "process_containment": "process-group"})
+
+
+def test_inspection_metadata_binds_private_plan_and_readable_declarations(tmp_path: Path) -> None:
+    plan = resolve_execution_plan(
+        CapabilityProfile.deterministic_fake(),
+        _shell_experiment(),
+        evidence=_evidence(tmp_path),
+        runner_fingerprint="PRIVATE_RUNTIME_IDENTITY",
+        safety_policy=SafetyPolicy.credential_free(),
+        resource_limits=ResourceLimits.credential_free(),
+    ).plan
+    assert plan is not None
+    metadata = plan.inspection_metadata
+    assert metadata.plan_content_digest == content_digest(plan.model_dump(mode="json"))
+    assert metadata.digest == plan.digest
+    assert metadata.reconstruction_method == plan.capability.reconstruction_method
+    assert metadata.declared_policy == plan.safety_policy.declarations
+    assert metadata.resource_limits == plan.resource_limits
+    assert ExecutionPlanMetadata.model_validate_json(metadata.model_dump_json()) == metadata
+    assert len(metadata.model_dump_json().encode()) < 4096
+    assert "PRIVATE_RUNTIME_IDENTITY" not in metadata.model_dump_json()
+    changed = plan.model_copy(update={"runner_fingerprint": "ANOTHER_PRIVATE_RUNTIME"})
+    assert changed.inspection_metadata.model_dump(exclude={"plan_content_digest"}) == (
+        metadata.model_dump(exclude={"plan_content_digest"})
+    )
+    assert changed.digest != plan.digest
+    assert metadata.model_copy(update={"reconstruction_method": "altered-v1"}).digest != plan.digest
+
+
+def test_policy_declarations_do_not_retain_private_destination() -> None:
+    policy = SafetyPolicy(
+        provider_transport="allowed",
+        allowed_provider="PRIVATE_PROVIDER",
+        allowed_endpoint="https://private.invalid/SECRET",
+    )
+    declarations = policy.declarations
+    assert type(declarations) is SafetyPolicyDeclarations
+    assert declarations.provider_transport == "allowed"
+    assert "PRIVATE_PROVIDER" not in repr(declarations)
+    assert "SECRET" not in declarations.model_dump_json()
 
 
 def test_preflight_refuses_postcondition_only_protected_state_checks(tmp_path: Path) -> None:

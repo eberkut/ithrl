@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 import tarfile
 import tomllib
 import zipfile
+from datetime import UTC, datetime
 from email.parser import BytesParser
 from pathlib import Path, PurePosixPath
 
@@ -447,6 +449,7 @@ def _assert_installed_workflow(wheel: Path, tmp_path: Path, expected_version: st
     assert report["confirmation"]["status"] == "confirmed-preserving"
     assert report["candidate_digest"] == summary["candidate_digest"]
     assert all("text" not in node for node in report["nodes"])
+    _assert_installed_sampled_inspection(python, case, runtime, child_environment)
     _assert_installed_preparation(executable, runtime, child_environment)
     _assert_installed_resume(executable, runtime, child_environment)
     _run(
@@ -464,6 +467,175 @@ def _assert_installed_workflow(wheel: Path, tmp_path: Path, expected_version: st
         cwd=runtime,
         env=child_environment,
     )
+
+
+def _assert_installed_sampled_inspection(
+    python: Path, case: Path, runtime: Path, environment: dict[str, str]
+) -> None:
+    """Inspect a saved sampled result after its external state has been removed."""
+    from ithrl.case import CaseWorkspace
+    from ithrl.cli.sampled_session import save_cli_result, save_cli_session
+    from ithrl.experiment import (
+        ExperimentDefinition,
+        FakeRunnerConfig,
+        SampledCalibrationPhase,
+        SampledConfirmationPhase,
+        SampledExperimentDefinition,
+        SampledReductionPlan,
+        SampledSearchPhase,
+        SamplingArmTarget,
+    )
+    from ithrl.observations import ObservationStore, SamplingBudgetAllowance
+    from ithrl.reduce import SampledReductionCheckpoint
+    from ithrl.results import SampledReductionEvidence
+    from ithrl.run_state import SampledRunStateFile, SamplingBudgetApproval
+    from ithrl.runner import prepare_candidate
+    from ithrl.sampled_run_metadata import SampledRunMetadata
+    from ithrl.workflow import prepare_experiment
+
+    workspace = CaseWorkspace.open(case)
+    evidence = workspace.load()
+    default = ExperimentDefinition.from_toml(evidence.default_experiment)
+    assert isinstance(default.runner, FakeRunnerConfig)
+    arm = SamplingArmTarget(required_valid=1, max_attempts=1)
+    reduction = SampledReductionPlan(
+        search=SampledSearchPhase(original=arm, candidate=arm),
+        confirmation=SampledConfirmationPhase(
+            original=arm, candidate=arm, one_sided_confidence=0.95
+        ),
+        margin=0.2,
+        freshness_seconds=60,
+    )
+    experiment = SampledExperimentDefinition(
+        target=default.target,
+        oracle=default.oracle,
+        runner=default.runner,
+        calibration=SampledCalibrationPhase(required_valid=1, minimum_matches=1, max_attempts=1),
+        reduction=reduction,
+    )
+    prepared = prepare_experiment(evidence, experiment=experiment)
+    candidate = prepare_candidate(evidence, prepared.execution_plan)
+    now = datetime(2026, 10, 7, tzinfo=UTC)
+    store = ObservationStore(runtime / "sampled-observations.sqlite")
+    store.initialize()
+    state_file = SampledRunStateFile.create(
+        case_root=case,
+        run_id="installed-sampled",
+        store=store,
+        started_at=now,
+        original_identity=prepared.identity,
+        original_candidate_digest=candidate.digest,
+        provider_calls_per_attempt=0,
+        approval=SamplingBudgetApproval(
+            approval_id="offline-fixture",
+            approved_at=now,
+            allowance=SamplingBudgetAllowance(
+                run_id="installed-sampled",
+                max_provider_calls=0,
+                max_wall_time_seconds=300,
+                max_candidate_comparisons=1,
+                confirmation_provider_calls=0,
+                confirmation_runner_seconds=60,
+            ),
+        ),
+    )
+    checkpoint = SampledReductionCheckpoint(
+        reduction=reduction,
+        original_identity=prepared.identity,
+        original_candidate_digest=candidate.digest,
+        best_candidate_digest=candidate.digest,
+        removed_context_ids=(),
+    )
+    with state_file.acquire_lock(store):
+        state = state_file.save_checkpoint(store, checkpoint)
+    session = SampledRunMetadata(
+        run_id=state.run_id,
+        run_directory=state_file.path.parent,
+        source_case=case,
+        original_workspace=runtime / "unavailable-original-workspace",
+        observation_store=store.path,
+        experiment=experiment,
+        execution_metadata=prepared.execution_plan.inspection_metadata,
+        original_identity=prepared.identity,
+        started_at=now,
+    )
+    save_cli_session(state_file.path.parent, session)
+    result = SampledReductionEvidence(
+        checkpoint=checkpoint,
+        search_result="search-incomplete",
+        selected_candidate_digest=candidate.digest,
+        selected_at=now,
+    )
+    destination = save_cli_result(
+        workspace,
+        evidence,
+        state,
+        store,
+        result,
+        session,
+        {
+            "schema_version": 1,
+            "kind": "sampled",
+            "command": "shrink",
+            "plan_digest": prepared.execution_plan.digest,
+            "target": experiment.target.type,
+            "original_context_count": len(evidence.context.nodes),
+            "retained_context_count": len(evidence.context.nodes),
+            "removed_context_count": 0,
+            "search_result": result.search_result,
+            "confirmation_result": result.confirmation_result,
+            "margin": reduction.margin,
+            "one_sided_confidence": reduction.confirmation.one_sided_confidence,
+        },
+    )
+    shutil.rmtree(case / ".runs")
+    store.path.unlink()
+    before = {path: path.read_bytes() for path in case.rglob("*") if path.is_file()}
+    inspected = _run(
+        str(python),
+        "-I",
+        "-c",
+        "import socket, subprocess\n"
+        "from ithrl.cli import app\n"
+        "from ithrl.observations import ObservationStore\n"
+        "def forbidden(*args, **kwargs):\n"
+        "    raise AssertionError('inspection attempted execution or database access')\n"
+        "socket.socket = subprocess.Popen = ObservationStore.__init__ = forbidden\n"
+        "app()\n",
+        "inspect",
+        "retained",
+        str(case),
+        "--result",
+        str(destination),
+        "--format",
+        "json",
+        cwd=runtime,
+        env=environment,
+    )
+    report = json.loads(inspected.stdout)
+    assert report["mode"] == "sampled"
+    assert report["candidate_digest"] == candidate.digest
+    assert report["execution_plan_digest"] == prepared.execution_plan.digest
+    assert (
+        report["reconstruction_method"] == prepared.runner.capability_profile.reconstruction_method
+    )
+    assert report["capture_type"] == "provider-request"
+    assert report["candidate_materialization"] == "exact-request"
+    assert report["declared_policy"] == session.execution_metadata.declared_policy.model_dump()
+    assert report["resource_limits"] == session.resource_limits.model_dump()
+    assert report["recorded_policy_evidence"]["observations_with_digest"] == 0
+    assert report["recorded_policy_evidence"]["observations_without_digest"] == 0
+    assert report["recorded_policy_evidence"]["referenced_observations_unavailable"] == 0
+    assert report["recorded_policy_evidence"]["effective_policy_digests"] == []
+    assert report["confirmation"]["status"] == "not-run"
+    assert report["provider_calls"] == report["actions_executed"] == 0
+    assert all("text" not in node for node in report["nodes"])
+    assert evidence.manifest.endpoint is not None
+    assert evidence.manifest.endpoint not in inspected.stdout
+    assert not session.original_workspace.exists()
+    assert not store.path.exists()
+    assert not session.run_directory.exists()
+    assert {path: path.read_bytes() for path in case.rglob("*") if path.is_file()} == before
 
 
 def _assert_installed_preparation(

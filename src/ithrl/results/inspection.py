@@ -4,16 +4,14 @@ from __future__ import annotations
 
 import os
 import stat
-from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from types import MappingProxyType
 from typing import Any
 
 from ithrl.case import CaseEvidence, CaseWorkspace
 from ithrl.case.filesystem import lstat_regular_file, read_safe_text, validate_existing_root
-from ithrl.context import ContextGraphError, JsonValue, content_digest
-from ithrl.execution import ResolvedExecutionPlan
+from ithrl.context import ContextGraphError, content_digest
+from ithrl.execution import ExecutionPlanMetadata
 from ithrl.experiment import ExperimentDefinition, SampledExperimentDefinition
 from ithrl.extraction import validate_experiment_target, validate_extracted_case
 from ithrl.mutation import TextMutation
@@ -45,12 +43,9 @@ class RetainedResult:
     evidence: CaseEvidence
     experiment: ExperimentDefinition | SampledExperimentDefinition
     retained_ids: tuple[str, ...]
-    execution_plan: ResolvedExecutionPlan | None = None
+    execution_metadata: ExecutionPlanMetadata
     deterministic: ResultSnapshot | None = None
     sampled: SampledReductionEvidence | None = None
-    recorded_metadata: Mapping[str, JsonValue] = field(
-        default_factory=lambda: MappingProxyType(dict[str, JsonValue]())
-    )
     validation_limits: tuple[str, ...] = _OFFLINE_LIMITS
 
 
@@ -80,7 +75,7 @@ def load_retained_result(case_path: Path, result_path: Path) -> RetainedResult:
                 evidence=evidence,
                 experiment=snapshot.experiment,
                 retained_ids=snapshot.summary.retained_context_ids,
-                execution_plan=snapshot.execution_plan,
+                execution_metadata=snapshot.execution_plan.inspection_metadata,
                 deterministic=snapshot,
             )
         if summary.get("kind") != "sampled":
@@ -195,17 +190,15 @@ def _load_sampled(root: Path, evidence: CaseEvidence, summary: dict[str, Any]) -
         evidence=evidence,
         experiment=experiment,
         retained_ids=selected.retained_context_ids,
+        execution_metadata=session.execution_metadata,
         sampled=result,
-        validation_limits=(
-            *_OFFLINE_LIMITS,
-            "The saved sampled snapshot does not include its full execution plan.",
-        ),
     )
 
 
 def _validate_result_state(result: SampledReductionEvidence, state: SampledRunState) -> None:
     if (
-        state.checkpoint != result.checkpoint
+        state.original_identity != result.checkpoint.original_identity
+        or state.checkpoint != result.checkpoint
         or state.original_candidate_digest != result.checkpoint.original_candidate_digest
         or state.calibration_observation_ids != result.calibration_observation_ids
         or len(result.calibration_attempt_ids) != len(result.calibration_observation_ids)

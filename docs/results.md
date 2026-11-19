@@ -12,6 +12,7 @@ counts and next action.
 | `request.json` | Original or reduced request when exact-request materialization is available |
 | `checkpoint.json` | Deterministic search checkpoint |
 | `result.json` | Sampled candidate selection, search checkpoint and confirmation evidence |
+| `cli-session.json` | Frozen sampled session inputs, private paths and identity-bound original-plan metadata |
 | `sampling/sampling-state.json` | Sampled run state and observation references |
 
 Other files record the experiment, execution plan and provenance. Native reconstruction may have
@@ -124,8 +125,39 @@ individual units or treated as behavioral losses. This count is unavailable for 
 
 A rejected screen is not confirmed loss or necessity. Coverage and fresh confirmation are separate.
 Target type, confirmation counts, margin and interval appear when saved; missing fields are `null`
-in JSON and unavailable in human output. Sampled snapshots omit the full execution plan, leaving
-detailed runner policy and reconstruction method unavailable.
+in JSON and unavailable in human output.
+
+Saved results bind the following plan metadata to `execution_plan_digest`.
+`plan_metadata_scope = "immutable-original"` identifies the original plan; candidate-arm plans
+can differ. Sampled snapshots retain this metadata without the full private execution plan.
+
+| Field | Interpretation |
+| --- | --- |
+| `execution_plan_digest` | Identity committing to the full private plan and its disclosed metadata. |
+| `capture_type` | Evidence classification used by the plan. |
+| `candidate_materialization` | How the runner constructs a candidate. |
+| `reconstruction_method` | The capability profile's reconstruction method. |
+| `safety_policy_digest` | Identity of the declared safety policy, including its private provider destination. |
+| `declared_policy` | Provider-transport permission, forbidden tool network access, denied action execution and unchanged-source/workspace declarations. Private provider destinations are excluded. |
+| `resource_limits` | Per-attempt limits bound by the plan. |
+
+These fields describe the declared plan; they do not prove historical enforcement.
+Within `recorded_policy_evidence`, `observations_with_digest` and `observations_without_digest`
+count embedded observations with and without an `effective_policy_digest`.
+`referenced_observations_unavailable` counts references without embedded observations. Sampled
+coarse, fine, active-block and confirmation observations contribute embedded evidence. Calibration
+retains only observation references; deterministic snapshots likewise retain references rather
+than embedded attempt evidence. Inspection does not retrieve those observations.
+
+`effective_policy_digests` contains at most 16 sorted, unique recorded digests across both arms;
+`omitted_digest_count` counts additional unique values. A digest identifies recorded attempt
+evidence without revealing the policy's content. Live validation requires each completed attempt's
+digest to match its own plan's safety policy. A mismatch is a safety error and may remain in failed
+attempt evidence. Inspection reports saved digests without independently verifying enforcement.
+
+Loading a saved sampled result requires its identity-bound execution metadata. Incompatible
+snapshots are refused; missing metadata is not reconstructed from current settings. See the
+[format policy](architecture.md#developer-map) before regenerating incompatible artifacts.
 
 Inspection checks saved identities against the case. It does not recheck an external observation
 database or reproduce historical execution. Byte counts have two scopes:

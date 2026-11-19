@@ -17,6 +17,7 @@ from ithrl.execution.contracts import (
     ContextOperation,
     DisposableStateEffect,
     DisposableStateLimitEnforcement,
+    ExecutionPlanMetadata,
     InputTokenLimitEnforcement,
     PreflightIssue,
     PreflightIssueCode,
@@ -29,6 +30,7 @@ from ithrl.execution.contracts import (
     ResolvedExecutionPlan,
     ResourceLimits,
     SafetyPolicy,
+    SafetyPolicyDeclarations,
     ToolNetworkAccess,
 )
 from ithrl.execution.preflight import resolve_execution_plan
@@ -50,6 +52,7 @@ __all__ = [
     "ContextOperation",
     "DisposableStateEffect",
     "DisposableStateLimitEnforcement",
+    "ExecutionPlanMetadata",
     "InputTokenLimitEnforcement",
     "PreflightIssue",
     "PreflightIssueCode",
@@ -62,6 +65,7 @@ __all__ = [
     "ResolvedExecutionPlan",
     "ResourceLimits",
     "SafetyPolicy",
+    "SafetyPolicyDeclarations",
     "ToolNetworkAccess",
     "calibration_budget_bounds",
     "resolve_execution_plan",

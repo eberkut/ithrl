@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+from collections import Counter
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
@@ -12,7 +14,14 @@ import pytest
 from ithrl.behavior import FinalResponseTarget
 from ithrl.case import CaptureFacts, CaseEvidence, CaseManifest, ProvenanceFacts, ReplayFacts
 from ithrl.context import ContextGraph, ContextNode, JsonValue, content_digest
-from ithrl.execution import CapabilityProfile, ResourceLimits, SafetyPolicy, resolve_execution_plan
+from ithrl.execution import (
+    CapabilityProfile,
+    ExecutionPlanMetadata,
+    ResourceLimits,
+    SafetyPolicy,
+    SafetyPolicyDeclarations,
+    resolve_execution_plan,
+)
 from ithrl.experiment import (
     DeterministicPhase,
     ExperimentDefinition,
@@ -226,7 +235,7 @@ def _deterministic(*, historical_only: bool = False) -> RetainedResult:
         evidence=evidence,
         experiment=experiment,
         retained_ids=retained,
-        execution_plan=plan,
+        execution_metadata=plan.inspection_metadata,
         deterministic=snapshot,
         validation_limits=("Observation database was not opened.",),
     )
@@ -295,10 +304,10 @@ def test_inspected_section_ids_agree_with_source_validated_persisted_candidate()
     assert node.trial_indexes
     assert any("do not establish section necessity" in line for line in report.limitations)
 
-    assert loaded.execution_plan is not None
+    assert loaded.deterministic is not None
     candidate = prepare_candidate(
         evidence,
-        loaded.execution_plan,
+        loaded.deterministic.execution_plan,
         remove_ids=("ctx-b",),
         mutation=TextMutation(edits=(catalog.removal((catalog.sections[1].id,)),)),
     )
@@ -486,12 +495,14 @@ def test_report_refuses_invalid_text_allowances(allowance: int) -> None:
         build_retained_inspection(_deterministic(), max_text_bytes=allowance)
 
 
-def _sampled(*, incomplete: bool = False) -> tuple[RetainedResult, SamplingBlockEvidence]:
+def _sampled(
+    *, incomplete: bool = False, samples: int = 1, distinct_policies: bool = False
+) -> tuple[RetainedResult, SamplingBlockEvidence]:
     evidence, _ = _case()
     reduction = SampledReductionPlan(
         search=SampledSearchPhase(
-            original=SamplingArmTarget(required_valid=1, max_attempts=1),
-            candidate=SamplingArmTarget(required_valid=1, max_attempts=1),
+            original=SamplingArmTarget(required_valid=samples, max_attempts=samples),
+            candidate=SamplingArmTarget(required_valid=samples, max_attempts=samples),
         ),
         confirmation=SampledConfirmationPhase(
             original=SamplingArmTarget(required_valid=20, max_attempts=20),
@@ -508,11 +519,21 @@ def _sampled(*, incomplete: bool = False) -> tuple[RetainedResult, SamplingBlock
         calibration=SampledCalibrationPhase(required_valid=1, minimum_matches=1, max_attempts=1),
         reduction=reduction,
     )
+    metadata = ExecutionPlanMetadata(
+        plan_content_digest="e" * 64,
+        capability_digest="d" * 64,
+        safety_policy_digest="f" * 64,
+        capture_type="provider-request",
+        candidate_materialization="exact-request",
+        reconstruction_method="fixture-v1",
+        declared_policy=SafetyPolicyDeclarations(provider_transport="allowed"),
+        resource_limits=ResourceLimits(max_provider_calls=1),
+    )
     identity = ObservationIdentity(
         case_digest=evidence.digest,
         experiment_digest=experiment.digest,
         runner_fingerprint="fixture",
-        execution_plan_digest="e" * 64,
+        execution_plan_digest=metadata.digest,
         target_digest=experiment.target.digest,
         algorithm_digest=ALGORITHM_DIGEST,
     )
@@ -539,11 +560,13 @@ def _sampled(*, incomplete: bool = False) -> tuple[RetainedResult, SamplingBlock
         candidate_digest=candidate(("ctx-c",)),
         frozen_at=_TIME,
         schedule_seed=0,
-        schedule=sampling_schedule(1, 1, 0),
+        schedule=sampling_schedule(samples, samples, 0),
         provider_calls_per_attempt=1,
     )
     attempts = []
+    arm_attempts: Counter[str] = Counter()
     for position, arm in enumerate(() if incomplete else plan.schedule):
+        arm_attempts[arm] += 1
         observation = Observation(
             observation_id=f"obs-{position}",
             recorded_at=_TIME + timedelta(seconds=position + 1),
@@ -551,14 +574,14 @@ def _sampled(*, incomplete: bool = False) -> tuple[RetainedResult, SamplingBlock
             candidate_digest=original if arm == "baseline" else plan.candidate_digest,
             role=ObservationRole.SEARCH,
             arm=ObservationArm(arm),
-            attempt=1,
+            attempt=arm_attempts[arm],
             outcome=ObservationOutcome.MATCH if arm == "baseline" else ObservationOutcome.NO_MATCH,
             attempt_evidence=AttemptEvidence(
                 attempt_id=f"attempt-{position:032x}",
                 attempt_digest=content_digest(position),
                 termination_reason="completed",
                 provider_acceptance_state=ProviderAcceptanceState.NOT_STARTED,
-                effective_policy_digest="f" * 64,
+                effective_policy_digest=content_digest(position) if distinct_policies else "f" * 64,
                 accounting=RunAccounting(),
             ),
         )
@@ -584,13 +607,14 @@ def _sampled(*, incomplete: bool = False) -> tuple[RetainedResult, SamplingBlock
         checkpoint=checkpoint,
         search_result="search-incomplete",
         selected_candidate_digest=original,
-        selected_at=_TIME + timedelta(seconds=10),
+        selected_at=_TIME + timedelta(seconds=2 * samples + 10),
     )
     return (
         RetainedResult(
             evidence=evidence,
             experiment=experiment,
             retained_ids=tuple(n.id for n in evidence.context.nodes),
+            execution_metadata=metadata,
             sampled=result,
         ),
         block,
@@ -608,8 +632,95 @@ def test_sampled_screen_rejection_is_not_a_confirmed_behavioral_loss() -> None:
     assert report.trials[0].candidate.no_matches == 1
     assert report.confirmation.status == "not-run"
     assert report.failed_candidate_observation_count is None
-    assert report.reconstruction_method is None
+    assert report.reconstruction_method == "fixture-v1"
+    assert report.declared_policy.provider_transport == "allowed"
+    assert report.resource_limits.max_provider_calls == 1
+    assert report.recorded_policy_evidence.observations_with_digest == 2
+    assert report.recorded_policy_evidence.effective_policy_digests == ("f" * 64,)
     assert any("do not establish confirmed loss" in line for line in report.limitations)
+
+
+def test_recorded_policy_digest_list_is_bounded_without_discarding_coverage() -> None:
+    loaded, _ = _sampled(samples=10, distinct_policies=True)
+    policy = build_retained_inspection(loaded).recorded_policy_evidence
+    assert policy.observations_with_digest == 20
+    assert policy.observations_without_digest == 0
+    assert len(policy.effective_policy_digests) == 16
+    assert policy.omitted_digest_count == 4
+    assert (
+        policy.effective_policy_digests == tuple(sorted(content_digest(i) for i in range(20)))[:16]
+    )
+
+
+def test_deterministic_policy_coverage_counts_only_unique_saved_references() -> None:
+    loaded = _deterministic()
+    assert loaded.deterministic is not None
+    snapshot = loaded.deterministic
+    summary = snapshot.summary.model_copy(
+        update={"observations_recorded": 999, "confirmation_observation_ids": ("calibration",)}
+    )
+    checkpoint = snapshot.checkpoint.model_copy(
+        update={"failed_candidate_observation_ids": ("failed-attempt",)}
+    )
+    report = build_retained_inspection(
+        replace(
+            loaded,
+            deterministic=snapshot.model_copy(
+                update={"summary": summary, "checkpoint": checkpoint}
+            ),
+        )
+    )
+    references = {trial.observation_id for trial in checkpoint.trials if trial.runner_executed}
+    assert (
+        report.recorded_policy_evidence.referenced_observations_unavailable == len(references) + 2
+    )
+    assert report.recorded_policy_evidence.observations_with_digest == 0
+
+
+def test_active_error_without_policy_and_referenced_calibration_remain_unknown() -> None:
+    loaded, block = _sampled(incomplete=True)
+    assert loaded.sampled is not None
+    arm = block.plan.schedule[0]
+    observation = Observation(
+        **block.plan.original_identity.model_dump(),
+        candidate_digest=(
+            block.plan.original_candidate_digest
+            if arm == "baseline"
+            else block.plan.candidate_digest
+        ),
+        role=ObservationRole.SEARCH,
+        arm=ObservationArm(arm),
+        attempt=1,
+        recorded_at=_TIME,
+        outcome=ObservationOutcome.RUNNER_ERROR,
+        error_category="startup",
+        attempt_evidence=AttemptEvidence(
+            attempt_id="attempt-" + "0" * 32,
+            attempt_digest="a" * 64,
+            termination_reason="failed",
+            provider_acceptance_state=ProviderAcceptanceState.NOT_STARTED,
+        ),
+    )
+    active = SamplingBlockEvidence(
+        plan=block.plan, attempts=(SamplingAttempt(schedule_position=0, observation=observation),)
+    )
+    checkpoint = SampledReductionCheckpoint.model_validate(
+        {**loaded.sampled.checkpoint.model_dump(), "trials": (), "active_block": active}
+    )
+    sampled = SampledReductionEvidence.model_validate(
+        {
+            **loaded.sampled.model_dump(),
+            "checkpoint": checkpoint,
+            "calibration_observation_ids": ("unavailable-calibration",),
+        }
+    )
+    report = build_retained_inspection(replace(loaded, sampled=sampled))
+    policy = report.recorded_policy_evidence
+    assert policy.observations_with_digest == 0
+    assert policy.observations_without_digest == 1
+    assert policy.referenced_observations_unavailable == 1
+    assert not policy.effective_policy_digests
+    assert report.confirmation.status == "not-run"
 
 
 def test_incomplete_comparison_does_not_count_as_a_completed_single_removal() -> None:
@@ -744,6 +855,7 @@ def test_partial_active_block_has_no_invented_node_attribution() -> None:
             evidence=loaded.evidence,
             experiment=loaded.experiment,
             retained_ids=loaded.retained_ids,
+            execution_metadata=loaded.execution_metadata,
             sampled=result,
         )
     )
@@ -855,6 +967,7 @@ def _fine_sampled(*, threshold_met: bool = True) -> RetainedResult:
         evidence=evidence,
         experiment=experiment,
         retained_ids=loaded.retained_ids,
+        execution_metadata=loaded.execution_metadata,
         sampled=result,
     )
 
@@ -868,6 +981,7 @@ def test_finer_report_separates_structural_criterion_from_exploration_and_confir
     _validate_sampled_trials(loaded.sampled, loaded.evidence, "run-fine")
     report = build_retained_inspection(loaded)
     assert not report.trials
+    assert report.recorded_policy_evidence.observations_with_digest == 2
     assert len(report.section_trials) == 1
     trial = report.section_trials[0]
     assert trial.outcome == "exploratory-screen-admitted"
@@ -1009,6 +1123,7 @@ def test_coarse_trials_do_not_explain_the_final_section_edited_parent() -> None:
             evidence=fine.evidence,
             experiment=fine.experiment,
             retained_ids=fine.retained_ids,
+            execution_metadata=fine.execution_metadata,
             sampled=result,
         )
     )
