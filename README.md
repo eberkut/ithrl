@@ -76,6 +76,10 @@ Use a new directory to repeat the example; extraction refuses to overwrite an ex
   [results and privacy](https://github.com/eberkut/ithrl/blob/main/docs/results.md#inspect-retained-context).
 - `ithrl fuzz CASE --config PRIVATE_TOML` searches for and simplifies text appends that decrease how
   often the selected behavior occurs, with independent confirmation.
+- `ithrl cost` applies reference rates to recorded or hypothetical token usage and saves an offline
+  report. See
+  [token-cost estimates](https://github.com/eberkut/ithrl/blob/main/docs/results.md#estimate-token-costs)
+  for pricing, coverage and interpretation.
 
 For example, extract a saved session file:
 

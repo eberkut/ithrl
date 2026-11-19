@@ -315,6 +315,131 @@ without it creates a new run and budget; reusing the observation database alone 
 overall wall-time allowance. A run also stops when its evidence becomes stale or its safety
 requirements cannot be verified. Retain the failed evidence; a fresh invocation is a separate run.
 
+## Estimate token costs
+
+`ithrl cost` applies explicit reference rates to recorded token counts or a hypothetical scenario.
+It uses the bundled `genai-prices` catalog offline. It does not fetch prices, run a harness or
+change execution limits. Estimates are token-price equivalents, not invoices or subscription
+charges.
+
+### Price recorded observations
+
+Create a private `pricing.json` with mode `0600`. Choose exact public provider/model identifiers
+and a reference time. Set `recorded_source` to the provider, returned model and endpoint in the
+private attempt evidence; this explicitly maps a deployment or alias to the chosen rates.
+
+Find provider and model `id` values in the
+[GenAI Prices provider catalog](https://github.com/pydantic/genai-prices/tree/main/prices/providers).
+Each model's `price_variants[].when` entries define supported context keys and values. Ithrl uses
+its installed catalog version, which can differ from the online catalog.
+
+```json
+{
+  "provider": "openai",
+  "model": "gpt-6.1-sol",
+  "as_of": "2026-11-19T00:00:00Z",
+  "context": {"service_tier": "default"},
+  "recorded_source": {
+    "provider": "RECORDED_PROVIDER",
+    "model": "RECORDED_MODEL",
+    "endpoint": "RECORDED_ENDPOINT"
+  }
+}
+```
+
+Use the case and experiment digests from the investigation's saved result. The database is an
+explicit input; the command never follows a path saved inside a result.
+The database must be private and use rollback-journal mode; WAL databases are unsupported.
+
+```bash
+ithrl cost OBSERVATIONS.sqlite --case-digest CASE_DIGEST \
+  --experiment-digest EXPERIMENT_DIGEST --pricing pricing.json --output costs.json
+ithrl inspect costs costs.json --format json
+```
+
+The report covers recorded observations for that case and experiment, including failed attempts.
+It counts a repeated physical attempt once and refuses conflicting copies. This scope can include
+several runs that used the same case and configuration. `provider_calls_possible_recorded`
+preserves possible-call counts present in the evidence, including cap-based counts. Pending
+reservations and further cap-dependent exposure remain unknown; the subtotal is not a complete
+investigation cost or a monetary execution limit.
+
+Private deployment identifiers and recorded service tiers appear only as digests in the report. When
+a recorded tier conflicts with the selected reference tier, the attempt stays unpriced with
+`service-tier-unmatched`. A missing tier remains an explicit reference-price assumption. Known and
+possible calls overlap rather than add. Started-call counters with unknown acceptance are lower
+bounds, even when the recorded counter is zero. Missing usage stays unpriced; verified zero-provider
+work has a zero subtotal. Multi-request attempts remain unpriced because their aggregate counts do
+not identify each request's model and context threshold.
+
+### Read coverage and rates
+
+`subtotal_usd` sums priced components. `null` means no amount could be established. Recorded reports
+list `unpriced_reasons`; hypothetical reports put reasons in `scenario.components[].reason`.
+A priced output or cached-input component does not imply complete input coverage.
+The JSON view includes at most 20 observation details and counts omissions. The saved report
+retains every included observation, up to the selected row limit.
+Human output also groups unpriced token components by dimension and reason across the full report.
+
+Diagnostics identify the failing input: `cost-pricing-invalid` for the pricing specification,
+`cost-usage-invalid` for hypothetical counts, `cost-source-invalid` for recorded evidence and
+`cost-output-invalid` for the destination. `cost-input-mode` identifies missing or mixed mode
+arguments. Messages give recovery actions without echoing private paths or input values.
+
+Input totals include cached reads and writes; output totals include reasoning tokens. Subsets are
+subtracted rather than charged twice. Missing cache counts or write durations can leave input
+components unpriced. Contradictory counts refuse estimation. Context thresholds apply to the full
+prompt and may change output rates too.
+An absent cache-write rate does not establish zero writes; supply an explicit zero count when
+writes are known not to apply. Supplying both five-minute and one-hour counts declares an exhaustive
+breakdown; their sum must equal any supplied write total. A partial breakdown does not identify
+the remainder's retention, so missing duration counts are not inferred. OpenAI catalog write
+rates require retention evidence and stay unpriced with `cache-retention-unknown` when it is
+unavailable; explicit custom rates record the operator's pricing assumption.
+
+The report saves the selected date/context, package and catalog identity, effective component
+rates, counts and amounts. Inspection validates its digest and arithmetic without the source
+database or a current price lookup. The reference time is a pricing assumption, not a claim about
+when the provider received a request. Unknown provider/model identifiers, unmatched context
+variants and dates outside the catalog's modeled constraints refuse instead of selecting a
+fallback. The catalog is reference data, not a complete historical price archive.
+When context is omitted and the catalog defines an applicable `default` service tier, the report
+records that tier and checks it against recorded evidence. Custom rates keep the supplied context.
+
+Managed Copilot catalog rates are labeled `published-reference-rate`; plan allowances and billing
+remain outside the estimate. Other catalog models use `api-list-price-equivalent`. Only token
+charges are included; separate tool, storage and other units are outside this report.
+
+For custom prices, add `custom_rates` to the specification. Supported keys are `input_mtok`,
+`output_mtok`, `cache_read_mtok`, `cache_write_mtok`, `cache_write_5m_mtok` and
+`cache_write_1h_mtok`. Quote rates as decimal strings to preserve precision; JSON numbers are
+refused. Values are USD per million tokens, such as `"2.50"`, or a cliff schedule:
+`{"base":"2","tiers":[{"start":200000,"price":"4"}]}`. Above a threshold, its rate applies to
+all tokens. Custom-rate selections carry their own digest and the `custom-rate-equivalent` label.
+An absent rate stays unknown; an explicit zero rate is valid.
+
+### Estimate a hypothetical scenario
+
+Create a private `usage.json` with mode `0600`:
+
+```json
+{
+  "input_tokens": 10000,
+  "output_tokens": 1000,
+  "cached_input_tokens": 2000,
+  "cache_write_tokens": 0,
+  "reasoning_output_tokens": 600
+}
+```
+
+```bash
+ithrl cost --scenario usage.json --pricing pricing.json --output scenario-costs.json
+```
+
+Scenario mode needs no database or `recorded_source`. Its explicit token counts remain separate
+from recorded usage and never fill telemetry gaps. For duration-specific cache writes, supply
+`cache_write_5m_tokens` and `cache_write_1h_tokens`; these contribute to the inclusive input total.
+
 ## Data and privacy
 
 Cases can contain prompts, source code, command output, paths and credentials. Keep cases, traces,

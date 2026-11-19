@@ -26,6 +26,29 @@ app = typer.Typer(
 )
 
 
+@app.command("costs")
+@command_boundary("inspect")
+def costs(
+    report: Annotated[Path, typer.Argument(help="Saved token-cost report.")],
+    output_format: Annotated[OutputFormat, typer.Option("--format")] = OutputFormat.HUMAN,
+) -> None:
+    """Inspect a saved cost estimate without resolving prices or opening its source store."""
+    from ithrl.cli.cost import render_cost_report
+    from ithrl.cost_reporting import load_cost_report
+
+    try:
+        saved = load_cost_report(report)
+    except (OSError, ValueError, RuntimeError):
+        fail(
+            "Cannot inspect the saved cost report.",
+            ExitCode.USAGE,
+            output_format,
+            "inspect",
+            "cost-invalid",
+        )
+    render_cost_report(saved, output_format)
+
+
 @app.command("reacquire")
 @command_boundary("inspect")
 def reacquire(

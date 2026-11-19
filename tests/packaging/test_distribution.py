@@ -56,6 +56,7 @@ RUNTIME_MODULES = frozenset(
         PurePosixPath("ithrl/cli/fuzz_session.py"),
         PurePosixPath("ithrl/cli/extract.py"),
         PurePosixPath("ithrl/cli/inspect.py"),
+        PurePosixPath("ithrl/cli/cost.py"),
         PurePosixPath("ithrl/cli/native.py"),
         PurePosixPath("ithrl/cli/output.py"),
         PurePosixPath("ithrl/cli/progress.py"),
@@ -67,6 +68,8 @@ RUNTIME_MODULES = frozenset(
         PurePosixPath("ithrl/cli/sampled_session.py"),
         PurePosixPath("ithrl/cli/shrink.py"),
         PurePosixPath("ithrl/context.py"),
+        PurePosixPath("ithrl/costs.py"),
+        PurePosixPath("ithrl/cost_reporting.py"),
         PurePosixPath("ithrl/decisions.py"),
         PurePosixPath("ithrl/execution/__init__.py"),
         PurePosixPath("ithrl/execution/budget.py"),
@@ -449,6 +452,7 @@ def _assert_installed_workflow(wheel: Path, tmp_path: Path, expected_version: st
     assert report["confirmation"]["status"] == "confirmed-preserving"
     assert report["candidate_digest"] == summary["candidate_digest"]
     assert all("text" not in node for node in report["nodes"])
+    _assert_installed_costs(python, runtime, child_environment, summary)
     _assert_installed_sampled_inspection(python, case, runtime, child_environment)
     _assert_installed_preparation(executable, runtime, child_environment)
     _assert_installed_resume(executable, runtime, child_environment)
@@ -467,6 +471,115 @@ def _assert_installed_workflow(wheel: Path, tmp_path: Path, expected_version: st
         cwd=runtime,
         env=child_environment,
     )
+
+
+def _assert_installed_costs(
+    python: Path, runtime: Path, environment: dict[str, str], summary: dict[str, str]
+) -> None:
+    pricing = runtime / "pricing.json"
+    pricing.write_text(
+        json.dumps(
+            {
+                "provider": "openai",
+                "model": "gpt-6.1-sol",
+                "as_of": "2026-11-19T00:00:00Z",
+                "context": {"service_tier": "default"},
+                "recorded_source": {
+                    "provider": "fixture",
+                    "model": "fixture",
+                    "endpoint": "https://example.invalid/inference",
+                },
+            }
+        )
+    )
+    pricing.chmod(0o600)
+    deny = (
+        "import socket, subprocess\n"
+        "def forbidden(*args, **kwargs):\n"
+        "    raise AssertionError('cost reporting attempted network or process execution')\n"
+        "socket.socket.connect = socket.socket.connect_ex = socket.getaddrinfo = forbidden\n"
+        "subprocess.Popen = forbidden\n"
+        "from ithrl.cli import app\n"
+        "app()\n"
+    )
+    recorded = runtime / "recorded-costs.json"
+    created = _run(
+        str(python),
+        "-I",
+        "-c",
+        deny,
+        "cost",
+        str(runtime / "data/ithrl/observations.sqlite"),
+        "--case-digest",
+        summary["case_digest"],
+        "--experiment-digest",
+        summary["experiment_digest"],
+        "--pricing",
+        str(pricing),
+        "--output",
+        str(recorded),
+        "--format",
+        "json",
+        cwd=runtime,
+        env=environment,
+    )
+    report = json.loads(created.stdout)
+    assert report["mode"] == "recorded-usage"
+    assert report["summary"]["subtotal_usd"] == "0"
+    assert report["summary"]["known_zero_provider_observations"] > 0
+    usage = runtime / "usage.json"
+    usage.write_text(
+        json.dumps(
+            {
+                "input_tokens": 1000,
+                "output_tokens": 100,
+                "cached_input_tokens": 200,
+                "cache_write_tokens": 0,
+            }
+        )
+    )
+    usage.chmod(0o600)
+    scenario = runtime / "scenario-costs.json"
+    hypothetical = _run(
+        str(python),
+        "-I",
+        "-c",
+        deny,
+        "cost",
+        "--scenario",
+        str(usage),
+        "--pricing",
+        str(pricing),
+        "--output",
+        str(scenario),
+        "--format",
+        "json",
+        cwd=runtime,
+        env=environment,
+    )
+    assert json.loads(hypothetical.stdout)["mode"] == "hypothetical"
+    assert json.loads(hypothetical.stdout)["summary"]["subtotal_usd"] == "0.00262"
+    pricing.unlink()
+    inspect = deny.replace(
+        "app()\n",
+        "from ithrl.costs import PriceBook\n"
+        "from ithrl.observations import ObservationStore\n"
+        "PriceBook.__init__ = ObservationStore.__init__ = forbidden\napp()\n",
+    )
+    saved = _run(
+        str(python),
+        "-I",
+        "-c",
+        inspect,
+        "inspect",
+        "costs",
+        str(recorded),
+        "--format",
+        "json",
+        cwd=runtime,
+        env=environment,
+    )
+    assert json.loads(saved.stdout) == report
 
 
 def _assert_installed_sampled_inspection(

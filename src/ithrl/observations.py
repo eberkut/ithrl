@@ -29,7 +29,7 @@ from ithrl.experiment import (
     SamplingEligibilityPolicy,
     SamplingProcedure,
 )
-from ithrl.path_safety import UnsafePathError, private_file_lock
+from ithrl.path_safety import UnsafePathError, private_file_lock, validate_directory_chain
 from ithrl.runner.evidence import AttemptEvidence
 
 _STORE_SCHEMA_VERSION = 1
@@ -811,6 +811,72 @@ class ObservationStore:
             raise ValueError("experiment_digest must not be empty")
         self.initialize()
         return self._select("experiment_digest = ?", (experiment_digest,))
+
+    def read_snapshot(
+        self, *, case_digest: str, experiment_digest: str, limit: int = 10_000
+    ) -> tuple[Observation, ...]:
+        """Read a bounded case/experiment snapshot without creating or changing the store."""
+
+        if not case_digest or not experiment_digest or not 1 <= limit <= 10_000:
+            raise ValueError("snapshot requires a case, experiment and bounded limit")
+        validate_directory_chain(self.path.parent)
+        _reject_symlink_components(self.path)
+        metadata = self.path.lstat()
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            raise ObservationStoreError("observation snapshot requires a single-link file")
+        if os.name == "posix" and stat.S_IMODE(metadata.st_mode) != 0o600:
+            raise ObservationStoreError("observation snapshot requires private file permissions")
+        with self.path.open("rb") as source:
+            header = source.read(20)
+        if header[18:20] != b"\x01\x01":
+            raise ObservationStoreError("observation snapshot requires rollback-journal SQLite")
+        try:
+            with closing(
+                sqlite3.connect(self.path.absolute().as_uri() + "?mode=ro", uri=True)
+            ) as connection:
+                connection.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, 2 * 1024 * 1024)
+                steps = 0
+
+                def bounded_work() -> int:
+                    nonlocal steps
+                    steps += 1
+                    return int(steps > 10_000)
+
+                connection.set_progress_handler(bounded_work, 1000)
+                connection.execute("PRAGMA query_only = ON")
+                connection.execute("BEGIN")
+                self._validate_schema(connection, _user_tables(connection))
+                cursor = connection.execute(
+                    f"SELECT {', '.join(_OBSERVATION_COLUMNS)} FROM observations "  # noqa: S608 -- fixed columns.
+                    "WHERE case_digest = ? AND experiment_digest = ? "
+                    "ORDER BY recorded_at, observation_id LIMIT ?",
+                    (case_digest, experiment_digest, limit + 1),
+                )
+                observations = []
+                total_bytes = 0
+                for row in cursor:
+                    if any(
+                        not (
+                            isinstance(value, int)
+                            if index == 11
+                            else isinstance(value, str) or (index == 13 and value is None)
+                        )
+                        for index, value in enumerate(row)
+                    ):
+                        raise ObservationStoreError(
+                            "observation snapshot contains invalid column types"
+                        )
+                    total_bytes += sum(
+                        len(value.encode()) for value in row if isinstance(value, str)
+                    )
+                    if len(observations) >= limit or total_bytes > 64 * 1024 * 1024:
+                        raise ObservationStoreError(
+                            "observation snapshot exceeds its row or byte limit"
+                        )
+                    observations.append(_from_row(row))
+                return tuple(observations)
+        except sqlite3.Error:
+            raise ObservationStoreError("cannot read a bounded observation snapshot") from None
 
     def get(self, observation_id: str) -> Observation | None:
         """Resolve one durable reference without creating a missing evidence store."""

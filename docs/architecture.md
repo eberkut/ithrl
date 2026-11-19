@@ -315,6 +315,13 @@ possible and pending provider calls remain distinct and conservatively charged. 
 is unknown, not zero. Synchronous local filesystem work and observed disposable-state limits do
 not imply a hard filesystem quota or a hard completion deadline.
 
+Post-run cost reporting reads a bounded, read-only observation snapshot and applies explicitly
+selected reference prices through `costs.py`. `cost_reporting.py` keeps recorded usage separate
+from hypothetical scenarios and saves counts, effective rates, arithmetic and pricing provenance
+in a self-contained private report. Inspection needs neither the observation store nor a current
+price lookup. Pricing does not participate in execution admission.
+See [token-cost estimates](results.md#estimate-token-costs) for coverage and interpretation.
+
 Cases and native output may contain prompts, source, credentials and tool arguments. Persistence
 uses private paths, bounded input/output and content-safe diagnostics; authentication is not
 copied into cases or results. `path_safety.py` centralizes controlling-directory and private-lock
@@ -343,6 +350,7 @@ Python module names are not public API commitments.
 | `runner/runtime/` | Shared bounded process, state, protection and output lifecycle |
 | `runner/fake.py`, `synthetic.py` | Provider-free deterministic runner and bundled example |
 | `measurement.py`, `calibration.py`, `observations.py` | One-attempt measurement, calibration and append-only SQLite observation/block evidence |
+| `costs.py`, `cost_reporting.py`, `cli/cost.py` | Offline token-price equivalents, usage/rate provenance and self-contained cost reports |
 | `grading/` | Bound Python repair tasks, isolated patch application and test grading; no native action execution |
 | `sampling.py`, `run_state.py` | Shared frozen-block collection, private run state, reservations, reconciliation and accounting |
 | `sampled_run_metadata.py` | Frozen sampled-run metadata and execution-plan identity binding |

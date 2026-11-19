@@ -23,6 +23,7 @@ from ithrl.case import (
     UnsafeCasePathError,
 )
 from ithrl.case.filesystem import read_safe_text
+from ithrl.cli.cost import cost as cost_command
 from ithrl.cli.extract import ExtractionSelectionError, create_case_report
 from ithrl.cli.fuzz import fuzz as fuzz_command
 from ithrl.cli.inspect import app as inspect_app
@@ -82,6 +83,7 @@ app = typer.Typer(
 
 app.command()(fuzz_command)
 app.command()(prepare_command)
+app.command()(cost_command)
 app.add_typer(inspect_app, name="inspect")
 
 
