@@ -21,13 +21,6 @@ Preserve harness-native source bytes and keep four separate contracts: immutable
 edit metadata, experimental definitions, resolved execution plans, and append-only observations.
 Result snapshots derive their claims from those contracts.
 
-Bind content-safe execution metadata and a hash of the full private plan into the execution-plan
-identity. Sampled snapshots retain this metadata, allowing offline inspection to validate disclosed
-declarations and limits without persisting private plan inputs. Keep declared safety policy separate
-from recorded effective-policy digests: neither a declaration nor an opaque digest proves historical
-enforcement. The [architecture reference](../architecture.md#case-and-experiment-lifecycle) owns the
-identity formula and contract boundaries.
-
 Adapters own discovery, bounded parsing, native decision selection and compilation of an ordered
 context graph. Application extraction writes the case. Each graph node refers to captured source
 or an authoritative exact request; stable selectors and content digests protect its identity.
@@ -73,9 +66,7 @@ arguments stay out of ordinary diagnostics, and authentication is not bundled wi
 
 Pre-1.0 project schemas evolve directly with tag `1`, strict validation and no migration or legacy
 reader layer. Regenerating an incompatible artifact must not modify its captured source evidence.
-Changes to execution-plan identity invalidate earlier plan-bound snapshots and resumes. Do not
-edit retained evidence to manufacture new metadata or a matching identity. Schema versioning is
-reconsidered for 1.0.
+Schema versioning is reconsidered for 1.0.
 
 ## Alternatives
 
@@ -84,12 +75,6 @@ requirements. Direct replay of every captured request would incorrectly treat lo
 evidence as an authoritative provider request. Executing or rewinding the original session/workspace
 would treat source evidence as disposable experimental state. These alternatives do not meet the
 evidence and safety requirements.
-
-Persisting the full private plan in sampled snapshots would expose inputs unnecessary for offline
-inspection. An unbound metadata sidecar could change declarations without changing the recorded
-plan identity. Reporting declarations as enforcement evidence would exceed what saved snapshots
-establish. Binding the bounded metadata and private-plan hash preserves both identity and disclosure
-limits.
 
 See the [architecture reference](../architecture.md) for current module ownership and contract
 lifecycles. Operational safety and contributor checks belong in

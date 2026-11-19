@@ -84,6 +84,9 @@ The declaration contract owns the whitelist of disclosed policy fields; private 
 destinations remain in the full plan. This binds readable declarations to all private plan inputs
 without disclosing those inputs or requiring them to recompute the execution-plan digest.
 
+A full-plan hash alone cannot validate a disclosed subset without the private contents. An
+unbound projection could change while retaining the recorded plan identity.
+
 `sampled_run_metadata.py` persists required `execution_metadata`, including per-attempt resource
 limits, and verifies its digest against the original observation identity. Sampled snapshots
 retain no full execution plan. `results/inspection.py` validates this binding offline;
@@ -193,7 +196,11 @@ the native request charge and stop collection without entering behavioral counts
 another inference. Under that cooperative assumption, task grades record the declared test
 outcomes. Native input visibility and runtime qualification require separate evidence. Exceptions
 in setup, teardown or cleanup are operational errors, including those caused by candidate code;
-assertion failures and other exceptions in the test body are behavioral failures.
+failures reported for test bodies are behavioral nonmatches. Skipped or expected-failure outcomes
+and incomplete suites are operational grading errors.
+
+[ADR 0005](decisions/0005-cooperative-repair-grading.md) records the grading outcome and trust
+boundary.
 
 Deterministic reduction and sampled reduction share dependency-valid candidate construction but
 make different claims. The deterministic reducer can establish `search-1-minimal` through a
