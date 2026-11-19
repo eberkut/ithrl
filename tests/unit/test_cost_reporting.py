@@ -15,15 +15,17 @@ from typer.testing import CliRunner
 
 from ithrl.cli import app
 from ithrl.context import content_digest
-from ithrl.cost_reporting import CostReport, recorded_report, write_cost_report
+from ithrl.cost_reporting import CostReport, load_cost_report, recorded_report, write_cost_report
 from ithrl.costs import PriceBook, PricingSpec, RecordedSource
 from ithrl.observations import (
+    _INSERT_OBSERVATION,
     Observation,
     ObservationArm,
     ObservationOutcome,
     ObservationRole,
     ObservationStore,
     ObservationStoreError,
+    _to_row,
 )
 from ithrl.runner import AttemptEvidence, ProviderAcceptanceState, RunAccounting, TokenUsage
 
@@ -168,6 +170,28 @@ def test_recorded_service_tier_is_bound_without_disclosing_native_values(
     assert "private-tier-secret" not in report.model_dump_json()
 
 
+@pytest.mark.parametrize("tier", [None, "default", "priority"])
+def test_implicit_catalog_tier_is_checked_and_persisted(tmp_path: Path, tier: str | None) -> None:
+    first = observation(1)
+    evidence = first.attempt_evidence.model_copy(update={"service_tier": tier})
+    store = ObservationStore(tmp_path / "observations.sqlite")
+    store.append(first.model_copy(update={"attempt_evidence": evidence}))
+    pricing = PriceBook(book().spec.model_copy(update={"custom_rates": None}))
+    report = recorded_report(store, case_digest="a" * 64, experiment_digest="c" * 64, book=pricing)
+    assert report.pricing.context == {"service_tier": "default"}
+    assert report.observations[0].reason == (
+        "service-tier-unmatched" if tier == "priority" else None
+    )
+    path = tmp_path / "costs.json"
+    write_cost_report(path, report)
+    assert load_cost_report(path) == report
+    if tier != "priority":
+        data = report.model_dump(mode="json")
+        data["observations"][0]["service_tier_digest"] = content_digest("priority")
+        with pytest.raises(ValueError, match="single-call attribution"):
+            CostReport.model_validate_json(json.dumps(data))
+
+
 def test_multiple_requests_are_unpriced_without_a_request_level_breakdown(tmp_path: Path) -> None:
     store = ObservationStore(tmp_path / "observations.sqlite")
     store.append(observation(1, calls=2))
@@ -219,12 +243,17 @@ def test_empty_selection_and_missing_store_are_not_zero_costs(tmp_path: Path) ->
     assert report.summary()["subtotal_usd"] is None
 
 
-def test_uncertain_acceptance_does_not_discard_other_priced_attempts(tmp_path: Path) -> None:
+@pytest.mark.parametrize(("started", "possible"), [(0, 4), (1, 1)])
+def test_uncertain_acceptance_does_not_discard_other_priced_attempts(
+    tmp_path: Path, started: int, possible: int
+) -> None:
     store = ObservationStore(tmp_path / "observations.sqlite")
     uncertain = observation(2, failed=True)
     fields = uncertain.attempt_evidence.model_dump()
     fields.update(
-        provider_acceptance_state=ProviderAcceptanceState.UNKNOWN, provider_calls_possible=1
+        accounting=RunAccounting(provider_calls_started=started, provider_calls_completed=started),
+        provider_acceptance_state=ProviderAcceptanceState.UNKNOWN,
+        provider_calls_possible=possible,
     )
     store.append_many(
         (
@@ -238,7 +267,13 @@ def test_uncertain_acceptance_does_not_discard_other_priced_attempts(tmp_path: P
     assert report.summary()["subtotal_usd"] == "0.00102"
     assert report.observations[1].reason == "incomplete-provider-request"
     assert report.observations[1].usage is not None
-    assert report.observations[1].provider_calls_possible == 1
+    assert report.observations[1].provider_calls_possible == possible
+    assert report.observations[1].provider_calls_started == started
+    assert not report.observations[1].provider_calls_started_exact
+    data = report.model_dump(mode="json")
+    data["observations"][1]["provider_calls_started_exact"] = True
+    with pytest.raises(ValueError, match="exact started-call count"):
+        CostReport.model_validate_json(json.dumps(data))
 
 
 @pytest.mark.parametrize(
@@ -327,6 +362,79 @@ def test_read_only_snapshot_refuses_wal_before_creating_sidecars(tmp_path: Path)
     with pytest.raises(ObservationStoreError, match="rollback-journal"):
         store.read_snapshot(case_digest="a" * 64, experiment_digest="c" * 64)
     assert {p.name for p in tmp_path.iterdir()} == before
+
+
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [(5, b"blob"), (11, 1.5), (13, b"blob")],
+)
+def test_read_only_snapshot_refuses_noncanonical_column_types(
+    tmp_path: Path, column: int, value: bytes | float
+) -> None:
+    store = ObservationStore(tmp_path / "observations.sqlite")
+    store.initialize()
+    row: list[object] = list(_to_row(observation(1, failed=True)))
+    row[column] = value
+    with closing(sqlite3.connect(store.path)) as connection:
+        connection.execute(_INSERT_OBSERVATION, row)
+        connection.commit()
+    before = store.path.read_bytes()
+    files = set(tmp_path.iterdir())
+    with pytest.raises(ObservationStoreError, match="invalid column types"):
+        store.read_snapshot(case_digest="a" * 64, experiment_digest="c" * 64)
+    assert store.path.read_bytes() == before
+    assert set(tmp_path.iterdir()) == files
+
+
+@pytest.mark.parametrize(
+    "rate_json",
+    [
+        "-1e-999",
+        "1e-999",
+        "1000000.000000000001",
+        "0",
+        '{"base":"2","tiers":[{"start":100,"price":1e-999}]}',
+        '"not-a-rate"',
+        '"1e-999"',
+        '"1000000.000000000001"',
+    ],
+)
+def test_cli_requires_exact_decimal_rate_strings(tmp_path: Path, rate_json: str) -> None:
+    pricing, usage, output = (
+        tmp_path / name for name in ("pricing.json", "usage.json", "out.json")
+    )
+    pricing.write_text(
+        book().spec.model_dump_json().replace('"input_mtok":"2"', f'"input_mtok":{rate_json}')
+    )
+    usage.write_text(
+        '{"input_tokens":100,"output_tokens":0,"cached_input_tokens":0,"cache_write_tokens":0}'
+    )
+    for path in (pricing, usage):
+        path.chmod(0o600)
+    result = CliRunner().invoke(
+        app,
+        [
+            "cost",
+            "--pricing",
+            str(pricing),
+            "--scenario",
+            str(usage),
+            "--output",
+            str(output),
+            "--format",
+            "json",
+        ],
+    )
+    if rate_json == '"1000000.000000000001"':
+        assert result.exit_code == 0, result.output
+        report = load_cost_report(output)
+        assert report.scenario is not None
+        assert report.scenario.components[0].usd_per_million == Decimal("1000000.000000000001")
+        assert report.scenario.subtotal_usd == Decimal("100.0000000000000001")
+    else:
+        assert result.exit_code == 2
+        assert json.loads(result.output)["error_code"] == "cost-pricing-invalid"
+        assert not output.exists()
 
 
 def test_normal_cli_saves_and_inspects_without_the_store_or_price_library(

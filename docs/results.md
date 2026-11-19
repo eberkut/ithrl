@@ -367,9 +367,10 @@ investigation cost or a monetary execution limit.
 Private deployment identifiers and recorded service tiers appear only as digests in the report. When
 a recorded tier conflicts with the selected reference tier, the attempt stays unpriced with
 `service-tier-unmatched`. A missing tier remains an explicit reference-price assumption. Known and
-possible calls overlap rather than add. Missing usage stays unpriced; verified zero-provider work
-has a zero subtotal. Multi-request attempts remain unpriced because their aggregate counts do not
-identify each request's model and context threshold.
+possible calls overlap rather than add. Started-call counters with unknown acceptance are lower
+bounds, even when the recorded counter is zero. Missing usage stays unpriced; verified zero-provider
+work has a zero subtotal. Multi-request attempts remain unpriced because their aggregate counts do
+not identify each request's model and context threshold.
 
 ### Read coverage and rates
 
@@ -402,6 +403,8 @@ database or a current price lookup. The reference time is a pricing assumption, 
 when the provider received a request. Unknown provider/model identifiers, unmatched context
 variants and dates outside the catalog's modeled constraints refuse instead of selecting a
 fallback. The catalog is reference data, not a complete historical price archive.
+When context is omitted and the catalog defines an applicable `default` service tier, the report
+records that tier and checks it against recorded evidence. Custom rates keep the supplied context.
 
 Managed Copilot catalog rates are labeled `published-reference-rate`; plan allowances and billing
 remain outside the estimate. Other catalog models use `api-list-price-equivalent`. Only token
@@ -409,7 +412,8 @@ charges are included; separate tool, storage and other units are outside this re
 
 For custom prices, add `custom_rates` to the specification. Supported keys are `input_mtok`,
 `output_mtok`, `cache_read_mtok`, `cache_write_mtok`, `cache_write_5m_mtok` and
-`cache_write_1h_mtok`. Values are USD per million tokens, such as `"2.50"`, or a cliff schedule:
+`cache_write_1h_mtok`. Quote rates as decimal strings to preserve precision; JSON numbers are
+refused. Values are USD per million tokens, such as `"2.50"`, or a cliff schedule:
 `{"base":"2","tiers":[{"start":200000,"price":"4"}]}`. Above a threshold, its rate applies to
 all tokens. Custom-rate selections carry their own digest and the `custom-rate-equivalent` label.
 An absent rate stays unknown; an explicit zero rate is valid.

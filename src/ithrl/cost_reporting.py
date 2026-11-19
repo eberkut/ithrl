@@ -89,6 +89,11 @@ class CostReport(_Contract):
         if len(digests) != len(set(digests)):
             raise ValueError("cost report repeats an attempt")
         for row in self.observations:
+            if (
+                row.provider_acceptance is ProviderAcceptanceState.UNKNOWN
+                and row.provider_calls_started_exact
+            ):
+                raise ValueError("unknown acceptance cannot establish an exact started-call count")
             if row.charges is not None and row.reason is not None:
                 raise ValueError("a refused attempt cannot have priced components")
             if row.charges is None and row.reason is None:
@@ -253,8 +258,8 @@ def _record(observation: Observation, book: PriceBook) -> RecordedCost:
         provider_calls_started=started,
         provider_calls_completed=completed,
         provider_calls_possible=possible,
-        provider_calls_started_exact=accounting is not None
-        or acceptance is ProviderAcceptanceState.NOT_STARTED,
+        provider_calls_started_exact=acceptance is ProviderAcceptanceState.NOT_STARTED
+        or (accounting is not None and acceptance is ProviderAcceptanceState.ACCEPTED),
         additional_call_exposure_unknown=additional_unknown,
         charges=charges,
         reason=reason,

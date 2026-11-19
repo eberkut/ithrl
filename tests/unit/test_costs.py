@@ -272,17 +272,28 @@ def test_bundled_selection_refuses_fallbacks(updates: dict[str, object]) -> None
 
 def test_bundled_model_service_tiers_and_data_identity_are_explicit() -> None:
     default = PriceBook(spec(custom_rates=None, context={"service_tier": "default"}))
+    implicit = PriceBook(spec(custom_rates=None))
     priority = PriceBook(spec(custom_rates=None, context={"service_tier": "priority"}))
     usage = CostUsage(
         input_tokens=1000, output_tokens=100, cached_input_tokens=0, cache_write_tokens=0
     )
     assert priority.estimate(usage).subtotal_usd != default.estimate(usage).subtotal_usd
+    assert implicit.provenance == default.provenance
+    assert implicit.estimate(usage) == default.estimate(usage)
     assert default.provenance.source == "genai-prices-bundled"
     assert default.provenance.package_version == "0.2.4"
     assert len(default.provenance.data_digest) == 64
     assert default.provenance.timestamp_basis == "operator-selected-reference-time"
     with pytest.raises(ValidationError):
         spec(context={"service_tier": "auto"})
+
+
+def test_default_tier_is_not_added_to_other_pricing_contexts() -> None:
+    assert PriceBook(spec()).provenance.context == {}
+    batch = PriceBook(spec(custom_rates=None, context={"processing": "batch"}))
+    assert batch.provenance.context == {"processing": "batch"}
+    anthropic = PriceBook(spec(provider="anthropic", model="claude-sonnet-5-5", custom_rates=None))
+    assert anthropic.provenance.context == {}
 
 
 @pytest.mark.parametrize("model", ["claude-sonnet-5-5", "claude-haiku-5-5"])

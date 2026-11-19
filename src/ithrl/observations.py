@@ -855,6 +855,17 @@ class ObservationStore:
                 observations = []
                 total_bytes = 0
                 for row in cursor:
+                    if any(
+                        not (
+                            isinstance(value, int)
+                            if index == 11
+                            else isinstance(value, str) or (index == 13 and value is None)
+                        )
+                        for index, value in enumerate(row)
+                    ):
+                        raise ObservationStoreError(
+                            "observation snapshot contains invalid column types"
+                        )
                     total_bytes += sum(
                         len(value.encode()) for value in row if isinstance(value, str)
                     )

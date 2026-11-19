@@ -4,18 +4,33 @@ from __future__ import annotations
 
 import hashlib
 from datetime import UTC, datetime
-from decimal import Decimal, localcontext
+from decimal import Decimal, InvalidOperation, localcontext
 from importlib.metadata import version
 from importlib.resources import files
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_validator, model_validator
 
 from ithrl.context import content_digest
 
 Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 Count = Annotated[int, Field(ge=0, le=10**15)]
-Rate = Annotated[Decimal, Field(ge=0, allow_inf_nan=False, max_digits=30, decimal_places=12)]
+
+
+def _exact_rate(value: object) -> Decimal:
+    if not isinstance(value, (str, Decimal)):
+        raise ValueError("rates require decimal strings")
+    try:
+        return Decimal(value)
+    except InvalidOperation:
+        raise ValueError("invalid decimal rate") from None
+
+
+Rate = Annotated[
+    Decimal,
+    BeforeValidator(_exact_rate),
+    Field(ge=0, allow_inf_nan=False, max_digits=30, decimal_places=12),
+]
 Money = Annotated[Decimal, Field(ge=0, allow_inf_nan=False, max_digits=60, decimal_places=18)]
 Identifier = Annotated[str, Field(pattern=r"^[a-zA-Z0-9][a-zA-Z0-9./:_-]{0,127}$")]
 type PriceKey = Literal[
@@ -278,10 +293,10 @@ class PriceBook:
     """Resolve one exact model from bundled data without updater or global snapshot state."""
 
     def __init__(self, spec: PricingSpec) -> None:
-        from genai_prices.data import providers
         from genai_prices.types import ModelPrice, Tier, TieredPrices
 
         self.spec = spec
+        context = spec.context
         if spec.custom_rates is not None:
             rates = {
                 key: TieredPrices(value.base, [Tier(x.start, x.price) for x in value.tiers])
@@ -292,6 +307,8 @@ class PriceBook:
             self.prices = ModelPrice(**rates)
             digest = content_digest(spec.model_dump(mode="json")["custom_rates"])
         else:
+            from genai_prices.data import providers
+
             provider = next((p for p in providers if p.id == spec.provider), None)
             model = (
                 next((m for m in provider.models if m.id == spec.model), None) if provider else None
@@ -305,12 +322,13 @@ class PriceBook:
             variants = [
                 v
                 for v in model.price_variants or ()
-                if (v.constraint is None or v.constraint.active(spec.as_of))
-                and all(spec.context.get(k) == value for k, value in v.when.items())
+                if v.constraint is None or v.constraint.active(spec.as_of)
             ]
-            if spec.context and not any(v.when == spec.context for v in variants):
+            if not context and any(v.when == {"service_tier": "default"} for v in variants):
+                context = {"service_tier": "default"}
+            if context and not any(v.when == context for v in variants):
                 raise ValueError("pricing context has no applicable exact variant")
-            self.prices = model.get_prices(spec.as_of, spec.context)
+            self.prices = model.get_prices(spec.as_of, context)
             if spec.provider == "anthropic" and self.prices.cache_write_mtok is not None:
                 # Anthropic publishes its default cache-write rate for a five-minute TTL.
                 self.prices = ModelPrice(
@@ -351,7 +369,7 @@ class PriceBook:
             provider=spec.provider,
             model=spec.model,
             as_of=spec.as_of,
-            context=spec.context,
+            context=context,
             semantics="custom-rate-equivalent"
             if spec.custom_rates is not None
             else "published-reference-rate"
