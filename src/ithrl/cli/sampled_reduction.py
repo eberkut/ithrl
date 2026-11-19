@@ -290,7 +290,7 @@ def handle_sampled_reduction(
                 original_workspace=original_workspace.absolute(),
                 observation_store=store.path.absolute(),
                 experiment=prepared.experiment,
-                resource_limits=prepared.resource_limits,
+                execution_metadata=prepared.execution_plan.inspection_metadata,
                 original_identity=prepared.identity,
                 started_at=now,
             )

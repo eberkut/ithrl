@@ -70,6 +70,30 @@ Digests identify the inputs and configuration used for each measurement:
 - The runner fingerprint identifies behavior-relevant runtime configuration. Observation identity
   additionally includes target and algorithm digests; each attempt has its own binding.
 
+`execution/contracts.py` defines the full `ResolvedExecutionPlan` and its bounded,
+content-safe `ExecutionPlanMetadata`. Their identities use canonical JSON:
+
+```text
+plan_content_digest = SHA256(canonical_json(resolved_execution_plan))
+execution_plan_digest = SHA256(canonical_json(execution_plan_metadata))
+```
+
+The metadata includes `plan_content_digest`, capability and safety-policy digests, capture type,
+candidate materialization, reconstruction method, `SafetyPolicyDeclarations` and `ResourceLimits`.
+The declaration contract owns the whitelist of disclosed policy fields; private provider
+destinations remain in the full plan. This binds readable declarations to all private plan inputs
+without disclosing those inputs or requiring them to recompute the execution-plan digest.
+
+A full-plan hash alone cannot validate a disclosed subset without the private contents. An
+unbound projection could change while retaining the recorded plan identity.
+
+`sampled_run_metadata.py` persists required `execution_metadata`, including per-attempt resource
+limits, and verifies its digest against the original observation identity. Sampled snapshots
+retain no full execution plan. `results/inspection.py` validates this binding offline;
+`inspection.py` reports the metadata and bounded coverage of recorded effective-policy digests.
+Declared policy and recorded attempt evidence remain separate, with interpretation in
+[results](results.md#interpret-retained-units-and-trials).
+
 Sampled-run resource limits are recorded separately from the statistical settings. Increasing a
 run allowance leaves sample targets, freshness, effective policy and per-attempt limits unchanged.
 Observation reuse requires compatible identities and roles; a matching candidate digest alone
@@ -172,7 +196,8 @@ the native request charge and stop collection without entering behavioral counts
 another inference. Under that cooperative assumption, task grades record the declared test
 outcomes. Native input visibility and runtime qualification require separate evidence. Exceptions
 in setup, teardown or cleanup are operational errors, including those caused by candidate code;
-assertion failures and other exceptions in the test body are behavioral failures.
+failures reported for test bodies are behavioral nonmatches. Skipped or expected-failure outcomes
+and incomplete suites are operational grading errors.
 
 Deterministic reduction and sampled reduction share dependency-valid candidate construction but
 make different claims. The deterministic reducer can establish `search-1-minimal` through a
@@ -317,6 +342,7 @@ Python module names are not public API commitments.
 | `measurement.py`, `calibration.py`, `observations.py` | One-attempt measurement, calibration and append-only SQLite observation/block evidence |
 | `grading/` | Bound Python repair tasks, isolated patch application and test grading; no native action execution |
 | `sampling.py`, `run_state.py` | Shared frozen-block collection, private run state, reservations, reconciliation and accounting |
+| `sampled_run_metadata.py` | Frozen sampled-run metadata and execution-plan identity binding |
 | `reduce/contracts.py`, `reduce/engine.py`, `reduce/search.py` | Deterministic and exploratory sampled reduction, checkpoints and final sweep coverage |
 | `statistics.py` | Independent-arm preservation interval and confirmation classification |
 | `fuzz/contracts.py`, `fuzz/generation.py`, `fuzz/deterministic.py`, `fuzz/simplify.py`, `fuzz/sampling.py`, `fuzz/statistics.py` | Internal bounded mutation, discovery, simplification and change-confirmation components |
@@ -332,4 +358,6 @@ Python module names are not public API commitments.
 Before 1.0, project-owned schema tags remain `1` while formats evolve directly. Strict structure,
 kind, evidence identity and safety validation still apply. Breaking changes may require artifact
 regeneration; the project does not add pre-1.0 migrations or compatibility readers. Captured
-upstream versions remain evidence facts. Revisit format-version policy for 1.0.
+upstream versions remain evidence facts. The execution-plan identity above makes snapshots and
+resumes bound to the earlier identity incompatible. Do not edit captured source or retained
+evidence to manufacture new metadata or a matching identity. Revisit format-version policy for 1.0.

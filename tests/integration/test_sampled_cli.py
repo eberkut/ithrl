@@ -458,6 +458,28 @@ def test_retained_inspection_reads_sampled_snapshot_without_live_run_or_store(
     report = _json(inspected)
     assert report["mode"] == "sampled"
     assert report["confirmation"]["status"] == saved["confirmation_result"]
+    assert report["execution_plan_digest"] == saved["plan_digest"]
+    assert report["reconstruction_method"] == "codex-app-server-inject-checkpoint-v1"
+    assert report["capture_type"] == "logical-session"
+    assert report["candidate_materialization"] == "source-backed"
+    assert report["declared_policy"]["provider_transport"] == "allowed"
+    assert report["declared_policy"]["action_execution"] == "denied"
+    assert report["resource_limits"]["max_provider_calls"] == 1
+    policy_evidence = report["recorded_policy_evidence"]
+    assert policy_evidence["observations_with_digest"] == calls - 1
+    assert policy_evidence["observations_without_digest"] == 0
+    assert policy_evidence["referenced_observations_unavailable"] == 1
+    assert policy_evidence["effective_policy_digests"]
+    assert _ENDPOINT not in inspected.stdout
+    assert _PROVIDER not in inspected.stdout
+    assert _PRIVATE_RESPONSE not in inspected.stdout
+    human = _invoke(
+        ["inspect", "retained", str(operator_case.workspace.root), "--result", str(result_path)]
+    )
+    assert human.exit_code == 0, human.output
+    assert "declared policy" in human.stdout
+    assert "recorded policy evidence" in human.stdout
+    assert _ENDPOINT not in human.stdout
     assert len(operator_case.runner.calls) == calls
     after = {
         path: path.read_bytes()

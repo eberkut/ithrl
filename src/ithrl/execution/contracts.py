@@ -149,17 +149,30 @@ class CapabilityProfile(_ImmutableContract):
         )
 
 
-class SafetyPolicy(_ImmutableContract):
-    """Maximum effects allowed for one runner attempt."""
+class SafetyPolicyDeclarations(_ImmutableContract):
+    """Content-safe effect declarations, without private provider destinations."""
 
     schema_version: Literal[1] = 1
     provider_transport: ProviderTransportPolicy = "forbidden"
-    allowed_provider: Annotated[str | None, Field(min_length=1, max_length=256)] = None
-    allowed_endpoint: Annotated[str | None, Field(min_length=1, max_length=2048)] = None
     tool_network_access: Literal["forbidden"] = "forbidden"
     action_execution: Literal["denied"] = "denied"
     source_store_effect: Literal["unchanged"] = "unchanged"
     original_workspace_effect: Literal["unchanged"] = "unchanged"
+
+
+class SafetyPolicy(SafetyPolicyDeclarations):
+    """Maximum effects and private destination allowed for one runner attempt."""
+
+    allowed_provider: Annotated[str | None, Field(min_length=1, max_length=256)] = None
+    allowed_endpoint: Annotated[str | None, Field(min_length=1, max_length=2048)] = None
+
+    @property
+    def declarations(self) -> SafetyPolicyDeclarations:
+        """Project only fields owned by the public declaration contract."""
+
+        return SafetyPolicyDeclarations.model_validate(
+            self.model_dump(include=set(SafetyPolicyDeclarations.model_fields))
+        )
 
     @model_validator(mode="after")
     def validate_destination(self) -> SafetyPolicy:
@@ -209,6 +222,29 @@ class ResourceLimits(_ImmutableContract):
         return cls()
 
 
+class ExecutionPlanMetadata(_ImmutableContract):
+    """Bounded disclosure committed alongside the complete private plan's content hash."""
+
+    schema_version: Literal[1] = 1
+    kind: Literal["execution-plan-metadata"] = "execution-plan-metadata"
+    plan_content_digest: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    capability_digest: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    safety_policy_digest: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    capture_type: CaptureType
+    candidate_materialization: CandidateMaterialization
+    reconstruction_method: Annotated[
+        str, Field(min_length=1, max_length=128, pattern=r"^[a-z0-9][a-z0-9._-]*$")
+    ]
+    declared_policy: SafetyPolicyDeclarations
+    resource_limits: ResourceLimits
+
+    @property
+    def digest(self) -> str:
+        """Recompute the plan identity without disclosing its private content."""
+
+        return content_digest(self.model_dump(mode="json"))
+
+
 class ResolvedExecutionPlan(_ImmutableContract):
     """One immutable runner plan resolved without starting external work."""
 
@@ -247,10 +283,25 @@ class ResolvedExecutionPlan(_ImmutableContract):
         return self
 
     @property
-    def digest(self) -> str:
-        """Return the stable identity of the fully resolved execution plan."""
+    def inspection_metadata(self) -> ExecutionPlanMetadata:
+        """Bind readable declarations to all execution inputs without persisting them."""
 
-        return content_digest(self.model_dump(mode="json"))
+        return ExecutionPlanMetadata(
+            plan_content_digest=content_digest(self.model_dump(mode="json")),
+            capability_digest=self.capability.digest,
+            safety_policy_digest=self.safety_policy.digest,
+            capture_type=self.capture_type,
+            candidate_materialization=self.candidate_materialization,
+            reconstruction_method=self.capability.reconstruction_method,
+            declared_policy=self.safety_policy.declarations,
+            resource_limits=self.resource_limits,
+        )
+
+    @property
+    def digest(self) -> str:
+        """Commit to the full private plan and its independently inspectable declarations."""
+
+        return self.inspection_metadata.digest
 
 
 type PreflightIssueCode = Literal[

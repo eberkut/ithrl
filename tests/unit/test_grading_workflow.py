@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+from dataclasses import replace
 from pathlib import Path
 from typing import Literal
 
@@ -24,6 +25,7 @@ from ithrl.grading.contracts import GradeEvidence, PatchGradingConfig, SuiteEvid
 from ithrl.measurement import RunnerExecutionError, observe_once
 from ithrl.observations import ObservationOutcome, ObservationStore
 from ithrl.runner import (
+    AttemptEvidence,
     PreparedAttempt,
     RunAccounting,
     RunnerRegistry,
@@ -511,9 +513,11 @@ def test_grading_error_elapsed_time_excludes_native_execution(
     assert grading.elapsed_milliseconds == 250
 
 
-def test_late_backend_error_preserves_its_diagnostic(
+@pytest.mark.parametrize("status", ["pass", "fail", "error"])
+def test_late_grades_become_timeouts_without_overwriting_backend_errors(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    status: Literal["pass", "fail", "error"],
 ) -> None:
     from types import SimpleNamespace
 
@@ -535,8 +539,8 @@ def test_late_backend_error_preserves_its_diagnostic(
             response,
             candidate_digest=candidate_digest,
             attempt_id=attempt_id,
-            status="error",
-            reason_code="grading-cleanup-failed",
+            status=status,
+            reason_code="grading-cleanup-failed" if status == "error" else None,
         ).model_copy(update={"report_digest": "e" * 64})
 
     monkeypatch.setattr(measurement, "grade_response", backend)
@@ -552,6 +556,73 @@ def test_late_backend_error_preserves_its_diagnostic(
     assert failed.value.observation is not None
     grade = failed.value.observation.attempt_evidence.grading
     assert grade is not None
-    assert grade.reason_code == "grading-cleanup-failed"
-    assert grade.report_digest == "e" * 64
+    assert grade.status == "error"
+    assert grade.reason_code == ("grading-cleanup-failed" if status == "error" else "timeout")
+    assert grade.report_digest == ("e" * 64 if status == "error" else None)
     assert runner.calls == 1
+
+
+def test_grading_helpers_require_a_frozen_configuration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, _, attempt = _attempt(tmp_path, monkeypatch)
+    plan = attempt.execution_plan.model_copy(update={"grading": None})
+    attempt = replace(
+        attempt,
+        execution_plan=plan,
+        candidate=prepare_candidate(attempt.evidence, plan),
+    )
+    result = RunResult(
+        attempt_id=attempt.attempt_id,
+        effective_policy_digest=attempt.safety_policy.digest,
+        accounting=RunAccounting(),
+    )
+    with pytest.raises(ValueError, match="requires a frozen configuration"):
+        measurement._grading_error(attempt, result, "timeout", 0)
+    with pytest.raises(ValueError, match="requires a frozen configuration"):
+        asyncio.run(measurement._grade_with_remaining_time(attempt, result, 1, 0, "a" * 64))
+
+
+def test_expired_grading_deadline_preserves_a_completed_attempt_without_running_the_grader(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    runner, _, attempt = _attempt(tmp_path, monkeypatch)
+    result = asyncio.run(runner.run(attempt))
+    backend = AsyncMock()
+    monkeypatch.setattr(measurement, "grade_response", backend)
+    monkeypatch.setattr(measurement, "time", SimpleNamespace(monotonic=lambda: 5))
+    grade = asyncio.run(
+        measurement._grade_with_remaining_time(attempt, result, 5, 5, attempt.candidate.digest)
+    )
+    assert grade.status == "error"
+    assert grade.reason_code == "timeout"
+    assert grade.attempt_id == result.attempt_id
+    assert grade.elapsed_milliseconds == 0
+    backend.assert_not_awaited()
+
+
+@pytest.mark.parametrize("mismatch", ["incomplete", "attempt-id"])
+def test_saved_grades_require_the_matching_completed_native_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mismatch: str
+) -> None:
+    runner, _, attempt = _attempt(tmp_path, monkeypatch)
+    result = asyncio.run(runner.run(attempt))
+    config = attempt.execution_plan.grading
+    assert config is not None
+    grade = _evidence(
+        config,
+        result.final_text,
+        candidate_digest=attempt.candidate.digest,
+        attempt_id=attempt.attempt_id,
+    )
+    raw = AttemptEvidence.from_result(attempt, result, grade).model_dump()
+    raw.update(
+        {"termination_reason": "failed"}
+        if mismatch == "incomplete"
+        else {"attempt_id": "attempt-" + "f" * 32}
+    )
+    with pytest.raises(ValidationError, match="matching completed native attempt"):
+        AttemptEvidence.model_validate(raw)

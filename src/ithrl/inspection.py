@@ -13,6 +13,12 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ithrl.case import CaseEvidence
 from ithrl.context import JsonValue, decode_pointer
+from ithrl.execution import (
+    CandidateMaterialization,
+    CaptureType,
+    ResourceLimits,
+    SafetyPolicyDeclarations,
+)
 from ithrl.experiment import SampledExperimentDefinition, SampledReductionPlan
 from ithrl.mutation import TextMutation
 from ithrl.observations import SamplingArmCounts, SamplingBlockEvidence
@@ -73,6 +79,16 @@ class ConfirmationInspection(_InspectionModel):
     difference: float | None = None
     lower_bound: float | None = None
     upper_bound: float | None = None
+
+
+class PolicyEvidenceInspection(_InspectionModel):
+    """Coverage of recorded attempt digests, without inferring their policy content."""
+
+    observations_with_digest: int
+    observations_without_digest: int
+    referenced_observations_unavailable: int
+    effective_policy_digests: tuple[str, ...]
+    omitted_digest_count: int
 
 
 class TrialInspection(_InspectionModel):
@@ -190,9 +206,15 @@ class RetainedInspection(_InspectionModel):
     )
     target_type: Literal["final-response", "shell-action"]
     grading_config_digest: str | None = Field(default=None, exclude_if=lambda value: value is None)
-    reconstruction_method: str | None
-    safety_policy_digest: str | None
-    action_execution: Literal["denied"] | None
+    reconstruction_method: str
+    plan_metadata_scope: Literal["immutable-original"] = "immutable-original"
+    execution_plan_digest: str
+    capture_type: CaptureType
+    candidate_materialization: CandidateMaterialization
+    safety_policy_digest: str
+    declared_policy: SafetyPolicyDeclarations
+    resource_limits: ResourceLimits
+    recorded_policy_evidence: PolicyEvidenceInspection
     search_result: str
     final_sweep_complete: bool
     failed_candidate_observation_count: int | None = Field(default=None, ge=0)
@@ -283,13 +305,7 @@ def build_retained_inspection(
         )
     else:
         raise ValueError("inspection requires a reduction snapshot")
-    plan = loaded.execution_plan
-    reconstruction = (
-        plan.capability.reconstruction_method
-        if plan is not None
-        else loaded.recorded_metadata.get("reconstruction_method")
-    )
-    policy_digest = plan.safety_policy.digest if plan is not None else None
+    metadata = loaded.execution_metadata
     failed_count = (
         len(deterministic.checkpoint.failed_candidate_observation_ids)
         if deterministic is not None
@@ -301,6 +317,8 @@ def build_retained_inspection(
         "joint removals do not explain each retained item.",
         "Available untested text sections are source-bound structural units, not tested removals. "
         "Whole-record trial outcomes do not establish section necessity or usefulness.",
+        "Plan metadata records declarations, not proof of historical enforcement. "
+        "Effective-policy digests identify recorded attempt evidence without revealing its content.",
         *loaded.validation_limits,
     )
     if failed_count:
@@ -337,9 +355,14 @@ def build_retained_inspection(
             and loaded.experiment.grading is not None
             else None
         ),
-        reconstruction_method=_metadata_label(reconstruction),
-        safety_policy_digest=policy_digest,
-        action_execution=plan.safety_policy.action_execution if plan is not None else None,
+        reconstruction_method=metadata.reconstruction_method,
+        execution_plan_digest=metadata.digest,
+        capture_type=metadata.capture_type,
+        candidate_materialization=metadata.candidate_materialization,
+        safety_policy_digest=metadata.safety_policy_digest,
+        declared_policy=metadata.declared_policy,
+        resource_limits=metadata.resource_limits,
+        recorded_policy_evidence=_policy_evidence(loaded),
         search_result=search,
         final_sweep_complete=complete,
         failed_candidate_observation_count=failed_count,
@@ -357,17 +380,52 @@ def build_retained_inspection(
     )
 
 
+def _policy_evidence(loaded: RetainedResult) -> PolicyEvidenceInspection:
+    sampled = loaded.sampled
+    digests: set[str] = set()
+    with_digest = without_digest = unavailable = 0
+    if sampled is not None:
+        unavailable = len(sampled.calibration_observation_ids)
+        blocks = sampled.checkpoint.blocks
+        if sampled.confirmation is not None:
+            blocks = (*blocks, sampled.confirmation.evidence)
+        for block in blocks:
+            for attempt in block.attempts:
+                digest = attempt.observation.attempt_evidence.effective_policy_digest
+                if digest is None:
+                    without_digest += 1
+                else:
+                    with_digest += 1
+                    digests.add(digest)
+    elif loaded.deterministic is not None:
+        snapshot = loaded.deterministic
+        references = {
+            *snapshot.summary.calibration_observation_ids,
+            *snapshot.summary.confirmation_observation_ids,
+            *snapshot.checkpoint.failed_candidate_observation_ids,
+        }
+        references.update(
+            trial.observation_id
+            for trial in snapshot.checkpoint.trials
+            if trial.observation_id is not None
+        )
+        unavailable = len(references)
+    return PolicyEvidenceInspection(
+        observations_with_digest=with_digest,
+        observations_without_digest=without_digest,
+        referenced_observations_unavailable=unavailable,
+        effective_policy_digests=tuple(sorted(digests)[:16]),
+        omitted_digest_count=max(0, len(digests) - 16),
+    )
+
+
 def _original_candidate_digest(loaded: RetainedResult) -> str:
     evidence = loaded.evidence
-    if loaded.execution_plan is not None:
-        plan_digest = loaded.execution_plan.digest
-    elif loaded.sampled is not None:
+    if loaded.sampled is not None:
         return loaded.sampled.checkpoint.original_candidate_digest
-    else:
-        raise ValueError("inspection requires recorded candidate identity")
     return Candidate(
         case_digest=evidence.digest,
-        execution_plan_digest=plan_digest,
+        execution_plan_digest=loaded.execution_metadata.digest,
         source_artifact_digests=tuple(a.sha256 for a in evidence.source_artifacts),
         retained_context_ids=tuple(n.id for n in evidence.context.nodes),
         removed_context_ids=(),

@@ -22,7 +22,7 @@ from ithrl.cli.sampled_session import (
     save_cli_session,
 )
 from ithrl.context import content_digest
-from ithrl.execution import ResourceLimits
+from ithrl.execution import ExecutionPlanMetadata, ResourceLimits, SafetyPolicyDeclarations
 from ithrl.experiment import (
     ExperimentDefinition,
     NativeRunnerConfig,
@@ -97,11 +97,21 @@ def bundle(tmp_path: Path) -> Bundle:
         decision=original.decision,
     )
     evidence = workspace.load()
+    metadata = ExecutionPlanMetadata(
+        plan_content_digest="b" * 64,
+        capability_digest="a" * 64,
+        safety_policy_digest="c" * 64,
+        capture_type="provider-request",
+        candidate_materialization="exact-request",
+        reconstruction_method="offline-fixture-v1",
+        declared_policy=SafetyPolicyDeclarations(provider_transport="allowed"),
+        resource_limits=ResourceLimits(max_provider_calls=1),
+    )
     identity = ObservationIdentity(
         case_digest=evidence.digest,
         experiment_digest=experiment.digest,
         runner_fingerprint="credential-free-fixture",
-        execution_plan_digest="b" * 64,
+        execution_plan_digest=metadata.digest,
         target_digest="c" * 64,
         algorithm_digest="d" * 64,
     )
@@ -145,7 +155,7 @@ def bundle(tmp_path: Path) -> Bundle:
         original_workspace=original_workspace.absolute(),
         observation_store=store.path.absolute(),
         experiment=experiment,
-        resource_limits=ResourceLimits(max_provider_calls=1),
+        execution_metadata=metadata,
         original_identity=identity,
         started_at=_TIME,
     )
@@ -372,7 +382,11 @@ def test_result_rejects_changed_pointer_and_unrelated_location(
     destination = _publish(bundle)
     pointer = destination / "cli-session.json"
     changed = bundle.session.model_copy(
-        update={"resource_limits": ResourceLimits(max_provider_calls=2)}
+        update={
+            "execution_metadata": bundle.session.execution_metadata.model_copy(
+                update={"resource_limits": ResourceLimits(max_provider_calls=2)}
+            )
+        }
     )
     pointer.write_text(changed.model_dump_json(), encoding="utf-8")
     with pytest.raises(SampledCliSessionError):

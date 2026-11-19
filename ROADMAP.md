@@ -89,7 +89,7 @@ is deferred.
 | Scope | Issue | Expected outcome |
 | --- | --- | --- |
 | Completed in [#82](https://github.com/eberkut/ithrl/pull/82) | [#16: broader workloads and costs](https://github.com/eberkut/ithrl/issues/16) | Published the frozen cohort's limiting outcome, selection funnel, developer conclusions, recorded costs and explicit gaps |
-| Committed design and feasibility | [#81: public debugging benchmark](https://github.com/eberkut/ithrl/issues/81) | Review a small public task package, graders and context-dependence controls; assess bounded Codex/Copilot feasibility and recommend adopt, revise or reject |
+| Completed in [#83](https://github.com/eberkut/ithrl/pull/83) | [#81: public debugging benchmark](https://github.com/eberkut/ithrl/issues/81) | Published two reviewed tasks and a patch grader; Codex/Copilot reductions reached fresh confirmation, with limiting outcomes and costs recorded |
 | Committed implementation | [#73: sampled inspection metadata](https://github.com/eberkut/ithrl/issues/73) | Offline reports explain digest-bound reconstruction and policy declarations separately from recorded attempt evidence |
 | Committed implementation | [#77: model cost estimates](https://github.com/eberkut/ithrl/issues/77) | Offline pricing with genai-prices, usage/rate provenance and explicit coverage; estimates and scenarios remain distinct from actual billing |
 | Committed implementation | [#78: first-party agent skill](https://github.com/eberkut/ithrl/issues/78) | One skill source distributed through Library Skills and Vercel Skills, with Python artifact and installed-copy validation |
@@ -105,7 +105,8 @@ coarse search; neither reached fine search or fresh confirmation. The
 in [#82](https://github.com/eberkut/ithrl/pull/82). Its retained evidence informs #13 and #74
 without establishing either capability.
 
-[#81's public task package](research/benchmarks/README.md) recommends iniconfig as a supplementary
+[#81's public task package](research/benchmarks/README.md), merged in
+[#83](https://github.com/eberkut/ithrl/pull/83), recommends iniconfig as a supplementary
 constructed workload. Bounded Codex and Copilot CLI reductions each completed fresh confirmation;
 both coarse sweeps remain incomplete. Migration-linter remains a baseline-calibration limiting
 case. The report owns outcomes, costs and maintenance requirements. Broader tasks, changed profiles
@@ -117,13 +118,13 @@ can help locate further sources, but ithrl must independently snapshot and valid
 evidence. Future ordinary cohorts must freeze selection rules before inspection and measure useful
 developer conclusions alongside reduction, reliability and cost.
 
-Neither #13 nor #74 waits for #16's publication or #81's completion. #73, #77 and #78 are
-independent implementation items. Cost estimates need verified usage and pricing coverage. The agent
-skill covers implemented workflows and must follow later release decisions. #74 must distinguish
-original output, delivered representation and saved evidence before proposing edits. Its v0.5
-commitment is the assessment; tool-output implementation requires a separate decision and need not
-block comparison within existing edit domains. Native probes and provider execution require separate
-approval.
+Issues #13 and #74 can proceed from the published #16 and #81 evidence within their design and
+assessment scope. #73, #77 and #78 are independent implementation items. Cost estimates need
+verified usage and pricing coverage. The agent skill covers implemented workflows and must follow
+later release decisions. #74 must distinguish original output, delivered representation and saved
+evidence before proposing edits. Its v0.5 commitment is the assessment; tool-output implementation
+requires a separate decision and need not block comparison within existing edit domains. Native
+probes and provider execution require separate approval.
 
 The review of
 [SkillOpt's training method](https://github.com/microsoft/SkillOpt/blob/45f65ca04f5f6713bca7b9797b495696ba812751/docs/guide/training-loop.md)
@@ -131,9 +132,10 @@ and
 [Sift's tool-output benchmarks](https://github.com/ctxrs/sift/blob/c22fb1b3747352dba8f8323c057d60e7afd92bf5/benchmarks/results/2026-09-21-release-v0.4.0/README.md)
 motivated better candidate selection and tool-output investigation. Their task-performance and
 output-size results do not establish ithrl's debugging usefulness. No search engine or skill
-optimizer is planned. Fuzzing already accepts supplied `stale_text`; #16 should establish a need for
-distinct proposals tied to specific fields before creating further work. Passive inspection retains
-its qualified exact-comparison contract; decoded or normalized matching needs a separate policy.
+optimizer is planned. Fuzzing already accepts supplied `stale_text`; further ordinary-workflow
+evidence must establish a need for distinct proposals tied to specific fields before creating
+further work. Passive inspection retains its qualified exact-comparison contract; decoded or
+normalized matching needs a separate policy.
 
 ## Deferred work
 
@@ -213,14 +215,15 @@ is separate work.
 - Optional editor/agent integrations and handoff analysis that compose the CLI rather than
   introducing separate experimental semantics.
 
-These candidates have no assigned release.
-[Broader native workloads and costs](https://github.com/eberkut/ithrl/issues/16) and
+These candidates have no assigned release. The completed
+[broader-workload study](https://github.com/eberkut/ithrl/issues/16) records a bounded limiting
+outcome. Further ordinary-workflow evidence and
 [baseline-sharing strategies](https://github.com/eberkut/ithrl/issues/17) remain research
-opportunities. Synthetic qualification covers a planted approximately 10k workload;
-[saved-session experiments](docs/measurements.md#saved-session-experiments) add selected larger
-contexts, including incomplete and inconclusive outcomes. Neither establishes a general 100k
-workload envelope. Qualification at that scale remains an optional expansion with a separate
-cost proposal.
+opportunities without an assigned release. Synthetic qualification covers a planted approximately
+10k workload; [saved-session experiments](docs/measurements.md#saved-session-experiments) add
+selected larger contexts, including incomplete and inconclusive outcomes. Neither establishes a
+general 100k workload envelope. Qualification at that scale remains an optional expansion with a
+separate cost proposal.
 
 ## Planning and release policy
 
