@@ -196,7 +196,8 @@ the native request charge and stop collection without entering behavioral counts
 another inference. Under that cooperative assumption, task grades record the declared test
 outcomes. Native input visibility and runtime qualification require separate evidence. Exceptions
 in setup, teardown or cleanup are operational errors, including those caused by candidate code;
-assertion failures and other exceptions in the test body are behavioral failures.
+failures reported for test bodies are behavioral nonmatches. Skipped or expected-failure outcomes
+and incomplete suites are operational grading errors.
 
 Deterministic reduction and sampled reduction share dependency-valid candidate construction but
 make different claims. The deterministic reducer can establish `search-1-minimal` through a
