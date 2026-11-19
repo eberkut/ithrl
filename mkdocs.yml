@@ -26,6 +26,7 @@ markdown_extensions:
       permalink: true
 nav:
   - Overview: index.md
+  - Agent skill: agent-skill.md
   - Native runs: native-runs.md
   - Native reduction: reduction.md
   - Context fuzzing: fuzzing.md
@@ -54,6 +55,7 @@ nav:
 exclude_docs: |
   *
   !/index.md
+  !/agent-skill.md
   !/native-runs.md
   !/reduction.md
   !/fuzzing.md

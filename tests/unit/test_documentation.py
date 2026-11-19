@@ -21,6 +21,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SITE_PAGES = frozenset(
     {
         "index.md",
+        "agent-skill.md",
         "native-runs.md",
         "reduction.md",
         "fuzzing.md",
@@ -47,6 +48,20 @@ SITE_ASSETS = frozenset({"third-party-notices.txt"}) | frozenset(
         "ithrl-logo-dark.svg",
     )
 )
+
+
+def test_agent_skill_has_discoverable_frontmatter() -> None:
+    skill = PROJECT_ROOT / "skills/ithrl/SKILL.md"
+    lines = skill.read_text(encoding="utf-8").splitlines()
+    assert lines[0] == "---"
+    end = lines.index("---", 1)
+    metadata = yaml.safe_load("\n".join(lines[1:end]))
+    assert isinstance(metadata, dict)
+    assert metadata["name"] == skill.parent.name
+    description = metadata["description"]
+    assert isinstance(description, str)
+    assert description.strip()
+    assert len(description) <= 1024
 
 
 def test_cli_reference_is_current_without_external_execution(

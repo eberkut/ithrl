@@ -33,14 +33,18 @@ the installation command.
 Tested on Python 3.12–3.14. Native runners require Linux. APIs and saved formats may change before
 1.0; keep your source sessions and record the version used for each case.
 
+To help an agent use ithrl, install the
+[agent skill](https://github.com/eberkut/ithrl/blob/main/docs/agent-skill.md) through Library Skills
+or Vercel Skills.
+
 ## Try it
 
 The bundled deterministic example needs no account, agent installation or model access:
 
 ```bash
-mkdir -m 700 ithrl-demo
-ithrl extract --example --output ithrl-demo/case
-ithrl shrink ithrl-demo/case --observation-store ithrl-demo/observations.sqlite
+mkdir -m 700 ithrl-demo &&
+  ithrl extract --example --output ithrl-demo/case &&
+  ithrl shrink ithrl-demo/case --observation-store ithrl-demo/observations.sqlite
 ```
 
 The result removes half the context items and confirms that the target is preserved. Output excerpt:

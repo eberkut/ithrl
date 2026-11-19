@@ -164,7 +164,9 @@ RUNTIME_MODULES = frozenset(
     }
 )
 
+SKILL_FILES = ("SKILL.md", "references/workflows.md")
 RUNTIME_ASSETS = frozenset({PurePosixPath("ithrl/examples/synthetic-trace.json")})
+SKILL_ASSETS = frozenset(PurePosixPath("ithrl/.agents/skills/ithrl", name) for name in SKILL_FILES)
 PUBLIC_EXAMPLES = frozenset(
     PurePosixPath("examples/fuzz", name)
     for name in ("codex.jsonl", "copilot.jsonl", "campaign.toml")
@@ -173,6 +175,7 @@ PUBLIC_DOCS = frozenset(
     PurePosixPath("docs", name)
     for name in (
         "index.md",
+        "agent-skill.md",
         "native-runs.md",
         "reduction.md",
         "fuzzing.md",
@@ -234,7 +237,7 @@ def test_wheel_contains_only_runtime_package_and_metadata(
 
     assert packaged_modules == RUNTIME_MODULES
     assert {member for member in members if member.parts[0] == "ithrl"} == (
-        RUNTIME_MODULES | RUNTIME_ASSETS
+        RUNTIME_MODULES | RUNTIME_ASSETS | SKILL_ASSETS
     )
     assert "ithrl" in roots
     assert len(roots) == 2
@@ -248,6 +251,11 @@ def test_wheel_contains_only_runtime_package_and_metadata(
             name for name in archive.namelist() if name.endswith(".dist-info/METADATA")
         )
         metadata = BytesParser().parsebytes(archive.read(metadata_path))
+        for name in SKILL_FILES:
+            assert (
+                archive.read(f"ithrl/.agents/skills/ithrl/{name}")
+                == (PROJECT_ROOT / "skills/ithrl" / name).read_bytes()
+            )
     assert metadata["Summary"] == project["project"]["description"]
     assert metadata["Requires-Python"] == ">=3.12"
     assert metadata["License-Expression"] == "Apache-2.0"
@@ -267,6 +275,11 @@ def test_sdist_contains_all_inputs_needed_to_rebuild_the_wheel(
     _, sdist = distributions
     with tarfile.open(sdist) as archive:
         members = tuple(PurePosixPath(member.name) for member in archive.getmembers())
+        for name in SKILL_FILES:
+            source = archive.extractfile(f"{members[0].parts[0]}/skills/ithrl/{name}")
+            assert source is not None
+            with source:
+                assert source.read() == (PROJECT_ROOT / "skills/ithrl" / name).read_bytes()
 
     relative_members = tuple(PurePosixPath(*member.parts[1:]) for member in members)
     expected_files = {PurePosixPath("src", module) for module in RUNTIME_MODULES}
@@ -283,6 +296,9 @@ def test_sdist_contains_all_inputs_needed_to_rebuild_the_wheel(
     assert {
         member for member in relative_members if member.parts[0] == "examples"
     } == PUBLIC_EXAMPLES
+    assert {member for member in relative_members if member.parts[0] == "skills"} == {
+        PurePosixPath("skills/ithrl", name) for name in SKILL_FILES
+    }
     packaged_sources = {
         member
         for member in relative_members
@@ -304,6 +320,7 @@ def test_sdist_contains_all_inputs_needed_to_rebuild_the_wheel(
         "src",
         "docs",
         "examples",
+        "skills",
     }
     _assert_no_private_or_checkout_content(relative_members)
 
@@ -378,6 +395,20 @@ def _assert_installed_workflow(wheel: Path, tmp_path: Path, expected_version: st
     assert "Test how agent context affects a model decision" in help_result.stdout
     version_result = _run(str(executable), "--version", cwd=runtime, env=child_environment)
     assert version_result.stdout == f"ithrl {expected_version}\n"
+    skill_result = _run(
+        str(python),
+        "-I",
+        "-c",
+        "import json\nfrom importlib.resources import files\n"
+        "skill = files('ithrl').joinpath('.agents/skills/ithrl')\n"
+        "print(json.dumps({name: skill.joinpath(name).read_bytes().hex() for name in "
+        f"{SKILL_FILES!r}}}))\n",
+        cwd=runtime,
+        env=child_environment,
+    )
+    assert json.loads(skill_result.stdout) == {
+        name: (PROJECT_ROOT / "skills/ithrl" / name).read_bytes().hex() for name in SKILL_FILES
+    }
     extract_help = _run(str(executable), "extract", "--help", cwd=runtime, env=child_environment)
     assert "--example" in extract_help.stdout
     completion = _run(
