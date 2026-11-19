@@ -10,7 +10,7 @@ import sys
 import tracemalloc
 import unittest
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from typing import Any, override
 from unittest.mock import Mock
 
@@ -438,9 +438,12 @@ def test_environment_refuses_missing_metadata_or_non_system_python(
 
 @pytest.mark.parametrize("manifest", [None, b"not json"])
 def test_invalid_bundle_manifest_is_refused_before_environment_access(
-    tmp_path: Path, manifest: bytes | None
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, manifest: bytes | None
 ) -> None:
-    from ithrl.grading.bundle import validate_grading
+    from ithrl.grading import bundle
+
+    monkeypatch.setattr(bundle, "sys", SimpleNamespace(platform="linux"))
+    monkeypatch.setattr(bundle.os, "access", Mock(return_value=True))
 
     if manifest is not None:
         (tmp_path / "manifest.json").write_bytes(manifest)
@@ -451,7 +454,7 @@ def test_invalid_bundle_manifest_is_refused_before_environment_access(
         environment_digest="b" * 64,
     )
     with pytest.raises(GradingError, match="grading-invalid-manifest"):
-        validate_grading(config)
+        bundle.validate_grading(config)
 
 
 @pytest.mark.parametrize("failure", ["overflow", "cancel"])
