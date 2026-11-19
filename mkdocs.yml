@@ -41,6 +41,7 @@ nav:
           - Sampling and dispatch: decisions/0002-fixed-samples-and-durable-dispatch.md
           - Fresh baselines: decisions/0003-strict-fresh-baselines.md
           - Fuzz confirmation: decisions/0004-single-finding-fuzz-confirmation.md
+          - Repair grading: decisions/0005-cooperative-repair-grading.md
       - Research:
           - Overview: research/index.md
           - Feasibility: research/feasibility.md

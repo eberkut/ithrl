@@ -199,6 +199,9 @@ in setup, teardown or cleanup are operational errors, including those caused by 
 failures reported for test bodies are behavioral nonmatches. Skipped or expected-failure outcomes
 and incomplete suites are operational grading errors.
 
+[ADR 0005](decisions/0005-cooperative-repair-grading.md) records the grading outcome and trust
+boundary.
+
 Deterministic reduction and sampled reduction share dependency-valid candidate construction but
 make different claims. The deterministic reducer can establish `search-1-minimal` through a
 completed final single-group sweep. Sampled search uses exploratory screens and reports its
