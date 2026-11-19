@@ -38,9 +38,9 @@ Tested on Python 3.12–3.14. Native runners require Linux. APIs and saved forma
 The bundled deterministic example needs no account, agent installation or model access:
 
 ```bash
-mkdir -m 700 ithrl-demo
-ithrl extract --example --output ithrl-demo/case
-ithrl shrink ithrl-demo/case --observation-store ithrl-demo/observations.sqlite
+mkdir -m 700 ithrl-demo &&
+  ithrl extract --example --output ithrl-demo/case &&
+  ithrl shrink ithrl-demo/case --observation-store ithrl-demo/observations.sqlite
 ```
 
 The result removes half the context items and confirms that the target is preserved. Output excerpt:
@@ -58,6 +58,27 @@ Reduced and confirmed
 Inspect the saved result in `ithrl-demo/case/results/`; the
 [results guide](https://github.com/eberkut/ithrl/blob/main/docs/results.md) explains its files.
 Use a new directory to repeat the example; extraction refuses to overwrite an existing case.
+
+## Use with a coding agent
+
+The `ithrl` agent skill guides your coding agent through inspecting saved sessions, preparing
+experiments and interpreting results. The agent using the skill need not be the harness that
+recorded the session.
+
+Install it through [Library Skills](https://library-skills.io/) when ithrl is installed in your
+Python project environment, or through [Vercel Skills](https://github.com/vercel-labs/skills) from
+the repository. The
+[installation guide](https://github.com/eberkut/ithrl/blob/main/docs/agent-skill.md) covers both
+routes and matching the skill to your installed CLI.
+
+After installation, try:
+
+> Use the ithrl skill to run the bundled local example and explain the result.
+
+For a saved session, provide its path and ask:
+
+> Use the ithrl skill to prepare a context-removal experiment for this session. Show me the
+> experiment plan and provider-call budget before execution.
 
 ## Commands
 
@@ -122,6 +143,8 @@ before using an installed harness.
 
 Read the [documentation site](https://eberkut.github.io/ithrl/) or browse the guides below.
 
+- [Agent skill](https://github.com/eberkut/ithrl/blob/main/docs/agent-skill.md): install and update
+  the skill through Library Skills or Vercel Skills.
 - [Native runs](https://github.com/eberkut/ithrl/blob/main/docs/native-runs.md): session selection,
   shared prerequisites and compatibility.
 - [Native reduction](https://github.com/eberkut/ithrl/blob/main/docs/reduction.md): prepare,

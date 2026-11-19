@@ -119,6 +119,7 @@ include = [
   "/README.md",
   "/ROADMAP.md",
   "/docs/native-runs.md",
+  "/docs/agent-skill.md",
   "/docs/reduction.md",
   "/docs/fuzzing.md",
   "/docs/results.md",
@@ -139,6 +140,7 @@ include = [
   "/docs/branding/branding.css",
   "/CONTRIBUTING.md",
   "/pyproject.toml",
+  "/skills/ithrl",
   "/src",
 ]
 exclude = [
@@ -148,6 +150,9 @@ exclude = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ithrl"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"skills/ithrl" = "ithrl/.agents/skills/ithrl"
 
 [tool.pyrefly]
 preset = "strict"
