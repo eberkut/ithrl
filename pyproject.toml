@@ -26,6 +26,7 @@ classifiers = [
 ]
 dependencies = [
   "filelock>=3.32.4",
+  "genai-prices==0.2.4",
   "github-copilot-sdk==1.0.28",
   "jsonschema>=4.25",
   "packaging>=24.2",

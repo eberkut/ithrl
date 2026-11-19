@@ -90,7 +90,7 @@ is deferred.
 | --- | --- | --- |
 | Completed in [#82](https://github.com/eberkut/ithrl/pull/82) | [#16: broader workloads and costs](https://github.com/eberkut/ithrl/issues/16) | Published the frozen cohort's limiting outcome, selection funnel, developer conclusions, recorded costs and explicit gaps |
 | Completed in [#83](https://github.com/eberkut/ithrl/pull/83) | [#81: public debugging benchmark](https://github.com/eberkut/ithrl/issues/81) | Published two reviewed tasks and a patch grader; Codex/Copilot reductions reached fresh confirmation, with limiting outcomes and costs recorded |
-| Committed implementation | [#73: sampled inspection metadata](https://github.com/eberkut/ithrl/issues/73) | Offline reports explain digest-bound reconstruction and policy declarations separately from recorded attempt evidence |
+| Completed in [#84](https://github.com/eberkut/ithrl/pull/84) | [#73: sampled inspection metadata](https://github.com/eberkut/ithrl/issues/73) | Offline reports explain digest-bound reconstruction and policy declarations separately from recorded attempt evidence |
 | Committed implementation | [#77: model cost estimates](https://github.com/eberkut/ithrl/issues/77) | Offline pricing with genai-prices, usage/rate provenance and explicit coverage; estimates and scenarios remain distinct from actual billing |
 | Committed implementation | [#78: first-party agent skill](https://github.com/eberkut/ithrl/issues/78) | One skill source distributed through Library Skills and Vercel Skills, with Python artifact and installed-copy validation |
 | Committed design | [#13: comparative debugging](https://github.com/eberkut/ithrl/issues/13) | A comparability contract, ordinary paired evidence, interaction example and bounded validation proposal; decide whether to implement or defer |
@@ -119,7 +119,8 @@ evidence. Future ordinary cohorts must freeze selection rules before inspection 
 developer conclusions alongside reduction, reliability and cost.
 
 Issues #13 and #74 can proceed from the published #16 and #81 evidence within their design and
-assessment scope. #73, #77 and #78 are independent implementation items. Cost estimates need
+assessment scope. #73's reporting contract is implemented in #84; #77 and #78 remain independent
+implementation items. Cost estimates need
 verified usage and pricing coverage. The agent skill covers implemented workflows and must follow
 later release decisions. #74 must distinguish original output, delivered representation and saved
 evidence before proposing edits. Its v0.5 commitment is the assessment; tool-output implementation

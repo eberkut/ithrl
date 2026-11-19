@@ -11,6 +11,8 @@ from typing import cast
 
 import pytest
 from click import unstyle
+from typer.core import TyperGroup
+from typer.main import get_command
 from typer.testing import CliRunner
 
 from ithrl.case import CaseEvidence, CaseWorkspace
@@ -1283,10 +1285,14 @@ def test_cli_help_exposes_only_the_public_commands() -> None:
     result = CliRunner().invoke(app, ["--help"], color=False)
 
     assert result.exit_code == ExitCode.SUCCESS
-    for command in ("extract", "shrink", "fuzz"):
+    root = get_command(app)
+    assert isinstance(root, TyperGroup)
+    commands = root.commands
+    for command in ("extract", "shrink", "fuzz", "inspect", "prepare", "cost"):
         assert command in result.output
+        assert command in commands
     for unavailable in ("record", "preflight", "reproduce", "compare", "export"):
-        assert unavailable not in result.output
+        assert unavailable not in commands
 
 
 def test_shrink_help_describes_the_default_resume_budget() -> None:

@@ -19,6 +19,7 @@ $ ithrl [OPTIONS] COMMAND [ARGS]...
 
 * `fuzz`: Find and independently confirm a bounded...
 * `prepare`: Prepare a native reduction offline, then...
+* `cost`: Estimate recorded or hypothetical token...
 * `extract`: Create a case from a saved agent session...
 * `shrink`: Find a smaller context that preserves the...
 * `inspect`: Inspect saved experimental evidence...
@@ -76,6 +77,31 @@ $ ithrl prepare [OPTIONS] {case}
 * `--inter-attempt-delay <int range>`: Seconds between attempts; included in admission bounds.  [default: 0; 0&lt;=x&lt;=86400]
 * `--observation-store <path>`: Forward a store path without opening it.
 * `--format <human|json>`: Output format.  [default: human]
+* `--help`: Show this message and exit.
+
+## `ithrl cost`
+
+Estimate recorded or hypothetical token costs using explicit reference rates.
+
+**Usage**:
+
+```console
+$ ithrl cost [OPTIONS] [observations]
+```
+
+**Arguments**:
+
+* `observations`: Existing observation database; omit with --scenario.
+
+**Options**:
+
+* `--pricing <path>`: Private JSON reference-pricing specification.  [required]
+* `--output <path>`: New private cost report; existing files are not overwritten.  [required]
+* `--case-digest <str>`: Exact case digest for recorded observations.
+* `--experiment-digest <str>`: Exact experiment digest for recorded observations.
+* `--scenario <path>`: Explicit hypothetical token counts as JSON.
+* `--max-observations <int range>`: [default: 10000; 1&lt;=x&lt;=10000]
+* `--format <human|json>`: [default: human]
 * `--help`: Show this message and exit.
 
 ## `ithrl extract`
@@ -167,9 +193,29 @@ $ ithrl inspect [OPTIONS] COMMAND [ARGS]...
 
 **Commands**:
 
+* `costs`: Inspect a saved cost estimate without...
 * `reacquire`: Inspect recorded operations and results...
 * `sections`: List eligible section IDs and half-open...
 * `retained`: Explain retained context and recorded...
+
+### `ithrl inspect costs`
+
+Inspect a saved cost estimate without resolving prices or opening its source store.
+
+**Usage**:
+
+```console
+$ ithrl inspect costs [OPTIONS] {report}
+```
+
+**Arguments**:
+
+* `report`: Saved token-cost report.  [required]
+
+**Options**:
+
+* `--format <human|json>`: [default: human]
+* `--help`: Show this message and exit.
 
 ### `ithrl inspect reacquire`
 
