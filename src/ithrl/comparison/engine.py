@@ -26,8 +26,6 @@ from ithrl.execution.budget import (
     sampling_freshness_refusal,
 )
 from ithrl.experiment import SampledComparisonPlan, SampledExperimentDefinition
-from ithrl.fuzz.contracts import FuzzOutcome
-from ithrl.fuzz.statistics import confirm_change, require_fuzz_numerics, validate_change_parameters
 from ithrl.mutation import ContextSelection
 from ithrl.observations import (
     Observation,
@@ -56,7 +54,12 @@ from ithrl.runner import (
 )
 from ithrl.runner.contracts import CandidateAdmission
 from ithrl.sampling import _collect_sampling_block_owned
-from ithrl.statistics import BinomialSample
+from ithrl.statistics import (
+    BinomialSample,
+    confirm_exact_change,
+    require_exact_numerics,
+    validate_exact_change_parameters,
+)
 from ithrl.workflow import PreparedExperiment
 
 if TYPE_CHECKING:
@@ -69,7 +72,7 @@ def _now() -> datetime:
 
 def _require_comparison_numerics() -> None:
     try:
-        require_fuzz_numerics()
+        require_exact_numerics()
     except ImportError:
         raise ImportError("sampled comparison requires the 'ithrl[compare]' extra") from None
 
@@ -254,9 +257,9 @@ def prepare_comparison(
     """Bind and pure-admit both exact contexts without allocating observations."""
 
     _require_comparison_numerics()
-    validate_change_parameters(
+    validate_exact_change_parameters(
         alpha=configuration.confirmation.alpha,
-        minimum_decrease=configuration.minimum_effect,
+        minimum_effect=configuration.minimum_effect,
     )
     if not isinstance(prepared.experiment, SampledExperimentDefinition):
         raise ValueError("comparison requires a sampled experiment")
@@ -386,6 +389,16 @@ def calibration_passes(block: SamplingBlockEvidence) -> bool | None:
     )
 
 
+def _incomplete_reason(block: SamplingBlockEvidence) -> str | None:
+    """Identify a terminal refusal that the frozen observation block proves."""
+
+    if block.eligibility_refusal is not None:
+        return block.eligibility_refusal
+    if not block.complete and block.next_schedule_position is None:
+        return "attempt-limit"
+    return None
+
+
 def confirm_comparison(
     block: SamplingBlockEvidence,
 ) -> tuple[ComparisonOutcome, float | None, float | None]:
@@ -407,19 +420,15 @@ def confirm_comparison(
         positive, negative = reference, candidate
         positive_target, negative_target = phase.original, phase.candidate
         confirmed = ComparisonOutcome.CONFIRMED_DEGRADATION
-    result = confirm_change(
+    result = confirm_exact_change(
         BinomialSample(positive.matches, positive.valid),
         BinomialSample(negative.matches, negative.valid),
-        required_original=positive_target.required_valid,
-        required_mutant=negative_target.required_valid,
+        required_positive=positive_target.required_valid,
+        required_negative=negative_target.required_valid,
         alpha=phase.alpha,
-        minimum_decrease=procedure.minimum_effect,
+        minimum_effect=procedure.minimum_effect,
     )
-    outcome = (
-        confirmed
-        if result.outcome is FuzzOutcome.CONFIRMED_CHANGE
-        else ComparisonOutcome.INCONCLUSIVE
-    )
+    outcome = confirmed if result.confirmed else ComparisonOutcome.INCONCLUSIVE
     return outcome, result.difference, result.lower_bound
 
 
@@ -510,12 +519,9 @@ def validate_comparison_progress(
         ):
             raise RunStateError("comparison calibration outcome differs from observations")
     elif progress.terminal is ComparisonOutcome.INCOMPLETE:
-        if (
-            not blocks
-            or blocks[-1].eligible
-            or progress.stop_reason != blocks[-1].eligibility_refusal
-        ):
-            raise RunStateError("terminal incompleteness requires its observed eligibility refusal")
+        reason = _incomplete_reason(blocks[-1]) if blocks else None
+        if reason is None or progress.stop_reason != reason:
+            raise RunStateError("terminal incompleteness requires its observed block refusal")
     else:
         if roles != ("calibration", "confirmation") or state.selection is None:
             raise RunStateError("comparison effect requires its fresh selected confirmation")
@@ -669,17 +675,22 @@ async def run_comparison(
                 if collected.stop_reason == "user-interrupt":
                     raise asyncio.CancelledError
                 continue
-            if state_file.load(store).pending is None and not collected.evidence.eligible:
+            reason = (
+                _incomplete_reason(collected.evidence)
+                if state_file.load(store).pending is None
+                else None
+            )
+            if reason is not None:
                 _finish(
                     state_file,
                     store,
                     progress,
                     ComparisonOutcome.INCOMPLETE,
-                    collected.evidence.eligibility_refusal or "ineligible-observation",
+                    reason,
                 )
             if collected.stop_reason == "user-interrupt":
                 raise asyncio.CancelledError
-            return _result(state_file, store, prepared, clock(), collected.stop_reason)
+            return _result(state_file, store, prepared, clock(), reason or collected.stop_reason)
 
 
 def _finish(

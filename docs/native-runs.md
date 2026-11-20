@@ -22,12 +22,12 @@ decision. You can also pass a saved session file:
 ithrl extract path/to/session.jsonl --output .ithrl/case
 ```
 
-For non-interactive use, pass the IDs reported by `extract`. This example selects a Codex session;
-use the appropriate harness name and IDs for another supported adapter:
+For non-interactive use, pass the IDs reported by `extract`. Replace `HARNESS` with `codex` or
+`copilot` and use the IDs from that adapter:
 
 ```bash
 ithrl extract \
-  --harness codex \
+  --harness HARNESS \
   --session SESSION_ID \
   --decision DECISION_ID \
   --target TARGET_ID \
@@ -66,10 +66,12 @@ You need:
   configuration and the observation store.
 
 By default, the model and provider come from captured evidence and supported local harness
-configuration. [Context comparison](comparison.md#prepare-native-execution) can declare a
+configuration. A [comparison](comparison.md#choose-a-prospective-codex-profile) can declare a
 prospective Codex execution profile; there is no general `--model` option. Returned actions are
 observed and denied; they never execute. Tool-side network access, hosted tools and MCP are
 disabled for the current runner profiles.
+
+### Codex tool-output limits
 
 For Codex history containing tool outputs, set `tool_output_token_limit` before any TOML tables
 in `$CODEX_HOME/config.toml`, or `~/.codex/config.toml` when `CODEX_HOME` is unset. For example:
@@ -116,16 +118,24 @@ Follow the [context-fuzzing guide](fuzzing.md), starting with its provider-free 
 
 [Run the bounded synthetic campaign](fuzzing.md#run-the-synthetic-native-campaign).
 
-## Context comparison
-
-Use the [comparison guide](comparison.md) to test two selected contexts from one case, with a fixed
-target, common execution profile, two-arm calibration and fresh confirmation.
-
 ## Compatibility and measurements
 
 Extraction validates record structure and recognized relationships. Codex rollouts are recognized
 by their initial `session_meta` record; they have no record-schema version field. Copilot's current
 adapter reads event schema `1`. Both adapters preserve unknown records without interpreting them.
+
+Local operation, permission, isolation and action-denial checks plus calibration determine whether
+a run can proceed. Public support also requires a qualified live workflow for that profile; see
+[supported inputs](https://github.com/eberkut/ithrl/blob/main/README.md#supported-inputs). Versions
+are recorded, not allowlisted. After a harness or configuration change, export a new receipt and
+prepare a new experiment; a changed digest blocks old pinned plans and incompatible saved runs.
+
+The [measurements](measurements.md) and
+[worked comparisons](research/comparative-debugging.md) record tested profiles, outcomes and costs.
+Other releases go through the same local compatibility checks. Request and wall-time limits are
+administrative ceilings; use those results to estimate usage for the recorded workloads.
+
+### Codex reconstruction
 
 Codex `compacted` rollout records are preserved as evidence. The Codex runner refuses decisions
 whose source prefix includes those records, even if a candidate removes the record. Removing a
@@ -145,17 +155,14 @@ The Codex final-response profile appends a fixed developer instruction declaring
 continuation: tools are unavailable, the response must use the restored context, and missing
 evidence must be stated. Captured developer instructions remain its prefix. The default
 reconstruction preserves captured history and the decision input. A
-[prospective Codex comparison profile](comparison.md#prepare-native-execution) can declare omission
+[prospective Codex profile](comparison.md#choose-a-prospective-codex-profile) can declare omission
 of historical reasoning records; source evidence remains unchanged. The runner fingerprint binds
 the continuation instruction and replay selection.
 
-Local operation, permission, isolation and action-denial checks plus calibration determine whether
-a run can proceed. Public support also requires a qualified live workflow for that profile; see
-[supported inputs](https://github.com/eberkut/ithrl/blob/main/README.md#supported-inputs). Versions
-are recorded, not allowlisted. After a harness or configuration change, export a new receipt and
-prepare a new experiment; a changed digest blocks old pinned plans and incompatible saved runs.
+### Copilot reconstruction
 
-The [measurements](measurements.md) and
-[worked comparisons](research/comparative-debugging.md) record tested profiles, outcomes and costs.
-Other releases go through the same local compatibility checks. Request and wall-time limits are
-administrative ceilings; use those results to estimate usage for the recorded workloads.
+Copilot restores the selected session prefix through its installed CLI and SDK. Final-response
+profiles support eligible prior-user text edits. The shell-action profile keeps the native `bash`
+request visible while denying execution; it supports whole-record removal, not text edits. The
+[compatibility checks](#compatibility-and-measurements) apply to the CLI, SDK and effective policy
+together; a working SDK import alone does not establish a usable native profile.

@@ -8,12 +8,13 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Literal, override
+from typing import Literal, cast, override
 
 import pytest
 
 from ithrl.behavior import FinalResponseTarget
 from ithrl.case import CaseEvidence
+from ithrl.cli.comparison_output import result_report
 from ithrl.comparison import engine as comparison_engine
 from ithrl.comparison.contracts import (
     ComparisonCalibration,
@@ -35,10 +36,11 @@ from ithrl.comparison.results import (
     write_comparison_result,
 )
 from ithrl.context import content_digest
-from ithrl.execution import ResourceLimits
+from ithrl.execution import CapabilityProfile, ResourceLimits, SafetyPolicy
 from ithrl.execution.budget import sampling_attempt_cost
 from ithrl.experiment import (
     FakeRunnerConfig,
+    NativeRunnerConfig,
     SampledCalibrationPhase,
     SampledExperimentDefinition,
     SamplingArmTarget,
@@ -47,7 +49,15 @@ from ithrl.experiment import (
 from ithrl.mutation import ContextSelection, MutationError, TextAppend, TextMutation
 from ithrl.observations import ObservationStore, SamplingBlockEvidence, SamplingBudgetAllowance
 from ithrl.run_state import RunStateError, SampledRunStateFile, SamplingBudgetApproval
-from ithrl.runner import Candidate, PreparedAttempt, RunnerRegistry, RunResult
+from ithrl.runner import (
+    Candidate,
+    NativeOutputReference,
+    PreparedAttempt,
+    ProviderAcceptanceState,
+    RunAccounting,
+    RunnerRegistry,
+    RunResult,
+)
 from ithrl.runner.contracts import RunnerError, RunnerErrorCode
 from ithrl.runner.fake import FakeRunner
 from ithrl.synthetic import extract_inference
@@ -88,6 +98,73 @@ class CountingRunner(FakeRunner):
             result.model_copy(update={"final_text": "BLUE"})
             if self.lose_effect and attempt.phase == "confirmation"
             else result
+        )
+
+
+class OverloadRunner(CountingRunner):
+    """Simulate accounted provider observations without native or network execution."""
+
+    def __init__(self, phase: str, harness: Literal["codex", "copilot"]) -> None:
+        super().__init__()
+        self.harness = harness
+        self.overload_phase = phase
+        self.overloaded = False
+
+    @property
+    @override
+    def capability_profile(self) -> CapabilityProfile:
+        return CapabilityProfile.model_validate(
+            {
+                **super().capability_profile.model_dump(),
+                "runner_type": self.harness,
+                "deterministic": False,
+                "provider_transport": "required",
+                "provider_calls_per_attempt": 1,
+                "provider": "fixture-provider",
+                "endpoint": "https://example.invalid/responses",
+                "protected_state_enforcement": "preventive",
+            }
+        )
+
+    @override
+    async def run(
+        self, attempt: PreparedAttempt, *, runtime_deadline: float | None = None
+    ) -> RunResult:
+        if attempt.phase == self.overload_phase and not self.overloaded:
+            self.overloaded = True
+            self.attempts.append(attempt)
+            raise RunnerError(
+                RunnerErrorCode.PROVIDER_OVERLOADED,
+                "Fixture overload.",
+                provider_acceptance_state=ProviderAcceptanceState.UNKNOWN,
+                model_requested=attempt.execution_plan.model_requested,
+                provider=self.capability_profile.provider,
+                endpoint=self.capability_profile.endpoint,
+                effective_policy_digest=attempt.safety_policy.digest,
+                behavior_output_observed=False,
+                native_output=NativeOutputReference(
+                    artifact_id="fixture-overload",
+                    sha256="a" * 64,
+                    media_type="application/json",
+                    size_bytes=100,
+                ),
+                accounting=RunAccounting(
+                    provider_calls_started=1,
+                    native_output_bytes=100,
+                    process_outcome="exited",
+                    cleanup_outcome="verified",
+                ),
+            )
+        result = await super().run(attempt, runtime_deadline=runtime_deadline)
+        return result.model_copy(
+            update={
+                "provider": self.capability_profile.provider,
+                "endpoint": self.capability_profile.endpoint,
+                "accounting": RunAccounting(
+                    provider_calls_started=1,
+                    provider_calls_completed=1,
+                ),
+            }
         )
 
 
@@ -133,22 +210,37 @@ def _fixture(
     wall_seconds: int = 1000,
     freshness_seconds: int = 600,
     pacing_seconds: int = 0,
+    runner: CountingRunner | None = None,
 ) -> ComparisonFixture:
     evidence = extract_inference(
         FIXTURE, inference_call_id="synthetic-ac-001", case_path=tmp_path / "case"
     ).load()
-    runner = CountingRunner()
+    runner = runner or CountingRunner()
+    profile = runner.capability_profile
+    provider_calls = profile.provider_calls_per_attempt
     experiment = SampledExperimentDefinition(
         target=FinalResponseTarget(text_equals="BLUE"),
         oracle=StructuralOracleConfig(),
-        runner=FakeRunnerConfig(required_markers=("A", "C"), final_text="BLUE"),
+        runner=NativeRunnerConfig(
+            type=cast(Literal["codex", "copilot"], profile.runner_type),
+            required_capability_digest=profile.digest,
+        )
+        if provider_calls
+        else FakeRunnerConfig(required_markers=("A", "C"), final_text="BLUE"),
         calibration=SampledCalibrationPhase(required_valid=1, minimum_matches=1, max_attempts=1),
     )
     prepared = prepare_experiment(
         evidence,
         experiment=experiment,
-        registry=RunnerRegistry({"fake": lambda _config, _evidence: runner}),
-        resource_limits=ResourceLimits(max_provider_calls=0, max_wall_time_seconds=1),
+        registry=RunnerRegistry({profile.runner_type: lambda _config, _evidence: runner}),
+        safety_policy=SafetyPolicy(
+            provider_transport="allowed",
+            allowed_provider=profile.provider,
+            allowed_endpoint=profile.endpoint,
+        )
+        if provider_calls
+        else None,
+        resource_limits=ResourceLimits(max_provider_calls=provider_calls, max_wall_time_seconds=1),
     )
     nodes = {node.path: node.id for node in evidence.context.nodes}
     absent = (nodes["/input/0"],) + ((nodes["/input/1"],) if both_nonfull else ())
@@ -184,10 +276,12 @@ def _fixture(
         confirmation=ComparisonConfirmation(reference=seven, candidate=seven, alpha=0.05),
         minimum_effect=0.1,
         seed=7,
-        eligibility_policy="independent-safe-preaccept-only",
+        eligibility_policy="safe-provider-overload"
+        if provider_calls
+        else "independent-safe-preaccept-only",
         freshness_seconds=freshness_seconds,
         limits=ComparisonLimits(
-            max_provider_calls=0,
+            max_provider_calls=100 * provider_calls,
             max_wall_time_seconds=wall_seconds,
             attempt_timeout_seconds=1,
             inter_attempt_delay_seconds=pacing_seconds,
@@ -208,14 +302,14 @@ def _fixture(
         started_at=started,
         original_identity=prepared.identity,
         original_candidate_digest=binding.reference.digest,
-        provider_calls_per_attempt=0,
+        provider_calls_per_attempt=provider_calls,
         comparison_progress=ComparisonProgress(binding=binding),
         approval=SamplingBudgetApproval(
             approval_id="provider-free-test",
             approved_at=started,
             allowance=SamplingBudgetAllowance(
                 run_id="direct-comparison",
-                max_provider_calls=0,
+                max_provider_calls=100 * provider_calls,
                 max_wall_time_seconds=wall_seconds,
                 max_candidate_comparisons=1,
                 confirmation_provider_calls=bounds.confirmation_provider_calls,
@@ -631,3 +725,69 @@ def test_historical_inspection_survives_implementation_change_but_resume_refuses
     with pytest.raises(RunStateError, match="frozen source and purpose"):
         fixture.run()
     assert len(fixture.runner.attempts) == 16
+
+
+@pytest.mark.parametrize("phase", ["calibration", "confirmation"])
+@pytest.mark.parametrize("harness", ["codex", "copilot"])
+def test_exhausted_eligible_comparison_is_terminal_and_never_redispatched(
+    tmp_path: Path, phase: str, harness: Literal["codex", "copilot"]
+) -> None:
+    runner = OverloadRunner(phase, harness)
+    fixture = _fixture(tmp_path, runner=runner)
+    result = fixture.run()
+    assert result.outcome is ComparisonOutcome.INCOMPLETE
+    assert result.stop_reason == "attempt-limit"
+    progress = result.state.comparison_progress
+    assert progress is not None
+    assert progress.terminal is ComparisonOutcome.INCOMPLETE
+    block = result.blocks[-1]
+    assert block.plan.role == phase
+    assert block.eligible
+    assert not block.complete
+    assert block.next_schedule_position is None
+    assert sum(a.observation.safe_provider_overload for a in block.attempts) == 1
+    assert result.usage.actual_provider_calls == len(runner.attempts)
+    assert result.usage.pending_provider_calls == 0
+    assert result.usage.unknown_token_attempts >= 1
+    report = result_report(result)
+    assert report.next_command is None
+    assert report.next_action is not None
+    assert "new" in report.next_action.lower()
+    count = len(runner.attempts)
+    resumed = fixture.run()
+    assert resumed.outcome is ComparisonOutcome.INCOMPLETE
+    assert resumed.stop_reason == "attempt-limit"
+    assert resumed.blocks == result.blocks
+    assert len(runner.attempts) == count
+    path = tmp_path / "evidence" / "comparison.json"
+    write_comparison_result(path, result)
+    assert load_comparison_result(path, fixture.evidence) == result
+    # Terminal exhaustion is invalid if a frozen slot remains available.
+    payload = result.model_dump(mode="json")
+    payload["blocks"][-1]["attempts"].pop()
+    payload["state"]["blocks"][-1]["observations"].pop()
+    with pytest.raises(ValueError, match="terminal incompleteness"):
+        ComparisonEvidence.model_validate_json(json.dumps(payload))
+
+
+def test_exhaustion_wins_when_freshness_expires_after_the_final_attempt(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path, runner=OverloadRunner("calibration", "copilot"))
+    expired = False
+
+    def progress(block: SamplingBlockEvidence) -> None:
+        nonlocal expired
+        if block.attempts and not block.complete and block.next_schedule_position is None:
+            expired = True
+
+    def clock() -> datetime:
+        now = datetime.now(UTC)
+        return now + timedelta(hours=1) if expired else now
+
+    result = fixture.run(clock=clock, on_progress=progress)
+    assert result.outcome is ComparisonOutcome.INCOMPLETE
+    assert result.stop_reason == "attempt-limit"
+    assert result.state.comparison_progress is not None
+    assert result.state.comparison_progress.stop_reason == "attempt-limit"
+    count = len(fixture.runner.attempts)
+    assert fixture.run().blocks == result.blocks
+    assert len(fixture.runner.attempts) == count

@@ -18,7 +18,7 @@ pytest.importorskip("scipy")
 @pytest.mark.parametrize(
     ("changes", "message"),
     [
-        ({"minimum_decrease": -0.1}, "minimum decrease must be within"),
+        ({"minimum_decrease": -0.1}, "minimum effect must be within"),
         ({"minimum_decrease": float("nan")}, "finite number"),
         ({"alpha": True}, "finite number"),
         ({"required_original": 0}, "positive fixed valid-sample targets"),

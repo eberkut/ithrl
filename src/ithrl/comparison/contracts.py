@@ -213,7 +213,7 @@ def comparison_implementation_digest() -> str:
         **{name: package / name for name in ("contracts.py", "engine.py", "results.py")},
         **{
             name: shared / name
-            for name in ("sampling.py", "observations.py", "run_state.py", "fuzz/statistics.py")
+            for name in ("sampling.py", "observations.py", "run_state.py", "statistics.py")
         },
     }
     return content_digest(

@@ -202,7 +202,9 @@ def result_report(result: ComparisonEvidence) -> ComparisonOutput:
         ),
         usage=result.usage,
         stop_reason=result.stop_reason,
-        next_action="Inspect the complete tested intervention and its fixed-profile conclusion; this is not historical causal attribution.",
+        next_action="The frozen attempt schedule is exhausted. Report the incomplete evidence; a revised plan requires a new run."
+        if result.stop_reason == "attempt-limit"
+        else "Inspect the tested context change, counts and effect under the recorded execution profile.",
     )
 
 

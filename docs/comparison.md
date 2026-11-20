@@ -6,9 +6,8 @@ reduces that behavior. Install `ithrl[compare]` for statistical inference.
 
 Both contexts keep the same triggering input, target, grader, model, reconstruction, policy and
 attempt limits. A second historical capture can suggest an intervention; it cannot serve as the
-other execution source. The command does not search for components or establish an interaction
-between them. The [worked investigations](research/comparative-debugging.md) record qualified
-profiles, costs and interpretation.
+other execution source. The [worked investigations](research/comparative-debugging.md) record
+qualified profiles, costs and interpretation.
 
 ## Try without a provider
 
@@ -103,8 +102,54 @@ Each selection lists `removed_context_ids`, with dependency closure applied, and
 source-bound `mutation`. An empty selection means the full original. Selections use the same
 [text edit contracts](architecture.md#source-bound-text-sections) as reduction and fuzzing;
 unsupported edits and removal of the triggering input are refused before sampling. A selection
-may restore a bundle of records removed by an earlier reduction. The result describes that whole
-bundle's effect, without attributing it to one record.
+may restore a bundle of records removed by an earlier reduction.
+
+### Select records and text
+
+Use the `id` values in the case's private `context.jsonl` edit graph for whole-record removals.
+The graph records dependencies and protected units; do not use native session IDs as selectors.
+For a previous reduction, `retained-context.jsonl` identifies its surviving units, and
+`ithrl inspect retained CASE --result RESULT --format json` relates the retained partition to the
+original graph. Copy the chosen removals into `[reference]` and `[candidate]`; restoring a record
+means omitting its ID from that selection's removals. Keep the source case unchanged.
+
+List eligible text fields and their source-bound selectors without a model call:
+
+```bash
+ithrl inspect sections CASE --format json
+```
+
+For paragraph removal, copy `context_id`, `content_index`, `original_text_digest` and
+`policy_digest` from one `fields` entry, then choose its `sections[].id` values in source order.
+Replace the uppercase placeholders below with those values:
+
+```toml
+[[candidate.mutation.edits]]
+operation = "remove-text-sections"
+context_id = "CONTEXT_ID"
+content_index = 0
+original_text_digest = "ORIGINAL_TEXT_DIGEST"
+policy_digest = "POLICY_DIGEST"
+section_ids = ["SECTION_ID"]
+```
+
+To append literal text instead, use this edit shape with an eligible prior-user field's selectors:
+
+```toml
+[[candidate.mutation.edits]]
+operation = "append-text"
+context_id = "CONTEXT_ID"
+content_index = 0
+original_text_digest = "ORIGINAL_TEXT_DIGEST"
+text = "Additional context."
+```
+
+Use the field's reported `content_index`, which need not be zero. Each context permits at most one
+text-field edit. Appends require an otherwise unchanged context; section removals may accompany
+record removals when the edited field survives. Native admission checks support for the selected
+target and edit before sampling.
+
+### Choose direction and samples
 
 Set `objective` according to the question:
 
@@ -119,38 +164,26 @@ gate ends with `calibration-failed`, without confirmation. Calibration checks th
 its observations receive no credit toward confirmation.
 
 After calibration, the command durably selects the pair and collects one fresh, randomized
-confirmation block. A confirmed effect requires its one-sided lower bound to exceed
-`minimum_effect` at the declared `alpha`. `inconclusive` means that criterion was not met;
-`incomplete` means the required eligible evidence was not obtained. Runner errors do not count as
-behavioral losses. Actual, possible and pending provider calls remain separate.
+confirmation block. A confirmed effect requires its one-sided lower bound to exceed `minimum_effect`
+at the declared `alpha`. See [comparison results](results.md#inspect-a-context-comparison) for
+outcomes, statistical assumptions and accounting.
 
 ## Prepare native execution
 
 Use the [native prerequisites](native-runs.md#native-prerequisites). Execution uses the captured
-model and provider unless the comparison declares a prospective Codex profile. Keep the
-observation store and profile outside the case and original workspace.
-The native runner preserves source evidence, protects the original workspace and denies execution
-of returned actions. The [supported-inputs table](https://github.com/eberkut/ithrl#supported-inputs)
-owns public capability claims; structural detection alone does not establish experimental support.
+model and provider unless you select the
+[optional Codex profile](#choose-a-prospective-codex-profile). Keep the observation store and
+profile outside the case and original workspace. The native runner preserves source evidence,
+protects the original workspace and denies execution of returned actions. The
+[supported-inputs table](https://github.com/eberkut/ithrl#supported-inputs) owns public capability
+claims; structural detection alone does not establish experimental support.
 
-To compare the contexts under a different Codex model or provider, add an explicit binding to
-`comparison.toml`:
-
-```toml
-[codex_replay]
-provider = "openai"
-model = "MODEL"
-reasoning = "omit"
-```
-
-Replace `MODEL` with a model available through the selected provider.
-
-Both arms use that execution profile. The saved source retains its historical model, provider and
-reasoning records. Reconstruction omits all historical reasoning records, including their summaries,
-from both model inputs; the report declares this projection as `reasoning_omitted`. This tests the
-effect of the selected contexts under the declared profile. It does not reproduce the historical
-reasoning state. The fixed decision input remains unchanged, and local configuration must provide
-authentication for the selected provider. Changing the profile requires fresh observations.
+Before detection, replace the demonstration's synthetic selectors and `[limits]` settings. Choose
+an `attempt_timeout_seconds` suitable for the native continuation, a nonzero `max_provider_calls`
+and a `max_wall_time_seconds` that can admit both calibration and confirmation. Each arm's
+`max_attempts` includes any permitted replacement attempts. The dry-run report calculates the
+complete request and wall-time ceilings from these counts and the detected per-attempt cap,
+cancellation grace and pacing; do not size a full comparison from calibration alone.
 
 In the commands below, `CASE` is the case directory, `ORIGINAL` the original workspace, `STORE`
 the private observation database and `PROFILE` the saved profile file. Omit
@@ -170,7 +203,9 @@ the private observation database and `PROFILE` the saved profile file. Omit
       --original-workspace ORIGINAL --observation-store STORE --dry-run
     ```
 
-    Check both contexts, objective, provider, model, action denial and request/time limits.
+    Check both contexts, objective, provider, model, action denial and request/time limits. If the
+    report refuses the budget or freshness window, revise the configuration and repeat detection
+    with a new profile before execution. Configuration changes invalidate the saved profile.
 
 3. Execute the reviewed plan within your authorization:
 
@@ -187,6 +222,23 @@ capacity. Its displayed ceilings are conservative bounds, not token or monetary 
 The four arms may schedule at most 1,000 attempts in total. Large context bindings can require a
 smaller plan to fit the private result snapshot; preparation reports `comparison-evidence-capacity`
 before collecting observations.
+
+### Choose a prospective Codex profile
+
+To test the contexts under a different Codex model or provider, add this table before detection.
+Replace `MODEL` with a model available through the selected provider's local authentication:
+
+```toml
+[codex_replay]
+provider = "openai"
+model = "MODEL"
+reasoning = "omit"
+```
+
+Both arms use the declared profile. Reconstruction omits historical reasoning records, including
+summaries, from both inputs and reports `reasoning_omitted`; the source evidence and fixed trigger
+remain unchanged. The comparison tests that profile, without reproducing historical reasoning
+state. Changing the profile requires a new configuration, detection and fresh observations.
 
 ### Stop after calibration
 
@@ -211,29 +263,14 @@ Review calibration before continuing. If confirmation is authorized, resume with
 Calibration observations supply no confirmation credit, and calibration-only mode is refused
 after confirmation has been selected.
 
-## Inspect or resume
+## Results and resume
 
 Normal output contains identities, edit metadata, counts, bounds and accounting, without source
 text or model responses. `--format json` writes one JSON report to stdout; plan and progress go to
 stderr. Save the reported `result_path` and `run_state_path`.
 
-The inspected plan shows both context digests, removed IDs, edit metadata, each arm's valid-sample
-target and attempt ceiling, calibration thresholds and time limits. `harness_started` describes
-the current invocation: offline inspection and completed-run resume do not start a harness.
-
-Inspect a private result snapshot offline:
-
-```bash
-ithrl inspect comparison RESULT --format json
-ithrl inspect comparison RESULT --case CASE --format json
-```
-
-The snapshot includes both source-bound selections, execution declarations and observations.
-Offline reports show the recorded requested model and provider when their known values agree.
-Absent, conflicting or unsafe identifiers remain undisclosed; the case's historical model does not
-substitute for the execution model. Inspection needs neither the observation database nor a native
-runtime. Supplying `--case` additionally re-derives both context selections from that immutable
-source. Neither form verifies the current native environment.
+Use [comparison inspection](results.md#inspect-a-context-comparison) to read a private snapshot,
+interpret its outcome or validate its source selections without a native runtime.
 
 Resume only the canonical run directory:
 

@@ -26,9 +26,10 @@ Passive compaction inspection reads recorded operations and results without mode
     one saved session.
 - **Compare selected contexts:** [declare a repair or degradation comparison](comparison.md),
     calibrate both contexts and confirm their effect with fresh observations.
-- **Investigate a result:** [inspect retained context](results.md#inspect-retained-context) and
-  read the [worked investigation](research/ordinary-session-investigation.md) for an example of
-  what the reduced context can tell you.
+- **Investigate a result:** use [Results and privacy](results.md) for the workflow's saved files,
+    inspection commands and outcome interpretation. The
+    [worked reduction](research/ordinary-session-investigation.md) shows what retained context can
+    tell you.
 
 ## Reference and background
 

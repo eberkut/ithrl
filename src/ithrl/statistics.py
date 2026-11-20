@@ -3,7 +3,9 @@
 The uncorrected Wilson hybrid-score interval is Newcombe method 10. ``confidence``
 is the nominal coefficient of each one-sided approximate bound: its normal quantile
 is ``Phi^-1(confidence)``, so the central interval has coefficient ``2*confidence-1``.
-This module assesses neither observation eligibility nor campaign-wide error control.
+Exact directed change confirmation uses binomial bounds with tail error alpha/2 per
+arm. This module assesses neither observation eligibility nor campaign-wide error
+control.
 """
 
 from __future__ import annotations
@@ -26,6 +28,85 @@ class BinomialSample:
         _validate_count(self.matches, "matches", positive=False)
         if self.matches > self.valid:
             raise ValueError("matches must not exceed valid observations")
+
+
+@dataclass(frozen=True, slots=True)
+class ExactChangeConfirmation:
+    """One directed fixed-sample effect; ``confirmed=None`` means incomplete samples."""
+
+    confirmed: bool | None
+    difference: float | None
+    lower_bound: float | None
+    positive_lower_bound: float | None
+    negative_upper_bound: float | None
+
+
+def require_exact_numerics() -> None:
+    """Require the optional exact-binomial dependency without choosing a workflow extra."""
+
+    try:
+        from scipy.special import betaincinv  # noqa: F401
+    except ImportError as error:
+        raise ImportError("exact-binomial inference requires scipy") from error
+
+
+def validate_exact_change_parameters(*, alpha: float, minimum_effect: float) -> None:
+    for value, name in ((alpha, "alpha"), (minimum_effect, "minimum effect")):
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not isfinite(value):
+            raise ValueError(f"{name} must be a finite number")
+    if not 0 < alpha < 1 or alpha / 2 == 0 or 1 - alpha / 2 == 1:
+        raise ValueError("alpha requires representable one-sided tail probabilities")
+    if not 0 <= minimum_effect < 1:
+        raise ValueError("minimum effect must be within [0, 1)")
+
+
+def confirm_exact_change(
+    positive: BinomialSample,
+    negative: BinomialSample,
+    *,
+    required_positive: int,
+    required_negative: int,
+    alpha: float,
+    minimum_effect: float,
+) -> ExactChangeConfirmation:
+    """Confirm positive minus negative using exact bounds with tail error alpha/2.
+
+    Callers own arm direction, eligibility, freshness and the workflow verdict. Only
+    complete fixed samples can establish an effect; operational errors are excluded.
+    """
+
+    validate_exact_change_parameters(alpha=alpha, minimum_effect=minimum_effect)
+    require_exact_numerics()
+    for sample, required in ((positive, required_positive), (negative, required_negative)):
+        if type(required) is not int or required < 1:
+            raise ValueError("confirmation requires positive fixed valid-sample targets")
+        if sample.valid > required:
+            raise ValueError("confirmation samples exceed their frozen target")
+    if positive.valid != required_positive or negative.valid != required_negative:
+        return ExactChangeConfirmation(None, None, None, None, None)
+    from scipy.special import betaincinv
+
+    gamma = alpha / 2
+    lower = (
+        0.0
+        if positive.matches == 0
+        else float(betaincinv(positive.matches, positive.valid - positive.matches + 1, gamma))
+    )
+    upper = (
+        1.0
+        if negative.matches == negative.valid
+        else float(betaincinv(negative.matches + 1, negative.valid - negative.matches, 1 - gamma))
+    )
+    if not (isfinite(lower) and isfinite(upper) and 0 <= lower <= 1 and 0 <= upper <= 1):
+        raise ValueError("exact-binomial computation returned invalid probability bounds")
+    bound = lower - upper
+    return ExactChangeConfirmation(
+        bound > minimum_effect,
+        positive.matches / positive.valid - negative.matches / negative.valid,
+        bound,
+        lower,
+        upper,
+    )
 
 
 @dataclass(frozen=True)

@@ -864,4 +864,5 @@ def test_pilot_recovery_command_cannot_start_confirmation(
     retained = load_comparison_result(Path(recovery_report["result_path"]))
     assert retained.confirmation is None
     assert retained.state.selection is None
-    assert "separate approval" in recovery_report["next_action"]
+    assert "authorized" in recovery_report["next_action"]
+    assert "separate approval" not in recovery_report["next_action"]

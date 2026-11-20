@@ -23,33 +23,6 @@ Other files record the experiment, execution plan and provenance. Native reconst
 no `request.json`; use the retained-context records and recorded reconstruction method. Leave
 internal JSON and SQLite state unchanged so validation and resume can verify it.
 
-## Inspect a context comparison
-
-Read a saved comparison without a harness, profile, original workspace or observation store:
-
-```bash
-ithrl inspect comparison RESULT --format json
-ithrl inspect comparison RESULT --case CASE --format json
-```
-
-Both forms validate the snapshot's identities, phase chronology and observation references.
-Adding `--case` re-derives its source partitions and text edits, with `source_validation` set to
-`verified`; otherwise that field is `not-requested`. The snapshot and case remain private. Default
-output contains edit metadata and accounting without session text or model responses.
-
-The reference and candidate are two explicit contexts from one immutable source, rather than two
-independent historical captures. For repair, the effect is candidate minus reference match rate;
-for degradation, reference minus candidate. `confirmed-improvement` and `confirmed-degradation`
-mean the fresh directional lower bound exceeds the declared minimum effect. `inconclusive` means
-complete confirmation did not meet that criterion. `calibration-failed` ends before confirmation;
-`incomplete` means required eligible evidence was not obtained.
-
-Calibration observations are reported separately and receive no confirmation credit. Operational
-errors are not behavioral nonmatches. Counts and usage include unsuccessful work; actual, possible
-and pending provider calls remain distinct. The result concerns the complete intervention, without
-establishing component necessity, minimality, an interaction or a unique historical cause.
-See the [comparison guide](comparison.md) for configuration, limits and continuation.
-
 ## Inspect recorded compaction
 
 `reacquire` compares recorded operations and captured results around compaction in one saved Codex
@@ -303,9 +276,43 @@ If result saving fails, `result-publication-failed` retains the known usage and 
 path and exits with code 70. Resolve the storage problem, then resume from `run_state_path` to
 save a new receipt. Completed observations and confirmation are retained.
 
+## Inspect a context comparison
+
+Read a saved comparison without a harness, profile, original workspace or observation store:
+
+```bash
+ithrl inspect comparison RESULT --format json
+ithrl inspect comparison RESULT --case CASE --format json
+```
+
+Both forms validate the snapshot's identities, phase chronology and observation references. Adding
+`--case` re-derives its source partitions and text edits, with `source_validation` set to
+`verified`; otherwise that field is `not-requested`. The snapshot and case remain private. Default
+output contains edit metadata and accounting without session text or model responses.
+
+The report includes both context digests, removed IDs, text-edit metadata, sampling counts and
+execution declarations. Recorded requested model and provider appear when their known values agree;
+absent, conflicting or unsafe identifiers are omitted. Neither source validation nor the recorded
+identities verify the current native environment. `harness_started` describes the current
+invocation; offline inspection and completed-run resume do not start a harness.
+
+The reference and candidate are two explicit contexts from one immutable source, rather than two
+independent historical captures. For repair, the effect is candidate minus reference match rate;
+for degradation, reference minus candidate. `confirmed-improvement` and `confirmed-degradation`
+mean the fresh directional lower bound exceeds the declared minimum effect. `inconclusive` means
+complete confirmation did not meet that criterion. `calibration-failed` ends before confirmation;
+`incomplete` means required eligible evidence was not obtained.
+
+Calibration observations are reported separately and receive no confirmation credit. Operational
+errors are not behavioral nonmatches. Counts and usage include unsuccessful work; actual, possible
+and pending provider calls remain distinct. Inference assumes independent, stationary valid outcomes
+under the prespecified eligibility policy. The result concerns the complete intervention, without
+establishing component necessity, minimality, an interaction or a unique historical cause.
+See the [comparison guide](comparison.md) for configuration, limits and continuation.
+
 ## Budgets and resume
 
-The summary reports calibration, search, confirmation, eligibility, reliability and usage. Actual
+Reports separate phase outcomes, eligibility, reliability and usage. Actual
 calls are known starts; additional possible calls are usage the runner cannot exclude. Completed
 attempts are charged known calls; failures with started provider work retain the full per-attempt
 allowance. Pending reservations stay charged until reconciliation. Resume reconciles observations
@@ -329,14 +336,15 @@ different cap for a new run.
 
 After a budget stop, use the printed continuation command with the saved result or active run.
 Sampled resume preserves the experiment and completed work. Supported administrative limits may
-increase for `shrink`; fuzz keeps its original limits. Neither repeats completed confirmation or
-unresolved dispatches.
+increase for `shrink`; fuzzing and comparison keep their original limits. No workflow repeats
+completed confirmation or unresolved dispatches.
 
 For sampled `shrink`, `--resume` requires the saved run or result directory. Starting from the case
 without it creates a new run and budget; reusing the observation database alone does not resume.
 
-`--inter-attempt-delay SECONDS` defaults to zero, persists across sampled resume and consumes the
-overall wall-time allowance. A run also stops when its evidence becomes stale or its safety
+For sampled `shrink`, `--inter-attempt-delay SECONDS` defaults to zero, persists across resume and
+consumes the overall wall-time allowance. Fuzzing and comparison set this delay in their
+configuration. A run also stops when its evidence becomes stale or its safety
 requirements cannot be verified. Retain the failed evidence; a fresh invocation is a separate run.
 
 ## Estimate token costs

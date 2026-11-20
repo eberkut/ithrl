@@ -446,7 +446,7 @@ def execute_comparison(
             report = report.model_copy(
                 update={
                     "status": "interrupted" if interrupted else report.status,
-                    "next_action": "Calibration passed; confirmation has not started. The displayed confirmation command requires separate approval and retains the original allowance."
+                    "next_action": "Calibration passed; confirmation has not started. If confirmation is authorized, use the displayed command within the original allowance."
                     if calibration_passed
                     else "Inspect saved accounting and resume only the same frozen comparison. Unresolved dispatches are never replayed.",
                     "next_command": command,
