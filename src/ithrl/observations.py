@@ -24,6 +24,7 @@ from ithrl.execution import MAX_PROVIDER_CALLS_PER_ATTEMPT
 from ithrl.experiment import (
     MAX_SAMPLING_ATTEMPTS,
     SampledChangePlan,
+    SampledComparisonPlan,
     SampledReductionPlan,
     SamplingArmTarget,
     SamplingEligibilityPolicy,
@@ -236,7 +237,7 @@ class AttemptCounts(BaseModel):
 
 
 type SamplingArm = Literal["baseline", "candidate"]
-type SamplingRole = Literal["search", "discovery", "simplification", "confirmation"]
+type SamplingRole = Literal["calibration", "search", "discovery", "simplification", "confirmation"]
 type _Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 
 
@@ -247,7 +248,8 @@ class _SamplingContract(BaseModel):
 class SamplingBlockPlan(_SamplingContract):
     """One frozen strict two-arm block, independent of administrative run allowances.
 
-    The original candidate identity must come from the protected full-context materialization.
+    Reduction and fuzz originals come from the protected full-context materialization.
+    Explicit comparisons bind their two declared source-derived contexts instead.
     Execution identities remain arm-specific; a budget extension cannot change this plan.
     The recorded order includes replacement slots, which are skipped once an arm is complete.
     """
@@ -284,17 +286,27 @@ class SamplingBlockPlan(_SamplingContract):
     @model_validator(mode="after")
     def validate_block(self) -> SamplingBlockPlan:
         change = isinstance(self.procedure, SampledChangePlan)
-        if self.provider_calls_per_attempt == 0 and not change:
+        comparison = isinstance(self.procedure, SampledComparisonPlan)
+        if self.provider_calls_per_attempt == 0 and not (change or comparison):
             raise ValueError("zero-call collection is restricted to credential-free fuzz workflows")
-        if (change and self.role == "search") or (
-            not change and self.role in {"discovery", "simplification"}
-        ):
+        allowed_roles = (
+            {"calibration", "confirmation"}
+            if comparison
+            else {"discovery", "simplification", "confirmation"}
+            if change
+            else {"search", "confirmation"}
+        )
+        if self.role not in allowed_roles:
             raise ValueError("sampling role does not belong to the frozen procedure")
         if isinstance(self.procedure, SampledChangePlan) and (
             self.original_identity.algorithm_digest != self.procedure.campaign_digest
         ):
             raise ValueError("change observations must bind the complete campaign policy")
-        if change and self.role == "confirmation":
+        if isinstance(self.procedure, SampledComparisonPlan) and (
+            self.original_identity.algorithm_digest != self.procedure.comparison_digest
+        ):
+            raise ValueError("comparison observations must bind the complete comparison policy")
+        if (change or comparison) and self.role == "confirmation":
             if self.selected_at is None or self.selected_at.tzinfo is None:
                 raise ValueError("change confirmation requires a frozen selection time")
             if self.frozen_at <= self.selected_at:
@@ -314,9 +326,12 @@ class SamplingBlockPlan(_SamplingContract):
         return self
 
     def targets_for(self, arm: SamplingArm) -> SamplingArmTarget:
-        phase = (
-            self.procedure.confirmation if self.role == "confirmation" else self.procedure.search
-        )
+        if self.role == "confirmation":
+            phase = self.procedure.confirmation
+        elif isinstance(self.procedure, SampledComparisonPlan):
+            phase = self.procedure.calibration
+        else:
+            phase = self.procedure.search
         return phase.original if arm == "baseline" else phase.candidate
 
     @property
@@ -685,6 +700,8 @@ class ObservationStore:
             ) from error
         if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
             raise ObservationStoreError(f"observation database must be a regular file: {self.path}")
+        if metadata.st_nlink != 1:
+            raise ObservationStoreError("observation database must have exactly one link")
         _restrict_permissions(self.path, 0o600)
         try:
             with self._connection() as connection:

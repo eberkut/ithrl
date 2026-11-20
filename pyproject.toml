@@ -46,6 +46,9 @@ Changelog = "https://github.com/eberkut/ithrl/releases"
 ithrl = "ithrl.cli:app"
 
 [project.optional-dependencies]
+compare = [
+    "scipy>=1.18",
+]
 fuzz = [
     "scipy>=1.18",
 ]
@@ -122,6 +125,7 @@ include = [
   "/docs/agent-skill.md",
   "/docs/reduction.md",
   "/docs/fuzzing.md",
+  "/docs/comparison.md",
   "/docs/results.md",
   "/docs/index.md",
   "/docs/cli.md",

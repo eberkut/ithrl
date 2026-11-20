@@ -13,8 +13,13 @@ from ithrl.execution.budget import (
     SamplingAttemptCost,
     sampling_attempt_cost,
     sampling_budget_refusal,
+    sampling_freshness_refusal,
 )
-from ithrl.experiment import SampledChangePlan, SampledExperimentDefinition
+from ithrl.experiment import (
+    SampledChangePlan,
+    SampledComparisonPlan,
+    SampledExperimentDefinition,
+)
 from ithrl.measurement import RunnerExecutionError, observe_once
 from ithrl.mutation import MutationError, TextMutation
 from ithrl.observations import (
@@ -57,6 +62,10 @@ def _now() -> datetime:
 
 
 def _validate_sampling_mutation(mutation: TextMutation | None, plan: SamplingBlockPlan) -> None:
+    if isinstance(plan.procedure, SampledComparisonPlan):
+        if mutation is not None:
+            raise MutationError("comparison mutations belong to the frozen context selections")
+        return
     if mutation is None:
         return
     mutation = TextMutation.model_validate(mutation.model_dump())
@@ -165,10 +174,27 @@ async def _collect_sampling_block_owned(
 
     _validate_sampling_mutation(mutation, plan)
     state_file._require_lock(store)
-    originals = prepare_candidate(evidence, original.execution_plan)
-    selected = prepare_candidate(
-        evidence, candidate.execution_plan, removed_context_ids, mutation=mutation
-    )
+    if isinstance(plan.procedure, SampledComparisonPlan):
+        if removed_context_ids:
+            raise ValueError("comparison removals belong to the frozen context selections")
+        reference_context, candidate_context = plan.procedure.reference, plan.procedure.candidate
+        originals = prepare_candidate(
+            evidence,
+            original.execution_plan,
+            reference_context.removed_context_ids,
+            mutation=reference_context.mutation,
+        )
+        selected = prepare_candidate(
+            evidence,
+            candidate.execution_plan,
+            candidate_context.removed_context_ids,
+            mutation=candidate_context.mutation,
+        )
+    else:
+        originals = prepare_candidate(evidence, original.execution_plan)
+        selected = prepare_candidate(
+            evidence, candidate.execution_plan, removed_context_ids, mutation=mutation
+        )
     inputs = {"baseline": (original, originals), "candidate": (candidate, selected)}
     _validate_inputs(evidence, plan, inputs)
     cost = sampling_attempt_cost(original.runner.capability_profile, original.resource_limits)
@@ -357,7 +383,9 @@ def _validate_inputs(
         if (
             not isinstance(prepared.experiment, SampledExperimentDefinition)
             or (
-                identity.algorithm_digest != plan.procedure.campaign_digest
+                identity.algorithm_digest != plan.procedure.comparison_digest
+                if isinstance(plan.procedure, SampledComparisonPlan)
+                else identity.algorithm_digest != plan.procedure.campaign_digest
                 if isinstance(plan.procedure, SampledChangePlan)
                 else prepared.experiment.reduction != plan.procedure
             )
@@ -366,7 +394,7 @@ def _validate_inputs(
             or (
                 profile.deterministic
                 and not (
-                    isinstance(plan.procedure, SampledChangePlan)
+                    isinstance(plan.procedure, (SampledChangePlan, SampledComparisonPlan))
                     and profile.runner_type == "fake"
                     and profile.provider_transport == "forbidden"
                     and profile.provider_calls_per_attempt == 0
@@ -419,9 +447,14 @@ def _budget_reason(
     active: bool,
 ) -> str | None:
     elapsed = state.started_at + timedelta(seconds=usage.wall_time_seconds)
-    future_seconds = remaining * (cost.runner_seconds + state.allowance.inter_attempt_delay_seconds)
-    if elapsed + timedelta(seconds=future_seconds) >= plan.expires_at:
-        return "freshness-budget"
+    freshness_refusal = sampling_freshness_refusal(
+        remaining_attempts=remaining,
+        attempt_cost=cost,
+        remaining_seconds=(plan.expires_at - elapsed).total_seconds(),
+        inter_attempt_delay_seconds=state.allowance.inter_attempt_delay_seconds,
+    )
+    if freshness_refusal is not None:
+        return freshness_refusal
     confirmation = plan.procedure.confirmation
     return sampling_budget_refusal(
         allowance=state.allowance,

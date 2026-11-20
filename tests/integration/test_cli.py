@@ -1288,10 +1288,10 @@ def test_cli_help_exposes_only_the_public_commands() -> None:
     root = get_command(app)
     assert isinstance(root, TyperGroup)
     commands = root.commands
-    for command in ("extract", "shrink", "fuzz", "inspect", "prepare", "cost"):
+    for command in ("extract", "shrink", "fuzz", "compare", "inspect", "prepare", "cost"):
         assert command in result.output
         assert command in commands
-    for unavailable in ("record", "preflight", "reproduce", "compare", "export"):
+    for unavailable in ("record", "preflight", "reproduce", "export"):
         assert unavailable not in commands
 
 

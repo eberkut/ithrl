@@ -38,6 +38,21 @@ class SamplingAttemptCost:
             raise ValueError("runner seconds per attempt must be a positive integer")
 
 
+def sampling_freshness_refusal(
+    *,
+    remaining_attempts: int,
+    attempt_cost: SamplingAttemptCost,
+    remaining_seconds: float,
+    inter_attempt_delay_seconds: int = 0,
+) -> str | None:
+    """Reserve complete attempt ceilings and pacing within the strict freshness window."""
+
+    required_seconds = remaining_attempts * (
+        attempt_cost.runner_seconds + inter_attempt_delay_seconds
+    )
+    return "freshness-budget" if required_seconds >= remaining_seconds else None
+
+
 @dataclass(frozen=True, slots=True)
 class ReductionBudgetBounds:
     """Frozen-plan bounds and the first applicable preflight refusal."""
@@ -121,7 +136,12 @@ def reduction_budget_bounds(
         or (max_wall_time_seconds is not None and max_wall_time_seconds < minimum_seconds)
     ):
         refusal = "sampling-budget-too-small"
-    elif max(search, confirmation) * seconds_per_attempt >= reduction.freshness_seconds:
+    elif sampling_freshness_refusal(
+        remaining_attempts=max(search, confirmation),
+        attempt_cost=attempt_cost,
+        remaining_seconds=reduction.freshness_seconds,
+        inter_attempt_delay_seconds=inter_attempt_delay_seconds,
+    ):
         refusal = "sampling-freshness-too-small"
     elif not optimistic_attainability(
         required_candidate=reduction.confirmation.candidate.required_valid,
@@ -206,7 +226,7 @@ def sampling_budget_refusal(
     attempt_cost: SamplingAttemptCost,
     confirmation_attempts: int,
     search_blocks: int,
-    role: Literal["search", "discovery", "simplification", "confirmation"],
+    role: Literal["calibration", "search", "discovery", "simplification", "confirmation"],
 ) -> str | None:
     """Return why remaining sampling and protected confirmation capacity do not fit."""
 
@@ -228,7 +248,7 @@ def sampling_budget_refusal(
     ):
         if type(value) is not int or value < minimum:
             raise ValueError(f"{name} must be an integer of at least {minimum}")
-    if role not in {"search", "discovery", "simplification", "confirmation"}:
+    if role not in {"calibration", "search", "discovery", "simplification", "confirmation"}:
         raise ValueError("role must be exploratory or confirmation")
 
     confirmation_calls = confirmation_attempts * attempt_cost.provider_calls

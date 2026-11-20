@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from ithrl.behavior import BehaviorType
 from ithrl.context import content_digest
+from ithrl.experiment import CodexReplayConfig
 from ithrl.grading.contracts import GRADING_CLEANUP_SECONDS, PatchGradingConfig
 
 type CaptureType = Literal[
@@ -237,6 +238,7 @@ class ExecutionPlanMetadata(_ImmutableContract):
     ]
     declared_policy: SafetyPolicyDeclarations
     resource_limits: ResourceLimits
+    reasoning_omitted: bool = Field(default=False, exclude_if=lambda value: value is False)
 
     @property
     def digest(self) -> str:
@@ -257,6 +259,9 @@ class ResolvedExecutionPlan(_ImmutableContract):
     source_harness_version: Annotated[str | None, Field(min_length=1, max_length=128)] = None
     source_schema: Annotated[str | None, Field(min_length=1, max_length=128)] = None
     model_requested: Annotated[str | None, Field(min_length=1, max_length=256)] = None
+    codex_replay: CodexReplayConfig | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     decision_digest: Annotated[str | None, Field(pattern=r"^[0-9a-f]{64}$")] = None
     runner_fingerprint: Annotated[str, Field(min_length=1, max_length=512)]
     safety_policy: SafetyPolicy
@@ -274,6 +279,13 @@ class ResolvedExecutionPlan(_ImmutableContract):
         _validate_resolved_transport(self)
         _validate_resolved_effects(self)
         _validate_resolved_limits(self)
+        if self.codex_replay is not None and (
+            self.harness != "codex"
+            or self.capability.runner_type != "codex"
+            or self.model_requested != self.codex_replay.model
+            or self.capability.provider != self.codex_replay.provider
+        ):
+            raise ValueError("Codex replay does not match the resolved execution identity")
         if self.grading is not None and (
             self.target_type != "final-response"
             or self.grading.timeout_seconds + GRADING_CLEANUP_SECONDS
@@ -295,6 +307,7 @@ class ResolvedExecutionPlan(_ImmutableContract):
             reconstruction_method=self.capability.reconstruction_method,
             declared_policy=self.safety_policy.declarations,
             resource_limits=self.resource_limits,
+            reasoning_omitted=self.codex_replay is not None,
         )
 
     @property

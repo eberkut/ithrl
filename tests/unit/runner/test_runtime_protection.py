@@ -15,11 +15,17 @@ from ithrl.runner.runtime.protection import (
 )
 
 
-def _capture(*paths: ProtectedPath, max_entries: int = 32, max_bytes: int = 4096):
+def _capture(
+    *paths: ProtectedPath,
+    max_entries: int = 32,
+    max_bytes: int = 4096,
+    allow_internal_symlinks: bool = False,
+):
     return ProtectedPathSnapshot.capture(
         paths,
         max_entries=max_entries,
         max_bytes=max_bytes,
+        allow_internal_symlinks=allow_internal_symlinks,
     )
 
 
@@ -212,6 +218,149 @@ def test_root_and_nested_symlinks_are_rejected(tmp_path: Path) -> None:
         with pytest.raises(ProtectedPathError) as raised:
             _capture(ProtectedPath("case", path))
         assert raised.value.code is ProtectionErrorCode.UNSAFE_PATH
+
+
+@pytest.mark.parametrize("change", ["content", "target"])
+def test_internal_link_and_its_target_are_preserved_and_verified(
+    tmp_path: Path, change: str
+) -> None:
+    root = tmp_path / "workspace"
+    (root / "docs").mkdir(parents=True)
+    (root / "assets").mkdir()
+    (root / "other").mkdir()
+    target = root / "assets" / "logo.txt"
+    target.write_text("before")
+    (root / "other" / "logo.txt").write_text("before")
+    link = root / "docs" / "assets"
+    link.symlink_to("../assets", target_is_directory=True)
+    snapshot = _capture(ProtectedPath("workspace", root), allow_internal_symlinks=True)
+
+    assert snapshot.verify() == ()
+    if change == "content":
+        target.write_text("after")
+    else:
+        link.unlink()
+        link.symlink_to("../other", target_is_directory=True)
+
+    assert snapshot.verify() == ("workspace",)
+
+
+@pytest.mark.parametrize("target", ["../assets/file.txt", ".", ".."])
+def test_internal_link_can_target_a_real_file_or_ancestor_directory(
+    tmp_path: Path, target: str
+) -> None:
+    root = tmp_path / "workspace"
+    (root / "docs").mkdir(parents=True)
+    (root / "assets").mkdir()
+    (root / "assets" / "file.txt").write_text("content")
+    (root / "docs" / "linked").symlink_to(target)
+
+    snapshot = _capture(ProtectedPath("workspace", root), allow_internal_symlinks=True)
+
+    assert snapshot.verify() == ()
+
+
+@pytest.mark.parametrize("ancestor", [False, True])
+def test_internal_link_option_still_refuses_symlinked_roots_and_ancestors(
+    tmp_path: Path, ancestor: bool
+) -> None:
+    root = tmp_path / "workspace"
+    (root / "docs").mkdir(parents=True)
+    alias = tmp_path / "alias"
+    alias.symlink_to(root, target_is_directory=True)
+    path = alias / "docs" if ancestor else alias
+
+    with pytest.raises(ProtectedPathError) as raised:
+        _capture(ProtectedPath("workspace", path), allow_internal_symlinks=True)
+
+    assert raised.value.code is ProtectionErrorCode.UNSAFE_PATH
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "/outside",
+        "../../outside",
+        "../missing",
+        "../alias",
+        "../alias/file.txt",
+        "../alias/../assets",
+    ],
+)
+def test_internal_links_refuse_escape_dangling_and_link_traversal(
+    tmp_path: Path, target: str
+) -> None:
+    root = tmp_path / "workspace"
+    (root / "docs").mkdir(parents=True)
+    (root / "assets").mkdir()
+    (root / "assets" / "file.txt").write_text("content")
+    (root / "alias").symlink_to("assets", target_is_directory=True)
+    (root / "docs" / "linked").symlink_to(target)
+
+    with pytest.raises(ProtectedPathError) as raised:
+        _capture(ProtectedPath("workspace", root), allow_internal_symlinks=True)
+
+    assert raised.value.code is ProtectionErrorCode.UNSAFE_PATH
+
+
+def test_internal_link_target_bytes_and_entry_use_the_snapshot_budget(tmp_path: Path) -> None:
+    root = tmp_path / "workspace"
+    (root / "docs").mkdir(parents=True)
+    (root / "assets").mkdir()
+    (root / "assets" / "file.txt").write_text("x")
+    (root / "docs" / "linked").symlink_to("../assets")
+    snapshot = _capture(
+        ProtectedPath("workspace", root),
+        max_entries=5,
+        max_bytes=10,
+        allow_internal_symlinks=True,
+    )
+    assert snapshot.verify() == ()
+    for entries, size in ((4, 10), (5, 9)):
+        with pytest.raises(ProtectedPathError) as raised:
+            _capture(
+                ProtectedPath("workspace", root),
+                max_entries=entries,
+                max_bytes=size,
+                allow_internal_symlinks=True,
+            )
+        assert raised.value.code is ProtectionErrorCode.LIMIT_EXCEEDED
+
+
+def test_internal_link_replacement_during_read_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "workspace"
+    root.mkdir()
+    (root / "target").write_text("content")
+    link = root / "linked"
+    link.symlink_to("target")
+    original_readlink = protection.os.readlink
+
+    def replace_after_read(path: str, *, dir_fd: int | None = None) -> str:
+        result = original_readlink(path, dir_fd=dir_fd)
+        link.unlink()
+        link.symlink_to("target")
+        return result
+
+    monkeypatch.setattr(protection.os, "readlink", replace_after_read)
+    with pytest.raises(ProtectedPathError) as raised:
+        _capture(ProtectedPath("workspace", root), allow_internal_symlinks=True)
+
+    assert raised.value.code is ProtectionErrorCode.CHANGED_DURING_READ
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="FIFOs are not available")
+def test_internal_link_cannot_target_a_special_file(tmp_path: Path) -> None:
+    root = tmp_path / "workspace"
+    root.mkdir()
+    os.mkfifo(root / "z-fifo")
+    (root / "linked").symlink_to("z-fifo")
+
+    with pytest.raises(ProtectedPathError) as raised:
+        _capture(ProtectedPath("workspace", root), allow_internal_symlinks=True)
+
+    assert raised.value.code is ProtectionErrorCode.UNSAFE_PATH
 
 
 @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="FIFOs are not available")

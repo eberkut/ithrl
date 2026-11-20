@@ -17,7 +17,7 @@ from ithrl.execution import (
     ResourceLimits,
     SafetyPolicy,
 )
-from ithrl.experiment import ExperimentDefinition
+from ithrl.experiment import CodexReplayConfig, ExperimentDefinition
 from ithrl.extraction import extract_decision
 from ithrl.mutation import MutationError, TextAppend, TextMutation
 from ithrl.runner import PreparedAttempt, prepare_candidate
@@ -31,6 +31,7 @@ from ithrl.runner.codex.materialize import (
     materialize_codex_attempt,
     validate_codex_output_limit,
 )
+from ithrl.runner.codex.policy import CONTINUATION_INSTRUCTIONS
 
 FIXTURES = Path(__file__).parents[3] / "fixtures"
 
@@ -312,7 +313,7 @@ def test_materializes_verified_history_with_preserved_tool_output_checkpoint(
     assert result.effort == "low"
     assert result.personality == "none"
     assert result.base_instructions == "Fixture instructions."
-    assert result.developer_instructions is None
+    assert result.developer_instructions == CONTINUATION_INSTRUCTIONS
     assert [item["type"] for item in result.history] == [
         "message",
         "reasoning",
@@ -328,6 +329,105 @@ def test_materializes_verified_history_with_preserved_tool_output_checkpoint(
         "output": [{"type": "input_text", "text": "Fixture result."}],
         "internal_chat_message_metadata_passthrough": {},
     }
+
+
+@pytest.mark.parametrize("instructions", [None, "Captured developer instructions.\r\n"])
+def test_continuation_policy_preserves_source_instructions_and_inputs(
+    tmp_path: Path, instructions: str | None
+) -> None:
+    evidence = _evidence_with_field(
+        tmp_path,
+        record_type="turn_context",
+        field_name="developer_instructions",
+        value=instructions,
+    )
+    original = _attempt(evidence)
+    source_identity = evidence.digest, evidence.source_artifacts
+    full = materialize_codex_attempt(original)
+    user_message = next(
+        node for node in evidence.context.nodes if node.kind == "response_item.message"
+    )
+    reduced = materialize_codex_attempt(_attempt(evidence, user_message.id))
+
+    expected = (
+        f"{instructions}\n\n{CONTINUATION_INSTRUCTIONS}"
+        if instructions is not None
+        else CONTINUATION_INSTRUCTIONS
+    )
+    assert full.developer_instructions == reduced.developer_instructions == expected
+    assert full.base_instructions == reduced.base_instructions == "Fixture instructions."
+    assert full.turn_input == reduced.turn_input
+    assert reduced.history == full.history[1:]
+    assert (evidence.digest, evidence.source_artifacts) == source_identity
+
+
+def test_explicit_replay_omits_known_reasoning_only_from_the_execution_copy(tmp_path: Path) -> None:
+    records = [
+        json.loads(line)
+        for line in (FIXTURES / "codex-session/rollout.jsonl").read_bytes().splitlines()
+    ]
+    reasoning = next(
+        record["payload"]
+        for record in records
+        if record["type"] == "response_item" and record["payload"]["type"] == "reasoning"
+    )
+    reasoning["summary"] = [{"type": "summary_text", "text": "Captured reasoning summary."}]
+    evidence = _evidence_from_records(tmp_path, records)
+    original = _attempt(evidence)
+    before = materialize_codex_attempt(original)
+    source_identity = evidence.digest, evidence.source_artifacts
+    replay = CodexReplayConfig(provider="replay-provider", model="replay-model")
+    policy = original.safety_policy.model_copy(update={"allowed_provider": replay.provider})
+    plan = original.execution_plan.model_copy(
+        update={
+            "codex_replay": replay,
+            "model_requested": replay.model,
+            "capability": original.execution_plan.capability.model_copy(
+                update={"provider": replay.provider}
+            ),
+            "safety_policy": policy,
+        }
+    )
+    attempt = replace(
+        original,
+        execution_plan=plan,
+        safety_policy=policy,
+        candidate=prepare_candidate(evidence, plan),
+    )
+    result = materialize_codex_attempt(attempt)
+    user = next(node for node in evidence.context.nodes if node.kind == "response_item.message")
+    reduced = materialize_codex_attempt(
+        replace(attempt, candidate=prepare_candidate(evidence, plan, (user.id,)))
+    )
+
+    assert result.model == reduced.model == replay.model
+    assert result.provider == reduced.provider == replay.provider
+    assert result.history == tuple(item for item in before.history if item["type"] != "reasoning")
+    assert reduced.history == result.history[1:]
+    assert result.turn_input == reduced.turn_input == before.turn_input
+    assert result.base_instructions == before.base_instructions
+    assert (
+        result.developer_instructions
+        == reduced.developer_instructions
+        == before.developer_instructions
+    )
+    assert (evidence.digest, evidence.source_artifacts) == source_identity
+    assert evidence.manifest.model_requested == before.model
+    assert evidence.manifest.provider == before.provider
+    assert plan.inspection_metadata.reasoning_omitted
+    assert plan.digest != original.execution_plan.digest
+
+
+@pytest.mark.parametrize("field", ["provider", "model_requested"])
+def test_materialization_refuses_captured_source_identity_mismatch(
+    tmp_path: Path, field: str
+) -> None:
+    evidence = _evidence(tmp_path)
+    attempt = _attempt(evidence)
+    evidence._manifest = evidence.manifest.model_copy(update={field: "different-source-identity"})
+    with pytest.raises(CodexMaterializationError) as refused:
+        _materialize_session(attempt, parse_session(FIXTURES / "codex-session/rollout.jsonl"))
+    assert refused.value.code is CodexMaterializationErrorCode.CHANGED_EVIDENCE
 
 
 @pytest.mark.parametrize("call_type", ["custom_tool_call", "function_call"])

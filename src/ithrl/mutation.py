@@ -8,7 +8,14 @@ from typing import Annotated, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from ithrl.context import MAX_JSON_ITEMS, ContextNode, JsonObject, content_digest, decode_pointer
+from ithrl.context import (
+    MAX_CONTEXT_NODES,
+    MAX_JSON_ITEMS,
+    ContextNode,
+    JsonObject,
+    content_digest,
+    decode_pointer,
+)
 from ithrl.text_sections import TextSectionRemoval
 
 MAX_MUTATION_TEXT_BYTES = 64 * 1024
@@ -84,6 +91,33 @@ class TextMutation(BaseModel):
     @property
     def is_empty(self) -> bool:
         return not self.edits
+
+    @property
+    def digest(self) -> str:
+        return content_digest(self.model_dump(mode="json"))
+
+
+class ContextSelection(BaseModel):
+    """Explicit removals and one supported mutation against immutable source evidence.
+
+    This is an input descriptor. Candidate preparation owns dependency closure,
+    source binding, protection and native reconstruction eligibility.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True, hide_input_in_errors=True)
+
+    removed_context_ids: Annotated[
+        tuple[Annotated[str, Field(min_length=1, max_length=256)], ...],
+        Field(max_length=MAX_CONTEXT_NODES),
+    ] = ()
+    mutation: TextMutation = Field(default_factory=TextMutation)
+
+    @field_validator("removed_context_ids")
+    @classmethod
+    def validate_unique_ids(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if len(set(value)) != len(value):
+            raise ValueError("context selection must not repeat removed IDs")
+        return value
 
     @property
     def digest(self) -> str:

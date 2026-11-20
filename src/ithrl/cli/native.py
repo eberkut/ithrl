@@ -36,6 +36,8 @@ from ithrl.execution import (
     calibration_budget_bounds,
 )
 from ithrl.experiment import (
+    AnyExperimentDefinition,
+    CodexReplayConfig,
     NativeRunnerConfig,
     SampledCalibrationPhase,
     SampledExperimentDefinition,
@@ -135,12 +137,13 @@ def native_selection(
     evidence: CaseEvidence,
     *,
     original_workspace: Path | None,
-    experiment: SampledExperimentDefinition | None = None,
+    experiment: AnyExperimentDefinition | None = None,
     calibration: SampledCalibrationPhase | None = None,
     max_provider_calls: int | None = None,
     max_provider_calls_per_attempt: int | None = None,
     attempt_timeout_seconds: int | None = None,
     max_input_tokens: int | None = None,
+    codex_replay: CodexReplayConfig | None = None,
 ) -> NativeSelection:
     """Resolve explicit samples against an exact current or persisted profile."""
 
@@ -175,6 +178,14 @@ def native_selection(
         )
     if harness not in ("codex", "copilot"):
         raise NativeSelectionError("unsupported-harness", "native harness is unsupported")
+    saved_replay = (
+        persisted.runner.codex_replay if isinstance(persisted.runner, NativeRunnerConfig) else None
+    )
+    if codex_replay is not None and saved_replay is not None and codex_replay != saved_replay:
+        raise NativeSelectionError("replay-mismatch", "Codex replay does not match the experiment")
+    selected_replay = codex_replay if codex_replay is not None else saved_replay
+    if selected_replay is not None and harness != "codex":
+        raise NativeSelectionError("unsupported-replay", "Codex replay requires the Codex runner")
     if harness == "copilot" and max_provider_calls_per_attempt not in (None, 1):
         raise NativeSelectionError(
             "unsupported-provider-call-limit",
@@ -200,6 +211,7 @@ def native_selection(
             required_digest,
             evidence,
             persisted.target.type,
+            codex_replay=selected_replay,
             max_provider_calls_per_attempt=max_provider_calls_per_attempt,
             state_parent=state_parent,
             output_root=output_root,
@@ -220,6 +232,7 @@ def native_selection(
     config = NativeRunnerConfig(
         type=native_type,
         required_capability_digest=capability.digest,
+        codex_replay=selected_replay,
     )
     if isinstance(persisted, SampledExperimentDefinition):
         resolved_experiment = persisted.model_copy(update={"runner": config, "calibration": phase})
@@ -287,6 +300,7 @@ def _codex_runner(
     evidence: CaseEvidence,
     target_type: str,
     *,
+    codex_replay: CodexReplayConfig | None = None,
     max_provider_calls_per_attempt: int | None = None,
     state_parent: Path,
     output_root: Path,
@@ -297,7 +311,7 @@ def _codex_runner(
         raise NativeSelectionError(
             "unsupported-target", "Codex runner does not support the selected target"
         )
-    provider_id = evidence.manifest.provider
+    provider_id = codex_replay.provider if codex_replay is not None else evidence.manifest.provider
     if provider_id is None:
         raise NativeSelectionError(
             "provider-unavailable", "captured Codex provider identity is unavailable"
@@ -360,6 +374,7 @@ def _codex_runner(
             capability_profile=profile,
             runtime=runtime,
             configuration=configuration,
+            codex_replay=codex_replay,
             state_parent=state_parent,
             output_root=output_root,
             source_paths=sources,

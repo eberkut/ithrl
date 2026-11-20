@@ -750,6 +750,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+compare = [
+    { name = "scipy" },
+]
 fuzz = [
     { name = "scipy" },
 ]
@@ -797,10 +800,11 @@ requires-dist = [
     { name = "platformdirs", specifier = ">=4.3" },
     { name = "pydantic", specifier = ">=2.12" },
     { name = "rich", specifier = ">=14" },
+    { name = "scipy", marker = "extra == 'compare'", specifier = ">=1.18" },
     { name = "scipy", marker = "extra == 'fuzz'", specifier = ">=1.18" },
     { name = "typer", specifier = ">=0.16" },
 ]
-provides-extras = ["fuzz"]
+provides-extras = ["compare", "fuzz"]
 
 [package.metadata.requires-dev]
 audit = [{ name = "pip-audit", specifier = "==2.10.1" }]

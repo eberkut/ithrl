@@ -11,9 +11,9 @@
 [![PyPI](https://img.shields.io/pypi/v/ithrl.svg)](https://pypi.org/project/ithrl/)
 [![CI](https://github.com/eberkut/ithrl/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/eberkut/ithrl/actions/workflows/ci.yml)
 
-`ithrl` turns saved Codex and GitHub Copilot sessions into debugging experiments. Search for a
-smaller context that preserves a chosen response or tool request, or a small text change that alters
-it.
+`ithrl` turns saved Codex and GitHub Copilot sessions into debugging experiments. Find a smaller
+context that preserves a chosen response or tool request, test text changes that alter it, or
+compare two selected contexts from the same source.
 
 [Documentation](https://eberkut.github.io/ithrl/) · [Try it](#try-it) ·
 [Supported inputs](#supported-inputs)
@@ -27,8 +27,8 @@ uv tool install ithrl
 ```
 
 You can also install with `pipx install ithrl` or, in an existing virtual environment,
-`python -m pip install ithrl`. For context fuzzing, use `'ithrl[fuzz]'` in place of `ithrl` in
-the installation command.
+`python -m pip install ithrl`. Install `'ithrl[fuzz]'` for context fuzzing or `'ithrl[compare]'`
+for context comparison.
 
 Tested on Python 3.12–3.14. Native runners require Linux. APIs and saved formats may change before
 1.0; keep your source sessions and record the version used for each case.
@@ -97,6 +97,9 @@ For a saved session, provide its path and ask:
   [results and privacy](https://github.com/eberkut/ithrl/blob/main/docs/results.md#inspect-retained-context).
 - `ithrl fuzz CASE --config PRIVATE_TOML` searches for and simplifies text appends that decrease how
   often the selected behavior occurs, with independent confirmation.
+- `ithrl compare CASE --config PRIVATE_TOML` tests whether a selected context change increases or
+  decreases the target's match rate, with fresh confirmation. See the
+  [comparison guide](https://github.com/eberkut/ithrl/blob/main/docs/comparison.md).
 - `ithrl cost` applies reference rates to recorded or hypothetical token usage and saves an offline
   report. See
   [token-cost estimates](https://github.com/eberkut/ithrl/blob/main/docs/results.md#estimate-token-costs)
@@ -109,17 +112,18 @@ ithrl extract path/to/session.jsonl --output .ithrl/case
 ```
 
 Extraction makes no provider calls. Native experiments require Linux, usable Bubblewrap, an
-installed harness and model access. Review the provider, safety controls and call/time budget in the
-[native-run guide](https://github.com/eberkut/ithrl/blob/main/docs/native-runs.md) before execution.
-Returned actions are observed and denied. Cases contain copied session content; keep them private.
+installed harness and model access. Review the provider, safety controls and request/time limits in
+the [native-run guide](https://github.com/eberkut/ithrl/blob/main/docs/native-runs.md) before
+execution. Returned actions are observed and denied. Cases contain copied session content; keep them
+private.
 
 ## Supported inputs
 
-| Input | Extracted decisions | Reduction | Fuzzing | Passive inspection |
-| --- | --- | --- | --- | --- |
-| Bundled synthetic example | Synthetic tool request | Deterministic local runner | Local fake runner | — |
-| Codex CLI rollouts | Final responses | Experimental native runner; [paragraph-removal measurements](https://github.com/eberkut/ithrl/blob/main/docs/measurements.md#ordinary-session-paragraph-removal) | Experimental prior-user text appends | Exact recorded-operation and captured-result comparisons across compaction |
-| Copilot CLI session events | Final responses and shell requests | Experimental final-response paragraph removal and denied `bash` runner | Experimental prior-user text appends for final-response targets | Exact recorded-operation and captured-result comparisons across compaction |
+| Input | Extracted decisions | Reduction | Fuzzing | Comparison | Passive inspection |
+| --- | --- | --- | --- | --- | --- |
+| Bundled synthetic example | Synthetic tool request | Deterministic local runner | Local fake runner | Local fake runner | — |
+| Codex CLI rollouts | Final responses | Experimental native runner; [paragraph-removal measurements](https://github.com/eberkut/ithrl/blob/main/docs/measurements.md#ordinary-session-paragraph-removal) | Experimental prior-user text appends | Experimental final-response contexts | Exact recorded-operation and captured-result comparisons across compaction |
+| Copilot CLI session events | Final responses and shell requests | Experimental final-response paragraph removal and denied `bash` runner | Experimental prior-user text appends for final-response targets | Experimental final-response and denied `bash` contexts | Exact recorded-operation and captured-result comparisons across compaction |
 
 Passive inspection reads saved evidence without a harness or model access. The
 [worked investigation](https://github.com/eberkut/ithrl/blob/main/docs/research/passive-compaction-investigation.md)
@@ -129,6 +133,11 @@ Native fuzzing appends text to eligible prior user input while preserving the fi
 input. The
 [fuzzing walkthrough](https://github.com/eberkut/ithrl/blob/main/docs/fuzzing.md)
 covers a local example and native execution.
+
+Ordinary Codex and Copilot comparisons confirmed how the tested context bundles affected reporting
+a permission restriction and selecting a test command. The
+[worked comparisons](https://github.com/eberkut/ithrl/blob/main/docs/research/comparative-debugging.md)
+record their profiles, costs and interpretation. Each result concerns the complete selected change.
 
 Ordinary Codex and Copilot paragraph-removal experiments passed fresh confirmation at a
 20-percentage-point preservation margin. See the
@@ -151,6 +160,8 @@ Read the [documentation site](https://eberkut.github.io/ithrl/) or browse the gu
   inspect and execute a context-removal experiment.
 - [Context fuzzing](https://github.com/eberkut/ithrl/blob/main/docs/fuzzing.md): try the local
   example and run a native text-append campaign.
+- [Context comparison](https://github.com/eberkut/ithrl/blob/main/docs/comparison.md): select two
+  contexts, declare the direction and confirm their effect.
 - [Results and privacy](https://github.com/eberkut/ithrl/blob/main/docs/results.md): saved files,
   result interpretation, budgets, resume and sensitive data.
 - [Contributing](https://github.com/eberkut/ithrl/blob/main/CONTRIBUTING.md): issue-first

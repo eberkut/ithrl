@@ -44,11 +44,15 @@ def progress_display() -> Generator[Callable[[str], None], None, None]:
 
 
 def sampling_status(
-    block: SamplingBlockEvidence, *, phase: str, candidate_label: str = "candidate"
+    block: SamplingBlockEvidence,
+    *,
+    phase: str,
+    candidate_label: str = "candidate",
+    baseline_label: str = "original",
 ) -> str:
     arms = []
     labels: tuple[tuple[SamplingArm, str], ...] = (
-        ("baseline", "original"),
+        ("baseline", baseline_label),
         ("candidate", candidate_label),
     )
     for arm, label in labels:

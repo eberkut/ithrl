@@ -151,6 +151,11 @@ def _resolved_report(
 ) -> PreflightReport:
     manifest = evidence.manifest
     decision = evidence.decision
+    replay = (
+        experiment.runner.codex_replay
+        if isinstance(experiment.runner, NativeRunnerConfig)
+        else None
+    )
     plan = ResolvedExecutionPlan(
         case_digest=evidence.digest,
         capture_type=manifest.capture.request,
@@ -159,7 +164,8 @@ def _resolved_report(
         harness=manifest.harness,
         source_harness_version=manifest.harness_version,
         source_schema=manifest.source_schema,
-        model_requested=manifest.model_requested,
+        model_requested=replay.model if replay is not None else manifest.model_requested,
+        codex_replay=replay,
         decision_digest=decision.selector.digest if decision is not None else None,
         runner_fingerprint=runner_fingerprint,
         safety_policy=safety_policy,
@@ -180,6 +186,17 @@ def _check_runner_identity(
     evidence: CaseEvidence,
     issues: list[PreflightIssue],
 ) -> None:
+    if (
+        isinstance(experiment.runner, NativeRunnerConfig)
+        and experiment.runner.codex_replay is not None
+        and experiment.runner.codex_replay.provider != capability.provider
+    ):
+        issues.append(
+            PreflightIssue(
+                code="runner-evidence-mismatch",
+                message="Codex replay provider does not match the runner capability",
+            )
+        )
     if capability.runner_type != experiment.runner.type:
         issues.append(
             PreflightIssue(

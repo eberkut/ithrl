@@ -50,6 +50,9 @@ RUNTIME_MODULES = frozenset(
         PurePosixPath("ithrl/case/source_storage.py"),
         PurePosixPath("ithrl/case/storage.py"),
         PurePosixPath("ithrl/cli/__init__.py"),
+        PurePosixPath("ithrl/cli/compare.py"),
+        PurePosixPath("ithrl/cli/comparison_output.py"),
+        PurePosixPath("ithrl/cli/comparison_session.py"),
         PurePosixPath("ithrl/cli/fuzz.py"),
         PurePosixPath("ithrl/cli/fuzz_run.py"),
         PurePosixPath("ithrl/cli/fuzz_output.py"),
@@ -68,6 +71,10 @@ RUNTIME_MODULES = frozenset(
         PurePosixPath("ithrl/cli/sampled_session.py"),
         PurePosixPath("ithrl/cli/shrink.py"),
         PurePosixPath("ithrl/context.py"),
+        PurePosixPath("ithrl/comparison/__init__.py"),
+        PurePosixPath("ithrl/comparison/contracts.py"),
+        PurePosixPath("ithrl/comparison/engine.py"),
+        PurePosixPath("ithrl/comparison/results.py"),
         PurePosixPath("ithrl/costs.py"),
         PurePosixPath("ithrl/cost_reporting.py"),
         PurePosixPath("ithrl/decisions.py"),
@@ -179,6 +186,7 @@ PUBLIC_DOCS = frozenset(
         "native-runs.md",
         "reduction.md",
         "fuzzing.md",
+        "comparison.md",
         "results.md",
         "cli.md",
         "troubleshooting.md",
@@ -956,6 +964,140 @@ def test_installed_fuzz_extra_provides_exact_numerics(
         "assert result.outcome is FuzzOutcome.CONFIRMED_CHANGE\n",
         cwd=tmp_path,
     )
+
+
+@pytest.mark.parametrize("origin", ["wheel", "sdist"])
+def test_installed_comparison_collects_confirms_and_inspects(
+    distributions: tuple[Path, Path], tmp_path: Path, origin: str
+) -> None:
+    wheel, sdist = distributions
+    if origin == "sdist":
+        wheel = _rebuild_wheel(sdist, tmp_path)
+    environment = tmp_path / "comparison-environment"
+    _run("uv", "venv", "--python", sys.executable, str(environment), cwd=tmp_path)
+    python = environment / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    executable = environment / ("Scripts/ithrl.exe" if os.name == "nt" else "bin/ithrl")
+    _run("uv", "pip", "install", "--python", str(python), f"{wheel}[compare]", cwd=tmp_path)
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    case = runtime / "case"
+    _run(str(executable), "extract", "--example", "--output", str(case), cwd=runtime)
+    config = runtime / "comparison.toml"
+    config.write_text(
+        """schema_version = 1
+kind = "comparison"
+objective = "repair"
+minimum_effect = 0.1
+seed = 1
+eligibility_policy = "independent-safe-preaccept-only"
+freshness_seconds = 86400
+[reference]
+removed_context_ids = ["ctx-4c4e9663bfd5daae", "ctx-8a6964db1606f4e7"]
+[candidate]
+removed_context_ids = []
+[calibration]
+positive_minimum_matches = 2
+negative_maximum_matches = 0
+[calibration.reference]
+required_valid = 2
+max_attempts = 2
+[calibration.candidate]
+required_valid = 2
+max_attempts = 2
+[confirmation]
+alpha = 0.05
+[confirmation.reference]
+required_valid = 20
+max_attempts = 20
+[confirmation.candidate]
+required_valid = 20
+max_attempts = 20
+[limits]
+max_provider_calls = 0
+max_wall_time_seconds = 10000
+attempt_timeout_seconds = 1
+"""
+    )
+    config.chmod(0o600)
+    arguments = (
+        str(executable),
+        "compare",
+        str(case),
+        "--config",
+        str(config),
+        "--observation-store",
+        str(runtime / "observations.sqlite"),
+        "--format",
+        "json",
+    )
+    dry = json.loads(_run(*arguments, "--dry-run", cwd=runtime).stdout)
+    assert dry["status"] == "ready"
+    assert dry["planned_attempts"] == 44
+    pilot = json.loads(_run(*arguments, "--calibration-only", cwd=runtime).stdout)
+    assert pilot["status"] == "calibrated"
+    repeated = json.loads(
+        _run(
+            str(executable),
+            "compare",
+            pilot["run_state_path"],
+            "--resume",
+            "--calibration-only",
+            "--format",
+            "json",
+            cwd=runtime,
+        ).stdout
+    )
+    assert repeated["status"] == "calibrated"
+    assert {k: v for k, v in repeated["usage"].items() if k != "wall_time_seconds"} == {
+        k: v for k, v in pilot["usage"].items() if k != "wall_time_seconds"
+    }
+    assert repeated["usage"]["wall_time_seconds"] >= pilot["usage"]["wall_time_seconds"]
+    collected = json.loads(
+        _run(
+            str(executable),
+            "compare",
+            pilot["run_state_path"],
+            "--resume",
+            "--format",
+            "json",
+            cwd=runtime,
+        ).stdout
+    )
+    assert collected["status"] == "confirmed-improvement"
+    assert collected["difference"] == 1
+    assert collected["lower_bound"] > 0.1
+    resumed = json.loads(
+        _run(
+            str(executable),
+            "compare",
+            collected["run_state_path"],
+            "--resume",
+            "--format",
+            "json",
+            cwd=runtime,
+        ).stdout
+    )
+    assert resumed["status"] == collected["status"]
+    assert resumed["usage"] == collected["usage"]
+    assert resumed["result_path"] == collected["result_path"]
+    for path in runtime.glob("observations.sqlite*"):
+        path.unlink()
+    inspected = json.loads(
+        _run(
+            str(executable),
+            "inspect",
+            "comparison",
+            collected["result_path"],
+            "--case",
+            str(case),
+            "--format",
+            "json",
+            cwd=runtime,
+        ).stdout
+    )
+    assert inspected["source_validation"] == "verified"
+    assert inspected["status"] == collected["status"]
+    assert inspected["usage"] == collected["usage"]
 
 
 def _assert_installed_resume(executable: Path, runtime: Path, environment: dict[str, str]) -> None:

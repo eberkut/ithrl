@@ -102,6 +102,7 @@ async def run_isolated_process(
     max_protected_entries: int,
     max_protected_bytes: int,
     runtime_deadline: float | None = None,
+    allow_internal_workspace_symlinks: bool = False,
 ) -> ProcessExecution:
     """Run one direct child in fresh state, then preserve output and verify cleanup."""
 
@@ -122,6 +123,7 @@ async def run_isolated_process(
             workspace_paths,
             max_entries=max_protected_entries,
             max_bytes=max_protected_bytes,
+            allow_internal_symlinks=allow_internal_workspace_symlinks,
         )
     except ProtectedPathError as error:
         raise ProcessRuntimeError(

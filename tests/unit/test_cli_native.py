@@ -19,8 +19,10 @@ from ithrl.execution import (
     PreflightIssue,
     PreflightReport,
     calibration_budget_bounds,
+    resolve_execution_plan,
 )
 from ithrl.experiment import (
+    CodexReplayConfig,
     ExperimentDefinition,
     FakeRunnerConfig,
     NativeRunnerConfig,
@@ -311,6 +313,99 @@ def test_ordinary_case_resolves_explicit_samples_without_rewriting_evidence(
     assert selection.registry.resolve(selection.experiment.runner, evidence).issue is None
     wrong = selection.experiment.runner.model_copy(update={"required_capability_digest": "0" * 64})
     assert selection.registry.resolve(wrong, evidence).issue is not None
+
+
+@pytest.mark.parametrize("saved", [False, True])
+def test_explicit_codex_replay_uses_the_declared_provider_and_persists_selection(
+    native_case: tuple[CaseWorkspace, CaseEvidence, Path],
+    mocked_runtime: tuple[Mock, Mock],
+    monkeypatch: pytest.MonkeyPatch,
+    profile: CapabilityProfile,
+    saved: bool,
+) -> None:
+    workspace, evidence, original = native_case
+    replay = CodexReplayConfig(provider="replay-provider", model="replay-model")
+    effective_profile = profile.model_copy(update={"provider": replay.provider})
+    detector, constructor = mocked_runtime
+    detector.return_value = effective_profile
+    constructor.return_value.capability_profile = effective_profile
+    experiment = None
+    if saved:
+        experiment = SampledExperimentDefinition(
+            target=ExperimentDefinition.from_toml(evidence.default_experiment).target,
+            oracle=ExperimentDefinition.from_toml(evidence.default_experiment).oracle,
+            runner=NativeRunnerConfig(
+                type="codex",
+                required_capability_digest=effective_profile.digest,
+                codex_replay=replay,
+            ),
+            calibration=PHASE,
+        )
+    resolver = Mock(return_value=SimpleNamespace(authentication="openai-chatgpt-file"))
+    monkeypatch.setattr(native, "resolve_codex_configuration", resolver)
+    selection = native.native_selection(
+        workspace,
+        evidence,
+        original_workspace=original,
+        experiment=experiment,
+        calibration=PHASE,
+        codex_replay=None if saved else replay,
+    )
+    assert resolver.call_args.kwargs["provider_id"] == replay.provider
+    assert constructor.call_args.kwargs["codex_replay"] == replay
+    assert isinstance(selection.experiment.runner, NativeRunnerConfig)
+    assert selection.experiment.runner.codex_replay == replay
+    report = resolve_execution_plan(
+        effective_profile,
+        selection.experiment,
+        evidence=evidence,
+        runner_fingerprint="fixture-native-v1",
+        safety_policy=selection.safety_policy,
+        resource_limits=selection.resource_limits,
+    )
+    assert report.ready
+    assert report.plan is not None
+    assert report.plan.model_requested == replay.model
+    assert report.plan.codex_replay == replay
+    assert report.plan.inspection_metadata.reasoning_omitted
+
+
+@pytest.mark.parametrize("fault", ["mismatch", "copilot"])
+def test_codex_replay_refusals_precede_native_detection(
+    native_case: tuple[CaseWorkspace, CaseEvidence, Path],
+    mocked_runtime: tuple[Mock, Mock],
+    profile: CapabilityProfile,
+    fault: str,
+) -> None:
+    workspace, evidence, original = native_case
+    replay = CodexReplayConfig(provider="replay-provider", model="replay-model")
+    default = ExperimentDefinition.from_toml(evidence.default_experiment)
+    experiment = (
+        SampledExperimentDefinition(
+            target=default.target,
+            oracle=default.oracle,
+            runner=NativeRunnerConfig(
+                type="codex", required_capability_digest=profile.digest, codex_replay=replay
+            ),
+            calibration=PHASE,
+        )
+        if fault == "mismatch"
+        else default.model_copy(update={"runner": UnavailableRunnerConfig(harness="copilot")})
+    )
+    requested = replay.model_copy(update={"model": "different-model"})
+    with pytest.raises(native.NativeSelectionError) as refused:
+        native.native_selection(
+            workspace,
+            evidence,
+            original_workspace=original,
+            experiment=experiment,
+            calibration=PHASE,
+            codex_replay=requested,
+        )
+    assert refused.value.code == (
+        "replay-mismatch" if fault == "mismatch" else "unsupported-replay"
+    )
+    mocked_runtime[0].assert_not_called()
 
 
 @pytest.mark.parametrize(

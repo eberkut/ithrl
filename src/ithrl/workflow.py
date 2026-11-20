@@ -127,15 +127,18 @@ def prepare_experiment(
     safety_policy: SafetyPolicy | None = None,
     resource_limits: ResourceLimits | None = None,
     experiment: AnyExperimentDefinition | None = None,
+    require_observed_match: bool = True,
 ) -> PreparedExperiment:
-    """Protect and resolve a persisted or explicitly supplied typed experiment."""
+    """Resolve an experiment, retaining historical matching unless explicitly prospective."""
 
     if experiment is None:
         experiment = parse_experiment_toml(evidence.default_experiment)
     decision = evidence.decision
     if decision is not None:
         try:
-            validate_experiment_target(decision, experiment.target)
+            validate_experiment_target(
+                decision, experiment.target, require_observed_match=require_observed_match
+            )
         except CaseFormatError as error:
             raise PreflightRefusedError(
                 PreflightReport(

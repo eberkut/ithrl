@@ -6,8 +6,10 @@
     experiment.
 - [Context fuzzing](fuzzing.md): try the local example or test text appends through a native
     harness.
+- [Context comparison](comparison.md): test two selected contexts for a repair or degradation
+    effect.
 
-Both native workflows use the shared [prerequisites](#native-prerequisites) and
+These workflows share the [prerequisites](#native-prerequisites) and
 [compatibility checks](#compatibility-and-measurements). For output interpretation and recovery,
 see [results and privacy](results.md).
 
@@ -63,9 +65,11 @@ You need:
 - A private directory, mode `0700`, outside the case and original workspace for receipts,
   configuration and the observation store.
 
-The model and provider come from captured evidence and supported local harness configuration.
-There is no `--model` override. Returned actions are observed and denied; they never execute.
-Tool-side network access, hosted tools and MCP are disabled for the current runner profiles.
+By default, the model and provider come from captured evidence and supported local harness
+configuration. [Context comparison](comparison.md#prepare-native-execution) can declare a
+prospective Codex execution profile; there is no general `--model` option. Returned actions are
+observed and denied; they never execute. Tool-side network access, hosted tools and MCP are
+disabled for the current runner profiles.
 
 For Codex history containing tool outputs, set `tool_output_token_limit` before any TOML tables
 in `$CODEX_HOME/config.toml`, or `~/.codex/config.toml` when `CODEX_HOME` is unset. For example:
@@ -112,6 +116,11 @@ Follow the [context-fuzzing guide](fuzzing.md), starting with its provider-free 
 
 [Run the bounded synthetic campaign](fuzzing.md#run-the-synthetic-native-campaign).
 
+## Context comparison
+
+Use the [comparison guide](comparison.md) to test two selected contexts from one case, with a fixed
+target, common execution profile, two-arm calibration and fresh confirmation.
+
 ## Compatibility and measurements
 
 Extraction validates record structure and recognized relationships. Codex rollouts are recognized
@@ -126,11 +135,19 @@ measurement used an uncompacted source and does not establish compaction support
 For a tool-output trigger, Codex injects the captured output with its original call identity and
 continues without duplicating it as new input. Current preflight reports
 `codex-app-server-inject-checkpoint-v1`; older saved reconstruction profiles require a new
-experiment. The private qualification auditor is not part of the shipped runner.
+experiment.
 
 Codex verifies the returned thread policy and identity before inserting history or starting a
 turn. Startup warnings are retained in private native output. A policy mismatch or a configuration
 warning after verification stops the attempt.
+
+The Codex final-response profile appends a fixed developer instruction declaring a context-only
+continuation: tools are unavailable, the response must use the restored context, and missing
+evidence must be stated. Captured developer instructions remain its prefix. The default
+reconstruction preserves captured history and the decision input. A
+[prospective Codex comparison profile](comparison.md#prepare-native-execution) can declare omission
+of historical reasoning records; source evidence remains unchanged. The runner fingerprint binds
+the continuation instruction and replay selection.
 
 Local operation, permission, isolation and action-denial checks plus calibration determine whether
 a run can proceed. Public support also requires a qualified live workflow for that profile; see
@@ -138,7 +155,7 @@ a run can proceed. Public support also requires a qualified live workflow for th
 are recorded, not allowlisted. After a harness or configuration change, export a new receipt and
 prepare a new experiment; a changed digest blocks old pinned plans and incompatible saved runs.
 
-The [measurements](measurements.md) record benchmark construction, completed reduction and fuzzing
-workflows, tested harness versions, confirmation results and costs. Other releases go through the
-same local compatibility checks. Wall-time and call limits are administrative ceilings; use the
-measurements to estimate the duration and usage of the recorded workloads.
+The [measurements](measurements.md) and
+[worked comparisons](research/comparative-debugging.md) record tested profiles, outcomes and costs.
+Other releases go through the same local compatibility checks. Request and wall-time limits are
+administrative ceilings; use those results to estimate usage for the recorded workloads.

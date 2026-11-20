@@ -18,6 +18,7 @@ $ ithrl [OPTIONS] COMMAND [ARGS]...
 **Commands**:
 
 * `fuzz`: Find and independently confirm a bounded...
+* `compare`: Calibrate and freshly confirm one directed...
 * `prepare`: Prepare a native reduction offline, then...
 * `cost`: Estimate recorded or hypothetical token...
 * `extract`: Create a case from a saved agent session...
@@ -48,6 +49,36 @@ $ ithrl fuzz [OPTIONS] {CASE_OR_RUN}
 * `--dry-run`: Inspect saved inputs and limits without starting a harness or provider.
 * `--detect`: Explicit credential-free structural harness detection; save a profile.
 * `--resume`: Continue exactly the saved campaign, without changing its inputs or budget.
+* `--acknowledge-model-execution`: Approve the inspected native execution within its frozen limits.
+* `--format <human|json>`: Output format.  [default: human]
+* `--help`: Show this message and exit.
+
+## `ithrl compare`
+
+Calibrate and freshly confirm one directed comparison of two explicit contexts.
+
+**Usage**:
+
+```console
+$ ithrl compare [OPTIONS] {CASE_OR_RUN}
+```
+
+**Arguments**:
+
+* `CASE_OR_RUN`: Case, or canonical saved run with --resume.  [required]
+
+**Options**:
+
+* `--config <path>`: Private TOML selecting both contexts, direction, samples and limits.
+* `--experiment <path>`: Existing experiment with the fixed target, oracle and optional grader.
+* `--profile <path>`: Private structural profile; output path with --detect-capabilities.
+* `--original-workspace <path>`: Protected original workspace for native execution.
+* `--max-provider-calls-per-attempt <int range>`: Hard native request ceiling per attempt; resume preserves its saved value.  [1&lt;=x&lt;=16]
+* `--observation-store <path>`: Private SQLite store outside protected inputs.
+* `--dry-run`: Inspect inputs and limits without starting a native harness or provider.
+* `--detect-capabilities, --detect`: Explicit zero-provider structural detection and profile persistence.
+* `--resume`: Continue the same frozen comparison without redispatching completed work.
+* `--calibration-only`: Stop after successful calibration, before selection or confirmation; preserve the full frozen allowance.
 * `--acknowledge-model-execution`: Approve the inspected native execution within its frozen limits.
 * `--format <human|json>`: Output format.  [default: human]
 * `--help`: Show this message and exit.
@@ -194,6 +225,7 @@ $ ithrl inspect [OPTIONS] COMMAND [ARGS]...
 **Commands**:
 
 * `costs`: Inspect a saved cost estimate without...
+* `comparison`: Inspect a saved comparison without a...
 * `reacquire`: Inspect recorded operations and results...
 * `sections`: List eligible section IDs and half-open...
 * `retained`: Explain retained context and recorded...
@@ -214,6 +246,26 @@ $ ithrl inspect costs [OPTIONS] {report}
 
 **Options**:
 
+* `--format <human|json>`: [default: human]
+* `--help`: Show this message and exit.
+
+### `ithrl inspect comparison`
+
+Inspect a saved comparison without a runner or observation database.
+
+**Usage**:
+
+```console
+$ ithrl inspect comparison [OPTIONS] {result}
+```
+
+**Arguments**:
+
+* `result`: Saved comparison evidence.  [required]
+
+**Options**:
+
+* `--case <path>`: Revalidate both context selections against this source case.
 * `--format <human|json>`: [default: human]
 * `--help`: Show this message and exit.
 

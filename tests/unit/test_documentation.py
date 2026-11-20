@@ -25,6 +25,7 @@ SITE_PAGES = frozenset(
         "native-runs.md",
         "reduction.md",
         "fuzzing.md",
+        "comparison.md",
         "results.md",
         "cli.md",
         "troubleshooting.md",

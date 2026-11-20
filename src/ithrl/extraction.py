@@ -81,12 +81,17 @@ def extract_decision(
     )
 
 
-def validate_experiment_target(decision: DecisionEvidence, target: BehaviorTarget) -> None:
-    """Require an experiment predicate to describe the selected observed behavior."""
+def validate_experiment_target(
+    decision: DecisionEvidence,
+    target: BehaviorTarget,
+    *,
+    require_observed_match: bool = True,
+) -> None:
+    """Preserve the captured target category and, normally, its observed match."""
 
     if target.type != decision.selected_target.type:
         raise CaseFormatError("experiment target category does not match the selected decision")
-    if not evaluate_target(target, decision.observation):
+    if require_observed_match and not evaluate_target(target, decision.observation):
         raise CaseFormatError("experiment target does not match the observed decision")
 
 

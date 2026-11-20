@@ -30,7 +30,13 @@ from ithrl.experiment import (
     SampledCalibrationPhase,
     SampledExperimentDefinition,
 )
-from ithrl.observations import ObservationArm, ObservationOutcome, ObservationRole, ObservationStore
+from ithrl.observations import (
+    ObservationArm,
+    ObservationOutcome,
+    ObservationRole,
+    ObservationStore,
+    ObservationStoreError,
+)
 from ithrl.runner import (
     AttemptEvidence,
     PreparedAttempt,
@@ -79,12 +85,13 @@ def test_calibration_lock_rejects_hard_link_without_modifying_store(tmp_path: Pa
     os.link(store.path, lock_path)
 
     with (
-        pytest.raises(ValueError, match="calibration lock file is unsafe"),
+        pytest.raises(ObservationStoreError, match="exactly one link"),
         calibration_module._calibration_lock(store),
     ):
         pytest.fail("hard-linked database was accepted as a lock")
 
     assert store.path.read_bytes() == lock_path.read_bytes() == original
+    lock_path.unlink()
     store.initialize()
 
 

@@ -23,6 +23,7 @@ The skill installer does not install or upgrade ithrl.
 | Select evidence, extract a case and check native prerequisites | `docs/native-runs.md` |
 | Prepare and execute context removal | `docs/reduction.md` |
 | Configure and run text-append fuzzing | `docs/fuzzing.md` |
+| Compare two explicit contexts for repair or degradation | `docs/comparison.md` |
 | Inspect results, resume work and estimate token costs | `docs/results.md` |
 | Resolve reported failures | `docs/troubleshooting.md` |
 | Understand measured outcomes and limits | `docs/measurements.md` |
@@ -47,10 +48,11 @@ coarse search will retain a field or that removing a paragraph preserves behavio
 
 Read the matching release's Native runs guide to select session, decision and target IDs. When
 selection is incomplete, non-interactive extraction reports available IDs without exposing session
-text. Save the case in a new private directory; extraction refuses overwrite. Literal predicates
-must match the saved decision. Prefer a specific behavior the developer cares about over exact prose
-matching when wording can vary. Changing the predicate after observing outcomes starts a different
-experiment.
+text. Save the case in a new private directory; extraction refuses overwrite. Extraction predicates
+must match the saved decision. A comparison can then declare a prospective predicate in the same
+target category while preserving that decision. Prefer a specific behavior the developer cares
+about over exact prose matching when wording can vary. Changing the predicate after observing
+outcomes starts a different experiment.
 
 Check the supported-inputs table for the source harness and target. Passive compaction evidence
 does not establish active reconstruction support. Do not edit unknown records or substitute a
@@ -98,12 +100,28 @@ ordinary case. After reviewing the dry-run report, execute only within the autho
 Candidate generation and simplification are exploratory. A campaign freshly confirms at most one
 selected decrease in match probability; it does not establish a model defect or a unique cause.
 
+## Compare two explicit contexts
+
+Read the matching source ref's Context comparison guide and use an installation with the `compare`
+extra. Bind reference and candidate selections to one immutable case. Keep the triggering input,
+target, grader and current execution profile identical between arms. A historical capture may
+suggest a change but supplies no experimental sample credit.
+
+Use the normal `ithrl compare` detection, dry-run and execution workflow from that guide.
+Calibration checks the declared contrast; confirmation uses fresh observations. A saved run resumes
+with its original inputs and allowance. An explicit prospective Codex profile can select a different
+model or provider and omit historical reasoning from both execution copies. Report that projection
+separately from the tested context edit; it does not establish historical equivalence. Do not select
+a model from the agent's own defaults.
+
 ## Interpret results and costs
 
-Start with the reported result directory's `summary.json`. Keep complete versus incomplete search,
-confirmed versus inconclusive preservation, and invalid versus behavioral outcomes separate.
-For recovery, follow the report's continuation with the original identities; leave saved JSON and
-SQLite state unchanged.
+For reduction and fuzzing, start with the reported result directory's `summary.json`. For
+comparison, read the reported `result_path` with `ithrl inspect comparison RESULT --format json`;
+add `--case CASE` to re-derive its source selections. Keep complete versus incomplete search,
+confirmed versus inconclusive effects, and invalid versus behavioral outcomes separate. For
+recovery, follow the report's continuation with the original identities; leave saved JSON and SQLite
+state unchanged.
 
 Read the matching release's Results and privacy guide for the private pricing specification and
 `ithrl cost` modes. Recorded costs require the case and experiment digests as well as explicit

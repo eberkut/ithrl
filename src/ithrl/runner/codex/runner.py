@@ -11,6 +11,7 @@ from typing import cast
 from ithrl.behavior import MAX_BEHAVIOR_TEXT_LENGTH
 from ithrl.context import JsonObject, JsonValue, content_digest
 from ithrl.execution import CapabilityProfile
+from ithrl.experiment import CodexReplayConfig
 from ithrl.runner.codex.configuration import CodexProviderConfiguration
 from ithrl.runner.codex.isolation import (
     CodexIsolationError,
@@ -28,6 +29,7 @@ from ithrl.runner.codex.materialize import (
 from ithrl.runner.codex.policy import (
     CAPTURE_TYPE,
     CONTEXT_OPERATIONS,
+    CONTINUATION_INSTRUCTIONS,
     MATERIALIZATION,
     POLICY_VERSION,
     RECONSTRUCTION_METHOD,
@@ -71,6 +73,8 @@ from ithrl.runner.runtime.protection import (
 )
 from ithrl.runner.validation import validate_run_result
 
+WORKSPACE_PROTECTION_POLICY = "internal-relative-links-v1"
+
 
 class CodexRunner:
     """Execute one reconstructed Codex turn with every action surface disabled."""
@@ -81,6 +85,7 @@ class CodexRunner:
         capability_profile: CapabilityProfile,
         runtime: CodexRuntime,
         configuration: CodexProviderConfiguration,
+        codex_replay: CodexReplayConfig | None = None,
         state_parent: Path,
         output_root: Path,
         source_paths: Iterable[ProtectedPath],
@@ -88,6 +93,8 @@ class CodexRunner:
     ) -> None:
         _validate_capability(capability_profile)
         _validate_configuration(capability_profile, configuration, runtime)
+        if codex_replay is not None and codex_replay.provider != capability_profile.provider:
+            raise ValueError("Codex replay provider does not match its capability profile")
         sources = tuple(source_paths)
         workspaces = tuple(workspace_paths)
         if not sources or not workspaces:
@@ -107,6 +114,7 @@ class CodexRunner:
         self._capability = capability_profile
         self._runtime = runtime
         self._configuration = configuration
+        self._codex_replay = codex_replay
         self._client_version = distribution_version("ithrl")
         self._worker_source = Path(__file__).with_name("worker.py")
         self._worker_digest = program_digest(self._worker_source)
@@ -135,17 +143,26 @@ class CodexRunner:
             "capability": self._capability.digest,
             "materialization": self._capability.reconstruction_method,
             "policy": POLICY_VERSION,
+            "continuation_instructions": CONTINUATION_INSTRUCTIONS,
+            "workspace_protection": WORKSPACE_PROTECTION_POLICY,
             "provider_configuration": self._configuration.public_digest,
             "runtime": self._runtime.identity,
             "worker": self._worker_digest,
             "support_programs": {source.name: digest for source, digest in self._support_programs},
         }
+        if self._codex_replay is not None:
+            identity["codex_replay"] = self._codex_replay.model_dump()
         return f"codex-v{RUNNER_VERSION}:{content_digest(identity)}"
 
     def validate_candidate(self, attempt: PreparedAttempt) -> None:
         """Check source-backed reconstruction without runtime or provider operations."""
 
         try:
+            if attempt.execution_plan.codex_replay != self._codex_replay:
+                raise CodexMaterializationError(
+                    CodexMaterializationErrorCode.INCOMPATIBLE_CASE,
+                    "Codex replay does not match the selected runner",
+                )
             materialized = materialize_codex_attempt(attempt)
             _validate_materialized_identity(materialized, attempt)
             validate_codex_output_limit(materialized, self._configuration.tool_output_token_limit)
@@ -210,6 +227,7 @@ class CodexRunner:
                 max_protected_entries=DEFAULT_MAX_PROTECTED_ENTRIES,
                 max_protected_bytes=DEFAULT_MAX_PROTECTED_BYTES,
                 runtime_deadline=runtime_deadline,
+                allow_internal_workspace_symlinks=True,
             )
         except ProcessRuntimeCancelled as cancelled:
             error = _runtime_error(
@@ -291,7 +309,11 @@ class CodexRunner:
                 "Codex runner inputs changed after capability detection",
             )
         plan = attempt.execution_plan
-        if plan.capability != self._capability or plan.runner_fingerprint != self.fingerprint:
+        if (
+            plan.capability != self._capability
+            or plan.runner_fingerprint != self.fingerprint
+            or plan.codex_replay != self._codex_replay
+        ):
             raise RunnerError(
                 RunnerErrorCode.CONTRACT,
                 "Codex runner does not match the resolved execution plan",
@@ -445,6 +467,7 @@ def _require_normalized_outcome(
     native_output: NativeOutputReference,
 ) -> None:
     error: tuple[RunnerErrorCode, str] | None = None
+    returned_model = None
     if outcome.final_text is not None and len(outcome.final_text) > MAX_BEHAVIOR_TEXT_LENGTH:
         error = (
             RunnerErrorCode.OUTPUT_LIMIT,
@@ -461,12 +484,23 @@ def _require_normalized_outcome(
             RunnerErrorCode.PROTOCOL,
             "Codex returned invalid model identity metadata",
         )
+    elif (
+        attempt.execution_plan.codex_replay is not None
+        and outcome.model_returned is not None
+        and outcome.model_returned != attempt.execution_plan.model_requested
+    ):
+        error = (
+            RunnerErrorCode.PROTOCOL,
+            "Codex returned a different model from the replay selection",
+        )
+        returned_model = outcome.model_returned
     if error is None:
         return
     raise RunnerError(
         *error,
         provider_acceptance_state=ProviderAcceptanceState(outcome.provider_acceptance),
         model_requested=attempt.execution_plan.model_requested,
+        model_returned=returned_model,
         provider=attempt.execution_plan.capability.provider,
         endpoint=attempt.execution_plan.capability.endpoint,
         usage=_token_usage(outcome),

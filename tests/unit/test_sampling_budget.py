@@ -273,7 +273,7 @@ def test_invalid_budget_arguments_fail_closed() -> None:
             attempt_cost=cost,
             confirmation_attempts=1,
             search_blocks=1,
-            role=cast(Literal["search", "confirmation"], "calibration"),
+            role=cast(Literal["search", "confirmation"], "unsupported"),
         )
 
 

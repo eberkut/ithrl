@@ -619,6 +619,31 @@ def test_store_refuses_a_symbolic_link_database(tmp_path: Path) -> None:
         ObservationStore(linked).initialize()
 
 
+@pytest.mark.parametrize("operation", ["initialize", "acquire_sampling_lock"])
+def test_store_refuses_hard_link_before_changing_its_inode(tmp_path: Path, operation: str) -> None:
+    target = tmp_path / "target.sqlite"
+    target.write_bytes(b"private evidence")
+    target.chmod(0o640)
+    linked = tmp_path / "linked.sqlite"
+    linked.hardlink_to(target)
+    before = target.stat()
+    store = ObservationStore(linked)
+
+    if operation == "initialize":
+        with pytest.raises(ObservationStoreError, match="exactly one link"):
+            store.initialize()
+    else:
+        with (
+            pytest.raises(ObservationStoreError, match="exactly one link"),
+            store.acquire_sampling_lock(),
+        ):
+            pytest.fail("hard-linked database was locked")
+
+    assert target.read_bytes() == b"private evidence"
+    assert target.stat().st_mode == before.st_mode
+    assert not (tmp_path / "linked.sqlite.sampling.lock").exists()
+
+
 def test_store_refuses_a_symbolic_link_parent(tmp_path: Path) -> None:
     target = tmp_path / "target"
     target.mkdir()
@@ -825,12 +850,14 @@ def test_sampling_store_lock_refuses_hard_link_without_truncating_evidence(
     lock_path = store.path.with_name(f"{store.path.name}.sampling.lock")
     lock_path.hardlink_to(target)
 
+    refusal = "exactly one link" if target_kind == "database" else "sampling lock file is unsafe"
     with (
-        pytest.raises(ObservationStoreError, match="sampling lock file is unsafe"),
+        pytest.raises(ObservationStoreError, match=refusal),
         store.acquire_sampling_lock(),
     ):
         pytest.fail("hard-linked sampling lock was accepted")
 
     assert target.read_bytes() == original
     assert lock_path.read_bytes() == original
+    lock_path.unlink()
     assert store.get(observation.observation_id) == observation
