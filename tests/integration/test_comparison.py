@@ -8,7 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Literal, cast, override
+from typing import Any, Literal, cast, override
 
 import pytest
 
@@ -39,6 +39,7 @@ from ithrl.context import content_digest
 from ithrl.execution import CapabilityProfile, ResourceLimits, SafetyPolicy
 from ithrl.execution.budget import sampling_attempt_cost
 from ithrl.experiment import (
+    CodexReplayConfig,
     FakeRunnerConfig,
     NativeRunnerConfig,
     SampledCalibrationPhase,
@@ -411,6 +412,88 @@ def test_confirmation_after_pilot_keeps_the_original_wall_time_allowance(tmp_pat
     assert result.stop_reason == "wall-time-exhausted"
     assert result.state.approvals == pilot.state.approvals
     assert len(fixture.runner.attempts) == 2
+    assert result.state.comparison_progress is not None
+    assert result.state.comparison_progress.terminal is ComparisonOutcome.INCOMPLETE
+    assert result.state.comparison_progress.stopped_at is not None
+    assert fixture.run(clock=clock).blocks == result.blocks
+    assert len(fixture.runner.attempts) == 2
+
+
+@pytest.mark.parametrize("dispatched", [False, True])
+def test_selected_confirmation_expiry_is_terminal_without_reselection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dispatched: bool
+) -> None:
+    fixture = _fixture(tmp_path)
+    collect = comparison_engine._collect_sampling_block_owned
+
+    async def interrupt_before_confirmation(**kwargs: Any):
+        if kwargs["plan"].role == "confirmation":
+            raise KeyboardInterrupt
+        return await collect(**kwargs)
+
+    def interrupt_partial(block: SamplingBlockEvidence) -> None:
+        if block.plan.role == "confirmation" and len(block.attempts) == 1:
+            raise KeyboardInterrupt
+
+    if dispatched:
+        with pytest.raises(KeyboardInterrupt):
+            fixture.run(on_progress=interrupt_partial)
+    else:
+        with monkeypatch.context() as scoped:
+            scoped.setattr(
+                comparison_engine, "_collect_sampling_block_owned", interrupt_before_confirmation
+            )
+            with pytest.raises(KeyboardInterrupt):
+                fixture.run()
+    with fixture.state.acquire_lock(fixture.store):
+        state = fixture.state.load(fixture.store)
+    assert state.selection is not None
+    assert state.pending is None
+    count = len(fixture.runner.attempts)
+    expired = state.selection.plan.expires_at + timedelta(seconds=1)
+    result = fixture.run(clock=lambda: expired)
+    assert result.outcome is ComparisonOutcome.INCOMPLETE
+    assert result.stop_reason == "freshness-expired"
+    assert result.state.selection == state.selection
+    assert result.state.comparison_progress is not None
+    assert result.state.comparison_progress.terminal is ComparisonOutcome.INCOMPLETE
+    assert result.state.comparison_progress.stopped_at == expired
+    assert len(fixture.runner.attempts) == count
+    assert fixture.run(clock=lambda: expired).blocks == result.blocks
+    assert len(fixture.runner.attempts) == count
+    destination = tmp_path / "evidence" / "expired.json"
+    write_comparison_result(destination, result)
+    assert load_comparison_result(destination, fixture.evidence) == result
+    payload = result.model_dump(mode="json")
+    payload["state"]["comparison_progress"]["stopped_at"] = (
+        state.selection.plan.expires_at - timedelta(seconds=1)
+    ).isoformat()
+    with pytest.raises(ValueError, match="terminal incompleteness"):
+        ComparisonEvidence.model_validate_json(json.dumps(payload))
+
+
+@pytest.mark.parametrize("declared", [True, False])
+def test_declared_replay_mismatch_refuses_before_candidate_admission(
+    tmp_path: Path, declared: bool
+) -> None:
+    from dataclasses import replace
+
+    fixture = _fixture(tmp_path)
+    replay = CodexReplayConfig(provider="openai", model="declared-model")
+    configuration = fixture.configuration.model_copy(
+        update={"codex_replay": replay if declared else None}
+    )
+    prepared = fixture.prepared
+    if not declared:
+        prepared = replace(
+            prepared,
+            execution_plan=prepared.execution_plan.model_copy(update={"codex_replay": replay}),
+        )
+    admitted = len(fixture.runner.admissions)
+    with pytest.raises(ValueError, match="replay differs"):
+        prepare_comparison(fixture.evidence, prepared, configuration)
+    assert len(fixture.runner.admissions) == admitted
+    assert fixture.runner.attempts == []
 
 
 def test_calibration_does_not_supply_confirmation_credit(tmp_path: Path) -> None:

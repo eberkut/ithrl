@@ -281,5 +281,9 @@ ithrl compare RUN_DIRECTORY --resume --acknowledge-model-execution
 Resume preserves the pair, target, policy and allowance. It never repeats completed confirmation
 or redispatches an unresolved attempt. Inspecting an already completed run requires no execution
 acknowledgment or native detection. Resume requires the implementation that created the run;
-use offline inspection for results from a different implementation. If result publication failed,
-restore output access and resume to publish the saved terminal evidence without collecting again.
+use offline inspection for results from a different implementation. An expired freshness window or
+wall-time allowance ends the comparison; inspect its saved evidence before preparing a new run.
+
+If publication fails, follow the reported recovery action. Restore write access for an output
+failure, or preserve a conflicting destination file elsewhere. Then resume to publish the saved
+terminal evidence without collecting again; ithrl never overwrites the conflicting file.

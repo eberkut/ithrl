@@ -18,6 +18,7 @@ from ithrl.cli.comparison_output import (
     comparison_exit_code,
     render_comparison,
     result_report,
+    safe_display_identifier,
 )
 from ithrl.cli.comparison_session import (
     ComparisonProfile,
@@ -43,12 +44,20 @@ if TYPE_CHECKING:
     from ithrl.comparison.engine import PreparedComparison
     from ithrl.comparison.results import ComparisonEvidence
     from ithrl.experiment import AnyExperimentDefinition
-    from ithrl.observations import ObservationStore
-    from ithrl.run_state import SampledRunStateFile
+    from ithrl.observations import ObservationStore, SamplingBlockEvidence
+    from ithrl.run_state import SampledRunState, SampledRunStateFile
 
 
 class ComparisonInputRefusal(ValueError):
     """A fixed diagnostic for a comparison input or mode refusal."""
+
+
+class ComparisonResultConflict(ComparisonSessionError):
+    """An existing destination cannot represent the canonical comparison evidence."""
+
+    def __init__(self, session: ComparisonSession) -> None:
+        super().__init__("comparison result destination conflicts with its saved evidence")
+        self.session = session
 
 
 def prepare_comparison_profile(
@@ -178,8 +187,8 @@ def report_for_profile(profile: ComparisonProfile, *, harness_started: bool) -> 
         configuration_digest=config.digest,
         comparison_digest=profile.binding.digest,
         harness=harness,
-        model=plan.model_requested,
-        provider=plan.capability.provider,
+        model=safe_display_identifier(plan.model_requested),
+        provider=safe_display_identifier(plan.capability.provider),
         harness_started=harness_started,
         capability_source="builtin"
         if plan.capability.runner_type == "fake"
@@ -239,21 +248,35 @@ def _snapshot(
 def _saved_result(
     session: ComparisonSession, state_file: SampledRunStateFile, store: ObservationStore
 ) -> ComparisonEvidence | None:
-    from ithrl.case import CaseWorkspace
-    from ithrl.comparison.results import load_comparison_result
-
     state = state_file.load(store)
     validate_session_state(session, state)
     if state.comparison_progress is None or state.comparison_progress.terminal is None:
         return None
     if session.result_path.exists() or session.result_path.is_symlink():
-        result = load_comparison_result(
-            session.result_path, case_evidence=CaseWorkspace(session.profile.case_path).load()
-        )
-        if result.state != state or result.blocks != state_file.evidence(store):
-            raise ComparisonSessionError("saved comparison result differs from canonical evidence")
-        return result
+        return _load_terminal_result(session, state, state_file.evidence(store))
     return _snapshot(session, state_file, store)
+
+
+def _load_terminal_result(
+    session: ComparisonSession,
+    state: SampledRunState,
+    blocks: tuple[SamplingBlockEvidence, ...],
+) -> ComparisonEvidence:
+    from ithrl.case import CaseWorkspace
+    from ithrl.comparison.results import load_comparison_result
+
+    evidence = CaseWorkspace(session.profile.case_path).load()
+    try:
+        result = load_comparison_result(session.result_path, case_evidence=evidence)
+    except (OSError, ValueError):
+        raise ComparisonResultConflict(session) from None
+    if (
+        result.state != state
+        or result.blocks != blocks
+        or result.execution_metadata != session.profile.execution_plan.inspection_metadata
+    ):
+        raise ComparisonResultConflict(session)
+    return result
 
 
 def execute_comparison(
@@ -362,19 +385,18 @@ def execute_comparison(
         validate_session_state(session, current_state)
         if current_state != result.state:
             raise ComparisonSessionError("comparison changed before result publication")
-        report = result_report(result).model_copy(
-            update={
-                "case_path": str(session.profile.case_path),
-                "run_state_path": str(session.run_directory),
-                "harness": session.profile.execution_plan.capability.runner_type,
-                "model": session.profile.execution_plan.model_requested,
-                "provider": session.profile.execution_plan.capability.provider,
-                "source_validation": "verified",
-                "harness_started": prepared is not None
-                and session.profile.execution_plan.capability.runner_type != "fake",
-                "limits": session.profile.configuration.limits,
-            }
-        )
+        session_fields = {
+            "case_path": str(session.profile.case_path),
+            "run_state_path": str(session.run_directory),
+            "harness": session.profile.execution_plan.capability.runner_type,
+            "model": safe_display_identifier(session.profile.execution_plan.model_requested),
+            "provider": safe_display_identifier(session.profile.execution_plan.capability.provider),
+            "source_validation": "verified",
+            "harness_started": prepared is not None
+            and session.profile.execution_plan.capability.runner_type != "fake",
+            "limits": session.profile.configuration.limits,
+        }
+        report = result_report(result).model_copy(update=session_fields)
         if dry_run:
             return report.model_copy(
                 update={"next_action": "Saved evidence inspected without native execution."}
@@ -389,15 +411,11 @@ def execute_comparison(
         try:
             prepare_private_directory(destination.parent)
             if destination.exists() or destination.is_symlink():
-                from ithrl.comparison.results import load_comparison_result
-
-                if load_comparison_result(destination) != result:
-                    raise ComparisonSessionError(
-                        "comparison result path already contains different evidence"
-                    )
+                result = _load_terminal_result(session, current_state, result.blocks)
+                report = result_report(result).model_copy(update=session_fields)
             else:
                 write_comparison_result(destination, result)
-        except (OSError, ValueError):
+        except (OSError, ValueError) as error:
             resume_args = (
                 "ithrl",
                 "compare",
@@ -408,12 +426,20 @@ def execute_comparison(
             if calibration_only:
                 resume_args += ("--calibration-only",)
             command, shell = shell_command(resume_args)
+            conflict = isinstance(error, ComparisonResultConflict)
+            if conflict:
+                next_action = "Preserve the conflicting result file elsewhere, then resume the canonical run to publish its saved evidence."
+            elif calibration_only:
+                next_action = "Restore private output access, then resume with --calibration-only to publish the saved pilot evidence without starting confirmation."
+            else:
+                next_action = "Restore private output access, then resume the canonical run to publish its saved evidence without repeating completed observations."
             return report.model_copy(
                 update={
-                    "error_code": "result-publication-failed",
-                    "next_action": "Restore private output access, then resume with --calibration-only to publish the saved pilot evidence without starting confirmation."
-                    if calibration_only
-                    else "Restore private output access, then resume the canonical run to publish its saved evidence without repeating completed observations.",
+                    "error_code": "result-destination-conflict"
+                    if conflict
+                    else "result-publication-failed",
+                    "result_path": str(destination),
+                    "next_action": next_action,
                     "next_command": command,
                     "next_command_shell": shell,
                 }
@@ -421,6 +447,12 @@ def execute_comparison(
         report = report.model_copy(update={"result_path": str(destination)})
         if execution_refused:
             report = report.model_copy(update={"error_code": "comparison-execution-refused"})
+        if report.stop_reason in {"wall-time-exhausted", "freshness-expired"}:
+            return report.model_copy(
+                update={
+                    "next_action": "Inspect the saved evidence. The frozen time limit has expired; a new comparison requires a new run."
+                }
+            )
         if (
             interrupted
             or report.status == "calibrated"
@@ -471,6 +503,7 @@ def _handle(
     calibration_only: bool = False,
 ) -> ComparisonOutput:
     from ithrl.case import CaseWorkspace
+    from ithrl.cli.paths import observation_storage_paths
     from ithrl.cli.sampled import _observation_store_path
     from ithrl.comparison.engine import _require_comparison_numerics
     from ithrl.comparison.results import validate_comparison_source
@@ -559,6 +592,12 @@ def _handle(
     store_path = _observation_store_path(
         workspace, original_workspace or workspace.root, observation_store
     )
+    if profile_path is not None:
+        profile_path = _observation_store_path(
+            workspace, original_workspace or workspace.root, profile_path
+        )
+        if profile_path in observation_storage_paths(store_path):
+            raise ComparisonInputRefusal("profile-store-overlap")
     if profile is not None:
         saved_limit = profile.execution_plan.capability.provider_calls_per_attempt
         if max_provider_calls_per_attempt not in (None, saved_limit):
@@ -638,14 +677,16 @@ def _handle(
         profile_path = _observation_store_path(
             workspace, original_workspace or workspace.root, profile_path
         )
-        if profile_path == store_path:
+        if profile_path in observation_storage_paths(store_path):
             raise ComparisonInputRefusal("profile-store-overlap")
         save_comparison_profile(profile_path, profile)
         return report.model_copy(
             update={
-                "status": "detected",
+                "status": "refused" if report.status == "refused" else "detected",
                 "profile_path": str(profile_path),
-                "next_action": "Inspect a harness-free --dry-run with this --profile before acknowledging execution.",
+                "next_action": "Revise the refused limits or configuration and detect again with a new profile."
+                if report.status == "refused"
+                else "Inspect a harness-free --dry-run with this --profile before acknowledging execution.",
             }
         )
     if report.status == "refused":
@@ -806,6 +847,18 @@ def compare(
             status="refused",
             error_code="invalid-comparison-configuration",
             next_action="Check context selectors, explicit sampling fields and private file permissions.",
+        )
+    except ComparisonResultConflict as error:
+        session = error.session
+        command, shell = shell_command(("ithrl", "compare", str(session.run_directory), "--resume"))
+        report = ComparisonOutput(
+            status="refused",
+            error_code="result-destination-conflict",
+            result_path=str(session.result_path),
+            run_state_path=str(session.run_directory),
+            next_action="Preserve the conflicting result file elsewhere, then resume the canonical run to publish its saved evidence.",
+            next_command=command,
+            next_command_shell=shell,
         )
     except ComparisonSessionError:
         report = ComparisonOutput(

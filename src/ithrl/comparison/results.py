@@ -76,6 +76,12 @@ class ComparisonEvidence(BaseModel):
         progress = self.state.comparison_progress
         if (
             progress is not None
+            and progress.stopped_at is not None
+            and (progress.stopped_at > self.recorded_at)
+        ):
+            raise ValueError("comparison stop follows its evidence snapshot")
+        if (
+            progress is not None
             and progress.terminal is not None
             and self.refusal not in {None, progress.stop_reason}
         ):

@@ -368,16 +368,7 @@ def _rebuild_wheel(sdist: Path, tmp_path: Path) -> Path:
     return _one_distribution(rebuilt, "*.whl")
 
 
-def _assert_installed_workflow(wheel: Path, tmp_path: Path, expected_version: str) -> None:
-    environment = tmp_path / "environment"
-    _run("uv", "venv", "--python", sys.executable, str(environment), cwd=tmp_path)
-    executable = environment / ("Scripts/ithrl.exe" if os.name == "nt" else "bin/ithrl")
-    python = environment / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
-    _run("uv", "pip", "install", "--python", str(python), str(wheel), cwd=tmp_path)
-
-    runtime = tmp_path / "runtime"
-    runtime.mkdir()
-    case = runtime / "case"
+def _installed_environment(runtime: Path) -> dict[str, str]:
     child_environment = {
         name: os.environ[name]
         for name in (
@@ -398,6 +389,20 @@ def _assert_installed_workflow(wheel: Path, tmp_path: Path, expected_version: st
     child_environment["NO_COLOR"] = "1"
     child_environment["XDG_DATA_HOME"] = str(runtime / "data")
     child_environment["HOME"] = str(runtime / "home")
+    return child_environment
+
+
+def _assert_installed_workflow(wheel: Path, tmp_path: Path, expected_version: str) -> None:
+    environment = tmp_path / "environment"
+    _run("uv", "venv", "--python", sys.executable, str(environment), cwd=tmp_path)
+    executable = environment / ("Scripts/ithrl.exe" if os.name == "nt" else "bin/ithrl")
+    python = environment / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    _run("uv", "pip", "install", "--python", str(python), str(wheel), cwd=tmp_path)
+
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    case = runtime / "case"
+    child_environment = _installed_environment(runtime)
 
     help_result = _run(str(executable), "--help", cwd=runtime, env=child_environment)
     assert "Test how agent context affects a model decision" in help_result.stdout
@@ -981,7 +986,16 @@ def test_installed_comparison_collects_confirms_and_inspects(
     runtime = tmp_path / "runtime"
     runtime.mkdir()
     case = runtime / "case"
-    _run(str(executable), "extract", "--example", "--output", str(case), cwd=runtime)
+    child_environment = _installed_environment(runtime)
+    _run(
+        str(executable),
+        "extract",
+        "--example",
+        "--output",
+        str(case),
+        cwd=runtime,
+        env=child_environment,
+    )
     config = runtime / "comparison.toml"
     config.write_text(
         """schema_version = 1
@@ -1030,10 +1044,12 @@ attempt_timeout_seconds = 1
         "--format",
         "json",
     )
-    dry = json.loads(_run(*arguments, "--dry-run", cwd=runtime).stdout)
+    dry = json.loads(_run(*arguments, "--dry-run", cwd=runtime, env=child_environment).stdout)
     assert dry["status"] == "ready"
     assert dry["planned_attempts"] == 44
-    pilot = json.loads(_run(*arguments, "--calibration-only", cwd=runtime).stdout)
+    pilot = json.loads(
+        _run(*arguments, "--calibration-only", cwd=runtime, env=child_environment).stdout
+    )
     assert pilot["status"] == "calibrated"
     repeated = json.loads(
         _run(
@@ -1045,6 +1061,7 @@ attempt_timeout_seconds = 1
             "--format",
             "json",
             cwd=runtime,
+            env=child_environment,
         ).stdout
     )
     assert repeated["status"] == "calibrated"
@@ -1061,6 +1078,7 @@ attempt_timeout_seconds = 1
             "--format",
             "json",
             cwd=runtime,
+            env=child_environment,
         ).stdout
     )
     assert collected["status"] == "confirmed-improvement"
@@ -1075,6 +1093,7 @@ attempt_timeout_seconds = 1
             "--format",
             "json",
             cwd=runtime,
+            env=child_environment,
         ).stdout
     )
     assert resumed["status"] == collected["status"]
@@ -1093,6 +1112,7 @@ attempt_timeout_seconds = 1
             "--format",
             "json",
             cwd=runtime,
+            env=child_environment,
         ).stdout
     )
     assert inspected["source_validation"] == "verified"

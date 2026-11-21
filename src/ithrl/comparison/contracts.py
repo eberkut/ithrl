@@ -231,18 +231,24 @@ class ComparisonProgress(_Contract):
     stop_reason: Annotated[
         str | None, Field(min_length=1, max_length=128, pattern=r"^[a-z][a-z0-9-]*$")
     ] = None
+    stopped_at: datetime | None = Field(default=None, exclude_if=lambda value: value is None)
 
-    @field_validator("selected_at")
+    @field_validator("selected_at", "stopped_at")
     @classmethod
-    def validate_selected_at(cls, value: datetime | None) -> datetime | None:
+    def validate_time(cls, value: datetime | None) -> datetime | None:
         if value is not None:
             if value.tzinfo is None or value.utcoffset() is None:
-                raise ValueError("comparison selection must include a UTC offset")
+                raise ValueError("comparison time must include a UTC offset")
             return value.astimezone(UTC)
         return None
 
     @model_validator(mode="after")
     def validate_terminal(self) -> ComparisonProgress:
+        timed_stop = self.stop_reason in {"freshness-expired", "wall-time-exhausted"}
+        if (self.stopped_at is not None) != timed_stop or (
+            timed_stop and self.terminal is not ComparisonOutcome.INCOMPLETE
+        ):
+            raise ValueError("comparison timing refusal requires its terminal stop time")
         if (
             self.terminal
             in {

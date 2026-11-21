@@ -273,6 +273,8 @@ def prepare_comparison(
         or prepared.runner.capability_profile != prepared.execution_plan.capability
     ):
         raise ValueError("comparison runner differs from its prepared execution plan")
+    if configuration.codex_replay != prepared.execution_plan.codex_replay:
+        raise ValueError("comparison replay differs from its prepared execution plan")
     partitions: list[Candidate] = []
     selections: tuple[tuple[ContextSelection, Literal["baseline", "candidate"]], ...] = (
         (configuration.reference, "baseline"),
@@ -399,6 +401,28 @@ def _incomplete_reason(block: SamplingBlockEvidence) -> str | None:
     return None
 
 
+def _timing_refusal(
+    state: SampledRunState,
+    blocks: tuple[SamplingBlockEvidence, ...],
+    stopped_at: datetime,
+) -> str | None:
+    """Prove expiry from the frozen plan or allowance without collecting again."""
+
+    plan = (
+        state.selection.plan
+        if state.selection is not None
+        else (blocks[-1].plan if blocks else None)
+    )
+    if plan is not None:
+        if blocks and blocks[-1].plan == plan and blocks[-1].complete and blocks[-1].eligible:
+            return None
+        if stopped_at >= plan.expires_at:
+            return "freshness-expired"
+    if (stopped_at - state.started_at).total_seconds() > state.allowance.max_wall_time_seconds:
+        return "wall-time-exhausted"
+    return None
+
+
 def confirm_comparison(
     block: SamplingBlockEvidence,
 ) -> tuple[ComparisonOutcome, float | None, float | None]:
@@ -520,6 +544,20 @@ def validate_comparison_progress(
             raise RunStateError("comparison calibration outcome differs from observations")
     elif progress.terminal is ComparisonOutcome.INCOMPLETE:
         reason = _incomplete_reason(blocks[-1]) if blocks else None
+        if progress.stopped_at is not None:
+            if progress.stopped_at < max(
+                (
+                    state.started_at,
+                    progress.selected_at or state.started_at,
+                    *(
+                        attempt.observation.recorded_at
+                        for block in blocks
+                        for attempt in block.attempts
+                    ),
+                )
+            ):
+                raise RunStateError("comparison stop precedes its observations")
+            reason = reason or _timing_refusal(state, blocks, progress.stopped_at)
         if reason is None or progress.stop_reason != reason:
             raise RunStateError("terminal incompleteness requires its observed block refusal")
     else:
@@ -675,11 +713,13 @@ async def run_comparison(
                 if collected.stop_reason == "user-interrupt":
                     raise asyncio.CancelledError
                 continue
-            reason = (
-                _incomplete_reason(collected.evidence)
-                if state_file.load(store).pending is None
-                else None
-            )
+            current, _, current_blocks = state_file._read_validated(store)
+            stopped_at = clock()
+            reason = None
+            if current.pending is None:
+                reason = _incomplete_reason(collected.evidence) or _timing_refusal(
+                    current, current_blocks, stopped_at
+                )
             if reason is not None:
                 _finish(
                     state_file,
@@ -687,6 +727,9 @@ async def run_comparison(
                     progress,
                     ComparisonOutcome.INCOMPLETE,
                     reason,
+                    stopped_at=stopped_at
+                    if reason in {"freshness-expired", "wall-time-exhausted"}
+                    else None,
                 )
             if collected.stop_reason == "user-interrupt":
                 raise asyncio.CancelledError
@@ -699,9 +742,14 @@ def _finish(
     progress: ComparisonProgress,
     outcome: ComparisonOutcome,
     reason: str,
+    *,
+    stopped_at: datetime | None = None,
 ) -> None:
     state_file.save_comparison_progress(
-        store, progress.model_copy(update={"terminal": outcome, "stop_reason": reason})
+        store,
+        progress.model_copy(
+            update={"terminal": outcome, "stop_reason": reason, "stopped_at": stopped_at}
+        ),
     )
 
 

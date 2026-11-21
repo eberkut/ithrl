@@ -9,20 +9,27 @@ import shlex
 import sys
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 from unittest.mock import Mock
 
 import pytest
 from typer.testing import CliRunner
 
 from ithrl.cli import app
-from ithrl.comparison.results import load_comparison_result
+from ithrl.comparison.results import ComparisonEvidence, load_comparison_result
 from ithrl.observations import ObservationStore
 from ithrl.synthetic import extract_inference
 
 
-def inputs(tmp_path: Path, *, both_reduced: bool = False, objective: str = "repair") -> list[str]:
+def inputs(
+    tmp_path: Path,
+    *,
+    both_reduced: bool = False,
+    objective: str = "repair",
+    trace_path: Path | None = None,
+) -> list[str]:
     evidence = extract_inference(
-        Path(__file__).parents[1] / "fixtures/synthetic-trace.json",
+        trace_path or Path(__file__).parents[1] / "fixtures/synthetic-trace.json",
         inference_call_id="synthetic-ac-001",
         case_path=tmp_path / "case",
     ).load()
@@ -866,3 +873,208 @@ def test_pilot_recovery_command_cannot_start_confirmation(
     assert retained.state.selection is None
     assert "authorized" in recovery_report["next_action"]
     assert "separate approval" not in recovery_report["next_action"]
+
+
+def test_unsafe_display_model_does_not_refuse_or_leak_from_a_valid_plan(tmp_path: Path) -> None:
+    payload = json.loads((Path(__file__).parents[1] / "fixtures/synthetic-trace.json").read_text())
+    payload["inferences"][0]["request"]["model"] = "local model"
+    trace = tmp_path / "trace.json"
+    trace.write_text(json.dumps(payload))
+    args = inputs(tmp_path, trace_path=trace)
+    preview = CliRunner().invoke(app, [*args, "--dry-run"])
+    assert preview.exit_code == 0, preview.output
+    assert json.loads(preview.stdout)["model"] is None
+    completed = CliRunner().invoke(app, args)
+    assert completed.exit_code == 0, completed.output
+    report = json.loads(completed.stdout)
+    assert report["model"] is None
+    assert "local model" not in completed.stdout
+    saved = load_comparison_result(Path(report["result_path"]))
+    assert all(
+        a.observation.attempt_evidence.model_requested == "local model"
+        for block in saved.blocks
+        for a in block.attempts
+    )
+
+
+@pytest.mark.parametrize("suffix", ["", "-journal", "-wal", "-shm", ".sampling.lock"])
+def test_detection_refuses_profile_store_lifecycle_overlap(tmp_path: Path, suffix: str) -> None:
+    args = inputs(tmp_path)
+    store = tmp_path / "private/observations.sqlite"
+    profile = store.with_name(store.name + suffix)
+    result = CliRunner().invoke(app, [*args, "--detect-capabilities", "--profile", str(profile)])
+    assert result.exit_code != 0
+    assert json.loads(result.stdout)["error_code"] == "profile-store-overlap"
+    assert not profile.exists()
+
+
+def test_detection_preserves_a_refused_budget(tmp_path: Path) -> None:
+    args = inputs(tmp_path)
+    config = tmp_path / "comparison.toml"
+    config.write_text(
+        config.read_text().replace("max_wall_time_seconds = 10000", "max_wall_time_seconds = 1")
+    )
+    result = CliRunner().invoke(
+        app, [*args, "--detect-capabilities", "--profile", str(tmp_path / "profiles/profile.json")]
+    )
+    report = json.loads(result.stdout)
+    assert result.exit_code != 0
+    assert report["status"] == "refused"
+    assert report["error_code"] == "wall-time-budget"
+    assert "detect again" in report["next_action"]
+
+
+def test_concurrent_terminal_publication_reuses_the_canonical_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import timedelta
+
+    from ithrl.comparison import engine
+    from ithrl.comparison.results import write_comparison_result
+
+    original = engine.run_comparison
+    published = []
+
+    async def publish_first(**kwargs: Any) -> ComparisonEvidence:
+        result = await original(**kwargs)
+        existing = result.model_copy(
+            update={"recorded_at": result.recorded_at + timedelta(microseconds=1)}
+        )
+        state_file, store = kwargs["state_file"], kwargs["store"]
+        destination = Path(result.state.source_case) / "results" / f"{result.run_id}.json"
+        with state_file.acquire_lock(store):
+            write_comparison_result(destination, existing)
+        published.append(existing)
+        return result
+
+    monkeypatch.setattr(engine, "run_comparison", publish_first)
+    completed = CliRunner().invoke(app, inputs(tmp_path))
+    assert completed.exit_code == 0, completed.output
+    report = json.loads(completed.stdout)
+    assert report["error_code"] is None
+    assert load_comparison_result(Path(report["result_path"])) == published[0]
+
+
+def test_conflicting_result_recovery_preserves_the_file_and_does_not_replay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ithrl.case.filesystem import prepare_private_directory
+    from ithrl.comparison import engine
+
+    original = engine.run_comparison
+
+    async def occupy_destination(**kwargs: Any) -> ComparisonEvidence:
+        result = await original(**kwargs)
+        destination = Path(result.state.source_case) / "results" / f"{result.run_id}.json"
+        prepare_private_directory(destination.parent)
+        destination.write_text("unrelated file")
+        destination.chmod(0o600)
+        return result
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(engine, "run_comparison", occupy_destination)
+        failed = CliRunner().invoke(app, inputs(tmp_path))
+    report = json.loads(failed.stdout)
+    assert failed.exit_code != 0
+    assert report["error_code"] == "result-destination-conflict"
+    assert "Preserve the conflicting" in report["next_action"]
+    destination = Path(report["result_path"])
+    assert destination.read_text() == "unrelated file"
+    rejected = CliRunner().invoke(
+        app, ["compare", report["run_state_path"], "--resume", "--format", "json"]
+    )
+    assert json.loads(rejected.stdout)["error_code"] == "result-destination-conflict"
+    destination.rename(destination.with_suffix(".preserved"))
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("result recovery redispatched completed work")
+
+    monkeypatch.setattr("ithrl.runner.FakeRunner.run", forbidden)
+    recovered = CliRunner().invoke(
+        app, ["compare", report["run_state_path"], "--resume", "--format", "json"]
+    )
+    assert recovered.exit_code == 0, recovered.output
+    assert json.loads(recovered.stdout)["status"] == "confirmed-improvement"
+
+
+def test_missing_comparison_progress_refuses_before_store_or_native_preparation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ithrl.comparison import engine
+
+    async def stop_before_collection(**_kwargs):
+        raise RuntimeError("fixture stop")
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(engine, "run_comparison", stop_before_collection)
+        initial = CliRunner().invoke(app, inputs(tmp_path))
+    report = json.loads(initial.stdout)
+    state_path = Path(report["run_state_path"]) / "sampled-state.json"
+    state = json.loads(state_path.read_text())
+    assert state["blocks"] == []
+    state.pop("comparison_progress")
+    state_path.write_text(json.dumps(state))
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("invalid comparison progress reached store or native preparation")
+
+    monkeypatch.setattr("ithrl.observations.ObservationStore.initialize", forbidden)
+    monkeypatch.setattr("ithrl.cli.native.native_selection", forbidden)
+    resumed = CliRunner().invoke(
+        app, ["compare", report["run_state_path"], "--resume", "--format", "json"]
+    )
+    assert json.loads(resumed.stdout)["error_code"] == "invalid-comparison-session"
+
+
+def test_expired_pilot_offers_inspection_without_another_resume(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from ithrl.comparison import engine
+
+    pilot = CliRunner().invoke(app, [*inputs(tmp_path), "--calibration-only"])
+    assert pilot.exit_code == 0, pilot.output
+    original = engine.run_comparison
+
+    async def expired(**kwargs: Any) -> ComparisonEvidence:
+        kwargs["clock"] = lambda: datetime.now(UTC) + timedelta(days=1)
+        return await original(**kwargs)
+
+    monkeypatch.setattr(engine, "run_comparison", expired)
+    report = json.loads(pilot.stdout)
+    resumed = CliRunner().invoke(
+        app, ["compare", report["run_state_path"], "--resume", "--format", "json"]
+    )
+    stopped = json.loads(resumed.stdout)
+    assert stopped["stop_reason"] == "wall-time-exhausted"
+    assert stopped["next_command"] is None
+    assert "Inspect" in stopped["next_action"]
+
+
+@pytest.mark.parametrize("suffix", ["-journal", ".sampling.lock"])
+def test_saved_profile_cannot_collide_with_a_later_selected_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, suffix: str
+) -> None:
+    args = inputs(tmp_path)
+    store = tmp_path / "private/observations.sqlite"
+    profile = store.with_name(store.name + suffix)
+    detection_args = args.copy()
+    detection_args[detection_args.index("--observation-store") + 1] = str(
+        tmp_path / "private/detection-store.sqlite"
+    )
+    detected = CliRunner().invoke(
+        app, [*detection_args, "--detect-capabilities", "--profile", str(profile)]
+    )
+    assert detected.exit_code == 0, detected.output
+    before = profile.read_bytes()
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("profile collision reached store initialization")
+
+    monkeypatch.setattr("ithrl.observations.ObservationStore.initialize", forbidden)
+    result = CliRunner().invoke(app, [*args, "--profile", str(profile)])
+    assert result.exit_code != 0
+    assert json.loads(result.stdout)["error_code"] == "profile-store-overlap"
+    assert profile.read_bytes() == before
+    assert not store.exists()

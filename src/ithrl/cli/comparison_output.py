@@ -134,6 +134,17 @@ class ComparisonOutput(BaseModel):
         return result
 
 
+def safe_display_identifier(value: str | None) -> str | None:
+    """Omit identifiers that cannot be displayed safely without altering private evidence."""
+
+    if value is None:
+        return None
+    try:
+        return _IDENTIFIER.validate_python(value)
+    except ValidationError:
+        return None
+
+
 def _recorded_identity(
     result: ComparisonEvidence, field: Literal["model_requested", "provider"]
 ) -> str | None:
@@ -145,10 +156,7 @@ def _recorded_identity(
     }
     if len(values) != 1:
         return None
-    try:
-        return _IDENTIFIER.validate_python(values.pop())
-    except ValidationError:
-        return None
+    return safe_display_identifier(values.pop())
 
 
 def result_report(result: ComparisonEvidence) -> ComparisonOutput:
@@ -249,6 +257,8 @@ def render_comparison(
         print_plain(
             target, f"  attempt timeout          {metadata.resource_limits.max_wall_time_seconds}s"
         )
+    if report.planned_wall_time_seconds is not None:
+        print_plain(target, f"  planned wall time        {report.planned_wall_time_seconds}s")
     if report.limits is not None:
         print_plain(target, f"  wall-time ceiling        {report.limits.max_wall_time_seconds}s")
     for label, context in (

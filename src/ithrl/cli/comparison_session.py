@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from ithrl.case.filesystem import (
     atomic_write,
     lstat_regular_file,
-    prepare_private_directory,
+    prepare_target_path,
     read_safe_text,
     reject_symlink_components,
     validate_existing_root,
@@ -123,7 +123,9 @@ def _read(path: Path) -> str:
 
 
 def save_comparison_profile(path: Path, profile: ComparisonProfile) -> None:
-    prepare_private_directory(path.parent)
+    if not path.parent.exists():
+        prepare_target_path(path)
+    validate_existing_root(path.parent)
     if path.exists() or path.is_symlink():
         if load_comparison_profile(path) != profile:
             raise ComparisonSessionError("comparison profile already binds different inputs")
@@ -146,10 +148,8 @@ def validate_session_state(session: ComparisonSession, state: SampledRunState) -
         or state.original_identity != session.profile.identity
         or state.original_candidate_digest != session.profile.binding.reference.digest
         or state.started_at != session.started_at.astimezone(UTC)
-        or (
-            state.comparison_progress is not None
-            and state.comparison_progress.binding != session.profile.binding
-        )
+        or state.comparison_progress is None
+        or state.comparison_progress.binding != session.profile.binding
     ):
         raise ComparisonSessionError("comparison session differs from its run state")
 

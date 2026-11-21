@@ -225,8 +225,11 @@ def test_sections_refuse_removed_parent_and_preserve_fixed_tool_input(tmp_path: 
     assert caught.value.code is CodexMaterializationErrorCode.MISSING_TRIGGER
 
 
-def _attempt(evidence: CaseEvidence, *remove_ids: str) -> PreparedAttempt:
+def _attempt(
+    evidence: CaseEvidence, *remove_ids: str, replay: CodexReplayConfig | None = None
+) -> PreparedAttempt:
     experiment = ExperimentDefinition.from_toml(evidence.default_experiment)
+    provider = replay.provider if replay is not None else "fixture-provider"
     capability = CapabilityProfile(
         runner_type="codex",
         runner_version="test",
@@ -260,12 +263,12 @@ def _attempt(evidence: CaseEvidence, *remove_ids: str) -> PreparedAttempt:
         supports_cancellation=True,
         cancellation_grace_seconds=3,
         reports_usage=True,
-        provider="fixture-provider",
+        provider=provider,
         endpoint="https://example.invalid/responses",
     )
     policy = SafetyPolicy(
         provider_transport="allowed",
-        allowed_provider="fixture-provider",
+        allowed_provider=provider,
         allowed_endpoint="https://example.invalid/responses",
     )
     limits = ResourceLimits(
@@ -282,7 +285,8 @@ def _attempt(evidence: CaseEvidence, *remove_ids: str) -> PreparedAttempt:
         harness="codex",
         source_harness_version=evidence.manifest.harness_version,
         source_schema=evidence.manifest.source_schema,
-        model_requested=evidence.manifest.model_requested,
+        model_requested=replay.model if replay is not None else evidence.manifest.model_requested,
+        codex_replay=replay,
         decision_digest=decision.selector.digest,
         runner_fingerprint="codex-test",
         safety_policy=policy,
@@ -377,23 +381,8 @@ def test_explicit_replay_omits_known_reasoning_only_from_the_execution_copy(tmp_
     before = materialize_codex_attempt(original)
     source_identity = evidence.digest, evidence.source_artifacts
     replay = CodexReplayConfig(provider="replay-provider", model="replay-model")
-    policy = original.safety_policy.model_copy(update={"allowed_provider": replay.provider})
-    plan = original.execution_plan.model_copy(
-        update={
-            "codex_replay": replay,
-            "model_requested": replay.model,
-            "capability": original.execution_plan.capability.model_copy(
-                update={"provider": replay.provider}
-            ),
-            "safety_policy": policy,
-        }
-    )
-    attempt = replace(
-        original,
-        execution_plan=plan,
-        safety_policy=policy,
-        candidate=prepare_candidate(evidence, plan),
-    )
+    attempt = _attempt(evidence, replay=replay)
+    plan = attempt.execution_plan
     result = materialize_codex_attempt(attempt)
     user = next(node for node in evidence.context.nodes if node.kind == "response_item.message")
     reduced = materialize_codex_attempt(
@@ -419,11 +408,17 @@ def test_explicit_replay_omits_known_reasoning_only_from_the_execution_copy(tmp_
 
 
 @pytest.mark.parametrize("field", ["provider", "model_requested"])
+@pytest.mark.parametrize("replay_enabled", [False, True])
 def test_materialization_refuses_captured_source_identity_mismatch(
-    tmp_path: Path, field: str
+    tmp_path: Path, field: str, replay_enabled: bool
 ) -> None:
     evidence = _evidence(tmp_path)
-    attempt = _attempt(evidence)
+    replay = (
+        CodexReplayConfig(provider="replay-provider", model="replay-model")
+        if replay_enabled
+        else None
+    )
+    attempt = _attempt(evidence, replay=replay)
     evidence._manifest = evidence.manifest.model_copy(update={field: "different-source-identity"})
     with pytest.raises(CodexMaterializationError) as refused:
         _materialize_session(attempt, parse_session(FIXTURES / "codex-session/rollout.jsonl"))

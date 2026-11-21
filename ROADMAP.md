@@ -96,7 +96,7 @@ Codex/Copilot investigations qualified the tested profiles in
 | Completed in [#87](https://github.com/eberkut/ithrl/pull/87) | [#78: first-party agent skill](https://github.com/eberkut/ithrl/issues/78) | One portable skill source, Python-package and repository distribution, installed-copy validation and concise installation guidance |
 | Implemented and qualified | [#13: comparative debugging](https://github.com/eberkut/ithrl/issues/13) | Explicit source-bound contexts, repair/degradation objectives, constructed repair tasks and useful ordinary investigations |
 | Implemented | [#88: explicit-context comparison](https://github.com/eberkut/ithrl/issues/88) | Comparison CLI, two-arm calibration, fresh confirmation, accounting, recovery and offline reports |
-| Qualified | [#89: qualify comparative debugging](https://github.com/eberkut/ithrl/issues/89) | Constructed and ordinary Codex/Copilot investigations through the normal CLI and installed artifacts, with successful and unsuccessful costs and explicit limits |
+| Qualification complete; acceptance pending merge | [#89: qualify comparative debugging](https://github.com/eberkut/ithrl/issues/89) | Constructed and ordinary Codex/Copilot investigations through the normal CLI and installed artifacts, with successful and unsuccessful costs and explicit limits; [PR #90](https://github.com/eberkut/ithrl/pull/90) records the evidence for acceptance |
 | Committed assessment | [#74: tool-output interventions](https://github.com/eberkut/ithrl/issues/74) | Establish native output visibility, source bindings and a useful localized intervention before deciding whether to add an edit domain |
 
 ## Evidence guiding the next investigations

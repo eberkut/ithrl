@@ -143,6 +143,8 @@ The [comparison guide](comparison.md) covers context selection, native detection
 | `calibration-failed` | Review the proposed contrast. A revised predicate or intervention needs a new run; the failed calibration receives no confirmation credit. |
 | `inconclusive` | Report that complete confirmation did not establish the minimum effect. Do not append samples to completed confirmation. |
 | `invalid-comparison-session` | Use the canonical run directory and original observation store. |
+| `result-destination-conflict` | Preserve the file at the reported result path elsewhere, then resume to publish the saved evidence. |
+| `freshness-expired` or `wall-time-exhausted` | Inspect the saved incomplete result. The frozen deadline cannot be extended by resuming; a new plan needs a new run. |
 | `comparison-input-or-execution-refused` | Check the frozen inputs and implementation. Use offline inspection to read retained results without resuming them. |
 
 For execution failures, the private result retains per-attempt `error_category` and
