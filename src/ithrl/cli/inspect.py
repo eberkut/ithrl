@@ -49,6 +49,49 @@ def costs(
     render_cost_report(saved, output_format)
 
 
+@app.command("comparison")
+@command_boundary("inspect")
+def comparison(
+    result: Annotated[Path, typer.Argument(help="Saved comparison evidence.")],
+    case: Annotated[
+        Path | None,
+        typer.Option("--case", help="Revalidate both context selections against this source case."),
+    ] = None,
+    output_format: Annotated[OutputFormat, typer.Option("--format")] = OutputFormat.HUMAN,
+) -> None:
+    """Inspect a saved comparison without a runner or observation database."""
+    from ithrl.case import CaseWorkspace
+    from ithrl.cli.comparison_output import render_comparison, result_report
+    from ithrl.comparison.results import load_comparison_result
+
+    try:
+        evidence = None if case is None else CaseWorkspace.open(case).load()
+        saved = load_comparison_result(result, case_evidence=evidence)
+        report = result_report(saved).model_copy(
+            update={
+                "result_path": str(result.absolute()),
+                "source_validation": "not-requested" if evidence is None else "verified",
+            }
+        )
+    except ImportError:
+        fail(
+            "Comparison inspection requires ithrl[compare].",
+            ExitCode.USAGE,
+            output_format,
+            "inspect",
+            "comparison-extra-required",
+        )
+    except (OSError, ValueError, RuntimeError):
+        fail(
+            "Cannot validate the saved comparison or its source case.",
+            ExitCode.USAGE,
+            output_format,
+            "inspect",
+            "comparison-invalid",
+        )
+    render_comparison(report, output_format)
+
+
 @app.command("reacquire")
 @command_boundary("inspect")
 def reacquire(

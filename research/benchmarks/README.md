@@ -86,8 +86,9 @@ evidence and execution decisions.
 Constructed-task results supplement the unchanged
 [ordinary-workflow limiting outcome](../../docs/research/reduction-design.md#prospective-ordinary-workflow-cohort).
 The separate [statistical simulations](../reduction/README.md) assess specified rates and budgets.
-Task-specific grades remain conditional on the reviewed tests; public-task contamination, opaque
-state and ordinary-workflow usefulness remain unresolved.
+Task-specific grades remain conditional on the reviewed tests. Public-task contamination and opaque
+state limit interpretation; constructed results do not establish how often ithrl helps ordinary
+debugging.
 
 ## Tasks and provenance
 
@@ -335,3 +336,15 @@ CLI timings exclude preparation and authoring. Request counts are not billed cha
 native usage has incomplete coverage and different cache semantics; no combined token estimate is
 reported. Billing, complete preparation/authoring effort and some authentication/metadata traffic
 remain unknown. These records cannot establish the total cost or time of an investigation.
+
+## Explicit-context comparisons
+
+Fresh native comparisons of the coarse and full iniconfig contexts confirmed a restoration effect
+for the complete bundle under both tested harness profiles. The
+[comparative-debugging study](../../docs/research/comparative-debugging.md#constructed-controls-and-repair-tasks)
+owns those results and their costs, separately from ordinary investigations under
+[#13](https://github.com/eberkut/ithrl/issues/13).
+
+Use the [local CLI example](../../docs/comparison.md#try-without-a-provider) to exercise comparison
+without private evidence, task downloads, native agents or provider requests. Its planted outcomes
+demonstrate the software workflow and supply no native qualification evidence.

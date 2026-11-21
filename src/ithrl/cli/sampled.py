@@ -519,7 +519,11 @@ def _interrupt_before_execution(output_format: OutputFormat, harness_started: bo
 
 
 def _observation_store_path(
-    workspace: CaseWorkspace, original_workspace: Path, requested: Path | None
+    workspace: CaseWorkspace,
+    original_workspace: Path,
+    requested: Path | None,
+    *,
+    require_original_workspace: bool = True,
 ) -> Path:
     """Keep SQLite and its sibling lifecycle files outside protected native state."""
 
@@ -531,7 +535,7 @@ def _observation_store_path(
     resolved = path.resolve(strict=False)
     protected = (
         workspace.root.resolve(strict=True),
-        original_workspace.resolve(strict=True),
+        original_workspace.resolve(strict=require_original_workspace),
         *native_storage_paths(),
     )
     lifecycle_paths = observation_storage_paths(resolved)

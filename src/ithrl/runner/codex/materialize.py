@@ -23,6 +23,7 @@ from ithrl.mutation import (
 )
 from ithrl.runner.codex.policy import (
     CAPTURE_TYPE,
+    CONTINUATION_INSTRUCTIONS,
     MATERIALIZATION,
     SOURCE_SCHEMA,
     TARGET_TYPE,
@@ -165,6 +166,20 @@ def _materialize_session(
             "Codex reconstruction requires an uncompacted source prefix",
         )
 
+    metadata = _object(records[0].get("payload"))
+    turn_context = _selected_turn_context(records[: boundary - 1], decision.selector.turn_id)
+    model = _required_string(turn_context.get("model"), "the selected Codex turn has no model")
+    provider = _required_string(
+        metadata.get("model_provider"),
+        "the selected Codex session has no model provider",
+    )
+    if model != evidence.manifest.model_requested or provider != evidence.manifest.provider:
+        raise CodexMaterializationError(
+            CodexMaterializationErrorCode.CHANGED_EVIDENCE,
+            "the captured Codex execution identity does not match the case",
+        )
+    replay = attempt.execution_plan.codex_replay
+
     retained = frozenset(attempt.candidate.retained_context_ids)
     selected: list[tuple[str, JsonObject]] = []
     for node in evidence.context.nodes:
@@ -211,6 +226,8 @@ def _materialize_session(
         record_type = _string(record.get("type"))
         if record_type == "response_item":
             payload = _object(record.get("payload"))
+            if replay is not None and payload.get("type") == "reasoning":
+                continue
             if node_id == trigger_id:
                 trigger = payload
             else:
@@ -250,26 +267,22 @@ def _materialize_session(
             "the selected Codex decision has no supported triggering input",
         )
 
-    metadata = _object(records[0].get("payload"))
-    turn_context = _selected_turn_context(records[: boundary - 1], decision.selector.turn_id)
-    model = _required_string(turn_context.get("model"), "the selected Codex turn has no model")
-    provider = _required_string(
-        metadata.get("model_provider"),
-        "the selected Codex session has no model provider",
-    )
     # Compute this before freezing history: a tool-output checkpoint includes the
     # captured output itself, with its original call_id and all native metadata.
     turn_input = _turn_input(trigger, history)
+    developer_instructions = _optional_instruction(
+        turn_context, "developer_instructions", allow_document=False
+    )
     return CodexMaterialization(
-        model=model,
-        provider=provider,
+        model=replay.model if replay is not None else model,
+        provider=replay.provider if replay is not None else provider,
         effort=_optional_turn_setting(turn_context, "effort"),
         personality=_optional_turn_setting(turn_context, "personality"),
         base_instructions=_optional_instruction(metadata, "base_instructions", allow_document=True),
-        developer_instructions=_optional_instruction(
-            turn_context,
-            "developer_instructions",
-            allow_document=False,
+        developer_instructions=(
+            f"{developer_instructions}\n\n{CONTINUATION_INSTRUCTIONS}"
+            if developer_instructions is not None
+            else CONTINUATION_INSTRUCTIONS
         ),
         history=tuple(history),
         turn_input=turn_input,

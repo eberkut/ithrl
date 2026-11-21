@@ -19,6 +19,7 @@ from ithrl.behavior import (
 )
 from ithrl.context import content_digest
 from ithrl.grading.contracts import PatchGradingConfig
+from ithrl.mutation import ContextSelection
 from ithrl.text_sections import TextSectionRemoval
 
 
@@ -83,11 +84,30 @@ class UnavailableRunnerConfig(_ImmutableContract):
     reason_code: Literal["runner-not-implemented"] = "runner-not-implemented"
 
 
+class CodexReplayConfig(_ImmutableContract):
+    """Prospective Codex execution identity with captured reasoning omitted."""
+
+    provider: Annotated[
+        str, Field(min_length=1, max_length=128, pattern=r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
+    ]
+    model: Annotated[str, Field(min_length=1, max_length=256, pattern=r"^[A-Za-z0-9._:/+-]+$")]
+    reasoning: Literal["omit"] = "omit"
+
+
 class NativeRunnerConfig(_ImmutableContract):
     """A native runner bound to one exact, locally detected capability profile."""
 
     type: Literal["codex", "copilot"]
     required_capability_digest: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    codex_replay: CodexReplayConfig | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+
+    @model_validator(mode="after")
+    def validate_replay(self) -> NativeRunnerConfig:
+        if self.codex_replay is not None and self.type != "codex":
+            raise ValueError("Codex replay requires the Codex runner")
+        return self
 
 
 type RunnerConfig = Annotated[
@@ -198,6 +218,13 @@ class SamplingArmTarget(_ImmutableContract):
         return self
 
 
+class SamplingPairTargets(_ImmutableContract):
+    """Two arm targets without search, screening or phase semantics."""
+
+    original: SamplingArmTarget
+    candidate: SamplingArmTarget
+
+
 class SampledSearchPhase(_ImmutableContract):
     """Fixed independent arms used only for exploratory point screening."""
 
@@ -284,7 +311,67 @@ class SampledChangePlan(_ImmutableContract):
     freshness_seconds: Annotated[int, Field(ge=1, le=MAX_SAMPLING_FRESHNESS_SECONDS)]
 
 
-type SamplingProcedure = SampledReductionPlan | SampledChangePlan
+class SampledComparisonPlan(_ImmutableContract):
+    """One fixed two-context comparison, with calibration and fresh confirmation."""
+
+    comparison_digest: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    objective: Literal["repair", "degradation"]
+    seed: Annotated[int, Field(ge=0, le=2**64 - 1)]
+    reference: ContextSelection
+    candidate: ContextSelection
+    calibration: SamplingPairTargets
+    positive_minimum_matches: Annotated[int, Field(ge=1)]
+    negative_maximum_matches: Annotated[int, Field(ge=0)]
+    confirmation: SampledChangeConfirmation
+    minimum_effect: Annotated[float, Field(ge=0, lt=1, allow_inf_nan=False)]
+    eligibility_policy: SamplingEligibilityPolicy
+    freshness_seconds: Annotated[int, Field(ge=1, le=MAX_SAMPLING_FRESHNESS_SECONDS)]
+
+    @model_validator(mode="after")
+    def validate_calibration_gate(self) -> SampledComparisonPlan:
+        if content_digest(self.policy_projection) != self.comparison_digest:
+            raise ValueError("comparison policy digest does not match its declared procedure")
+        positive, negative = (
+            (self.calibration.candidate, self.calibration.original)
+            if self.objective == "repair"
+            else (self.calibration.original, self.calibration.candidate)
+        )
+        if (
+            self.positive_minimum_matches > positive.required_valid
+            or self.negative_maximum_matches > negative.required_valid
+        ):
+            raise ValueError("comparison calibration gate exceeds its arm sample target")
+        return self
+
+    @property
+    def policy_projection(self) -> dict[str, Any]:
+        """Reconstruct the owning configuration's frozen policy without command limits."""
+
+        return {
+            "schema_version": 1,
+            "kind": "comparison",
+            "objective": self.objective,
+            "reference": self.reference.model_dump(mode="json"),
+            "candidate": self.candidate.model_dump(mode="json"),
+            "calibration": {
+                "reference": self.calibration.original.model_dump(mode="json"),
+                "candidate": self.calibration.candidate.model_dump(mode="json"),
+                "positive_minimum_matches": self.positive_minimum_matches,
+                "negative_maximum_matches": self.negative_maximum_matches,
+            },
+            "confirmation": {
+                "reference": self.confirmation.original.model_dump(mode="json"),
+                "candidate": self.confirmation.candidate.model_dump(mode="json"),
+                "alpha": self.confirmation.alpha,
+            },
+            "minimum_effect": self.minimum_effect,
+            "seed": self.seed,
+            "eligibility_policy": self.eligibility_policy,
+            "freshness_seconds": self.freshness_seconds,
+        }
+
+
+type SamplingProcedure = SampledReductionPlan | SampledChangePlan | SampledComparisonPlan
 
 
 class SampledExperimentDefinition(_ImmutableContract):
@@ -450,6 +537,11 @@ def _render_experiment(experiment: AnyExperimentDefinition) -> str:
         lines.append(
             f"required_capability_digest = {_toml_string(runner.required_capability_digest)}"
         )
+        if runner.codex_replay is not None:
+            lines.append("")
+            lines.append("[runner.codex_replay]")
+            for name, value in runner.codex_replay.model_dump().items():
+                lines.append(f"{name} = {_toml_string(value)}")
 
     if isinstance(experiment, ExperimentDefinition):
         for name, phase in (

@@ -11,6 +11,7 @@ when new evidence changes its rationale. Issue and pull-request links record the
 | [0003](0003-strict-fresh-baselines.md) | Retain strict fresh-original baselines; keep sharing conditional on useful cost/freshness evidence |
 | [0004](0004-single-finding-fuzz-confirmation.md) | Confirm one selected fuzz intervention with fresh exact-binomial bounds |
 | [0005](0005-cooperative-repair-grading.md) | Grade cooperative Python repairs with fixed task tests |
+| [0006](0006-explicit-context-comparison.md) | Compare two source-bound contexts with a declared direction and fresh confirmation |
 
 Records 0001-0004 consolidate the decisions behind the initial reduction implementation and fuzz
 services. They were written retrospectively from development evidence and checked against the

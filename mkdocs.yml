@@ -30,6 +30,7 @@ nav:
   - Native runs: native-runs.md
   - Native reduction: reduction.md
   - Context fuzzing: fuzzing.md
+  - Context comparison: comparison.md
   - Results and privacy: results.md
   - CLI reference: cli.md
   - Troubleshooting: troubleshooting.md
@@ -43,6 +44,7 @@ nav:
           - Fresh baselines: decisions/0003-strict-fresh-baselines.md
           - Fuzz confirmation: decisions/0004-single-finding-fuzz-confirmation.md
           - Repair grading: decisions/0005-cooperative-repair-grading.md
+          - Context comparison: decisions/0006-explicit-context-comparison.md
       - Research:
           - Overview: research/index.md
           - Feasibility: research/feasibility.md
@@ -50,6 +52,7 @@ nav:
           - Ordinary-session investigation: research/ordinary-session-investigation.md
           - Passive compaction investigation: research/passive-compaction-investigation.md
           - Context fuzzing: research/context-fuzzing.md
+          - Comparative debugging design: research/comparative-debugging.md
       - Roadmap: https://github.com/eberkut/ithrl/blob/main/ROADMAP.md
 # Navigation alone does not restrict which files MkDocs publishes.
 exclude_docs: |
@@ -59,6 +62,7 @@ exclude_docs: |
   !/native-runs.md
   !/reduction.md
   !/fuzzing.md
+  !/comparison.md
   !/results.md
   !/cli.md
   !/troubleshooting.md

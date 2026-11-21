@@ -32,7 +32,7 @@ from ithrl.execution import (
     ResourceLimits,
     SafetyPolicy,
 )
-from ithrl.experiment import ExperimentDefinition
+from ithrl.experiment import CodexReplayConfig, ExperimentDefinition
 from ithrl.grading.contracts import PatchGradingConfig
 from ithrl.mutation import TextAppend, TextMutation
 from ithrl.observations import ObservationIdentity, ObservationStore
@@ -77,6 +77,7 @@ def _runner(
     configuration: CodexProviderConfiguration | None = None,
     capability: CapabilityProfile | None = None,
     capability_configuration: CodexProviderConfiguration | None = None,
+    codex_replay: CodexReplayConfig | None = None,
     state_parent: Path | None = None,
     output_root: Path | None = None,
     max_provider_calls_per_attempt: int = MAX_INFERENCE_REQUESTS,
@@ -105,6 +106,7 @@ def _runner(
         ),
         runtime=runtime,
         configuration=configuration,
+        codex_replay=codex_replay,
         state_parent=state_parent or tmp_path / "attempts",
         output_root=output_root or tmp_path / "output",
         source_paths=(
@@ -196,6 +198,38 @@ def test_runner_fingerprint_binds_the_installed_client_version(
     assert first.fingerprint != second.fingerprint
 
 
+def test_runner_fingerprint_binds_workspace_protection_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace, _ = _case(tmp_path)
+    runner = _runner(tmp_path, workspace)
+    original = runner.fingerprint
+
+    monkeypatch.setattr(codex_runner_module, "WORKSPACE_PROTECTION_POLICY", "different-policy")
+
+    assert runner.fingerprint != original
+
+
+def test_runner_fingerprint_binds_continuation_instructions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace, _ = _case(tmp_path)
+    runner = _runner(tmp_path, workspace)
+    original = runner.fingerprint
+
+    monkeypatch.setattr(codex_runner_module, "CONTINUATION_INSTRUCTIONS", "Different instruction.")
+
+    assert runner.fingerprint != original
+
+
+def test_runner_fingerprint_binds_explicit_replay_selection(tmp_path: Path) -> None:
+    workspace, _ = _case(tmp_path)
+    runner = _runner(tmp_path, workspace)
+    original = runner.fingerprint
+    runner._codex_replay = CodexReplayConfig(provider="fixture-provider", model="replay-model")
+    assert runner.fingerprint != original
+
+
 def _attempt(
     evidence: CaseEvidence,
     runner: CodexRunner,
@@ -227,7 +261,12 @@ def _attempt(
         harness="codex",
         source_harness_version=evidence.manifest.harness_version,
         source_schema="codex-rollout-jsonl",
-        model_requested=evidence.manifest.model_requested,
+        model_requested=(
+            runner._codex_replay.model
+            if runner._codex_replay is not None
+            else evidence.manifest.model_requested
+        ),
+        codex_replay=runner._codex_replay,
         decision_digest=decision.selector.digest,
         runner_fingerprint=runner.fingerprint,
         safety_policy=policy,
@@ -549,9 +588,16 @@ def test_candidate_admission_does_not_probe_codex_runtime(
     assert list((tmp_path / "output").iterdir()) == []
 
 
-def test_runs_one_final_response_inside_shared_isolation(tmp_path: Path) -> None:
+@pytest.mark.parametrize("internal_link", [False, True])
+def test_runs_one_final_response_inside_shared_isolation(
+    tmp_path: Path, internal_link: bool
+) -> None:
     workspace, evidence = _case(tmp_path)
     runner = _runner(tmp_path, workspace)
+    if internal_link:
+        original = tmp_path / "original-workspace"
+        (original / "docs").mkdir()
+        (original / "docs" / "linked.txt").symlink_to("../marker.txt")
 
     result = asyncio.run(runner.run(_attempt(evidence, runner)))
 
@@ -577,6 +623,10 @@ def test_runs_one_final_response_inside_shared_isolation(tmp_path: Path) -> None
     assert not (tmp_path / "attempts" / result.attempt_id).exists()
     assert stat.S_IMODE((tmp_path / "output").stat().st_mode) == 0o700
     assert (tmp_path / "original-workspace" / "marker.txt").read_text() == "unchanged\n"
+    if internal_link:
+        assert (tmp_path / "original-workspace" / "docs" / "linked.txt").readlink() == Path(
+            "../marker.txt"
+        )
 
 
 def test_relay_uses_profile_bound_when_resource_allowance_is_larger(tmp_path: Path) -> None:
@@ -760,6 +810,37 @@ def test_failed_outcome_omits_oversized_identity_metadata(tmp_path: Path) -> Non
     assert "private-model" not in str(refused.value)
     persisted = AttemptEvidence.from_error(attempt, refused.value)
     assert persisted.model_returned is None
+
+
+@pytest.mark.parametrize("selected", [False, True])
+def test_explicit_replay_refuses_a_reported_model_change_with_accounting(
+    tmp_path: Path, selected: bool
+) -> None:
+    workspace, evidence = _case(tmp_path)
+    replay = CodexReplayConfig(provider="fixture-provider", model="replay-model")
+    runner = _runner(
+        tmp_path, workspace, codex_replay=replay if selected else None, mode="model-rerouted"
+    )
+    attempt = _attempt(evidence, runner)
+    if not selected:
+        result = asyncio.run(runner.run(attempt))
+        assert result.model_returned == "rerouted-model"
+        return
+    with pytest.raises(RunnerError, match="different model") as refused:
+        asyncio.run(runner.run(attempt))
+    error = refused.value
+    assert error.code is RunnerErrorCode.PROTOCOL
+    assert error.model_requested == replay.model
+    assert error.model_returned == "rerouted-model"
+    assert error.provider_acceptance_state is ProviderAcceptanceState.ACCEPTED
+    assert error.usage is not None
+    assert error.accounting is not None
+    assert error.accounting.provider_calls_completed == 1
+    assert error.accounting.cleanup_outcome == "verified"
+    assert error.native_output is not None
+    persisted = AttemptEvidence.from_error(attempt, error)
+    assert persisted.termination_reason != "completed"
+    assert persisted.model_returned == "rerouted-model"
 
 
 def test_rejects_provider_configuration_mismatch_before_execution(tmp_path: Path) -> None:

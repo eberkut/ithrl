@@ -1,8 +1,7 @@
 # Agent skill
 
-The `ithrl` skill helps an agent choose and run supported investigation workflows: inspection,
-extraction, preparation, reduction, fuzzing and cost reporting. It uses the same public guides and
-CLI as a developer. The agent invoking it need not be Codex or Copilot.
+The `ithrl` skill guides an agent through session inspection, experiments and result interpretation
+using the public guides and CLI. The agent invoking it need not be Codex or Copilot.
 
 Install ithrl first, following the
 [installation instructions](https://github.com/eberkut/ithrl/blob/main/README.md#install).
@@ -54,7 +53,7 @@ limits described in [native runs](native-runs.md).
 Use one installer per destination. Before an update, identify the existing copy and preserve any
 local changes. Library Skills refuses to replace a real directory; remove only a known,
 replaceable installed copy before running it again. Vercel can replace that directory during
-installation. Do not point either installer at an unrelated skill.
+installation.
 
 Update ithrl and its skill together. Check `ithrl --version`, known source revision and command
 help; the documentation site follows `main`, while the skill explains how to find guides at the

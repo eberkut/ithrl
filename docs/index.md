@@ -7,9 +7,9 @@
 </div>
 <!-- rumdl-enable MD033 -->
 
-`ithrl` turns saved coding-agent sessions into debugging experiments: reduce context while
-preserving a selected behavior, or test text appends that alter it. You can also inspect recorded
-operations around compaction without running a model.
+`ithrl` turns saved coding-agent sessions into debugging experiments. Find a smaller context that
+preserves a selected behavior, test a text append that changes it, or compare two selected contexts.
+Passive compaction inspection reads recorded operations and results without model calls.
 
 ## Start here
 
@@ -24,9 +24,12 @@ operations around compaction without running a model.
 - **Inspect compaction without model calls:**
     [compare recorded operations and captured results](results.md#inspect-recorded-compaction) in
     one saved session.
-- **Investigate a result:** [inspect retained context](results.md#inspect-retained-context) and
-  read the [worked investigation](research/ordinary-session-investigation.md) for an example of
-  what the reduced context can tell you.
+- **Compare selected contexts:** [declare a repair or degradation comparison](comparison.md),
+    calibrate both contexts and confirm their effect with fresh observations.
+- **Investigate a result:** use [Results and privacy](results.md) for the workflow's saved files,
+    inspection commands and outcome interpretation. The
+    [worked reduction](research/ordinary-session-investigation.md) shows what retained context can
+    tell you.
 
 ## Reference and background
 

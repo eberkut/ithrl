@@ -155,7 +155,7 @@ emit("summary", {
     "status": "error" if overloaded or limited or action else "completed",
     "error_code": "provider-call-limit" if limited else "provider-overloaded" if overloaded else "action-requested" if action else None,
     "final_text": None if overloaded or limited or action else final_text,
-    "model_returned": "private-model-" * 30 if mode == "action-long-metadata" else request["model"],
+    "model_returned": "private-model-" * 30 if mode == "action-long-metadata" else "rerouted-model" if mode == "model-rerouted" else request["model"],
     "service_tier": "default",
     "usage": None if overloaded else {"input_tokens": 101, "output_tokens": 7, "cached_input_tokens": 50},
     "provider_acceptance": "unknown" if overloaded or limited else "accepted",

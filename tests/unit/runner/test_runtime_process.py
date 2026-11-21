@@ -98,6 +98,40 @@ async def _run(
     return store, result
 
 
+def test_workspace_link_option_does_not_allow_source_symlinks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "real.txt").write_text("source")
+    (source / "linked.txt").symlink_to("real.txt")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("source refusal must precede process execution")
+
+    monkeypatch.setattr(runtime_process.subprocess, "Popen", forbidden)
+    with pytest.raises(ProcessRuntimeError) as raised:
+        asyncio.run(
+            run_isolated_process(
+                attempt_id=ATTEMPT_ID,
+                state_parent=tmp_path / "state",
+                output_store=ProtectedOutputStore.open(tmp_path / "outputs"),
+                prepare=_prepare("exit", "0"),
+                resource_limits=ResourceLimits(max_wall_time_seconds=5),
+                source_paths=(ProtectedPath("source", source),),
+                workspace_paths=(ProtectedPath("workspace", workspace),),
+                max_protected_entries=16,
+                max_protected_bytes=4096,
+                allow_internal_workspace_symlinks=True,
+            )
+        )
+
+    assert raised.value.reason_code == "protected-input-snapshot"
+    assert raised.value.report.process_outcome == "not-started"
+
+
 @pytest.mark.parametrize(
     ("failure", "code"),
     [

@@ -19,8 +19,10 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from ithrl.case.contracts import CaseError
 from ithrl.case.filesystem import read_safe_bytes
+from ithrl.comparison.contracts import ComparisonProgress
 from ithrl.context import content_digest
 from ithrl.execution import MAX_PROVIDER_CALLS_PER_ATTEMPT
+from ithrl.experiment import SampledComparisonPlan
 from ithrl.fuzz.progress import FuzzCampaignProgress
 from ithrl.observations import (
     Observation,
@@ -379,6 +381,7 @@ class SampledRunState(_SampledStateContract):
     checkpoint: SampledReductionCheckpoint | None = None
     selection: SampledFinalSelection | None = None
     fuzz_progress: FuzzCampaignProgress | None = Field(default=None, repr=False)
+    comparison_progress: ComparisonProgress | None = Field(default=None, repr=False)
 
     @field_validator("started_at")
     @classmethod
@@ -387,13 +390,59 @@ class SampledRunState(_SampledStateContract):
 
     @model_validator(mode="after")
     def validate_history(self) -> SampledRunState:
-        if self.fuzz_progress is not None and self.checkpoint is not None:
-            raise ValueError("fuzz and reduction checkpoints cannot share a run")
+        if (
+            sum(
+                item is not None
+                for item in (self.fuzz_progress, self.comparison_progress, self.checkpoint)
+            )
+            > 1
+        ):
+            raise ValueError("comparison, fuzz and reduction progress cannot share a run")
         self._validate_approval_history()
         confirmations, references = self._validate_block_history()
         self._validate_pending_dispatch(references)
         self._validate_final_selection(confirmations)
+        self._validate_comparison_history()
         return self
+
+    def _validate_comparison_history(self) -> None:
+        comparison = self.comparison_progress
+        comparison_blocks = tuple(
+            block
+            for block in self.blocks
+            if isinstance(block.plan.procedure, SampledComparisonPlan)
+        )
+        if comparison is None:
+            if comparison_blocks:
+                raise ValueError("comparison blocks require their owning comparison progress")
+            return
+        binding = comparison.binding
+        if (
+            self.calibration_observation_ids
+            or len(comparison_blocks) != len(self.blocks)
+            or len(self.blocks) > 2
+            or binding.reference.digest != self.original_candidate_digest
+            or binding.reference.case_digest != self.original_identity.case_digest
+            or binding.reference.execution_plan_digest
+            != self.original_identity.execution_plan_digest
+            or binding.procedure.comparison_digest != self.original_identity.algorithm_digest
+        ):
+            raise ValueError("comparison progress differs from its frozen run identity")
+        roles = tuple(block.plan.role for block in self.blocks)
+        if roles != ("calibration", "confirmation")[: len(roles)]:
+            raise ValueError("comparison permits one calibration then one confirmation block")
+        for block in self.blocks:
+            if (
+                block.plan.procedure != binding.procedure
+                or block.plan.original_candidate_digest != binding.reference.digest
+                or block.plan.candidate_digest != binding.candidate.digest
+                or block.plan.original_identity != block.plan.candidate_identity
+            ):
+                raise ValueError("comparison blocks must preserve both selected contexts")
+        if (comparison.selected_at is None) != (self.selection is None):
+            raise ValueError("comparison selection and progress must be published together")
+        if comparison.terminal is not None and self.pending is not None:
+            raise ValueError("terminal comparison requires reconciled dispatch")
 
     def _validate_approval_history(self) -> None:
         if any(item.allowance.run_id != self.run_id for item in self.approvals):
@@ -470,7 +519,20 @@ class SampledRunState(_SampledStateContract):
                 holdout_id[:16], 16
             ):
                 raise ValueError("confirmation must use the single frozen run holdout")
-            if self.fuzz_progress is not None:
+            if self.comparison_progress is not None:
+                comparison = self.comparison_progress
+                binding = comparison.binding
+                if (
+                    selection.checkpoint_digest != comparison.selection_digest
+                    or selection.selected_at != comparison.selected_at
+                    or plan.procedure != binding.procedure
+                    or plan.original_candidate_digest != binding.reference.digest
+                    or plan.candidate_digest != binding.candidate.digest
+                    or plan.original_identity != self.original_identity
+                    or plan.candidate_identity != self.original_identity
+                ):
+                    raise ValueError("confirmation must bind the frozen comparison selection")
+            elif self.fuzz_progress is not None:
                 fuzz = self.fuzz_progress
                 selected = next(
                     (t for t in fuzz.trials if t.mutation == fuzz.selected_mutation), None
@@ -577,6 +639,7 @@ class SampledRunStateFile:
         provider_calls_per_attempt: int,
         approval: SamplingBudgetApproval,
         calibration_observation_ids: tuple[str, ...] = (),
+        comparison_progress: ComparisonProgress | None = None,
     ) -> SampledRunStateFile:
         try:
             state = SampledRunState(
@@ -589,6 +652,7 @@ class SampledRunStateFile:
                 provider_calls_per_attempt=provider_calls_per_attempt,
                 approvals=(approval,),
                 calibration_observation_ids=calibration_observation_ids,
+                comparison_progress=comparison_progress,
             )
         except ValidationError as error:
             raise RunStateError("invalid sampled run initialization") from error
@@ -778,6 +842,10 @@ class SampledRunStateFile:
             from ithrl.fuzz.campaign import validate_campaign_progress
 
             validate_campaign_progress(state, observations, blocks)
+        if state.comparison_progress is not None:
+            from ithrl.comparison.engine import validate_comparison_progress
+
+            validate_comparison_progress(state, observations, blocks)
         SampledRunStateFile._validate_checkpoint_authority(state, checkpoint, blocks)
         SampledRunStateFile._validate_selection_chronology(state, checkpoint, observations, blocks)
         return observations, blocks
@@ -806,7 +874,11 @@ class SampledRunStateFile:
         observations: tuple[Observation, ...],
         blocks: tuple[SamplingBlockEvidence, ...],
     ) -> None:
-        if state.selection is not None and state.fuzz_progress is None:
+        if (
+            state.selection is not None
+            and state.fuzz_progress is None
+            and state.comparison_progress is None
+        ):
             selection = state.selection
             search = tuple(block for block in blocks if block.plan.role == "search")
             if checkpoint is None or checkpoint.blocks != search:
@@ -1187,6 +1259,52 @@ class SampledRunStateFile:
         if current.blocks and not current.blocks[-1].archived:
             raise RunStateError("fuzz selection requires classified exploratory blocks")
         return self._publish(current, store, fuzz_progress=progress, selection=selection)
+
+    def save_comparison_progress(
+        self, store: ObservationStore, progress: ComparisonProgress
+    ) -> SampledRunState:
+        """Preserve the comparison binding while publishing reconciled progress."""
+
+        current = self.load(store)
+        previous = current.comparison_progress
+        if current.pending is not None:
+            raise RunStateError("comparison publication requires dispatch reconciliation")
+        if (
+            previous is None
+            or previous.binding != progress.binding
+            or previous.implementation_digest != progress.implementation_digest
+        ):
+            raise RunStateError("comparison progress cannot change the bound context pair")
+        if previous.terminal is not None:
+            raise RunStateError("a terminal comparison cannot change")
+        if previous.selected_at != progress.selected_at:
+            raise RunStateError("comparison selection must be published atomically")
+        return self._publish(current, store, comparison_progress=progress)
+
+    def select_comparison_candidate(
+        self,
+        store: ObservationStore,
+        progress: ComparisonProgress,
+        selection: SampledFinalSelection,
+    ) -> SampledRunState:
+        """Freeze both contexts and final policy before any holdout dispatch."""
+
+        current = self.load(store)
+        previous = current.comparison_progress
+        if (
+            previous is None
+            or previous.binding != progress.binding
+            or previous.implementation_digest != progress.implementation_digest
+            or previous.terminal is not None
+            or previous.selected_at is not None
+            or current.selection is not None
+            or current.pending is not None
+            or len(current.blocks) != 1
+            or current.blocks[0].plan.role != "calibration"
+            or not current.blocks[0].archived
+        ):
+            raise RunStateError("comparison selection requires completed, reconciled calibration")
+        return self._publish(current, store, comparison_progress=progress, selection=selection)
 
     def select_candidate(
         self, store: ObservationStore, selection: SampledFinalSelection

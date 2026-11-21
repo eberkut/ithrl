@@ -76,15 +76,16 @@ The project-wide documentation review is complete in
 | Released in v0.4 | [#67: performance and simplification](https://github.com/eberkut/ithrl/issues/67) | Project-wide performance fixes, permanent local-workload benchmarks and durable coding guidance, merged in [PR #71](https://github.com/eberkut/ithrl/pull/71) |
 | Released in v0.4 | [#68: documentation and writing guidance](https://github.com/eberkut/ithrl/issues/68) | Project-wide documentation corrections and concise writing guidance, merged in [PR #72](https://github.com/eberkut/ithrl/pull/72) |
 
-## Planned: v0.5 investigation reports and comparative debugging
+## In development: v0.5 investigation reports and comparative debugging
 
 The [v0.5.0 milestone](https://github.com/eberkut/ithrl/milestone/4) groups broader
 ordinary-workflow evidence, public benchmark feasibility, self-describing sampled reports, cost
-estimates, a first-party agent skill and comparative-debugging design. A qualified first comparison
-workflow is the intended feature, conditional on the design evidence.
-Implementation and qualification issues follow an implement decision; design completion alone does
-not establish a shipped `compare` command. Record an explicit release-scope decision if comparison
-is deferred.
+estimates, a first-party agent skill and comparative debugging. The comparison workflow binds two
+explicit contexts to one immutable source, with repair/degradation objectives and independent fresh
+confirmation in [#88](https://github.com/eberkut/ithrl/issues/88). Constructed and ordinary
+Codex/Copilot investigations qualified the tested profiles in
+[#89](https://github.com/eberkut/ithrl/issues/89); the
+[worked comparisons](docs/research/comparative-debugging.md) record their costs and scope.
 
 | Scope | Issue | Expected outcome |
 | --- | --- | --- |
@@ -92,11 +93,13 @@ is deferred.
 | Completed in [#83](https://github.com/eberkut/ithrl/pull/83) | [#81: public debugging benchmark](https://github.com/eberkut/ithrl/issues/81) | Published two reviewed tasks and a patch grader; Codex/Copilot reductions reached fresh confirmation, with limiting outcomes and costs recorded |
 | Completed in [#84](https://github.com/eberkut/ithrl/pull/84) | [#73: sampled inspection metadata](https://github.com/eberkut/ithrl/issues/73) | Offline reports explain digest-bound reconstruction and policy declarations separately from recorded attempt evidence |
 | Completed in [#86](https://github.com/eberkut/ithrl/pull/86) | [#77: model cost estimates](https://github.com/eberkut/ithrl/issues/77) | Offline pricing with genai-prices, usage/rate provenance and explicit coverage; estimates and scenarios remain distinct from actual billing |
-| Implementation in progress | [#78: first-party agent skill](https://github.com/eberkut/ithrl/issues/78) | One portable skill source, Python-package and repository distribution, installed-copy validation and concise installation guidance |
-| Committed design | [#13: comparative debugging](https://github.com/eberkut/ithrl/issues/13) | A comparability contract, ordinary paired evidence, interaction example and bounded validation proposal; decide whether to implement or defer |
+| Completed in [#87](https://github.com/eberkut/ithrl/pull/87) | [#78: first-party agent skill](https://github.com/eberkut/ithrl/issues/78) | One portable skill source, Python-package and repository distribution, installed-copy validation and concise installation guidance |
+| Implemented and qualified | [#13: comparative debugging](https://github.com/eberkut/ithrl/issues/13) | Explicit source-bound contexts, repair/degradation objectives, constructed repair tasks and useful ordinary investigations |
+| Implemented | [#88: explicit-context comparison](https://github.com/eberkut/ithrl/issues/88) | Comparison CLI, two-arm calibration, fresh confirmation, accounting, recovery and offline reports |
+| Qualification complete; acceptance pending merge | [#89: qualify comparative debugging](https://github.com/eberkut/ithrl/issues/89) | Constructed and ordinary Codex/Copilot investigations through the normal CLI and installed artifacts, with successful and unsuccessful costs and explicit limits; [PR #90](https://github.com/eberkut/ithrl/pull/90) records the evidence for acceptance |
 | Committed assessment | [#74: tool-output interventions](https://github.com/eberkut/ithrl/issues/74) | Establish native output visibility, source bindings and a useful localized intervention before deciding whether to add an edit domain |
 
-## Next investigations
+## Evidence guiding the next investigations
 
 [#16's frozen cohort](https://github.com/eberkut/ithrl/issues/16) completed native controls and
 approved measurements. Both primary workloads calibrated, but their selected fields were removed in
@@ -118,14 +121,15 @@ can help locate further sources, but ithrl must independently snapshot and valid
 evidence. Future ordinary cohorts must freeze selection rules before inspection and measure useful
 developer conclusions alongside reduction, reliability and cost.
 
-Issues #13 and #74 can proceed from the published #16 and #81 evidence within their design and
-assessment scope. #73's reporting contract is implemented in #84 and #77's cost reporting in #86.
-Issue #78 implements skill distribution and validates both installation routes. Cost estimates
-require verified usage and pricing coverage. The agent skill covers implemented workflows and must
-follow later release decisions. Issue #74 must distinguish original output, delivered representation
-and saved evidence before proposing edits. Its v0.5 commitment is the assessment; tool-output
-implementation requires a separate decision and need not block comparison within existing edit
-domains. Native probes and provider execution require separate approval.
+The [comparative-debugging study](docs/research/comparative-debugging.md) establishes useful
+context-bundle effects under the tested Codex and Copilot profiles. Broader ordinary cohorts can
+assess how often comparison helps; historical contrasts alone cannot establish those effects.
+
+Issue #74 can use the #16 and #81 evidence alongside those comparisons for its provider-free
+assessment. It must distinguish original tool output, delivered representation and saved evidence
+before proposing a localized edit. Its v0.5 commitment is the assessment; tool-output implementation
+requires a separate decision. Existing whole-record comparisons remain available without expanding
+the edit domain. Native probes and provider execution require separate approval.
 
 The review of
 [SkillOpt's training method](https://github.com/microsoft/SkillOpt/blob/45f65ca04f5f6713bca7b9797b495696ba812751/docs/guide/training-loop.md)
@@ -169,12 +173,7 @@ Deterministic single-removal minimality and
 claims. The latter requires additional complete comparisons, error allocation and a budget that
 covers all advertised checks.
 
-### Comparative debugging and another integration
-
-`compare GOOD_CASE BAD_CASE` should search supported context differences with dependency-valid
-interventions. It must establish comparability of target, oracle, model/provider, request surface,
-environment and effective runner policy before attributing a regression to context. Differences in
-model, harness or execution environment remain explicit experimental factors.
+### Additional harnesses
 
 Claude Code, OpenCode and Pi are planned additional integrations. Claude Code and OpenCode have
 promising portability evidence in the [feasibility study](docs/research/feasibility.md); Pi needs an
@@ -198,7 +197,7 @@ text do not prove avoidable retrieval, forgetting or effects caused by compactio
 inspection leaves active Codex compaction reconstruction unsupported; implementing agent handoffs
 is separate work.
 
-## Further capability candidates
+### Further capability candidates
 
 - Further mutation operations: supported whitespace changes, independent reordering and adding
   stale or irrelevant observations outside prior-user text. State whether each tests expected
@@ -226,7 +225,7 @@ selected larger contexts, including incomplete and inconclusive outcomes. Neithe
 general 100k workload envelope. Qualification at that scale remains an optional expansion with a
 separate cost proposal.
 
-## Planning and release policy
+### Planning and release policy
 
 GitHub issues track implementation scope, acceptance criteria and dependencies. Release milestones
 group this work, and the [public Project](https://github.com/users/eberkut/projects/1/views/4) shows

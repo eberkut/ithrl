@@ -7,10 +7,12 @@ status. These experiments do not identify the original decision's cause or repro
 The
 [README supported-inputs table](https://github.com/eberkut/ithrl/blob/main/README.md#supported-inputs)
 defines public support. Use `extract` to capture a decision, `prepare` to generate a reduction
-configuration, `shrink` to reduce context, `fuzz` to test mutations, and `inspect` to read retained
-context or recorded operations across compaction. Inspection starts no runner or observation
-store. See [native runs](native-runs.md) for procedures, [measurements](measurements.md) for
-qualification evidence and [results](results.md) for interpretation.
+configuration, `shrink` to reduce context, `fuzz` to test mutations and `compare` to test a declared
+effect between two source-bound contexts. `inspect` reads retained context or recorded operations
+across compaction without starting a runner or opening an observation store. See
+[native runs](native-runs.md) and [comparison](comparison.md) for procedures,
+[measurements](measurements.md) and the [comparison study](research/comparative-debugging.md) for
+qualification evidence, and [results](results.md) for interpretation.
 
 ## Adapters and runners
 
@@ -213,7 +215,7 @@ reconciliation and accounting. Reduction owns exploratory screening, search cove
 preservation classification. Fuzz components own mutation generation, discovery, simplification
 and change classification.
 
-Application workflow requires calibration, durably selects one candidate and then collects a
+Reduction and fuzzing require calibration, durably select one candidate and then collect a
 separate fresh final confirmation against the immutable original. Calibration and exploratory
 observations never enter that holdout. Once selection is final, search cannot resume or use the
 holdout to select another candidate.
@@ -239,6 +241,37 @@ The fake runner uses this collector with deterministic capabilities and zero pro
 Native text mutation requires detected support and a qualified execution profile: Codex edits
 eligible prior-user `input_text` fields, and Copilot edits prior `user.message` content in a copied
 prefix. Neither edits the selected decision's input.
+
+### Explicit-context comparison
+
+`comparison/` binds a reference and candidate to one immutable case, target and execution plan. Each
+selection uses existing dependency-closed removals and optional source-bound text edits; either
+context may omit supported material. Preparation admits the immutable original and both selections,
+and protects the fixed triggering input independently of caller-supplied edit flags.
+
+Capture-time model and provider remain source provenance. An explicit prospective Codex profile
+binds the effective model and provider and omits complete historical reasoning records from both
+execution copies. The plan and report declare this common projection separately from context edits;
+the immutable source and fixed input remain intact.
+
+The comparison procedure binds both selections, repair or degradation direction, calibration gates,
+fixed confirmation counts, freshness and eligibility policy. Administrative ceilings remain
+separate. The shared collector materializes its reference arm from the explicit selection only for
+this procedure; reduction and fuzzing retain their full-original baseline.
+
+Two-arm calibration checks the declared contrast before durable selection. Confirmation uses fresh
+observations and the existing exact change bounds: repair orders candidate minus reference;
+degradation orders reference minus candidate. A lower bound exceeding the frozen minimum effect
+confirms the directed change. Incomplete evidence and a complete inconclusive comparison remain
+distinct, and calibration supplies no confirmation credit.
+
+Comparison progress uses the existing sampled state, observation store, block admission and
+dispatch reconciliation. It excludes reduction and fuzz checkpoints. A private result snapshot
+contains that state, referenced blocks and digest-bound execution metadata; summaries are derived
+from them. Offline inspection validates their identities and chronology without opening the store
+or starting a runner. Supplying the case additionally re-derives source partitions and text edits.
+[ADR 0006](decisions/0006-explicit-context-comparison.md) records the decision; the
+[comparison guide](comparison.md) owns configuration and recovery procedures.
 
 ## Execution and privacy boundary
 
@@ -309,6 +342,12 @@ A shell target requires native action visibility and denial through the effectiv
 category. Tool-side network effects, hosted tools, MCP and web access need separately qualified
 profiles.
 
+Source snapshots, workspace roots and their ancestors refuse symlinks. Codex workspace snapshots
+can preserve nested relative links to existing real files or directories inside the same tree.
+Leading `..` steps may stay within that root; absolute targets, later `..` traversal, link chains,
+dangling targets and special files are refused. The snapshot hashes each link's text without
+following it; ordinary tree inspection covers the target data.
+
 Attempt evidence preserves termination and cleanup state, protected-path effects, action counts,
 provider acceptance, available token usage and native-output references. Actual, additional
 possible and pending provider calls remain distinct and conservatively charged. Missing usage
@@ -360,6 +399,8 @@ Python module names are not public API commitments.
 | `cli/fuzz.py`, `cli/fuzz_run.py`, `cli/fuzz_output.py`, `cli/fuzz_session.py` | Fuzz preflight, consent, composition, content-safe reports and private resume/results |
 | `fuzz/configuration.py` | Private operator policy and command limits, bound to an immutable original |
 | `fuzz/progress.py`, `fuzz/campaign.py` | Frozen mutation order, authoritative traversal recovery, durable selection and terminal campaign evidence over shared sampled state |
+| `comparison/contracts.py`, `comparison/engine.py`, `comparison/results.py` | Explicit source-bound selections, two-arm calibration, directed confirmation and offline result validation over shared sampled state |
+| `cli/compare.py`, `cli/comparison_output.py`, `cli/comparison_session.py` | Comparison preflight, consent, progress, private sessions, recovery and content-safe reports |
 | `workflow.py`, `results/` | Application phase composition and validated result models, summaries and snapshots |
 | `inspection.py`, `results/inspection.py`, `cli/inspect.py` | Offline result/case binding, retained-context interpretation, source section catalogs and CLI presentation |
 | `reacquisition.py`, `adapters/reacquisition.py`, `adapters/codex/reacquisition.py`, `adapters/copilot/reacquisition.py` | Passive compaction projections, exact adjacent-epoch matching and bounded reports |

@@ -2,17 +2,22 @@
 
 Ordinary Codex and Copilot saved-session experiments removed **580** and **6,512 additional UTF-8
 bytes** from retained prior-user text and passed fresh preservation confirmation. An earlier Codex
-whole-record reduction lowered mean confirmation input tokens by **50.17%**. This page reports
-these results, synthetic fuzzing campaigns and their costs, followed by reference measurements.
+whole-record reduction lowered mean confirmation input tokens by **50.17%**. The measurements
+below cover these reductions, synthetic fuzzing campaigns, reference workloads and their costs.
 
 Results apply to the recorded workloads, predicates and runner policies. General session success
-rates, robustness, causal explanations and monetary savings remain unmeasured. See
+rates, robustness, unique historical causes and monetary savings remain unmeasured. See
 [native runs](native-runs.md) for execution and [results](results.md) for statistical assumptions,
 validity and call accounting.
 
 Harness versions identify the measured installations. Compatibility depends on detected operations,
 capabilities and safety controls; there is no exact-release allowlist. Durations below are rounded
 to the nearest second; KiB and MiB use binary units.
+
+For explicit-context comparisons, see the
+[comparative-debugging study](research/comparative-debugging.md). It reports constructed and
+ordinary Codex/Copilot investigations, calibration, fresh confirmation and costs including
+unsuccessful work.
 
 ## Saved-session experiments
 

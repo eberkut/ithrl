@@ -1,9 +1,13 @@
 # Results and privacy
 
-Start with `summary.json` in the printed result directory for the outcome, evidence identifiers,
-counts and next action.
+For reduction and fuzzing, start with `summary.json` in the printed result directory for the
+outcome, evidence identifiers, counts and next action. For `compare`, use the reported
+`result_path` and [comparison inspection](#inspect-a-context-comparison).
 
 ## Saved files
+
+Reduction results contain the files below; fuzzing and comparison use the workflow-specific files
+described in their sections.
 
 | File | Contents |
 | --- | --- |
@@ -97,7 +101,7 @@ makes no provider calls or probes.
 
 The report lists units, editability, dependencies and removal trials. Trials identify requested
 and effective removals, candidate, outcome and search parent—the context from which removal was
-proposed. Sampled comparisons use the full immutable original as their statistical baseline.
+proposed. Sampled reduction trials use the full immutable original as their statistical baseline.
 
 | Evidence | Interpretation |
 | --- | --- |
@@ -272,16 +276,43 @@ If result saving fails, `result-publication-failed` retains the known usage and 
 path and exits with code 70. Resolve the storage problem, then resume from `run_state_path` to
 save a new receipt. Completed observations and confirmation are retained.
 
-## Research basis
+## Inspect a context comparison
 
-The [feasibility study](research/feasibility.md#research-basis) explains the original research
-motivations and source papers. [Reduction design](research/reduction-design.md) and
-[context fuzzing](research/context-fuzzing.md) describe the statistical methods, measured usefulness
-and limits behind the result claims.
+Read a saved comparison without a harness, profile, original workspace or observation store:
+
+```bash
+ithrl inspect comparison RESULT --format json
+ithrl inspect comparison RESULT --case CASE --format json
+```
+
+Both forms validate the snapshot's identities, phase chronology and observation references. Adding
+`--case` re-derives its source partitions and text edits, with `source_validation` set to
+`verified`; otherwise that field is `not-requested`. The snapshot and case remain private. Default
+output contains edit metadata and accounting without session text or model responses.
+
+The report includes both context digests, removed IDs, text-edit metadata, sampling counts and
+execution declarations. Recorded requested model and provider appear when their known values agree;
+absent, conflicting or unsafe identifiers are omitted. Neither source validation nor the recorded
+identities verify the current native environment. `harness_started` describes the current
+invocation; offline inspection and completed-run resume do not start a harness.
+
+The reference and candidate are two explicit contexts from one immutable source, rather than two
+independent historical captures. For repair, the effect is candidate minus reference match rate;
+for degradation, reference minus candidate. `confirmed-improvement` and `confirmed-degradation`
+mean the fresh directional lower bound exceeds the declared minimum effect. `inconclusive` means
+complete confirmation did not meet that criterion. `calibration-failed` ends before confirmation;
+`incomplete` means required eligible evidence was not obtained.
+
+Calibration observations are reported separately and receive no confirmation credit. Operational
+errors are not behavioral nonmatches. Counts and usage include unsuccessful work; actual, possible
+and pending provider calls remain distinct. Inference assumes independent, stationary valid outcomes
+under the prespecified eligibility policy. The result concerns the complete intervention, without
+establishing component necessity, minimality, an interaction or a unique historical cause.
+See the [comparison guide](comparison.md) for configuration, limits and continuation.
 
 ## Budgets and resume
 
-The summary reports calibration, search, confirmation, eligibility, reliability and usage. Actual
+Reports separate phase outcomes, eligibility, reliability and usage. Actual
 calls are known starts; additional possible calls are usage the runner cannot exclude. Completed
 attempts are charged known calls; failures with started provider work retain the full per-attempt
 allowance. Pending reservations stay charged until reconciliation. Resume reconciles observations
@@ -305,14 +336,15 @@ different cap for a new run.
 
 After a budget stop, use the printed continuation command with the saved result or active run.
 Sampled resume preserves the experiment and completed work. Supported administrative limits may
-increase for `shrink`; fuzz keeps its original limits. Neither repeats completed confirmation or
-unresolved dispatches.
+increase for `shrink`; fuzzing and comparison keep their original limits. No workflow repeats
+completed confirmation or unresolved dispatches.
 
 For sampled `shrink`, `--resume` requires the saved run or result directory. Starting from the case
 without it creates a new run and budget; reusing the observation database alone does not resume.
 
-`--inter-attempt-delay SECONDS` defaults to zero, persists across sampled resume and consumes the
-overall wall-time allowance. A run also stops when its evidence becomes stale or its safety
+For sampled `shrink`, `--inter-attempt-delay SECONDS` defaults to zero, persists across resume and
+consumes the overall wall-time allowance. Fuzzing and comparison set this delay in their
+configuration. A run also stops when its evidence becomes stale or its safety
 requirements cannot be verified. Retain the failed evidence; a fresh invocation is a separate run.
 
 ## Estimate token costs
@@ -386,6 +418,8 @@ Diagnostics identify the failing input: `cost-pricing-invalid` for the pricing s
 `cost-output-invalid` for the destination. `cost-input-mode` identifies missing or mixed mode
 arguments. Messages give recovery actions without echoing private paths or input values.
 
+#### Check token counts
+
 Input totals include cached reads and writes; output totals include reasoning tokens. Subsets are
 subtracted rather than charged twice. Missing cache counts or write durations can leave input
 components unpriced. Contradictory counts refuse estimation. Context thresholds apply to the full
@@ -397,10 +431,12 @@ the remainder's retention, so missing duration counts are not inferred. OpenAI c
 rates require retention evidence and stay unpriced with `cache-retention-unknown` when it is
 unavailable; explicit custom rates record the operator's pricing assumption.
 
-The report saves the selected date/context, package and catalog identity, effective component
-rates, counts and amounts. Inspection validates its digest and arithmetic without the source
-database or a current price lookup. The reference time is a pricing assumption, not a claim about
-when the provider received a request. Unknown provider/model identifiers, unmatched context
+#### Check pricing assumptions
+
+Saved reports bind the reference time and context, package and catalog identity, effective rates,
+counts and amounts. Offline inspection validates the digest and arithmetic without the source
+database or a current price lookup. The reference time selects pricing; it need not be the provider
+request date. Unknown provider/model identifiers, unmatched context
 variants and dates outside the catalog's modeled constraints refuse instead of selecting a
 fallback. The catalog is reference data, not a complete historical price archive.
 When context is omitted and the catalog defines an applicable `default` service tier, the report
@@ -409,6 +445,8 @@ records that tier and checks it against recorded evidence. Custom rates keep the
 Managed Copilot catalog rates are labeled `published-reference-rate`; plan allowances and billing
 remain outside the estimate. Other catalog models use `api-list-price-equivalent`. Only token
 charges are included; separate tool, storage and other units are outside this report.
+
+### Use custom rates
 
 For custom prices, add `custom_rates` to the specification. Supported keys are `input_mtok`,
 `output_mtok`, `cache_read_mtok`, `cache_write_mtok`, `cache_write_5m_mtok` and
@@ -451,11 +489,19 @@ By default, observations are stored in the platform's standard user-data directo
 systems, ithrl refuses case files and directories with unexpected permissions.
 
 Source evidence is snapshotted before native execution. The original session and workspace remain
-protected; disposable candidate state is separate. Returned actions are observations and never
-execute under the current profiles.
+protected; disposable candidate state is separate. Returned actions are observed and denied under
+the current profiles.
 
 Content digests detect inconsistent changes. Another process running as the same user can still
 replace local files; ithrl assumes that has not happened. On POSIX, it checks ownership and write
 permissions for source and case paths. A shared sticky parent is allowed only above a private
 user-owned directory. On platforms without ownership checks, custom paths must stay inside the
 active user profile.
+
+## Research basis
+
+The [feasibility study](research/feasibility.md#research-basis) explains the original research
+motivations and source papers. [Reduction design](research/reduction-design.md),
+[context fuzzing](research/context-fuzzing.md) and
+[comparative debugging](research/comparative-debugging.md) describe the statistical methods,
+measured usefulness and limits behind the result claims.

@@ -108,6 +108,7 @@ class ProtectedPathSnapshot:
     _paths: tuple[_CapturedPath, ...] = field(repr=False)
     max_entries: int
     max_bytes: int
+    allow_internal_symlinks: bool = False
 
     @classmethod
     def capture(
@@ -116,10 +117,13 @@ class ProtectedPathSnapshot:
         *,
         max_entries: int,
         max_bytes: int,
+        allow_internal_symlinks: bool = False,
     ) -> ProtectedPathSnapshot:
         """Capture labeled paths without following links or reading special files."""
 
         entries = tuple(paths)
+        if type(allow_internal_symlinks) is not bool:
+            _invalid_specification()
         _validate_specification(entries, max_entries=max_entries, max_bytes=max_bytes)
         budget = _Budget(max_entries=max_entries, max_bytes=max_bytes)
         captured: list[_CapturedPath] = []
@@ -129,10 +133,19 @@ class ProtectedPathSnapshot:
                 _CapturedPath(
                     label=entry.label,
                     path=absolute_path,
-                    fingerprint=_fingerprint(absolute_path, budget=budget),
+                    fingerprint=_fingerprint(
+                        absolute_path,
+                        budget=budget,
+                        allow_internal_symlinks=allow_internal_symlinks,
+                    ),
                 )
             )
-        return cls(_paths=tuple(captured), max_entries=max_entries, max_bytes=max_bytes)
+        return cls(
+            _paths=tuple(captured),
+            max_entries=max_entries,
+            max_bytes=max_bytes,
+            allow_internal_symlinks=allow_internal_symlinks,
+        )
 
     def verify(self) -> tuple[str, ...]:
         """Return labels whose names, types, modes, or contents changed."""
@@ -140,7 +153,12 @@ class ProtectedPathSnapshot:
         budget = _Budget(max_entries=self.max_entries, max_bytes=self.max_bytes)
         changed: list[str] = []
         for captured in self._paths:
-            current = _fingerprint(captured.path, budget=budget, allow_missing=True)
+            current = _fingerprint(
+                captured.path,
+                budget=budget,
+                allow_missing=True,
+                allow_internal_symlinks=self.allow_internal_symlinks,
+            )
             if current is None or current != captured.fingerprint:
                 changed.append(captured.label)
         return tuple(changed)
@@ -195,6 +213,7 @@ def _fingerprint(
     *,
     budget: _Budget,
     allow_missing: Literal[False] = False,
+    allow_internal_symlinks: bool = False,
 ) -> bytes: ...
 
 
@@ -204,6 +223,7 @@ def _fingerprint(
     *,
     budget: _Budget,
     allow_missing: Literal[True],
+    allow_internal_symlinks: bool = False,
 ) -> bytes | None: ...
 
 
@@ -212,11 +232,18 @@ def _fingerprint(
     *,
     budget: _Budget,
     allow_missing: bool = False,
+    allow_internal_symlinks: bool = False,
 ) -> bytes | None:
     _reject_symlink_components(path, allow_missing_leaf=allow_missing)
     digest = hashlib.sha256()
     try:
-        _fingerprint_entry(path, relative_parts=(), digest=digest, budget=budget)
+        _fingerprint_entry(
+            path,
+            relative_parts=(),
+            digest=digest,
+            budget=budget,
+            allow_internal_symlinks=allow_internal_symlinks,
+        )
     except FileNotFoundError:
         if allow_missing and not os.path.lexists(path):
             return None
@@ -272,6 +299,7 @@ def _fingerprint_entry(
     relative_parts: tuple[str, ...],
     digest: _Digest,
     budget: _Budget,
+    allow_internal_symlinks: bool = False,
 ) -> None:
     metadata = path.lstat()
     budget.add_entry()
@@ -291,6 +319,7 @@ def _fingerprint_entry(
             initial=metadata,
             digest=digest,
             budget=budget,
+            allow_internal_symlinks=allow_internal_symlinks,
         )
         return
     if stat.S_ISLNK(metadata.st_mode):
@@ -311,6 +340,7 @@ def _fingerprint_directory(
     initial: os.stat_result,
     digest: _Digest,
     budget: _Budget,
+    allow_internal_symlinks: bool,
 ) -> None:
     _update_header(digest, relative_parts=relative_parts, kind=b"D", mode=initial.st_mode)
     descriptor = _open_directory(path, initial=initial)
@@ -320,6 +350,7 @@ def _fingerprint_directory(
             relative_parts=relative_parts,
             digest=digest,
             budget=budget,
+            directory_descriptors=(descriptor,) if allow_internal_symlinks else None,
         )
         finished = os.fstat(descriptor)
     finally:
@@ -338,6 +369,7 @@ def _fingerprint_open_directory(
     relative_parts: tuple[str, ...],
     digest: _Digest,
     budget: _Budget,
+    directory_descriptors: tuple[int, ...] | None,
 ) -> None:
     names: list[str] = []
     with os.scandir(descriptor) as iterator:
@@ -351,6 +383,7 @@ def _fingerprint_open_directory(
             relative_parts=(*relative_parts, name),
             digest=digest,
             budget=budget,
+            directory_descriptors=directory_descriptors,
         )
 
 
@@ -361,6 +394,7 @@ def _fingerprint_entry_at(
     relative_parts: tuple[str, ...],
     digest: _Digest,
     budget: _Budget,
+    directory_descriptors: tuple[int, ...] | None,
 ) -> None:
     metadata = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
     budget.add_entry()
@@ -382,9 +416,21 @@ def _fingerprint_entry_at(
             initial=metadata,
             digest=digest,
             budget=budget,
+            directory_descriptors=directory_descriptors,
         )
         return
     if stat.S_ISLNK(metadata.st_mode):
+        if directory_descriptors is not None:
+            _fingerprint_symlink_at(
+                parent_descriptor,
+                name,
+                relative_parts=relative_parts,
+                initial=metadata,
+                digest=digest,
+                budget=budget,
+                directory_descriptors=directory_descriptors,
+            )
+            return
         raise ProtectedPathError(
             ProtectionErrorCode.UNSAFE_PATH,
             "a protected path contains a symbolic link",
@@ -403,6 +449,7 @@ def _fingerprint_directory_at(
     initial: os.stat_result,
     digest: _Digest,
     budget: _Budget,
+    directory_descriptors: tuple[int, ...] | None,
 ) -> None:
     _update_header(digest, relative_parts=relative_parts, kind=b"D", mode=initial.st_mode)
     descriptor = _open_directory(name, initial=initial, dir_fd=parent_descriptor)
@@ -412,6 +459,9 @@ def _fingerprint_directory_at(
             relative_parts=relative_parts,
             digest=digest,
             budget=budget,
+            directory_descriptors=(*directory_descriptors, descriptor)
+            if directory_descriptors is not None
+            else None,
         )
         finished = os.fstat(descriptor)
     finally:
@@ -422,6 +472,70 @@ def _fingerprint_directory_at(
     ) != _read_signature(current):
         _changed_during_read()
     digest.update(b"E")
+
+
+def _fingerprint_symlink_at(
+    parent_descriptor: int,
+    name: str,
+    *,
+    relative_parts: tuple[str, ...],
+    initial: os.stat_result,
+    digest: _Digest,
+    budget: _Budget,
+    directory_descriptors: tuple[int, ...],
+) -> None:
+    target = os.readlink(name, dir_fd=parent_descriptor)
+    encoded = os.fsencode(target)
+    budget.add_bytes(len(encoded))
+    _validate_internal_link_target(target, directory_descriptors)
+    current = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+    if _read_signature(initial) != _read_signature(current):
+        _changed_during_read()
+    _update_header(digest, relative_parts=relative_parts, kind=b"L", mode=initial.st_mode)
+    digest.update(len(encoded).to_bytes(8, "big", signed=False))
+    digest.update(encoded)
+
+
+def _validate_internal_link_target(target: str, directory_descriptors: tuple[int, ...]) -> None:
+    # Resolve only leading parent steps through descriptors already opened within this root.
+    # Reject later traversal rather than normalizing away a possible symlink or root escape.
+    parts = target.split("/")
+    parents = 0
+    while parts and parts[0] in {".", ".."}:
+        if parts.pop(0) == "..":
+            parents += 1
+    if (
+        not target
+        or target.startswith("/")
+        or parents >= len(directory_descriptors)
+        or any(part in {"", ".", ".."} for part in parts)
+    ):
+        _unsafe_link_target()
+    descriptor = directory_descriptors[-1 - parents]
+    opened: list[int] = []
+    try:
+        for index, part in enumerate(parts):
+            metadata = os.stat(part, dir_fd=descriptor, follow_symlinks=False)
+            if index == len(parts) - 1:
+                if not (stat.S_ISREG(metadata.st_mode) or stat.S_ISDIR(metadata.st_mode)):
+                    _unsafe_link_target()
+            else:
+                if not stat.S_ISDIR(metadata.st_mode):
+                    _unsafe_link_target()
+                descriptor = _open_directory(part, initial=metadata, dir_fd=descriptor)
+                opened.append(descriptor)
+    except FileNotFoundError:
+        _unsafe_link_target()
+    finally:
+        for descriptor in reversed(opened):
+            os.close(descriptor)
+
+
+def _unsafe_link_target() -> None:
+    raise ProtectedPathError(
+        ProtectionErrorCode.UNSAFE_PATH,
+        "a protected symbolic link does not target a real entry within its root",
+    )
 
 
 def _open_directory(

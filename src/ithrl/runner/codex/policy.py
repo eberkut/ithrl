@@ -30,7 +30,13 @@ DISABLED_FEATURES = frozenset(
 # Codex may force its unified-exec backend on. Disabling ``shell_tool`` prevents that
 # backend from being registered as a model tool, which is the safety-relevant fact.
 
-POLICY_VERSION = "codex-final-response-isolated-discovery-v2"
+POLICY_VERSION = "codex-final-response-context-only-v3"
+CONTINUATION_INSTRUCTIONS = (
+    "This is a context-only final-response continuation. "
+    "Tools are unavailable; do not call them. "
+    "Answer the current request using the supplied context. "
+    "State any missing evidence explicitly."
+)
 RUNNER_VERSION = "1"
 CAPTURE_TYPE = "logical-session"
 CONTEXT_OPERATIONS = ("dependency-closed-removal", "append-text", "remove-text-sections")
@@ -55,6 +61,7 @@ def runtime_deviation(runtime_identity: str) -> str:
 __all__ = [
     "CAPTURE_TYPE",
     "CONTEXT_OPERATIONS",
+    "CONTINUATION_INSTRUCTIONS",
     "DISABLED_FEATURES",
     "MATERIALIZATION",
     "POLICY_VERSION",

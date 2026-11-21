@@ -106,7 +106,7 @@ class PreparedAttempt:
 
     def __post_init__(self) -> None:
         allowed_phase_arms = {
-            "calibration": ("baseline",),
+            "calibration": ("baseline", "candidate"),
             "search": ("baseline", "candidate"),
             "discovery": ("baseline", "candidate"),
             "simplification": ("baseline", "candidate"),

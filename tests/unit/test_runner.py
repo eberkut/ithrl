@@ -131,6 +131,7 @@ def test_successful_result_cannot_exceed_its_frozen_execution_budget(
 @pytest.mark.parametrize(
     ("phase", "arm"),
     [
+        ("calibration", "candidate"),
         ("search", "baseline"),
         ("search", "candidate"),
         ("confirmation", "baseline"),
@@ -150,7 +151,7 @@ def test_prepared_attempt_supports_fresh_sampling_arms(
 
 @pytest.mark.parametrize(
     ("phase", "arm"),
-    [("calibration", "candidate"), ("calibration", "selected"), ("search", "selected")],
+    [("calibration", "selected"), ("search", "selected")],
 )
 def test_prepared_attempt_rejects_wrong_sampling_arm(
     tmp_path: Path, phase: AttemptPhase, arm: AttemptArm

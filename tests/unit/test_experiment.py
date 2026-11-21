@@ -11,6 +11,7 @@ from ithrl.experiment import (
     MAX_SAMPLING_ATTEMPTS,
     MAX_SAMPLING_FRESHNESS_SECONDS,
     AnyRunnerConfig,
+    CodexReplayConfig,
     DeterministicPhase,
     ExperimentDefinition,
     ExperimentFormatError,
@@ -56,6 +57,29 @@ def _sampled_experiment() -> SampledExperimentDefinition:
         runner=NativeRunnerConfig(type="codex", required_capability_digest="a" * 64),
         calibration=SampledCalibrationPhase(required_valid=3, minimum_matches=2, max_attempts=5),
     )
+
+
+def test_codex_replay_round_trips_and_binds_execution_selection() -> None:
+    original = _sampled_experiment()
+    replay = CodexReplayConfig(provider="replay-provider", model="replay-model")
+    experiment = original.model_copy(
+        update={"runner": original.runner.model_copy(update={"codex_replay": replay})}
+    )
+    restored = parse_experiment_toml(experiment.to_toml())
+    assert restored == experiment
+    assert restored.digest != original.digest
+    assert "codex_replay" not in original.runner.model_dump()
+    with pytest.raises(ValidationError, match="Codex replay requires"):
+        NativeRunnerConfig(type="copilot", required_capability_digest="a" * 64, codex_replay=replay)
+
+
+@pytest.mark.parametrize(
+    "update",
+    [{"provider": "bad provider"}, {"model": "bad\nmodel"}, {"reasoning": "preserve"}],
+)
+def test_codex_replay_requires_explicit_bounded_execution_inputs(update: dict[str, str]) -> None:
+    with pytest.raises(ValidationError):
+        CodexReplayConfig.model_validate({"provider": "provider", "model": "model", **update})
 
 
 def _sampled_reduction() -> SampledReductionPlan:
