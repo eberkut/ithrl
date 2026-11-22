@@ -690,6 +690,8 @@ def _run_report(
     *,
     calibration: str = "measurable",
 ) -> SampledReductionOutput:
+    """Derive verdicts, charges and continuation from one owned state snapshot."""
+
     snapshot = state_file.snapshot(store, now=datetime.now(UTC))
     if snapshot.state != state:
         raise ValueError("sampled report differs from current owned state")

@@ -82,31 +82,20 @@ For a saved session, provide its path and ask:
 
 ## Commands
 
-- `ithrl extract` browses saved sessions and creates a case from a selected decision.
-- `ithrl prepare CASE` generates a private reduction configuration from a preflight receipt and
-  statistical settings. Follow the
-  [preparation procedure](https://github.com/eberkut/ithrl/blob/main/docs/reduction.md).
-- `ithrl shrink CASE` searches for context removals that preserve the selected behavior.
-- `ithrl inspect sections CASE` lists editable text fields and paragraph boundaries without
-  displaying text or requiring a reduction result.
-- `ithrl inspect tool CASE` lists source-bound tool output fields and can describe an
-  exact span deletion without model access. See
-  [tool output text inspection](https://github.com/eberkut/ithrl/blob/main/docs/results.md#inspect-tool-output).
-- `ithrl inspect reacquire SESSION` compares recorded operations and captured results across
-  compaction. See
-  [passive inspection](https://github.com/eberkut/ithrl/blob/main/docs/results.md#inspect-recorded-compaction).
-- `ithrl inspect retained CASE --result RESULT` explains retained units and recorded removal trials
-  from a saved reduction without model access. See
-  [results and privacy](https://github.com/eberkut/ithrl/blob/main/docs/results.md#inspect-retained-context).
-- `ithrl fuzz CASE --config PRIVATE_TOML` searches for and simplifies text appends that decrease how
-  often the selected behavior occurs, with independent confirmation.
-- `ithrl compare CASE --config PRIVATE_TOML` tests whether a selected context change increases or
-  decreases the target's match rate, with fresh confirmation. See the
-  [comparison guide](https://github.com/eberkut/ithrl/blob/main/docs/comparison.md).
-- `ithrl cost` applies reference rates to recorded or hypothetical token usage and saves an offline
-  report. See
-  [token-cost estimates](https://github.com/eberkut/ithrl/blob/main/docs/results.md#estimate-token-costs)
-  for pricing, coverage and interpretation.
+Choose a workflow for your debugging question:
+
+| Task | Command | Guide |
+| --- | --- | --- |
+| Create a case from a saved decision | `ithrl extract` | [Select a decision](https://github.com/eberkut/ithrl/blob/main/docs/native-runs.md#select-a-saved-decision) |
+| Find a smaller context that preserves the behavior | `ithrl prepare`, then `ithrl shrink` | [Context reduction](https://github.com/eberkut/ithrl/blob/main/docs/reduction.md) |
+| Find text appends that decrease the target's match rate | `ithrl fuzz` | [Context fuzzing](https://github.com/eberkut/ithrl/blob/main/docs/fuzzing.md) |
+| Test a selected context change | `ithrl compare` | [Context comparison](https://github.com/eberkut/ithrl/blob/main/docs/comparison.md) |
+| Inspect saved context, compaction or results without model calls | `ithrl inspect` | [Results and privacy](https://github.com/eberkut/ithrl/blob/main/docs/results.md) |
+| Estimate costs from recorded or hypothetical token usage | `ithrl cost` | [Token-cost estimates](https://github.com/eberkut/ithrl/blob/main/docs/results.md#estimate-token-costs) |
+
+Inspection covers retained context and removal trials (`inspect retained`), editable paragraph
+boundaries (`inspect sections`), source-bound tool output (`inspect tool`) and recorded operations
+across compaction (`inspect reacquire`). Default inspection output omits private text.
 
 For example, extract a saved session file:
 
@@ -155,28 +144,14 @@ before using an installed harness.
 
 ## Documentation
 
-Read the [documentation site](https://eberkut.github.io/ithrl/) or browse the guides below.
-
-- [Agent skill](https://github.com/eberkut/ithrl/blob/main/docs/agent-skill.md): install and update
-  the skill through Library Skills or Vercel Skills.
-- [Native runs](https://github.com/eberkut/ithrl/blob/main/docs/native-runs.md): session selection,
-  shared prerequisites and compatibility.
-- [Native reduction](https://github.com/eberkut/ithrl/blob/main/docs/reduction.md): prepare,
-  inspect and execute a context-removal experiment.
-- [Context fuzzing](https://github.com/eberkut/ithrl/blob/main/docs/fuzzing.md): try the local
-  example and run a native text-append campaign.
-- [Context comparison](https://github.com/eberkut/ithrl/blob/main/docs/comparison.md): select two
-  contexts, declare the direction and confirm their effect.
-- [Results and privacy](https://github.com/eberkut/ithrl/blob/main/docs/results.md): saved files,
-  result interpretation, budgets, resume and sensitive data.
-- [Contributing](https://github.com/eberkut/ithrl/blob/main/CONTRIBUTING.md): issue-first
-  collaboration, checkout setup, checks and smoke tests.
-- [Roadmap](https://github.com/eberkut/ithrl/blob/main/ROADMAP.md): current priorities and planned
-  capabilities.
-- [Architecture](https://github.com/eberkut/ithrl/blob/main/docs/architecture.md): implementation
-  boundaries and decisions.
-- [Research](https://github.com/eberkut/ithrl/blob/main/docs/research/index.md): feasibility
-  studies, statistical methods and measurements.
+The [documentation site](https://eberkut.github.io/ithrl/) provides the guides above,
+[CLI reference](https://eberkut.github.io/ithrl/cli/) and
+[troubleshooting](https://eberkut.github.io/ithrl/troubleshooting/).
+For development, see [Contributing](https://github.com/eberkut/ithrl/blob/main/CONTRIBUTING.md) and
+[architecture](https://github.com/eberkut/ithrl/blob/main/docs/architecture.md).
+The [roadmap](https://github.com/eberkut/ithrl/blob/main/ROADMAP.md) records direction;
+[research](https://github.com/eberkut/ithrl/blob/main/docs/research/index.md) records methods and
+evidence.
 
 For help, bugs or proposals, see [Support](https://github.com/eberkut/ithrl/blob/main/SUPPORT.md).
 Report vulnerabilities through

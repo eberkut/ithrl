@@ -1,8 +1,13 @@
 # Results and privacy
 
-For reduction and fuzzing, start with `summary.json` in the printed result directory for the
-outcome, evidence identifiers, counts and next action. For `compare`, use the reported
-`result_path` and [comparison inspection](#inspect-a-context-comparison).
+For reduction and fuzzing, open `summary.json` in the printed result directory. Read the phase
+outcomes, actual edits and usage together: a confirmed behavioral result can have incomplete search
+coverage or retain the entire original context. For `compare`, inspect the reported `result_path`
+as described under [context comparison](#inspect-a-context-comparison).
+
+This page explains saved evidence, statistical claims, accounting and private inspection. For
+execution procedures, use [reduction](reduction.md), [fuzzing](fuzzing.md) or
+[comparison](comparison.md). All `inspect` commands below read evidence without provider calls.
 
 ## Saved files
 
@@ -12,7 +17,7 @@ described in their sections.
 | File | Contents |
 | --- | --- |
 | `summary.json` | Outcome, phase results, context counts, usage and continuation |
-| `retained-context.jsonl` | Retained source context records, in order; sampled section edits are recorded separately in `result.json` |
+| `retained-context.jsonl` | Retained edit-graph nodes in source order, including source references; sampled section edits are recorded separately in `result.json` |
 | `request.json` | Original or reduced request when exact-request materialization is available |
 | `checkpoint.json` | Deterministic search checkpoint |
 | `result.json` | Sampled candidate selection, search checkpoint and confirmation evidence |
@@ -20,15 +25,15 @@ described in their sections.
 | `sampling/sampling-state.json` | Sampled run state and observation references |
 
 Other files record the experiment, execution plan and provenance. Native reconstruction may have
-no `request.json`; use the retained-context records and recorded reconstruction method. Leave
-internal JSON and SQLite state unchanged so validation and resume can verify it.
+no `request.json`; inspect retained nodes with their source case and recorded reconstruction method.
+Preserve JSON and SQLite state unchanged for validation and resume.
 
 ## Inspect recorded compaction
 
-`reacquire` compares recorded operations and captured results around compaction in one saved Codex
-or Copilot JSONL file. No case, completed decision, harness, credentials or original workspace is
-needed. See the [worked investigation](research/passive-compaction-investigation.md) for qualified
-profiles and ordinary examples.
+`inspect reacquire` compares recorded operations and captured results around compaction in one
+saved Codex or Copilot JSONL file. It needs no case, completed decision, harness, credentials or
+original workspace. The [worked investigation](research/passive-compaction-investigation.md)
+describes qualified profiles and ordinary examples.
 
 First list the recognized successful compactions, then choose an ID from that report:
 
@@ -62,8 +67,8 @@ strip whitespace, timestamps or transport metadata.
 | `unavailable` | The field is missing, empty or explicitly incomplete; no positive result comparison is supported. |
 | `resource_state = "unknown"` | No historical resource snapshot was read or inferred. |
 
-SHA-256, record digests and one-based lines locate evidence. Boundary IDs include line and record
-digest; reuse them only with unchanged sources. Generic Codex code/shell operations stay
+Source SHA-256, record digests and one-based lines locate evidence. Boundary IDs include line and
+record digest; reuse them only with unchanged sources. Generic Codex code/shell operations stay
 unclassified: identical commands do not establish a file read. Copilot accepts missing turn IDs
 when unique request/start/completion identities suffice, but rejects contradictions. Experimental
 extraction keeps stricter turn validation.
@@ -97,11 +102,15 @@ string `payload.output`, or each `text` string in an output array containing onl
 blocks. Copilot fields are string `data.result.content` values in prior `tool.execution_complete`
 events. Copilot `detailedContent`, structured values and mixed Codex output arrays are excluded.
 
-Each field reports its identity, source node and native field path, original-text digest,
-codepoint count and UTF-8 byte size. Only prior eligible fields are included; the current decision
-input remains fixed. Fields beyond the 1 MiB policy appear in `unavailable_fields`.
-`metadata_limit` bounds the combined field listings at 4,096 entries; `omitted_field_count`
-reports additional entries. A partial listing does not mean the omitted fields are ineligible.
+Each field reports its source-bound identity, source node, native field path, original-text digest,
+codepoint count and UTF-8 byte size. The selected decision's input remains fixed.
+
+| Report field | Interpretation |
+| --- | --- |
+| `fields` | Eligible prior tool output text fields within the 1 MiB policy. |
+| `unavailable_fields` | Fields exceeding that policy. |
+| `metadata_limit` | Maximum combined listing size: 4,096 entries. |
+| `omitted_field_count` | Additional entries omitted from the listing; omission does not imply ineligibility. |
 
 To inspect one field privately, replace `FIELD_ID` with a reported identity:
 
@@ -110,12 +119,11 @@ ithrl inspect tool CASE --field FIELD_ID --show-text --max-text-bytes 4096
 ```
 
 Display is escaped and bounded in UTF-8 bytes. `text_truncated` reports incomplete display;
-displayed escape characters are not source offsets. Select ranges in the original Unicode string
-using the [source-location procedure](comparison.md#select-tool-output-text).
-Supplying `--start START --end END` creates a source-bound deletion
-descriptor; with `--show-text`, the displayed field is the retained text after that deletion.
-See [comparison configuration](comparison.md#select-tool-output-text) for its use and supported
-profiles. Discovery alone establishes neither native delivery nor a behavioral effect.
+displayed escape characters are not source offsets. Supplying `--start START --end END` creates a
+source-bound deletion descriptor; with `--show-text`, the displayed field is the retained text after
+that deletion. Follow the [tool output selection procedure](comparison.md#select-tool-output-text)
+to locate ranges in the original Unicode string and configure a supported comparison. Discovery
+alone establishes neither native delivery nor a behavioral effect.
 
 ## Inspect retained context
 
@@ -132,9 +140,10 @@ makes no provider calls or probes.
 
 ### Interpret retained units and trials
 
-The report lists units, editability, dependencies and removal trials. Trials identify requested
-and effective removals, candidate, outcome and search parent—the context from which removal was
-proposed. Sampled reduction trials use the full immutable original as their statistical baseline.
+The report lists units, editability, dependencies and removal trials. Each trial identifies the
+requested and effective removals, candidate, outcome and search parent: the context from which the
+removal was proposed. The search parent can change; sampled trials always use the full immutable
+original as their statistical baseline.
 
 | Evidence | Interpretation |
 | --- | --- |
@@ -160,9 +169,11 @@ Deterministic reports include `failed_candidate_observation_count` for recorded 
 failures. The checkpoint lacks their removal-set details, so failures cannot be attributed to
 individual units or treated as behavioral losses. This count is unavailable for sampled results.
 
-A rejected screen is not confirmed loss or necessity. Coverage and fresh confirmation are separate.
-Target type, confirmation counts, margin and interval appear when saved; missing fields are `null`
-in JSON and unavailable in human output.
+A rejected screen establishes neither confirmed loss nor necessity. Read search coverage separately
+from fresh confirmation. Target type, confirmation counts, margin and interval appear when saved;
+missing fields are `null` in JSON and unavailable in human output.
+
+### Interpret plan and policy evidence
 
 Saved results bind the following plan metadata to `execution_plan_digest`.
 `plan_metadata_scope = "immutable-original"` identifies the original plan; candidate-arm plans
@@ -178,26 +189,30 @@ can differ. Sampled snapshots retain this metadata without the full private exec
 | `declared_policy` | Provider-transport permission, forbidden tool network access, denied action execution and unchanged-source/workspace declarations. Private provider destinations are excluded. |
 | `resource_limits` | Per-attempt limits bound by the plan. |
 
-These fields describe the declared plan; they do not prove historical enforcement.
-Within `recorded_policy_evidence`, `observations_with_digest` and `observations_without_digest`
-count embedded observations with and without an `effective_policy_digest`.
-`referenced_observations_unavailable` counts references without embedded observations. Sampled
-coarse, fine, active-block and confirmation observations contribute embedded evidence. Calibration
-retains only observation references; deterministic snapshots likewise retain references rather
-than embedded attempt evidence. Inspection does not retrieve those observations.
+Plan metadata describes declarations. Recorded attempt evidence has a separate coverage report,
+`recorded_policy_evidence`:
 
-`effective_policy_digests` contains at most 16 sorted, unique recorded digests across both arms;
-`omitted_digest_count` counts additional unique values. A digest identifies recorded attempt
-evidence without revealing the policy's content. Live validation requires each completed attempt's
-digest to match its own plan's safety policy. A mismatch is a safety error and may remain in failed
-attempt evidence. Inspection reports saved digests without independently verifying enforcement.
+| Field | Interpretation |
+| --- | --- |
+| `observations_with_digest` / `observations_without_digest` | Embedded observations with or without an `effective_policy_digest`. |
+| `referenced_observations_unavailable` | Referenced observations whose attempt evidence is absent from the snapshot. |
+| `effective_policy_digests` | Up to 16 sorted, unique recorded digests across both arms. |
+| `omitted_digest_count` | Additional unique digests omitted from that list. |
+
+Sampled coarse, fine, active-block and confirmation observations supply embedded evidence.
+Calibration and deterministic snapshots retain observation references instead; inspection does not
+retrieve them from the external store.
+
+A digest identifies recorded attempt evidence without revealing policy content. Live validation
+requires each completed attempt's digest to match its own plan's safety policy; a mismatch is a
+safety error and may remain in failed attempt evidence. Offline inspection validates saved
+identities, without independently verifying enforcement or reproducing historical execution.
 
 Loading a saved sampled result requires its identity-bound execution metadata. Incompatible
 snapshots are refused; missing metadata is not reconstructed from current settings. See the
 [format policy](architecture.md#developer-map) before regenerating incompatible artifacts.
 
-Inspection checks saved identities against the case. It does not recheck an external observation
-database or reproduce historical execution. Byte counts have two scopes:
+Byte counts have two scopes:
 
 - Context counts measure canonical UTF-8 JSON. `canonical_json_scope` identifies original source
   records before section edits; those counts do not subtract text removals.
@@ -226,31 +241,20 @@ trial evidence for all units remain in the report. Default output contains metad
 
 ## Deterministic results
 
-The bundled example uses the deterministic local runner. A `search-1-minimal` result means every
-valid single-group removal from the final context was tested and none preserved the behavior
-under the recorded runner, settings and budget. It does not establish the smallest possible
-context, a unique solution or a causal explanation of the decision.
-
-Useful options, using the private example directory created in the
-[quick start](https://github.com/eberkut/ithrl/blob/main/README.md#try-it):
-
-```bash
-# Validate the plan without running it.
-ithrl shrink ithrl-demo/case --dry-run
-
-# Test only the original context.
-ithrl shrink ithrl-demo/case --observation-store ithrl-demo/observations.sqlite --calibrate-only
-
-# Return one JSON object on stdout; progress goes to stderr.
-ithrl shrink ithrl-demo/case --observation-store ithrl-demo/observations.sqlite --format json
-```
+The [bundled example](https://github.com/eberkut/ithrl/blob/main/README.md#try-it) uses the
+deterministic local runner. A `search-1-minimal` result means every valid single-group removal from
+the final context was tested and none preserved the behavior under the recorded runner, settings
+and budget. It establishes neither the smallest possible context, a unique solution nor a causal
+explanation of the decision. Use `--dry-run` to validate a plan, `--calibrate-only` to test only the
+original context and `--format json` for one stdout object with progress on stderr; the
+[CLI reference](cli.md#ithrl-shrink) lists their arguments.
 
 ## Sampled results
 
-Native reduction screens candidates against fresh original samples, freezes one candidate, then
+Sampled reduction screens candidates against original samples, freezes one candidate, then
 compares it against the immutable original with separate fresh observations. A
 `confirmed-preserving` result supports preservation within the declared margin among valid
-observations. Errors are excluded from match rates; execution reliability is reported separately.
+observations. Errors are excluded from match rates; read execution reliability separately.
 
 Inference assumes independent valid observations and stationarity within comparisons. Confirmation
 establishes neither minimality, causality nor campaign-wide confidence. `search-incomplete` records
@@ -260,16 +264,28 @@ stop leaves a candidate and enough budget for complete fresh confirmation. Repor
 A preservation verdict can also apply when the selected context is unchanged. Report actual
 removals and usage to establish whether the run produced a useful reduction.
 
-Section-search results retain the coarse candidate/stop reason, coarse/fine comparison counts,
-fine coverage and selected one-field mutation. `additional_removed_utf8_bytes` counts editable text
-removed from the frozen coarse candidate, excluding whole-record deletions and envelope changes.
-`additional_reduction_result` is `criterion-met`, `below-threshold`, `no-retained-fields` or
-`not-assessed`, independently of the behavioral verdict. Confirmation below the byte criterion
-still fails the workload's additional-reduction gate. Debugging value needs separate interpretation.
+Section-search results separate structural reduction from behavior:
+
+| Evidence | Interpretation |
+| --- | --- |
+| Coarse candidate and stop reason, coarse/fine comparison counts, fine coverage | Work completed before final selection. |
+| Selected one-field mutation and `additional_removed_utf8_bytes` | Editable text removed from the frozen coarse candidate, excluding whole-record deletions and envelope changes. |
+| `additional_reduction_result` | `criterion-met`, `below-threshold`, `no-retained-fields` or `not-assessed`, independently of the behavioral verdict. |
+
+With `require_criterion_for_confirmation` enabled, an unmet byte criterion stops the run before
+selection and confirmation. Without that gate, confirmation can pass below the criterion; the
+workload's additional-reduction requirement still fails. Debugging value also requires separate
+interpretation.
 
 Both search stages can be incomplete at final selection. `search-reduced` requires complete coarse
 and fine coverage when fine search is configured; `coarse_final_sweep_complete` describes only the
 whole-record sweep. The fresh holdout cannot reopen either stage or select a different edit.
+
+The default `independent-safe-preaccept-only` policy permits replacing a preparation, startup or
+transport failure only when runner evidence proves no provider work started, state protection and
+cleanup checks pass, and a trusted verifier establishes independence from the potential behavioral
+outcome. Error labels or digests alone do not establish independence. Without both safety and
+independence evidence, the block is ineligible; the failure never counts as a behavioral nonmatch.
 
 The opt-in `safe-provider-overload` policy permits a fresh attempt after a verified structured
 overload with no captured output, unchanged protected state and verified cleanup. Failed
@@ -300,10 +316,11 @@ including exact mutation payloads and configuration. The database stays at its f
 path. Normal output shows mutation type, byte count and digest without payload text. Fixed input
 means what ithrl supplies; the harness may add context. Keep results and the database private.
 
-Use `ithrl fuzz RUN_OR_RESULT --resume`, adding `--acknowledge-model-execution` for native runs.
-Resume keeps configuration, source, profile, store, limits and all call accounting, and rechecks
-native identity. It never redispatches unresolved attempts, changes final selection or repeats
-completed confirmation. `--dry-run --resume` inspects state without starting a harness.
+Fuzz resume keeps configuration, source, profile, store, limits and accounting, and rechecks native
+identity. It never redispatches unresolved attempts, changes final selection or repeats completed
+confirmation. `--dry-run --resume` inspects state without starting a harness. Follow the
+[fuzz resume guidance](troubleshooting.md#fuzz-setup-and-resume) for the command; native execution
+requires `--acknowledge-model-execution`.
 
 If result saving fails, `result-publication-failed` retains the known usage and canonical run
 path and exits with code 70. Resolve the storage problem, then resume from `run_state_path` to

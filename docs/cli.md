@@ -17,17 +17,22 @@ $ ithrl [OPTIONS] COMMAND [ARGS]...
 
 **Commands**:
 
-* `fuzz`: Find and independently confirm a bounded...
-* `compare`: Calibrate and freshly confirm one directed...
-* `prepare`: Prepare a native reduction offline, then...
+* `fuzz`: Find text appends that decrease the...
+* `compare`: Test whether a context change improves or...
+* `prepare`: Generate a native reduction configuration...
 * `cost`: Estimate recorded or hypothetical token...
-* `extract`: Create a case from a saved agent session...
+* `extract`: Create a case from a saved session or...
 * `shrink`: Find a smaller context that preserves the...
-* `inspect`: Inspect saved experimental evidence...
+* `inspect`: Inspect saved sessions, cases and reports...
 
 ## `ithrl fuzz`
 
-Find and independently confirm a bounded decrease in the selected target rate.
+Find text appends that decrease the selected behavior&#x27;s match rate.
+
+Requires the fuzz extra. Use --config to choose mutations, samples and limits,
+then inspect with --dry-run. A selected append receives separate fresh
+confirmation. For native cases, first save a profile with --detect; execution
+requires --acknowledge-model-execution.
 
 **Usage**:
 
@@ -47,7 +52,7 @@ $ ithrl fuzz [OPTIONS] {CASE_OR_RUN}
 * `--max-provider-calls-per-attempt <int range>`: Hard provider-call limit per native attempt. Codex default: 16; Copilot requires 1. Resume preserves the saved limit. This budget does not guarantee turn completion.  [1&lt;=x&lt;=16]
 * `--observation-store <path>`: Private SQLite store outside protected state.
 * `--dry-run`: Inspect saved inputs and limits without starting a harness or provider.
-* `--detect`: Explicit credential-free structural harness detection; save a profile.
+* `--detect`: Probe local capabilities without provider requests; save a profile.
 * `--resume`: Continue exactly the saved campaign, without changing its inputs or budget.
 * `--acknowledge-model-execution`: Approve the inspected native execution within its frozen limits.
 * `--format <human|json>`: Output format.  [default: human]
@@ -55,7 +60,13 @@ $ ithrl fuzz [OPTIONS] {CASE_OR_RUN}
 
 ## `ithrl compare`
 
-Calibrate and freshly confirm one directed comparison of two explicit contexts.
+Test whether a context change improves or degrades the selected behavior.
+
+Requires the compare extra. Both contexts come from one case and keep the same
+triggering input. Use --config to select the pair, direction, samples and
+limits, then inspect with --dry-run. Native execution requires a detected
+profile and --acknowledge-model-execution. Calibration precedes fresh
+confirmation of the declared effect.
 
 **Usage**:
 
@@ -76,16 +87,20 @@ $ ithrl compare [OPTIONS] {CASE_OR_RUN}
 * `--max-provider-calls-per-attempt <int range>`: Hard native request ceiling per attempt; resume preserves its saved value.  [1&lt;=x&lt;=16]
 * `--observation-store <path>`: Private SQLite store outside protected inputs.
 * `--dry-run`: Inspect inputs and limits without starting a native harness or provider.
-* `--detect-capabilities, --detect`: Explicit zero-provider structural detection and profile persistence.
+* `--detect-capabilities, --detect`: Probe local capabilities without provider requests; save a profile.
 * `--resume`: Continue the same frozen comparison without redispatching completed work.
-* `--calibration-only`: Stop after successful calibration, before selection or confirmation; preserve the full frozen allowance.
+* `--calibration-only`: Stop after calibration; the plan must still reserve confirmation capacity.
 * `--acknowledge-model-execution`: Approve the inspected native execution within its frozen limits.
 * `--format <human|json>`: Output format.  [default: human]
 * `--help`: Show this message and exit.
 
 ## `ithrl prepare`
 
-Prepare a native reduction offline, then print its inspection command.
+Generate a native reduction configuration from a saved preflight receipt.
+
+Combine --preflight with statistical choices in --settings and explicit
+call/time limits. Writes a new private experiment TOML and prints its
+dry-run command without starting a harness or making provider requests.
 
 **Usage**:
 
@@ -112,7 +127,12 @@ $ ithrl prepare [OPTIONS] {case}
 
 ## `ithrl cost`
 
-Estimate recorded or hypothetical token costs using explicit reference rates.
+Estimate recorded or hypothetical token costs using reference rates.
+
+Supply an observation database with --case-digest and --experiment-digest,
+or use --scenario for hypothetical token counts. --pricing selects reference
+prices or custom rates; estimates do not establish billed or subscription charges.
+Prices are resolved offline, without provider requests.
 
 **Usage**:
 
@@ -131,13 +151,17 @@ $ ithrl cost [OPTIONS] [observations]
 * `--case-digest <str>`: Exact case digest for recorded observations.
 * `--experiment-digest <str>`: Exact experiment digest for recorded observations.
 * `--scenario <path>`: Explicit hypothetical token counts as JSON.
-* `--max-observations <int range>`: [default: 10000; 1&lt;=x&lt;=10000]
+* `--max-observations <int range>`: Maximum recorded observations; larger selections are refused, not truncated.  [default: 10000; 1&lt;=x&lt;=10000]
 * `--format <human|json>`: [default: human]
 * `--help`: Show this message and exit.
 
 ## `ithrl extract`
 
-Create a case from a saved agent session or supported synthetic trace.
+Create a case from a saved session or supported synthetic trace.
+
+Omit SOURCE to browse saved sessions in a terminal. Without a terminal, supply
+the IDs listed by the command. Extraction copies source evidence into a new
+private case and makes no network requests.
 
 **Usage**:
 
@@ -164,12 +188,16 @@ $ ithrl extract [OPTIONS] [SOURCE]
 * `--format <human|json>`: Output format.  [default: human]
 * `--help`: Show this message and exit.
 
-Saved session: ithrl extract --harness codex --session SESSION --decision DECISION --target TARGET
+Saved session: ithrl extract path/to/session.jsonl
 Synthetic trace: ithrl extract trace.json --inference inference-001
 
 ## `ithrl shrink`
 
 Find a smaller context that preserves the selected behavior.
+
+Use --dry-run to inspect the plan. Native cases require explicit sampling
+settings, the original workspace and --acknowledge-model-execution. A native
+dry-run can start local harness probes but makes no provider requests.
 
 **Usage**:
 
@@ -210,7 +238,7 @@ Resume:  ithrl shrink RESULT_DIRECTORY --resume
 
 ## `ithrl inspect`
 
-Inspect saved experimental evidence without running a harness.
+Inspect saved sessions, cases and reports without running a harness.
 
 **Usage**:
 
@@ -224,16 +252,19 @@ $ ithrl inspect [OPTIONS] COMMAND [ARGS]...
 
 **Commands**:
 
-* `costs`: Inspect a saved cost estimate without...
-* `comparison`: Inspect a saved comparison without a...
-* `tool`: Inspect captured tool output and select...
-* `reacquire`: Inspect recorded operations and results...
-* `sections`: List eligible section IDs and half-open...
-* `retained`: Explain retained context and recorded...
+* `costs`: Inspect a saved token-cost report.
+* `comparison`: Inspect a saved context comparison.
+* `tool`: List captured tool output fields or...
+* `reacquire`: Compare recorded operations and results...
+* `sections`: List editable prior-user fields and...
+* `retained`: Explain retained context and removal...
 
 ### `ithrl inspect costs`
 
-Inspect a saved cost estimate without resolving prices or opening its source store.
+Inspect a saved token-cost report.
+
+Validates the saved identities and arithmetic without resolving prices or
+opening the source observation database.
 
 **Usage**:
 
@@ -252,7 +283,11 @@ $ ithrl inspect costs [OPTIONS] {report}
 
 ### `ithrl inspect comparison`
 
-Inspect a saved comparison without a runner or observation database.
+Inspect a saved context comparison.
+
+Reads the snapshot without a harness or observation database. Add --case to
+verify both selections against their source; --show-text includes retained
+tool output text and requires --case.
 
 **Usage**:
 
@@ -274,10 +309,12 @@ $ ithrl inspect comparison [OPTIONS] {result}
 
 ### `ithrl inspect tool`
 
-Inspect captured tool output and select text to remove.
+List captured tool output fields or describe a text deletion.
 
-Offsets select a nonempty half-open range in the original string. Sizes are UTF-8 bytes.
-Text display shows the retained field when a range is selected.
+Supply --field, --start and --end to create a source-bound edit descriptor;
+the case remains unchanged. Offsets select a nonempty half-open range in
+original Unicode codepoints; sizes are UTF-8 bytes. --show-text displays the
+retained field when a range is selected.
 
 **Usage**:
 
@@ -301,7 +338,10 @@ $ ithrl inspect tool [OPTIONS] {case}
 
 ### `ithrl inspect reacquire`
 
-Inspect recorded operations and results across compaction without model access.
+Compare recorded operations and results across compaction.
+
+Omit --boundary to list compaction IDs, then select one to compare adjacent
+intervals. Reads saved JSONL without starting a harness or making model requests.
 
 **Usage**:
 
@@ -324,9 +364,10 @@ $ ithrl inspect reacquire [OPTIONS] {session}
 
 ### `ithrl inspect sections`
 
-List eligible section IDs and half-open Unicode codepoint offsets without text.
+List editable prior-user fields and paragraph section IDs.
 
-Section sizes are UTF-8 byte counts.
+Reports source-bound selectors, half-open Unicode codepoint offsets and
+UTF-8 byte sizes without displaying text or collecting observations.
 
 **Usage**:
 
@@ -345,7 +386,11 @@ $ ithrl inspect sections [OPTIONS] {case}
 
 ### `ithrl inspect retained`
 
-Explain retained context and recorded removal trials without collecting observations.
+Explain retained context and removal trials from a saved reduction.
+
+Supply the original case and --result directory. Reads saved evidence without
+a harness or observation database. Default output omits private text; use
+--show-text for bounded retained content.
 
 **Usage**:
 

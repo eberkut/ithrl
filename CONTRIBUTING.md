@@ -212,17 +212,21 @@ combine orientation and first use; do not split pages just to fill those categor
 - Follow [W3C's writing guidance](https://www.w3.org/WAI/tips/writing/): use descriptive link text,
   ordered headings and useful image alternatives. Do not rely on color alone. Keep code blocks
   executable or identify placeholders before the command.
+- Write docstrings for callers and comments for maintainers. State useful contracts, intent,
+  constraints or workaround reasons; omit narration of the adjacent code. Keep comments accurate
+  when the implementation changes.
 
 Before review, check: can the intended reader find the task, run its steps and interpret the
 result? Does each paragraph add information? Are terms, claims, links and generated content current?
 Check the [documentation commands](#building-and-checking-documentation) below after edits.
 
 For additional guidance, consult the
-[Google developer documentation style guide](https://developers.google.com/style) and
-[Microsoft Writing Style Guide](https://learn.microsoft.com/en-us/style-guide/welcome/).
-Follow this project's conventions where they differ.
-Use judgment rather than word-count targets; explanations and research need enough detail to support
-their conclusions.
+[Google developer documentation style guide](https://developers.google.com/style),
+[Microsoft Writing Style Guide](https://learn.microsoft.com/en-us/style-guide/welcome/)
+and
+[Stack Overflow's code-comment guidance](https://stackoverflow.blog/2021/12/23/best-practices-for-writing-code-comments/).
+Follow this project's conventions where they differ. Use judgment rather than word-count targets;
+explanations and research need enough detail to support their conclusions.
 
 ### Documentation ownership
 

@@ -1,8 +1,9 @@
 # Synthetic reduction studies
 
-Evaluate screening and sampling decisions, and reproduce the baseline-sharing and native-layout
-budget studies using synthetic Bernoulli observations. These scripts use no harness, provider,
-credentials or network service.
+Check screening and sampling decisions, and reproduce the baseline-sharing and native-layout
+budget studies using synthetic Bernoulli observations. Eager prefetch failed its cost gate; lazy
+sharing helped within the tested domain, while expiry could erase that benefit. These scripts use
+no harness, provider, credentials or network service.
 [Reduction design](../../docs/research/reduction-design.md) explains the methods, results and
 decisions; this directory supplies executable models and reference data.
 
@@ -63,15 +64,15 @@ Verification checks:
 
 It prints the checked counts and writes `verification.json`.
 
-To run all evaluations, freeze a new output directory and run the full replay:
+For a full replay, freeze a new output directory and run all evaluations:
 
 ```sh
 uv run --locked --offline --no-sync python research/reduction/reproduce.py freeze --output research/reduction/outputs/full
 uv run --locked --offline --no-sync python research/reduction/reproduce.py replay --output research/reduction/outputs/full
 ```
 
-To run one evaluation, pass `--study decisions`, `--study eager`, `--study sharing`,
-`--study operational` or `--study native` to the second command. The eager study simulates 4.8
+To run one evaluation, add `--study decisions`, `--study eager`, `--study sharing`,
+`--study operational` or `--study native` to the `replay` command. The eager study simulates 4.8
 million workflows. The operational study simulates 1.76 million workflows and scores each against
 two byte layouts; these scores share outcomes and are not independent samples. Runtime depends on
 hardware. A run that exceeds its time limit stops without changing sample counts or criteria.

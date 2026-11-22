@@ -120,10 +120,9 @@ class _ObservationSession:
 
 
 @app.command(
-    help="Create a case from a saved agent session or supported synthetic trace.",
     epilog=(
-        "Saved session: ithrl extract --harness codex --session SESSION --decision DECISION "
-        "--target TARGET\nSynthetic trace: ithrl extract trace.json --inference inference-001"
+        "Saved session: ithrl extract path/to/session.jsonl\n"
+        "Synthetic trace: ithrl extract trace.json --inference inference-001"
     ),
 )
 @command_boundary("extract")
@@ -191,7 +190,12 @@ def extract(
         typer.Option("--format", help="Output format."),
     ] = OutputFormat.HUMAN,
 ) -> None:
-    """Extract one decision without making a network request."""
+    """Create a case from a saved session or supported synthetic trace.
+
+    Omit SOURCE to browse saved sessions in a terminal. Without a terminal, supply
+    the IDs listed by the command. Extraction copies source evidence into a new
+    private case and makes no network requests.
+    """
 
     try:
         report = create_case_report(
@@ -240,7 +244,6 @@ def extract(
 
 
 @app.command(
-    help="Find a smaller context that preserves the selected behavior.",
     epilog=("Example: ithrl shrink .ithrl/case\nResume:  ithrl shrink RESULT_DIRECTORY --resume"),
 )
 @command_boundary("shrink")
@@ -425,7 +428,12 @@ def shrink(
         ),
     ] = None,
 ) -> None:
-    """Test the original context, reduce it, confirm the result, and save the evidence."""
+    """Find a smaller context that preserves the selected behavior.
+
+    Use --dry-run to inspect the plan. Native cases require explicit sampling
+    settings, the original workspace and --acknowledge-model-execution. A native
+    dry-run can start local harness probes but makes no provider requests.
+    """
 
     active_state = RunStateFile.open(source)
     active_lock_held = resume and active_state.path.is_file()
@@ -528,6 +536,8 @@ def _shrink(
             "shrink",
             "invalid-options",
         )
+    # Sampled resume restores frozen experiment and attempt limits; it must not
+    # fall through to fresh case preparation and create a second run.
     if resume and (source / "cli-session.json").exists():
         if any(
             value is not None

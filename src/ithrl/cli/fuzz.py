@@ -245,6 +245,8 @@ def _handle(
             next_action="Inspect --dry-run, then pass --acknowledge-model-execution.",
         )
     prepared = None
+    # A saved profile is sufficient for inspection. Native execution must detect
+    # the current runtime again and match that profile before dispatch.
     if not native or detect or not dry_run:
         current, prepared = prepare_fuzz_profile(
             workspace,
@@ -367,7 +369,7 @@ def fuzz(
         bool,
         typer.Option(
             "--detect",
-            help="Explicit credential-free structural harness detection; save a profile.",
+            help="Probe local capabilities without provider requests; save a profile.",
         ),
     ] = False,
     resume: Annotated[
@@ -388,7 +390,13 @@ def fuzz(
         OutputFormat, typer.Option("--format", help="Output format.")
     ] = OutputFormat.HUMAN,
 ) -> None:
-    """Find and independently confirm a bounded decrease in the selected target rate."""
+    """Find text appends that decrease the selected behavior's match rate.
+
+    Requires the fuzz extra. Use --config to choose mutations, samples and limits,
+    then inspect with --dry-run. A selected append receives separate fresh
+    confirmation. For native cases, first save a profile with --detect; execution
+    requires --acknowledge-model-execution.
+    """
     from ithrl.cli.fuzz_session import FuzzSessionError
     from ithrl.cli.native import NativeSelectionError
     from ithrl.fuzz.configuration import FuzzConfigurationError

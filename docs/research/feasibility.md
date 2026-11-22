@@ -1,11 +1,11 @@
 # Post-hoc experiment feasibility
 
-The **2026-09-02** study found that ordinary saved sessions can supply decision evidence for
-harness-specific context interventions without exact provider-request capture. Its results apply to
-the inspected installations. See the
-[supported-inputs table](https://github.com/eberkut/ithrl/blob/main/README.md#supported-inputs) for
-current capabilities; later [native measurements](../measurements.md) record qualified reduction and
-fuzzing profiles.
+The **2026-09-02** study identified saved decision evidence and harness-specific mechanisms for
+context interventions without exact provider-request capture. It also found unproved reconstruction
+paths and failed action-denial controls. These findings apply to the inspected installations. See
+the [supported-inputs table](https://github.com/eberkut/ithrl/blob/main/README.md#supported-inputs)
+for current capabilities; later [native measurements](../measurements.md) record qualified reduction
+and fuzzing profiles.
 
 ## Research basis
 
@@ -45,10 +45,10 @@ product change. Four separate questions determine the answer:
 3. Can the runner observe the target behavior while preventing action execution?
 4. Has that exact profile passed calibration, useful reduction and fresh confirmation?
 
-Each capability needs separate evidence: saved-record parsing for extraction, controlled
-reconstruction and isolation for execution, then calibration, useful reduction and fresh
-confirmation for an experimental profile. The initial study tested the mechanisms in bounded
-controls. Later implementation and native qualification established the product claims.
+Saved-record parsing establishes extraction; controlled reconstruction and isolation establish an
+execution mechanism. Calibration, useful reduction and fresh confirmation are additional gates for
+an experimental profile. The initial study tested mechanisms through bounded controls. Product
+qualification is recorded separately in the [native measurements](../measurements.md).
 
 The credential-free control reduced a planted ten-node case to five nodes while retaining the
 two behavior-relevant input items. It demonstrated dependency-aware reduction with zero provider
@@ -165,8 +165,8 @@ production defaults or measured campaigns. The historic
 five-percentage-point planning example required 470 requests for a final candidate and 5,170
 for it plus ten independently tested neighbors, before search.
 
-Candidate materialization and startup were unmeasured in this study. No defensible monetary price
-existed for the Codex/Copilot access paths. These costs motivated exploratory screening with
+Candidate materialization and startup were unmeasured in this study. The study had no verified
+monetary prices for the Codex/Copilot access paths. These costs motivated exploratory screening with
 independent final confirmation. Narrow noninferiority margins and confirmed minimality required
 more sampling than the intended interactive workflow could afford.
 [Reduction-design research](reduction-design.md) records how later studies tested that choice.

@@ -81,9 +81,9 @@ logos, header icon, favicon, README fallback, site sharing card and CSS. This gu
 `overrides/` and `social-preview.png` stay out of GitHub Pages, source distributions and installed
 packages.
 
-The 1200 × 630 site card is connected through the theme's extra-head template. For the repository,
-upload `docs/branding/social-preview.png` under **Settings → Social preview** after merging the
-assets. It is 1280 × 640 with a solid background, following
+The 1200 × 630 site card is connected through the theme's extra-head template. When changing the
+repository sharing card, upload `docs/branding/social-preview.png` under **Settings → Social
+preview**. It is 1280 × 640 with a solid background, following
 [GitHub's sharing-image guidance](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/customizing-your-repositorys-social-media-preview).
 Committing an image alone does not change that setting.
 

@@ -40,9 +40,8 @@ class _Call:
 def project_reacquisition(document: JsonlDocument) -> PassiveProjection:
     """Validate the passive profile; missing turn IDs never replace native call IDs.
 
-    This profile uses the same envelopes and metadata as experimental parsing but
-    validates tool request/start/completion identities independently of turn nesting.
-    Known turn IDs must agree. Experimental parsing remains stricter and unchanged.
+    Tool request/start/completion identities are validated independently of turn nesting.
+    Known turn IDs must agree across those events.
     """
 
     if not PARSER.matches(document):

@@ -1,15 +1,26 @@
 # Sampled reduction design research
 
 Sampled reduction uses exploratory candidate screening followed by one independent fresh
-confirmation of a durably selected candidate. The design studies rejected eager baseline prefetch,
-measured a limited synthetic benefit from lazy sharing, and retained strict fresh baselines in
-production. This page records their methods, numerical results and failed alternatives.
+confirmation of a durably selected candidate. The studies met their usefulness/cost gates for some
+planted high-match-rate workloads, but found substantial failures at lower rates, under invalidity
+or when the selected field disappeared. They rejected eager baseline prefetch and measured a limited
+synthetic benefit from lazy sharing. Strict fresh baselines remain the production policy.
 
 Study budgets and native layouts describe the evaluated workloads. Use
 [native reduction](../reduction.md) for current operator settings,
 [measurements](../measurements.md) for native results and costs, and [results](../results.md)
 to interpret output.
 [ADR 0003](../decisions/0003-strict-fresh-baselines.md) records the baseline decision.
+
+The studies answer separate design questions:
+
+| Question | Evidence |
+| --- | --- |
+| Can every search decision carry a preservation verdict within the original budget? | [The original joint gate failed](#original-joint-gate-and-its-failure). |
+| Can exploratory screening leave enough budget for one independent verdict? | [A separate holdout](#exploratory-screening-and-a-separate-holdout) passed a narrow conditional workload; [failure-tolerance studies](#budget-and-failure-tolerance-studies) exposed the cost of complete collection. |
+| Does sharing reduce useful-workflow cost? | [Eager prefetch failed; lazy sharing helped only in the synthetic domain](#baseline-sharing-failed-prefetch-and-useful-conditional-design). |
+| Do native record layouts change the required allowance? | [The native-layout model](#native-layout-budget-study) required a larger comparison cap. |
+| Do ordinary sources support the proposed finer edit? | [The prospective cohort](#prospective-ordinary-workflow-cohort) lost both selected fields before fine search. |
 
 ## Method and confidence convention
 
@@ -171,7 +182,7 @@ The maximum complete-search false-confirmation probability in the frozen scenari
 
 ## Baseline sharing: failed prefetch and useful conditional design
 
-The first sharing study retained strict sampling. Its main cost stage used 200,000 repetitions
+The first sharing study retained strict sampling. Its cost stage used 200,000 repetitions
 in each of 24 stationary cells (4.8 million simulated workflows). Eager sibling-cohort policies
 prefetched candidate work that could become unnecessary after an accepted removal. Fixed-six
 one-call budgets were small strict/cohort-2/cohort-4 **357/333/325**, and large
@@ -268,9 +279,10 @@ not establish an envelope for ordinary sessions, noisy targets or mild degradati
 workloads and configurations, including a larger search sample on Codex. Current per-attempt
 request bounds also differ from these historical call allowances.
 
-100k execution remains unqualified. Larger source preparations and pure reconstruction establish
-neither execution capacity nor token or monetary savings at that scale. No native comparison
-established baseline-sharing savings, so strict fresh baselines remain the production policy.
+The study did not qualify execution at an estimated 100,000 input tokens. Larger source preparations
+and pure reconstruction establish neither execution capacity nor token or monetary savings at that
+scale. No native comparison established baseline-sharing savings, so strict fresh baselines remain
+the production policy.
 
 ## Failed and interrupted native predecessors
 
@@ -331,8 +343,8 @@ qualification used **no overload replacement**.
 
 ## Text-section workload preparation
 
-This section preserves the original [#44](https://github.com/eberkut/ithrl/issues/44) preparation
-proposal, which collected no new model observations. The
+The original [#44](https://github.com/eberkut/ithrl/issues/44) preparation proposal collected no new
+model observations. The
 [shared section contract](../architecture.md#source-bound-text-sections) defines the deterministic
 `paragraph-v1` policy. Exact ordinary source text, identities, fixed input, predicates, section
 selections and proposal digest remain private. These settings are historical, not current execution
@@ -544,8 +556,8 @@ compatibility diagnosis, review and publication, human effort or assistant-autho
 The linked issue preserves failed controls, partial timings and missing data. Execution latency
 alone therefore does not establish an affordable ordinary debugging workflow or context envelope.
 
-The result limits the usefulness claim for this selection: neither chosen field survived the
-normal coarse traversal, so finer reduction could not be evaluated. It does not establish how
+Neither chosen field survived the normal coarse traversal, so finer reduction could not be
+evaluated. This limits the usefulness claim for this selection without establishing how
 often this occurs for other workloads. Further paid work on these fields is unwarranted without
 a distinct prospective question and eligibility argument. Artificial protection, a lower byte
 threshold or outcome-based source replacement would change the experiment. The separate

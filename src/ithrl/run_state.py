@@ -511,6 +511,8 @@ class SampledRunState(_SampledStateContract):
                 raise ValueError("dispatch cannot repeat a published prepared attempt")
 
     def _validate_final_selection(self, confirmations: tuple[SamplingBlockProgress, ...]) -> None:
+        """Bind the run's single holdout to its frozen workflow selection and candidate."""
+
         if self.selection is not None:
             selection, checkpoint = self.selection, self.checkpoint
             plan = selection.plan

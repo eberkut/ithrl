@@ -1,8 +1,9 @@
 # Troubleshooting
 
-Record `ithrl --version`, the error code, `next_action` and any private evidence location. Check
-the failing command's `--help`; `--format json` returns structured output with progress on stderr.
-Review output, including local paths, before sharing it. Keep raw sessions and diagnostics private.
+Follow the error's `next_action` and keep its private evidence. For structured output, add
+`--format json`; progress stays on stderr. Use the failing command's `--help` to check its options.
+Before sharing a report, record `ithrl --version` and the error code, and remove private paths,
+session content and credentials. Keep raw sessions and diagnostics private.
 
 ## Selecting a decision
 
@@ -34,11 +35,10 @@ execution. Native dry-run can start bounded, network-denied local probes without
 | `runner-evidence-mismatch` | Use a runner that matches the harness recorded in the case. |
 | `observation-store-unavailable` | Choose a writable store inside a private user-owned directory. |
 | `storage-overlap` | Move disposable storage outside the protected case and original workspace. |
-| `input-token-limit-unenforceable` | The current native profiles cannot enforce a hard input-token cap. Use a profile with that guarantee, or explicitly decide whether to proceed without the cap. |
+| `input-token-limit-unenforceable` | Neither current native profile enforces a hard input-token cap. Proceed without that option only if an uncapped input-token count is acceptable. |
 
-Do not bypass a refusal by disabling permission checks or editing internal state. New harness
-versions use the same capability checks; unsupported protocol or safety behavior needs
-investigation.
+Keep permission checks enabled and saved state unchanged. Unsupported protocol or safety behavior
+requires investigation, including after a harness upgrade.
 
 `runner_error_reason_code = "protected-input-snapshot"` means the runner could not snapshot the
 source or original workspace before starting that attempt. Check read permissions, unsupported
@@ -69,18 +69,17 @@ Python runtime, whose certificate trust is not established by a successful CLI l
 | `model-catalog-tls` | Check certificate trust. |
 | `model-catalog-failed` | Check account access and the private diagnostic for another catalogue refusal. |
 
-Read-only catalogue recovery allows three connection attempts, delayed by 0.5 then 1 second,
-within the attempt timeout. It preserves SDK proxy/certificate settings and never retries
-inference. HTTP status errors and streaming-body failures are outside that loop.
+Catalogue lookup allows three connection attempts within the attempt timeout, delayed by 0.5 then
+1 second. It preserves proxy/certificate settings. HTTP status errors, streaming-body failures and
+inference are not retried by this recovery loop.
 
-Recognized pre-turn startup warnings are metadata, not proof of authentication or provider
-acceptance. If execution fails, inspect the refusal and private diagnostic.
+Startup warnings do not establish authentication or provider acceptance. Diagnose execution failures
+from the refusal and private diagnostic.
 
 ## Preparing a reduction
 
-Follow the [preparation procedure](reduction.md) to export a receipt,
-supply settings and generate an experiment. `prepare` is offline; its returned inspection command
-runs native dry-run, which can start bounded local probes.
+The [preparation procedure](reduction.md) exports a receipt and generates an experiment from your
+settings. `prepare` is offline; its returned inspection command runs bounded native dry-run probes.
 
 | Error code | Next action |
 | --- | --- |
@@ -93,8 +92,8 @@ runs native dry-run, which can start bounded local probes.
 | `preparation-contract-mismatch` | Check the selected profile, behavior specification, protected IDs and section choices against the case. Keep the source evidence unchanged. |
 | `preparation-invalid` / `preflight-output-invalid` | Check private path permissions and input bounds. Choose a new output outside the case and original workspace; existing files are never overwritten. |
 
-Preparation also checks sampling budgets and freshness. Success validates recorded facts; it
-neither replaces current native preflight nor authorizes model execution.
+Preparation checks recorded facts, sampling budgets and freshness. Run the returned inspection
+command before authorizing model execution.
 
 ## Sampling and budget refusals
 
@@ -112,9 +111,8 @@ neither replaces current native preflight nor authorizes model execution.
 
 ## Fuzz setup and resume
 
-The [fuzzing walkthrough](fuzzing.md) covers the fake-runner example and native
-setup. Detection makes no provider requests; inspecting a saved profile with `--dry-run` starts no
-harness.
+The [fuzzing walkthrough](fuzzing.md) covers local and native setup. Detection makes no provider
+requests; inspecting a saved profile with `--dry-run` starts no harness.
 
 | Error code | Next action |
 | --- | --- |
@@ -147,16 +145,16 @@ The [comparison guide](comparison.md) covers context selection, native detection
 | `freshness-expired` or `wall-time-exhausted` | Inspect the saved incomplete result. The frozen deadline cannot be extended by resuming; a new plan needs a new run. |
 | `comparison-input-or-execution-refused` | Check the frozen inputs and implementation. Use offline inspection to read retained results without resuming them. |
 
-For execution failures, the private result retains per-attempt `error_category` and
-`attempt_evidence.reason_code` under `blocks[].attempts[].observation`. Review those metadata fields
-before deciding whether another run is justified. Keep raw responses private.
+For execution failures, inspect `error_category` and `attempt_evidence.reason_code` under
+`blocks[].attempts[].observation` in the private result before starting another run. Keep raw
+responses private.
 
 ## Provider errors and interruption
 
-`runner_error_category = "provider-call-limit"` means the local per-attempt cap blocked another
-request. It is a budget stop, not throttling, transport failure or a behavioral nonmatch; no retry
-or continuation is offered. Inspect retained usage before starting a new run with a different cap.
-Codex can need several successful requests per turn even with retries disabled. See
+`runner_error_category = "provider-call-limit"` means the per-attempt cap blocked another request.
+No retry or continuation is offered for this budget stop. It supplies no evidence of throttling,
+transport failure or behavioral nonmatch. Inspect retained usage before starting a new run with a
+different cap; Codex can need several successful requests per turn even with retries disabled. See
 [plan limits](reduction.md#3-generate-and-inspect-the-complete-plan-and-budget).
 
 For authentication or quota failures, inspect the selected harness's account status privately.
@@ -176,13 +174,13 @@ without copying native messages, bodies or request identifiers. Structured Copil
 | `provider-unavailable` | Check provider service status and retain the failed observation. |
 | `provider-failure` | Inspect the private native diagnostic for an unclassified failure; share only sanitized evidence. |
 
-These codes classify evidence; they neither retry attempts, establish provider acceptance nor
-change charges. A quota refusal alone does not establish a harness compatibility failure.
+These codes do not trigger retries or change charges, and they do not establish provider acceptance.
+A quota refusal alone does not establish a harness compatibility failure.
 
 Errors stay outside behavioral denominators. `started-unknown` means execution started without a
 complete provider-call count. Inspect actual, additional possible, pending and charged counts
 separately; unknown usage is not zero. See [sampled results](results.md#sampled-results) for
-interpretation and the opt-in structured-overload replacement policy.
+interpretation and opt-in failure replacement.
 
 When interrupted, use the printed continuation command if one is supplied. An unresolved dispatch
 must be reconciled before execution can continue. Completed confirmation is never repeated.

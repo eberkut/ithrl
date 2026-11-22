@@ -71,6 +71,7 @@ class AttemptEvidence(BaseModel):
             raise ValueError("grading evidence requires the matching completed native attempt")
         if self.retry_safe:
             self._validate_safe_retry()
+        # Persisted replacement markers are claims to validate, not authority to retry.
         if self.overload_replacement_safe or self.transport_replacement_safe:
             accounting = self.accounting
             timeout = (
@@ -298,6 +299,12 @@ def _error_provider_replacement_safe(
     error: RunnerError,
     acceptance: ProviderAcceptanceState,
 ) -> bool:
+    """Check identity, output capture and safety evidence for failure replacement.
+
+    Unknown provider acceptance differs from a proven pre-dispatch retry. The
+    caller must also qualify the failure kind under the selected policy.
+    """
+
     accounting = error.accounting
     capability = attempt.execution_plan.capability
     return (

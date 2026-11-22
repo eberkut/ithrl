@@ -149,7 +149,12 @@ def prepare(
         OutputFormat, typer.Option("--format", help="Output format.")
     ] = OutputFormat.HUMAN,
 ) -> None:
-    """Prepare a native reduction offline, then print its inspection command."""
+    """Generate a native reduction configuration from a saved preflight receipt.
+
+    Combine --preflight with statistical choices in --settings and explicit
+    call/time limits. Writes a new private experiment TOML and prints its
+    dry-run command without starting a harness or making provider requests.
+    """
 
     try:
         workspace = CaseWorkspace.open(case)

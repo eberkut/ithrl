@@ -105,7 +105,11 @@ def _editable_prior_records(
 def decision_input_node_id(
     nodes: tuple[ContextNode, ...], records: tuple[JsonObject, ...], selector: DecisionSelector
 ) -> str | None:
-    """Locate the fixed input; None means it is absent from the supplied graph."""
+    """Locate the latest user or tool input since the previous assistant turn.
+
+    That input stays fixed during intervention. None means its source record is
+    absent from the supplied graph.
+    """
 
     boundary = selector.context_before_line
     if (
@@ -202,6 +206,11 @@ def _dependencies(
     starts: dict[str, str],
     references: dict[str, str],
 ) -> tuple[str, ...]:
+    """Link nested prior-record references and the tool request/start/completion chain.
+
+    These conservative edges prevent removals from leaving dangling native references.
+    """
+
     data = _object(record.get("data"))
     dependencies = set()
     pending: list[JsonValue] = [data]
