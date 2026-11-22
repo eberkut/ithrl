@@ -242,6 +242,52 @@ def _source_records(
     return records
 
 
+def _tool_output_text_records(text: str, target: CopilotTarget) -> list[dict[str, Any]]:
+    """One complete prior tool lifecycle followed by the fixed target turn."""
+    records = _source_records(target)
+    prior_turn = "prior-turn"
+    call: dict[str, Any] = {"toolCallId": "prior-call", "name": "fixture_tool", "arguments": {}}
+    records[1:1] = [
+        _record(
+            10, "user.message", {"content": "Earlier diagnostic request.", "turnId": prior_turn}
+        ),
+        _record(11, "assistant.turn_start", {"turnId": prior_turn}),
+        _record(
+            12,
+            "assistant.message",
+            {
+                "messageId": "prior-message",
+                "content": "",
+                "toolRequests": [call],
+                "turnId": prior_turn,
+                "model": "fixture-model",
+            },
+        ),
+        _record(
+            13,
+            "tool.execution_start",
+            {
+                "toolCallId": "prior-call",
+                "toolName": "fixture_tool",
+                "arguments": {},
+                "turnId": prior_turn,
+            },
+        ),
+        _record(
+            14,
+            "tool.execution_complete",
+            {
+                "toolCallId": "prior-call",
+                "turnId": prior_turn,
+                "success": False,
+                "result": {"content": text},
+            },
+        ),
+        _record(15, "assistant.turn_end", {"turnId": prior_turn}),
+    ]
+    return records
+
+
 def _case(
     tmp_path: Path,
     target: CopilotTarget,

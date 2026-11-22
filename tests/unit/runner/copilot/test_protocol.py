@@ -7,9 +7,10 @@ from typing import Any
 import pytest
 
 from ithrl.runner.contracts import TokenUsage, ToolCall
+from ithrl.runner.copilot import worker
 from ithrl.runner.copilot.protocol import CopilotProtocolError, parse_output
 from ithrl.runner.copilot.protocol.contracts import MAX_OUTPUT_EVENTS, MAX_OUTPUT_LINE_BYTES
-from ithrl.runner.copilot.protocol.parser import physical_forward_count
+from ithrl.runner.copilot.protocol.parser import parse_output_free_timeout, physical_forward_count
 
 MODEL = "fixture-model"
 TURN = "fixture-turn"
@@ -114,7 +115,175 @@ def _parse(events: list[dict[str, Any]], *, shell_target: bool = False):
         expected="shell-action" if shell_target else "final-response",
         native_session=NATIVE,
         system_message=SYSTEM,
+        expected_model=MODEL,
     )
+
+
+def _transport_events() -> list[dict[str, Any]]:
+    events = _events()[:7]
+    events.insert(
+        2,
+        _event(
+            "session.managed_settings_resolved",
+            clientManaged=True,
+            bypassPermissionsDisabled=True,
+            failClosed=False,
+            permissionsContext={
+                "permissions": {
+                    "disableBypassPermissionsMode": "disable",
+                    "disableAssistedPermissionsMode": True,
+                    "deny": ["Shell(*)"],
+                }
+            },
+        ),
+    )
+    complete = _complete()
+    complete.update(
+        success=False,
+        failure_stage="inference-request",
+        failure_code="inference-transport-failed",
+    )
+    return [*events, _event("session.error", message="private fixture failure"), complete]
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [None, "response", "assistant.message", "assistant.reasoning", "partial-line", "failure"],
+)
+def test_timeout_prefix_requires_bound_output_free_pre_response_dispatch(extra: str | None) -> None:
+    events = _transport_events()[:-2]
+    if extra == "response":
+        events.append(_receipt("response", request_sha256="a" * 64, status_code=200))
+    elif extra == "failure":
+        events.append(_event("model.call_failure"))
+    elif extra is not None and extra != "partial-line":
+        events.append(_event(extra, content="private partial output"))
+    output = b"".join(json.dumps(e).encode() + b"\n" for e in events)
+    if extra == "partial-line":
+        output += b'{"type":"assistant.message"'
+    assert parse_output_free_timeout(
+        output,
+        expected="final-response",
+        native_session=NATIVE,
+        system_message=SYSTEM,
+        expected_model=MODEL,
+    ) is (extra is None)
+    assert not parse_output_free_timeout(
+        output,
+        expected="final-response",
+        native_session=b"other input",
+        system_message=SYSTEM,
+        expected_model=MODEL,
+    )
+
+
+@pytest.mark.parametrize("invalid", [None, "digest", "duplicate", "status", "before-forward"])
+def test_response_receipt_requires_one_matching_post_dispatch_response(invalid: str | None) -> None:
+    events = _events()
+    response = _receipt("response", request_sha256="a" * 64, status_code=200)
+    if invalid == "digest":
+        response["request_sha256"] = "b" * 64
+    elif invalid == "status":
+        response["status_code"] = True
+    index = 6 if invalid == "before-forward" else 7
+    events[index:index] = [response, response] if invalid == "duplicate" else [response]
+    if invalid is None:
+        assert _parse(events).provider_calls_completed == 1
+    else:
+        with pytest.raises(CopilotProtocolError):
+            _parse(events)
+
+
+@pytest.mark.parametrize("native_failure_event", [False, True])
+def test_output_free_typed_transport_failure_proves_one_bound_request(
+    native_failure_event: bool,
+) -> None:
+    events = _transport_events()
+    if not native_failure_event:
+        del events[-2]
+    with pytest.raises(CopilotProtocolError) as caught:
+        _parse(events)
+    assert caught.value.code == "inference-transport-failed"
+    assert caught.value.behavior_output_observed is False
+    assert "private fixture failure" not in str(caught.value)
+
+
+def test_transport_failure_preserves_pre_dispatch_native_metadata() -> None:
+    events = _transport_events()
+    index = next(i for i, event in enumerate(events) if event["type"] == "ithrl.copilot.forward")
+    events[index:index] = [
+        _event("session.usage_info", currentTokens=100),
+        _event("session.mcp_server_status_changed", status="disconnected"),
+        _event("session.mcp_server_tools_loaded", tools=[]),
+        _event("model.turn_started"),
+        _event("model.model_call_started"),
+    ]
+    with pytest.raises(CopilotProtocolError) as caught:
+        _parse(events)
+    assert caught.value.code == "inference-transport-failed"
+    assert caught.value.behavior_output_observed is False
+
+
+def test_projected_telemetry_preserves_behavior_and_refuses_output_free_recovery() -> None:
+    telemetry: dict[str, object] = {
+        "type": "model.future_telemetry",
+        "data": {"content": "fixture-private-response" * 100_000},
+    }
+    events = _events(usage=True)
+    expected = _parse(events)
+    events.insert(-1, telemetry)
+    projected = [worker._project_native_event(event) for event in events]
+    assert _parse(projected) == expected
+    assert expected.final_text == "Fixture complete."
+    transport_events = _transport_events()
+    transport_events.insert(-1, worker._project_native_event(telemetry))
+    with pytest.raises(CopilotProtocolError) as caught:
+        _parse(transport_events)
+    assert caught.value.behavior_output_observed is True
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "assistant.message",
+        "assistant.reasoning",
+        "tool.execution_start",
+        "unknown-event",
+        "policy",
+        "system",
+        "model",
+        "request",
+        "rejections",
+        "permissions",
+        "input",
+        "post-dispatch-usage",
+    ],
+)
+def test_transport_replacement_refuses_captured_output_or_unsafe_proof(change: str) -> None:
+    events = _transport_events()
+    if change.startswith(("assistant.", "tool.")):
+        events.insert(-1, _event(change, content="private output"))
+    elif change == "unknown-event":
+        events.insert(-1, _event("session.unknown"))
+    elif change == "policy":
+        events[2]["data"]["failClosed"] = True
+    elif change == "system":
+        events[3]["data"]["content"] = "other guidance"
+    elif change == "model":
+        events[6]["data"]["model"] = "other-model"
+    elif change == "request":
+        events[-1]["request_sha256"] = "b" * 64
+    elif change == "rejections":
+        events[-1]["requests_rejected"] = 1
+    elif change == "permissions":
+        events[-1]["permissions_denied"] = 1
+    elif change == "input":
+        events[0]["native_session_sha256"] = "b" * 64
+    elif change == "post-dispatch-usage":
+        events.insert(-1, _event("session.usage_info", outputTokens=0))
+    with pytest.raises(CopilotProtocolError) as caught:
+        _parse(events)
+    assert caught.value.behavior_output_observed is True
 
 
 @pytest.mark.parametrize(

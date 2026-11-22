@@ -6,7 +6,8 @@ from typing import Any
 
 import pytest
 
-from ithrl.adapters import enumerate_decisions, parse_session
+from ithrl.adapters import AdapterError, enumerate_decisions, parse_session
+from ithrl.adapters.copilot.context import editable_tool_output_text
 from ithrl.adapters.registry import editable_session_text
 from ithrl.case import CaseEvidence, CaseFormatError
 from ithrl.context import ContextGraph, content_digest
@@ -229,6 +230,7 @@ def _attempt(
             "dependency-closed-removal",
             "append-text",
             "remove-text-sections",
+            "remove-tool-output-text-span",
         ),
         reconstruction_method="copilot-native-prefix-sdk-v1",
         supported_targets=("final-response", "shell-action"),
@@ -830,3 +832,209 @@ def test_partial_or_reordered_graph_preserves_text_discovery_and_native_refusal(
         else "the Copilot context graph does not match the selected boundary"
     )
     assert captured.value.__cause__ is None
+
+
+@pytest.mark.parametrize("shell_action", [False, True])
+@pytest.mark.parametrize("line_ending", ["\n", "\r\n"])
+@pytest.mark.parametrize("remove_all", [False, True])
+def test_tool_span_preserves_every_other_native_value_and_source(
+    tmp_path: Path, shell_action: bool, line_ending: str, remove_all: bool
+) -> None:
+    records = _history_records()
+    text = 'Keep Ω and e\u0301.\r\nRemove \\"quoted\\" detail 🐍.\nLast line.'
+    records[5]["data"].update(
+        success=False,
+        error={"code": "fixture-error", "message": "Fixture failure detail."},
+        result={
+            "content": text,
+            "detailedContent": text,
+            "metadata": {"fixture": [1, True, None]},
+        },
+    )
+    if shell_action:
+        records[-2]["data"].update(
+            content="",
+            toolRequests=[
+                {
+                    "toolCallId": "80000000-0000-4000-8000-000000000099",
+                    "name": "bash",
+                    "arguments": {"command": "pwd"},
+                }
+            ],
+        )
+        records[-2]["data"].pop("phase")
+    evidence = _evidence(tmp_path, records, line_ending=line_ending)
+    source_before = (tmp_path / "events.jsonl").read_bytes()
+    artifacts_before = evidence.source_artifacts
+    baseline = materialize_copilot_attempt(_attempt(evidence))
+    site = evidence.editable_tool_output_text()[0]
+    descriptor = evidence.tool_output_text_fields()[0]
+    assert descriptor.field_path == "/data/result/content"
+    assert descriptor.original_utf8_bytes == len(text.encode())
+    assert descriptor.original_codepoints == len(text)
+    start, end = (0, len(text)) if remove_all else (text.index("Remove"), text.index("Last"))
+    edit = descriptor.removal(site.original_text, start=start, end=end)
+
+    result = materialize_copilot_attempt(_attempt(evidence, mutation=TextMutation(edits=(edit,))))
+
+    expected = _native_records(baseline.native_session)
+    expected[5]["data"]["result"]["content"] = text[:start] + text[end:]
+    assert _native_records(result.native_session) == expected
+    original_lines = baseline.native_session.splitlines(keepends=True)
+    actual_lines = result.native_session.splitlines(keepends=True)
+    assert [
+        i
+        for i, (left, right) in enumerate(zip(original_lines, actual_lines, strict=True))
+        if left != right
+    ] == [5]
+    assert actual_lines[5].endswith(line_ending.encode())
+    assert (tmp_path / "events.jsonl").read_bytes() == source_before
+    assert evidence.source_artifacts == artifacts_before
+    assert materialize_copilot_attempt(_attempt(evidence)) == baseline
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        {"detailedContent": "Display only."},
+        {"content": [{"type": "text", "text": "Structured result."}]},
+        {"content": {"text": "Structured result."}},
+        {"content": None},
+    ],
+)
+def test_tool_span_discovery_excludes_display_and_structured_results(
+    tmp_path: Path, result: dict[str, Any]
+) -> None:
+    records = _history_records()
+    records[5]["data"]["result"] = result
+    evidence = _evidence(tmp_path, records)
+    assert evidence.editable_tool_output_text() == ()
+    assert evidence.tool_output_text_fields() == ()
+
+
+@pytest.mark.parametrize("node_change", [{"mutable": False}, {"protected": True}])
+def test_tool_span_discovery_excludes_protected_or_immutable_nodes(
+    tmp_path: Path, node_change: dict[str, bool]
+) -> None:
+    evidence = _evidence(tmp_path, _history_records())
+    assert evidence.decision is not None
+    session = parse_session(tmp_path / "events.jsonl")
+    context = evidence.context.model_copy(
+        update={
+            "nodes": tuple(
+                node.model_copy(update=node_change)
+                if node.kind == "tool.execution_complete"
+                else node
+                for node in evidence.context.nodes
+            )
+        }
+    )
+    assert editable_tool_output_text(session, evidence.decision.selector, context) == ()
+
+
+def test_tool_span_discovery_and_native_overlay_protect_fixed_tool_input(tmp_path: Path) -> None:
+    prior = _evidence(tmp_path / "prior", _history_records())
+    site = prior.editable_tool_output_text()[0]
+    edit = prior.tool_output_text_fields()[0].removal(site.original_text, start=0, end=7)
+    records = _history_records()
+    # A continuation following the historical tool completion makes that completion the trigger.
+    records[8:10] = [_turn_record(9, 2, start=True)]
+    evidence = _evidence(tmp_path, records)
+    assert evidence.editable_tool_output_text() == ()
+    assert evidence.tool_output_text_fields() == ()
+    attempt = _attempt(evidence)
+    object.__setattr__(
+        attempt,
+        "candidate",
+        attempt.candidate.model_copy(update={"mutation": TextMutation(edits=(edit,))}),
+    )
+    with pytest.raises(CopilotMaterializationError) as caught:
+        _materialize_session(attempt, parse_session(tmp_path / "events.jsonl"))
+    assert caught.value.code is CopilotMaterializationErrorCode.MISSING_TRIGGER
+
+
+def test_tool_span_selects_one_uniquely_paired_result_of_multiple_calls(tmp_path: Path) -> None:
+    records = _history_records()
+    second_id = "80000000-0000-4000-8000-000000000002"
+    records[3]["data"]["toolRequests"].append(
+        {"toolCallId": second_id, "name": "fixture_tool", "arguments": {}}
+    )
+    records[6:6] = [
+        _record(
+            20,
+            "tool.execution_start",
+            {"toolCallId": second_id, "turnId": records[4]["data"]["turnId"]},
+        ),
+        _record(
+            21,
+            "tool.execution_complete",
+            {
+                "toolCallId": second_id,
+                "turnId": records[5]["data"]["turnId"],
+                "result": {"content": "Second result remains fixed."},
+            },
+        ),
+    ]
+    evidence = _evidence(tmp_path, records)
+    fields = evidence.tool_output_text_fields()
+    assert len(fields) == 2
+    site = evidence.editable_tool_output_text()[1]
+    edit = fields[1].removal(site.original_text, start=0, end=7)
+    baseline = materialize_copilot_attempt(_attempt(evidence))
+    changed = materialize_copilot_attempt(_attempt(evidence, mutation=TextMutation(edits=(edit,))))
+    expected = _native_records(baseline.native_session)
+    expected[7]["data"]["result"]["content"] = "result remains fixed."
+    assert _native_records(changed.native_session) == expected
+
+
+@pytest.mark.parametrize("relationship", ["duplicate-request", "orphan-completion"])
+def test_tool_span_fields_require_unambiguous_native_pairing(
+    tmp_path: Path, relationship: str
+) -> None:
+    records = _history_records()
+    if relationship == "duplicate-request":
+        records[3]["data"]["toolRequests"] *= 2
+    else:
+        records[5]["data"]["toolCallId"] = "80000000-0000-4000-8000-000000000099"
+    with pytest.raises(AdapterError):
+        _evidence(tmp_path, records)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"field_id": "tool-output-text-" + "0" * 64},
+        {"original_text_digest": "0" * 64},
+        {"removed_text_digest": "0" * 64},
+        {"end": 10000},
+    ],
+)
+def test_tool_span_rejects_stale_or_foreign_binding_before_materialization(
+    tmp_path: Path, change: dict[str, Any]
+) -> None:
+    evidence = _evidence(tmp_path, _history_records())
+    original = _attempt(evidence)
+    site = evidence.editable_tool_output_text()[0]
+    descriptor = evidence.tool_output_text_fields()[0]
+    edit = descriptor.removal(site.original_text, start=0, end=7).model_copy(update=change)
+    with pytest.raises(MutationError):
+        prepare_candidate(evidence, original.execution_plan, mutation=TextMutation(edits=(edit,)))
+
+
+def test_tool_span_refuses_removed_parent_and_forged_source_identity(tmp_path: Path) -> None:
+    evidence = _evidence(tmp_path, _history_records())
+    original = _attempt(evidence)
+    site = evidence.editable_tool_output_text()[0]
+    edit = evidence.tool_output_text_fields()[0].removal(site.original_text, start=0, end=7)
+    mutation = TextMutation(edits=(edit,))
+    with pytest.raises(MutationError, match="whole-record dependency closure"):
+        prepare_candidate(evidence, original.execution_plan, (site.context_id,), mutation=mutation)
+    attempt = _attempt(evidence, mutation=mutation)
+    object.__setattr__(
+        attempt,
+        "candidate",
+        attempt.candidate.model_copy(update={"source_artifact_digests": ("0" * 64,)}),
+    )
+    with pytest.raises(CopilotMaterializationError) as caught:
+        materialize_copilot_attempt(attempt)
+    assert caught.value.code is CopilotMaterializationErrorCode.CHANGED_EVIDENCE

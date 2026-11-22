@@ -49,7 +49,7 @@ contract; do not merge their identities or weaken the existing collector's check
 | Runtime and request surface | One verified current native runtime, reconstruction method and capability profile for both arms | Reconstructing both captures with a newer runtime tests that runtime, not historical equivalence |
 | Instructions, tools and policy | Same effective instructions, tool schemas and action-denial policy, except for an explicitly supported intervention | Frozen differences outside the edit domain cannot be silently discarded or treated as tested edits |
 | Environment | Same protected workspace snapshot and other declared readable inputs; no uncontrolled tool or external-state access | Refuse execution if required inputs or protection cannot be established; a matching workspace path is insufficient |
-| Visible context | Every difference in the delivered reconstruction is accounted for by the edit or explicitly excluded native bookkeeping | Refuse an exact-mapping claim if extra assistant history, tool results, images or transformed text differ |
+| Visible context | Every difference in the delivered reconstruction is accounted for by the edit or explicitly excluded native bookkeeping | Refuse an exact-mapping claim if extra assistant history, tool outputs, images or transformed text differ |
 | Opaque state | Preserve the anchor's opaque records, or declare one supported common reconstruction projection | Different opaque state prevents exact historical alignment; a declared projection tests the resulting execution profile |
 
 Requested model names may denote mutable deployments. Matching names do not prove immutable weights
@@ -57,9 +57,10 @@ or stationarity. Bind observable identities, bound the collection window and ret
 Native IDs and timestamps can differ between captures; do not erase them from source evidence.
 Any comparison projection must be owned by the relevant harness and explain each excluded field.
 It must never equate opaque data or meaning on the basis of normalized text.
-An explicit prospective Codex profile omits complete historical reasoning records from both
-execution copies, including their summaries, while preserving them in the source. The resulting
-comparison concerns that profile's visible context; it does not replay historical reasoning state.
+When the selected Codex model or provider differs from capture, reconstruction omits complete
+historical reasoning records, including summaries, from both execution copies. The source retains
+those records. The comparison tests the resulting visible context; it does not replay historical
+reasoning state.
 
 Pure admission does not establish native resume eligibility. Validate the immutable original before
 attributing a candidate failure to its edit. Copilot's
@@ -106,16 +107,19 @@ their required counts when changing direction; negating a verdict or a point est
 reverse a one-sided confidence bound. A confirmed repair increases the fixed target's valid-match
 probability. Do not turn arbitrary nonmatches into a repair predicate.
 
-Existing record removal, paragraph removal and one-field append contracts define the possible edit
-surface, subject to each profile's admission rules. A coarse-removal context and the full source
-can supply a restoration test. Removing either record from a bundle and restoring both are distinct
-tests; report the complete tested change before attempting component isolation.
+Record removal, paragraph removal, one-field append and
+[source-bound tool output text spans](../comparison.md#select-tool-output-text) define the
+implemented edit surface, subject to each profile's admission rules. A coarse-removal context and
+the full source can supply a restoration test. Removing either record from a bundle and restoring
+both are distinct tests; report the complete tested change before attempting component isolation.
 
 For a prefix-preserving append, exact mapping requires the donor's effective prior-user field to be
 the anchor's exact text plus the declared suffix, and all other relevant delivered inputs to match.
 Supplying a phrase copied from an unrelated failure is a stress test, not reproduction of the
-captured difference. Tool-output, instruction and model changes require their own intervention
-designs; [#74](https://github.com/eberkut/ithrl/issues/74) assesses the first of these.
+captured difference. The [localized tool output study](tool-output-interventions.md) reports exact
+field edits and their separate native and practical qualification. Instruction changes require
+their own intervention design; prospective execution settings are bound before collection through
+the [shared configuration](../comparison.md#choose-execution-settings).
 
 Sampled fuzzing already tests and simplifies supplied append text. Use it when its generation and
 selection behavior answer the question. Exact-context comparison instead freezes the two contexts

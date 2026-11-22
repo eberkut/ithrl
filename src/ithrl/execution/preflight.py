@@ -15,6 +15,7 @@ from ithrl.execution.contracts import (
 )
 from ithrl.experiment import (
     AnyExperimentDefinition,
+    CodexReplayConfig,
     ExperimentDefinition,
     FakeRunnerConfig,
     NativeRunnerConfig,
@@ -151,11 +152,23 @@ def _resolved_report(
 ) -> PreflightReport:
     manifest = evidence.manifest
     decision = evidence.decision
-    replay = (
-        experiment.runner.codex_replay
-        if isinstance(experiment.runner, NativeRunnerConfig)
-        else None
+    model = experiment.runner.model if isinstance(experiment.runner, NativeRunnerConfig) else None
+    provider = (
+        experiment.runner.provider if isinstance(experiment.runner, NativeRunnerConfig) else None
     )
+    effective_model = model or manifest.model_requested
+    effective_provider = provider or manifest.provider
+    replay = None
+    if (
+        isinstance(experiment.runner, NativeRunnerConfig)
+        and experiment.runner.type == "codex"
+        and capability.harness == "codex"
+        and manifest.harness == "codex"
+        and effective_model is not None
+        and effective_provider is not None
+        and (effective_model != manifest.model_requested or effective_provider != manifest.provider)
+    ):
+        replay = CodexReplayConfig(provider=effective_provider, model=effective_model)
     plan = ResolvedExecutionPlan(
         case_digest=evidence.digest,
         capture_type=manifest.capture.request,
@@ -164,7 +177,12 @@ def _resolved_report(
         harness=manifest.harness,
         source_harness_version=manifest.harness_version,
         source_schema=manifest.source_schema,
-        model_requested=replay.model if replay is not None else manifest.model_requested,
+        model_requested=effective_model,
+        reasoning_effort=(
+            experiment.runner.reasoning_effort
+            if isinstance(experiment.runner, NativeRunnerConfig)
+            else None
+        ),
         codex_replay=replay,
         decision_digest=decision.selector.digest if decision is not None else None,
         runner_fingerprint=runner_fingerprint,
@@ -188,13 +206,13 @@ def _check_runner_identity(
 ) -> None:
     if (
         isinstance(experiment.runner, NativeRunnerConfig)
-        and experiment.runner.codex_replay is not None
-        and experiment.runner.codex_replay.provider != capability.provider
+        and experiment.runner.provider is not None
+        and experiment.runner.provider != capability.provider
     ):
         issues.append(
             PreflightIssue(
                 code="runner-evidence-mismatch",
-                message="Codex replay provider does not match the runner capability",
+                message="selected provider does not match the runner capability",
             )
         )
     if capability.runner_type != experiment.runner.type:

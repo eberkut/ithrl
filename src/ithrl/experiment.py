@@ -21,6 +21,7 @@ from ithrl.context import content_digest
 from ithrl.grading.contracts import PatchGradingConfig
 from ithrl.mutation import ContextSelection
 from ithrl.text_sections import TextSectionRemoval
+from ithrl.tool_output_text import ToolOutputTextSpanRemoval
 
 
 class ExperimentFormatError(ValueError):
@@ -99,15 +100,15 @@ class NativeRunnerConfig(_ImmutableContract):
 
     type: Literal["codex", "copilot"]
     required_capability_digest: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
-    codex_replay: CodexReplayConfig | None = Field(
-        default=None, exclude_if=lambda value: value is None
-    )
-
-    @model_validator(mode="after")
-    def validate_replay(self) -> NativeRunnerConfig:
-        if self.codex_replay is not None and self.type != "codex":
-            raise ValueError("Codex replay requires the Codex runner")
-        return self
+    model: Annotated[
+        str | None, Field(min_length=1, max_length=256, pattern=r"^[A-Za-z0-9._:/+-]+$")
+    ] = Field(default=None, exclude_if=lambda value: value is None)
+    reasoning_effort: Annotated[
+        str | None, Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._-]+$")
+    ] = Field(default=None, exclude_if=lambda value: value is None)
+    provider: Annotated[
+        str | None, Field(min_length=1, max_length=128, pattern=r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
+    ] = Field(default=None, exclude_if=lambda value: value is None)
 
 
 type RunnerConfig = Annotated[
@@ -245,7 +246,7 @@ class SampledConfirmationPhase(_ImmutableContract):
 
 
 type SamplingEligibilityPolicy = Literal[
-    "independent-safe-preaccept-only", "safe-provider-overload"
+    "independent-safe-preaccept-only", "safe-provider-overload", "safe-provider-transport"
 ]
 
 
@@ -331,6 +332,18 @@ class SampledComparisonPlan(_ImmutableContract):
     def validate_calibration_gate(self) -> SampledComparisonPlan:
         if content_digest(self.policy_projection) != self.comparison_digest:
             raise ValueError("comparison policy digest does not match its declared procedure")
+        if any(
+            isinstance(edit, ToolOutputTextSpanRemoval)
+            for selection in (self.reference, self.candidate)
+            for edit in selection.mutation.edits
+        ) and (
+            not self.reference.mutation.is_empty
+            or len(self.candidate.mutation.edits) != 1
+            or not isinstance(self.candidate.mutation.edits[0], ToolOutputTextSpanRemoval)
+        ):
+            raise ValueError(
+                "tool output text comparison requires an unmutated reference and one candidate span removal"
+            )
         positive, negative = (
             (self.calibration.candidate, self.calibration.original)
             if self.objective == "repair"
@@ -537,11 +550,9 @@ def _render_experiment(experiment: AnyExperimentDefinition) -> str:
         lines.append(
             f"required_capability_digest = {_toml_string(runner.required_capability_digest)}"
         )
-        if runner.codex_replay is not None:
-            lines.append("")
-            lines.append("[runner.codex_replay]")
-            for name, value in runner.codex_replay.model_dump().items():
-                lines.append(f"{name} = {_toml_string(value)}")
+        _append_optional_string(lines, "model", runner.model)
+        _append_optional_string(lines, "reasoning_effort", runner.reasoning_effort)
+        _append_optional_string(lines, "provider", runner.provider)
 
     if isinstance(experiment, ExperimentDefinition):
         for name, phase in (

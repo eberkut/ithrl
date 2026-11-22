@@ -110,7 +110,7 @@ def test_dry_run_admits_pair_without_execution_or_storage(
     assert not (tmp_path / "case/.runs").exists()
 
 
-def test_codex_replay_refuses_another_harness_before_detection(
+def test_removed_codex_replay_table_refuses_before_detection(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     args = inputs(tmp_path)
@@ -126,7 +126,7 @@ def test_codex_replay_refuses_another_harness_before_detection(
     monkeypatch.setattr("ithrl.cli.native.native_selection", forbidden)
     result = CliRunner().invoke(app, [*args, "--dry-run"])
     assert result.exit_code != 0
-    assert json.loads(result.stdout)["error_code"] == "codex-replay-requires-codex"
+    assert json.loads(result.stdout)["error_code"] == "invalid-comparison-configuration"
     assert not (tmp_path / "private").exists()
 
 
@@ -504,8 +504,16 @@ def test_explicit_unavailable_experiment_controls_mode_and_preserves_target(
 
 
 @pytest.mark.parametrize("same_category", [True, False])
+@pytest.mark.parametrize("model", [None, "gpt-6-luna"])
+@pytest.mark.parametrize("harness", ["codex", "copilot"])
+@pytest.mark.parametrize("reasoning_effort", [None, "low"])
 def test_native_comparison_binds_a_prospective_predicate_without_changing_the_capture(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, same_category: bool
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    same_category: bool,
+    model: str | None,
+    harness: str,
+    reasoning_effort: str | None,
 ) -> None:
     from ithrl.behavior import FinalResponseTarget, ShellActionTarget
     from ithrl.cli.comparison_session import load_comparison_profile
@@ -519,6 +527,7 @@ def test_native_comparison_binds_a_prospective_predicate_without_changing_the_ca
         parse_experiment_toml,
     )
     from ithrl.runner import PreparedAttempt, RunnerRegistry, RunResult
+    from ithrl.runner.codex.materialize import materialize_codex_attempt
     from ithrl.runner.copilot.materialize import materialize_copilot_attempt
     from ithrl.workflow import PreflightRefusedError, prepare_experiment
     from native_support.copilot import _capability, _case
@@ -528,11 +537,16 @@ def test_native_comparison_binds_a_prospective_predicate_without_changing_the_ca
     args = inputs(fake_root)
     native_root = tmp_path / "native"
     native_root.mkdir()
-    _, case, evidence = _case(native_root, "shell-action", context_sensitive=True)
+    if harness == "codex":
+        from native_support.codex import _case as codex_case
+
+        case, evidence = codex_case(native_root, context_sensitive=True)
+    else:
+        _, case, evidence = _case(native_root, "shell-action", context_sensitive=True)
     original_decision = evidence.decision
     target = (
         ShellActionTarget(tool_name_equals="bash", command_contains=" --isolated ")
-        if same_category
+        if same_category == (harness == "copilot")
         else FinalResponseTarget(text_contains="new prospective response")
     )
     experiment = parse_experiment_toml(evidence.default_experiment).model_copy(
@@ -542,9 +556,18 @@ def test_native_comparison_binds_a_prospective_predicate_without_changing_the_ca
     explicit.write_text(experiment.to_toml())
     explicit.chmod(0o600)
     config = Path(args[3])
-    removals = iter([[], [evidence.context.nodes[1].id]])
+    removable_id = (
+        next(
+            node.id for node in evidence.context.nodes if node.selector and node.selector.line == 4
+        )
+        if harness == "codex"
+        else evidence.context.nodes[1].id
+    )
+    removals = iter([[], [removable_id]])
     config.write_text(
-        "\n".join(
+        (f"model = {json.dumps(model)}\n" if model is not None else "")
+        + (f"reasoning_effort = {json.dumps(reasoning_effort)}\n" if reasoning_effort else "")
+        + "\n".join(
             f"removed_context_ids = {json.dumps(next(removals))}"
             if line.startswith("removed_context_ids = ")
             else line.replace("max_provider_calls = 0", "max_provider_calls = 100")
@@ -553,13 +576,30 @@ def test_native_comparison_binds_a_prospective_predicate_without_changing_the_ca
         + "\n"
     )
     capability = _capability("shell-action")
+    if harness == "codex":
+        capability = capability.model_copy(
+            update={
+                "runner_type": "codex",
+                "harness": "codex",
+                "source_schema": "codex-rollout-jsonl",
+                "provider": "fixture-provider",
+                "supported_targets": ("final-response",),
+                "reconstruction_method": "codex-app-server-inject-checkpoint-v1",
+            }
+        )
 
     class PureRunner:
         fingerprint = "prospective-target-fixture:1"
         capability_profile = capability
 
         def validate_candidate(self, attempt: PreparedAttempt) -> None:
-            materialize_copilot_attempt(attempt)
+            if harness == "codex":
+                materialized = materialize_codex_attempt(attempt)
+                assert materialized.model == attempt.execution_plan.model_requested
+                if reasoning_effort is not None:
+                    assert materialized.effort == reasoning_effort
+            else:
+                materialize_copilot_attempt(attempt)
 
         async def run(
             self, attempt: PreparedAttempt, *, runtime_deadline: float | None = None
@@ -570,10 +610,12 @@ def test_native_comparison_binds_a_prospective_predicate_without_changing_the_ca
         *_args: object,
         experiment: AnyExperimentDefinition,
         calibration: SampledCalibrationPhase,
+        model: str | None,
+        reasoning_effort: str | None,
         **_kwargs: object,
     ) -> NativeSelection:
         return NativeSelection(
-            RunnerRegistry({"copilot": lambda _config, _evidence: PureRunner()}),
+            RunnerRegistry({harness: lambda _config, _evidence: PureRunner()}),
             SafetyPolicy(
                 provider_transport="allowed",
                 allowed_provider=capability.provider,
@@ -583,8 +625,13 @@ def test_native_comparison_binds_a_prospective_predicate_without_changing_the_ca
             SampledExperimentDefinition(
                 target=experiment.target,
                 oracle=experiment.oracle,
-                runner=NativeRunnerConfig(
-                    type="copilot", required_capability_digest=capability.digest
+                runner=NativeRunnerConfig.model_validate(
+                    {
+                        "type": harness,
+                        "required_capability_digest": capability.digest,
+                        "model": model,
+                        "reasoning_effort": reasoning_effort,
+                    }
                 ),
                 calibration=calibration,
             ),
@@ -619,7 +666,33 @@ def test_native_comparison_binds_a_prospective_predicate_without_changing_the_ca
         assert profile.experiment.target == target
         assert profile.identity.target_digest == target.digest
         assert profile.execution_plan.target_digest == target.digest
+        assert profile.configuration.model == model
+        assert "codex_replay" not in profile.configuration.model_dump()
+        assert profile.configuration.reasoning_effort == reasoning_effort
+        assert profile.execution_plan.reasoning_effort == reasoning_effort
+        assert profile.execution_plan.inspection_metadata.reasoning_effort == reasoning_effort
+        assert profile.execution_plan.model_requested == (
+            model or evidence.manifest.model_requested
+        )
+        assert isinstance(profile.experiment.runner, NativeRunnerConfig)
+        assert profile.experiment.runner.model == model
+        assert profile.experiment.runner.reasoning_effort == reasoning_effort
         assert case.load().decision == original_decision
+        if model is not None:
+            from pydantic import ValidationError
+
+            changed_configuration = profile.configuration.model_copy(update={"model": "other"})
+            with pytest.raises(ValidationError, match="configuration differs"):
+                type(profile).model_validate(
+                    {**profile.model_dump(), "configuration": changed_configuration}
+                )
+            changed_plan = profile.execution_plan.model_copy(update={"model_requested": "other"})
+            with pytest.raises(
+                ValidationError, match=r"model configuration differs|resolved execution identity"
+            ):
+                type(profile).model_validate(
+                    {**profile.model_dump(), "execution_plan": changed_plan}
+                )
     else:
         assert result.exit_code != 0
         assert json.loads(result.stdout)["error_code"] == "comparison-input-or-execution-refused"

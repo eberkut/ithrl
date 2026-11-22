@@ -67,6 +67,7 @@ from ithrl.runner.copilot.isolation import (
     DEFAULT_DISPOSABLE_STATE_BYTES as COPILOT_DISPOSABLE_STATE_BYTES,
 )
 from ithrl.runner.copilot.isolation import CopilotIsolationError
+from ithrl.runner.copilot.policy import PROVIDER as COPILOT_PROVIDER
 from ithrl.runner.copilot.policy import CopilotTarget
 from ithrl.runner.runtime import NativeOutputStoreError, ProtectedPath
 
@@ -143,7 +144,9 @@ def native_selection(
     max_provider_calls_per_attempt: int | None = None,
     attempt_timeout_seconds: int | None = None,
     max_input_tokens: int | None = None,
-    codex_replay: CodexReplayConfig | None = None,
+    model: str | None = None,
+    reasoning_effort: str | None = None,
+    provider: str | None = None,
 ) -> NativeSelection:
     """Resolve explicit samples against an exact current or persisted profile."""
 
@@ -178,14 +181,46 @@ def native_selection(
         )
     if harness not in ("codex", "copilot"):
         raise NativeSelectionError("unsupported-harness", "native harness is unsupported")
-    saved_replay = (
-        persisted.runner.codex_replay if isinstance(persisted.runner, NativeRunnerConfig) else None
+    saved_provider = (
+        persisted.runner.provider if isinstance(persisted.runner, NativeRunnerConfig) else None
     )
-    if codex_replay is not None and saved_replay is not None and codex_replay != saved_replay:
-        raise NativeSelectionError("replay-mismatch", "Codex replay does not match the experiment")
-    selected_replay = codex_replay if codex_replay is not None else saved_replay
-    if selected_replay is not None and harness != "codex":
-        raise NativeSelectionError("unsupported-replay", "Codex replay requires the Codex runner")
+    if provider is not None and saved_provider is not None and provider != saved_provider:
+        raise NativeSelectionError("provider-mismatch", "provider does not match the experiment")
+    selected_provider = provider if provider is not None else saved_provider
+    effective_provider = selected_provider or evidence.manifest.provider
+    saved_model = (
+        persisted.runner.model if isinstance(persisted.runner, NativeRunnerConfig) else None
+    )
+    if model is not None and saved_model is not None and model != saved_model:
+        raise NativeSelectionError("model-mismatch", "model does not match the experiment")
+    selected_model = model if model is not None else saved_model
+    saved_effort = (
+        persisted.runner.reasoning_effort
+        if isinstance(persisted.runner, NativeRunnerConfig)
+        else None
+    )
+    if (
+        reasoning_effort is not None
+        and saved_effort is not None
+        and reasoning_effort != saved_effort
+    ):
+        raise NativeSelectionError(
+            "reasoning-effort-mismatch", "reasoning effort does not match the experiment"
+        )
+    selected_effort = reasoning_effort if reasoning_effort is not None else saved_effort
+    selected_replay = None
+    if harness == "codex" and (
+        (selected_model is not None and selected_model != evidence.manifest.model_requested)
+        or effective_provider != evidence.manifest.provider
+    ):
+        if effective_provider is None:
+            raise NativeSelectionError(
+                "provider-unavailable", "captured Codex provider identity is unavailable"
+            )
+        effective_model = selected_model or evidence.manifest.model_requested
+        if effective_model is None:
+            raise NativeSelectionError("model-unavailable", "Codex model identity is unavailable")
+        selected_replay = CodexReplayConfig(provider=effective_provider, model=effective_model)
     if harness == "copilot" and max_provider_calls_per_attempt not in (None, 1):
         raise NativeSelectionError(
             "unsupported-provider-call-limit",
@@ -200,6 +235,8 @@ def native_selection(
         raise NativeSelectionError(
             "source-evidence-unavailable", "native selection requires saved source evidence"
         )
+    if harness == "copilot" and effective_provider not in (None, COPILOT_PROVIDER):
+        raise NativeSelectionError("unsupported-provider", "Copilot requires its managed provider")
 
     protected_workspace = _original_workspace(original_workspace)
     sources = (ProtectedPath("case-evidence", workspace.root),)
@@ -232,7 +269,9 @@ def native_selection(
     config = NativeRunnerConfig(
         type=native_type,
         required_capability_digest=capability.digest,
-        codex_replay=selected_replay,
+        model=selected_model,
+        reasoning_effort=selected_effort,
+        provider=selected_provider,
     )
     if isinstance(persisted, SampledExperimentDefinition):
         resolved_experiment = persisted.model_copy(update={"runner": config, "calibration": phase})

@@ -36,26 +36,9 @@ def _is_exact_int(value: object, expected: int) -> bool:
     return type(value) is int and value == expected
 
 
-def parse_output(
-    output: bytes,
-    *,
-    expected: ExpectedOutcome,
-    native_session: bytes | None = None,
-    system_message: str | None = None,
-) -> CopilotProtocolOutcome:
-    """Validate SDK-native events and trusted physical-forward receipts."""
-
-    events = decode_events(output)
-    state = ProtocolState(expected=expected)
-    if (
-        events[0].get("type") != "ithrl.copilot.input"
-        or events[-1].get("type") != "ithrl.copilot.complete"
-    ):
-        raise CopilotProtocolError(
-            "missing-receipt", "Copilot output lacks worker input or completion evidence"
-        )
-    receipt = events[0]
-    request_digest = None
+def _validate_input_receipt(
+    receipt: dict[str, object], *, native_session: bytes | None, system_message: str | None
+) -> None:
     if not _is_exact_int(receipt.get("schema_version"), 1) or not _is_exact_int(
         receipt.get("new_user_messages"), 0
     ):
@@ -68,6 +51,46 @@ def parse_output(
     ):
         raise CopilotProtocolError(
             "input-mismatch", "Copilot worker input differs from materialized evidence"
+        )
+
+
+def parse_output(
+    output: bytes,
+    *,
+    expected: ExpectedOutcome,
+    native_session: bytes | None = None,
+    system_message: str | None = None,
+    expected_model: str | None = None,
+) -> CopilotProtocolOutcome:
+    """Validate SDK-native events and trusted physical-forward receipts."""
+
+    events = decode_events(output)
+    state = ProtocolState(expected=expected)
+    if (
+        events[0].get("type") != "ithrl.copilot.input"
+        or events[-1].get("type") != "ithrl.copilot.complete"
+    ):
+        raise CopilotProtocolError(
+            "missing-receipt", "Copilot output lacks worker input or completion evidence"
+        )
+    request_digest = None
+    response_seen = False
+    _validate_input_receipt(events[0], native_session=native_session, system_message=system_message)
+    if (
+        events[-1].get("success") is False
+        and events[-1].get("failure_code") == "inference-transport-failed"
+    ):
+        _validate_output_free_transport(
+            events,
+            expected=expected,
+            input_bound=native_session is not None,
+            system_message=system_message,
+            expected_model=expected_model,
+        )
+        raise CopilotProtocolError(
+            "inference-transport-failed",
+            "Copilot inference transport failed before returning a response",
+            behavior_output_observed=False,
         )
     for event in events[1:-1]:
         event_type = cast(str, event["type"])
@@ -93,6 +116,21 @@ def parse_output(
             ):
                 invalid_sequence()
             state.forwarded = True
+            continue
+        if event_type == "ithrl.copilot.response":
+            status = event.get("status_code")
+            if (
+                response_seen
+                or not state.forwarded
+                or not state.call_started
+                or state.call_finished
+                or not _is_exact_int(event.get("schema_version"), 1)
+                or event.get("request_sha256") != request_digest
+                or type(status) is not int
+                or not 100 <= status <= 599
+            ):
+                invalid_sequence()
+            response_seen = True
             continue
         if event_type in {
             "pending_messages.modified",
@@ -166,6 +204,152 @@ def parse_output(
         )
     state.result_seen = True
     return _finish(state)
+
+
+def _validate_output_free_transport(
+    events: list[dict[str, object]],
+    *,
+    expected: ExpectedOutcome,
+    input_bound: bool,
+    system_message: str | None,
+    expected_model: str | None,
+    require_completion: bool = True,
+) -> None:
+    """Prove a typed worker failure has one bound dispatch and no behavioral output."""
+
+    state = ProtocolState(expected=expected)
+    policy_verified = False
+    system_verified = system_message is None
+    request_digest = None
+    for event in events[1:-1] if require_completion else events[1:]:
+        kind = cast(str, event["type"])
+        if kind == "ithrl.copilot.forward":
+            request_digest = event.get("request_sha256")
+            if (
+                state.forwarded
+                or not state.call_started
+                or not policy_verified
+                or not system_verified
+                or not _is_exact_int(event.get("schema_version"), 1)
+                or not _is_exact_int(event.get("provider_calls_started"), 1)
+                or not isinstance(request_digest, str)
+                or len(request_digest) != 64
+                or any(c not in "0123456789abcdef" for c in request_digest)
+            ):
+                invalid_sequence()
+            state.forwarded = True
+            continue
+        data = event_data(event)
+        if kind == "session.managed_settings_resolved":
+            context = data.get("permissionsContext")
+            permissions = context.get("permissions") if isinstance(context, dict) else None
+            if not (
+                data.get("clientManaged") is True
+                and data.get("bypassPermissionsDisabled") is True
+                and data.get("failClosed") is False
+                and isinstance(permissions, dict)
+                and permissions.get("disableBypassPermissionsMode") == "disable"
+                and permissions.get("disableAssistedPermissionsMode") is True
+                and isinstance(permissions.get("deny"), list)
+                and "Shell(*)" in permissions["deny"]
+            ):
+                invalid_sequence()
+            policy_verified = True
+        if kind == "system.message":
+            if data.get("role", "system") != "system" or data.get("content") != system_message:
+                invalid_sequence()
+            system_verified = True
+        if kind in STARTUP_EVENTS or kind in {"assistant.turn_start", "model.call_start"}:
+            _handle_event(state, kind, event)
+        elif kind in {
+            "pending_messages.modified",
+            "prompt_cache_break",
+            "session.usage_info",
+            "session.mcp_server_status_changed",
+            "session.mcp_server_tools_loaded",
+            "model.turn_started",
+            "model.model_call_started",
+        }:
+            # These native metadata records describe the resumed context and
+            # pending call. They cannot establish output absence after dispatch.
+            if state.forwarded:
+                invalid_sequence()
+            continue
+        elif kind in {"session.error", "model.call_failure", "model.call_finished"}:
+            if (
+                not require_completion
+                or not state.forwarded
+                or "statusCode" in data
+                or "usage" in data
+            ):
+                invalid_sequence()
+            if kind == "model.call_finished":
+                require_matching_turn(state, data)
+                if data.get("outcome") not in ("error", "failure", "failed"):
+                    invalid_sequence()
+            elif "turnId" in data:
+                require_matching_turn(state, data)
+            if "model" in data:
+                bind_model(state, required_string(data, "model", max_length=MAX_MODEL_LENGTH))
+        else:
+            # Assistant, reasoning, usage, action, completion and unknown events
+            # cannot establish output absence, even with a typed worker receipt.
+            invalid_sequence()
+    if not (
+        input_bound
+        and expected_model is not None
+        and state.model == expected_model
+        and state.forwarded
+    ):
+        invalid_sequence()
+    if not require_completion:
+        return
+    complete = events[-1]
+    if not (
+        _is_exact_int(complete.get("schema_version"), 1)
+        and _is_exact_int(complete.get("provider_calls_started"), 1)
+        and _is_exact_int(complete.get("requests_rejected"), 0)
+        and _is_exact_int(complete.get("websockets_rejected"), 0)
+        and _is_exact_int(complete.get("permissions_denied"), 0)
+        and complete.get("request_sha256") == request_digest
+        and complete.get("failure_stage") == "inference-request"
+    ):
+        raise CopilotProtocolError(
+            "incomplete-dispatch", "Copilot transport failure lacks bounded dispatch evidence"
+        )
+
+
+def parse_output_free_timeout(
+    output: bytes,
+    *,
+    expected: ExpectedOutcome,
+    native_session: bytes,
+    system_message: str | None,
+    expected_model: str | None,
+) -> bool:
+    """Verify a complete output-free prefix; the parent must prove timeout and cleanup."""
+
+    if not output.endswith(b"\n"):
+        return False
+    try:
+        events = decode_events(output)
+        receipt = events[0]
+        if receipt.get("type") != "ithrl.copilot.input":
+            return False
+        _validate_input_receipt(
+            receipt, native_session=native_session, system_message=system_message
+        )
+        _validate_output_free_transport(
+            events,
+            expected=expected,
+            input_bound=True,
+            system_message=system_message,
+            expected_model=expected_model,
+            require_completion=False,
+        )
+    except CopilotProtocolError:
+        return False
+    return True
 
 
 def _provider_failure_code(data: dict[str, object]) -> str | None:

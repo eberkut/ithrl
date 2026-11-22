@@ -1,4 +1,4 @@
-"""Provider-free interpretation of retained reduction evidence."""
+"""Provider-free inspection of case fields and retained experiment evidence."""
 
 from __future__ import annotations
 
@@ -38,9 +38,15 @@ from ithrl.text_sections import (
     catalog_text_sections,
     remove_text_sections,
 )
+from ithrl.tool_output_text import (
+    ToolOutputTextField,
+    ToolOutputTextLimitError,
+    ToolOutputTextSpanRemoval,
+)
 
 MAX_INSPECTION_TEXT_BYTES = 65_536
 MAX_INSPECTION_SECTION_UNITS = 4096
+MAX_INSPECTION_TOOL_OUTPUT_TEXT_FIELDS = 4096
 type TrialOutcome = Literal[
     "deterministic-target-observed",
     "deterministic-target-not-observed",
@@ -68,6 +74,159 @@ _HISTORICAL_LIMIT = (
 
 class _InspectionModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class ToolOutputTextSelectionInspection(_InspectionModel):
+    """Source-bound sizes and optional private display for one exact native field."""
+
+    field: ToolOutputTextField
+    edit: ToolOutputTextSpanRemoval | None = None
+    removed_codepoints: int = 0
+    removed_utf8_bytes: int = 0
+    retained_codepoints: int
+    retained_utf8_bytes: int
+    text: str | None = Field(default=None, repr=False, exclude_if=lambda value: value is None)
+    text_scope: Literal["original-tool-output-text-field", "retained-tool-output-text-field"]
+    text_bytes: int = 0
+    text_truncated: bool = False
+
+
+class UnavailableToolOutputTextInspection(_InspectionModel):
+    context_id: str
+    field_path: str
+    reason: Literal["tool-output-text-policy-limit"] = "tool-output-text-policy-limit"
+
+
+class ToolOutputTextInspection(_InspectionModel):
+    schema_version: Literal[1] = 1
+    command: Literal["inspect"] = "inspect"
+    kind: Literal["tool-output-text"] = "tool-output-text"
+    case_digest: str
+    fields: tuple[ToolOutputTextField, ...]
+    unavailable_fields: tuple[UnavailableToolOutputTextInspection, ...]
+    omitted_field_count: int
+    metadata_limit: int = MAX_INSPECTION_TOOL_OUTPUT_TEXT_FIELDS
+    selection: ToolOutputTextSelectionInspection | None = None
+    mutation: TextMutation | None = None
+    text_requested: bool = False
+    provider_calls: Literal[0] = 0
+    actions_executed: Literal[0] = 0
+
+
+def inspect_tool_output_text(
+    evidence: CaseEvidence,
+    *,
+    field_id: str | None = None,
+    start: int | None = None,
+    end: int | None = None,
+    show_text: bool = False,
+    max_text_bytes: int = 4096,
+) -> ToolOutputTextInspection:
+    """Discover fields or author one source-bound edit without a native operation."""
+
+    _validate_text_allowance(max_text_bytes)
+    if (start is None) != (end is None) or (start is not None and field_id is None):
+        raise ValueError("a tool output text span requires a field and both range endpoints")
+    if show_text and field_id is None:
+        raise ValueError("tool output text display requires an explicit field")
+    fields = []
+    unavailable = []
+    omitted = 0
+    selected = None
+    edit = None
+    sites = evidence.editable_tool_output_text()
+    if field_id is not None:
+        descriptor, _ = evidence.tool_output_text_field(field_id)
+        if start is not None and end is not None:
+            edit = evidence.tool_output_text_removal(field_id, start=start, end=end)
+        fields.append(descriptor)
+        omitted = len(sites) - 1
+        selected = inspect_tool_output_text_selection(
+            evidence,
+            descriptor,
+            edit=edit,
+            show_text=show_text,
+            max_text_bytes=max_text_bytes,
+        )
+    else:
+        for index, site in enumerate(sites):
+            if len(fields) + len(unavailable) >= MAX_INSPECTION_TOOL_OUTPUT_TEXT_FIELDS:
+                omitted = len(sites) - index
+                break
+            try:
+                descriptor = evidence._tool_output_text_field(site)
+            except ToolOutputTextLimitError:
+                unavailable.append(
+                    UnavailableToolOutputTextInspection(
+                        context_id=site.context_id, field_path=site.field_path
+                    )
+                )
+            else:
+                fields.append(descriptor)
+    return ToolOutputTextInspection(
+        case_digest=evidence.digest,
+        fields=tuple(fields),
+        unavailable_fields=tuple(unavailable),
+        omitted_field_count=omitted,
+        metadata_limit=MAX_INSPECTION_TOOL_OUTPUT_TEXT_FIELDS,
+        selection=selected,
+        mutation=None if edit is None else TextMutation(edits=(edit,)),
+        text_requested=show_text,
+    )
+
+
+def inspect_tool_output_text_selection(
+    evidence: CaseEvidence,
+    descriptor: ToolOutputTextField,
+    *,
+    edit: ToolOutputTextSpanRemoval | None = None,
+    show_text: bool = False,
+    max_text_bytes: int = 4096,
+) -> ToolOutputTextSelectionInspection:
+    """Revalidate the original field and report retained text, never the deleted substring."""
+
+    _validate_text_allowance(max_text_bytes)
+    if edit is None:
+        verified, site = evidence.tool_output_text_field(descriptor.field_id)
+    else:
+        verified, site = evidence.validate_tool_output_text_span(edit)
+    if verified != descriptor:
+        raise ValueError("tool output text field differs from its source binding")
+    removed_codepoints = 0 if edit is None else edit.end - edit.start
+    removed_utf8_bytes = 0
+    if edit is not None:
+        removed_utf8_bytes = (
+            descriptor.original_utf8_bytes
+            if removed_codepoints == descriptor.original_codepoints
+            else len(site.original_text[edit.start : edit.end].encode("utf-8"))
+        )
+    text, truncated = None, False
+    if show_text:
+        retained = (
+            site.original_text
+            if edit is None
+            else site.original_text[: edit.start] + site.original_text[edit.end :]
+        )
+        text, truncated = _bounded_text(retained, max_text_bytes, escape_backslashes=True)
+    return ToolOutputTextSelectionInspection(
+        field=descriptor,
+        edit=edit,
+        removed_codepoints=removed_codepoints,
+        removed_utf8_bytes=removed_utf8_bytes,
+        retained_codepoints=descriptor.original_codepoints - removed_codepoints,
+        retained_utf8_bytes=descriptor.original_utf8_bytes - removed_utf8_bytes,
+        text=text,
+        text_scope="original-tool-output-text-field"
+        if edit is None
+        else "retained-tool-output-text-field",
+        text_bytes=0 if text is None else len(text.encode("utf-8")),
+        text_truncated=truncated,
+    )
+
+
+def _validate_text_allowance(allowance: int) -> None:
+    if type(allowance) is not int or not 0 <= allowance <= MAX_INSPECTION_TEXT_BYTES:
+        raise ValueError("inspection text allowance must be between 0 and 65536 bytes")
 
 
 class ConfirmationInspection(_InspectionModel):
@@ -260,8 +419,7 @@ def build_retained_inspection(
 ) -> RetainedInspection:
     """Interpret an already-validated snapshot; text display has one global byte allowance."""
 
-    if type(max_text_bytes) is not int or not 0 <= max_text_bytes <= MAX_INSPECTION_TEXT_BYTES:
-        raise ValueError("inspection text allowance must be between 0 and 65536 bytes")
+    _validate_text_allowance(max_text_bytes)
     evidence = loaded.evidence
     retained = frozenset(loaded.retained_ids)
     if text_node_id is not None:
@@ -827,11 +985,15 @@ def _canonical_text(value: JsonValue) -> str:
     )
 
 
-def _bounded_text(value: str, allowance: int) -> tuple[str, bool]:
+def _bounded_text(
+    value: str, allowance: int, *, escape_backslashes: bool = False
+) -> tuple[str, bool]:
     parts: list[str] = []
     used = 0
     for char in value:
-        if char in "[]" or not char.isprintable():
+        if char == "\\" and escape_backslashes:
+            escaped = "\\\\"
+        elif char in "[]" or not char.isprintable():
             escaped = f"\\u{ord(char):04x}" if ord(char) <= 0xFFFF else f"\\U{ord(char):08x}"
         else:
             escaped = char

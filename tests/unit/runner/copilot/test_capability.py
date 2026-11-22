@@ -154,9 +154,14 @@ def test_detects_target_specific_capability_from_structural_contracts(
     assert profile.supported_capture_types == ("logical-session",)
     assert profile.supported_materializations == ("source-backed",)
     assert profile.supported_context_operations == (
-        ("dependency-closed-removal", "append-text", "remove-text-sections")
+        (
+            "dependency-closed-removal",
+            "append-text",
+            "remove-text-sections",
+            "remove-tool-output-text-span",
+        )
         if target == "final-response"
-        else ("dependency-closed-removal",)
+        else ("dependency-closed-removal", "remove-tool-output-text-span")
     )
     assert profile.reconstruction_method == "copilot-native-prefix-sdk-v1"
     assert profile.provider_transport == "required"

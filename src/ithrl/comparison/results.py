@@ -30,6 +30,7 @@ from ithrl.observations import ObservationIdentity, SamplingBlockEvidence
 from ithrl.results.validation import loads_json
 from ithrl.run_state import SampledRunState, SampledRunStateFile, SampledRunUsage
 from ithrl.runner import Candidate
+from ithrl.tool_output_text import ToolOutputTextSpanRemoval
 
 _MAX_BYTES = MAX_COMPARISON_RESULT_BYTES
 
@@ -243,6 +244,10 @@ def validate_comparison_source(
                         or content_digest(site.original_text) != edit.original_text_digest
                     ):
                         raise ValueError("comparison append differs from its source field")
+                elif isinstance(edit, ToolOutputTextSpanRemoval):
+                    if edit.context_id not in candidate.retained_context_ids:
+                        raise ValueError("comparison tool output text field is not retained")
+                    evidence.validate_tool_output_text_span(edit)
                 else:
                     evidence.validate_text_sections(edit)
 

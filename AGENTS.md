@@ -42,10 +42,12 @@ an old research result. Planned capabilities must remain clearly distinguished f
   eligible fresh confirmation of the durably selected candidate against the immutable original.
   Keep confirmation observations separate from calibration and search; never resume search after
   final selection. Errors do not count as behavioral losses or enter Bernoulli denominators.
-  Preaccept exclusions require verified outcome independence. The opt-in `safe-provider-overload`
-  policy permits a fresh sample after a structured overload with no captured output and verified
-  safety/cleanup; retain the failed observation, unknown acceptance and full call charge. Its
-  valid-only inference assumes independent, stationary attempts with prespecified validity.
+  Preaccept exclusions require verified outcome independence. Keep strict eligibility as the
+  default. Opt-in provider-failure replacement requires runner-owned proof of an eligible
+  output-free failure, enforced action denial, unchanged protected state and verified cleanup.
+  Freeze valid-sample targets and replacement ceilings; retain failed observations, unknown
+  acceptance and full conservative charges. Valid-only inference assumes independent, stationary
+  attempts under prespecified validity rules.
 - Admit complete sampling blocks while preserving the confirmation budget. Persist dispatch
   reservations before execution and reconcile recorded observations on resume. Never redispatch
   an unresolved attempt or repeat completed confirmation. Keep actual, possible and pending

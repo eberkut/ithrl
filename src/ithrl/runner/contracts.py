@@ -31,6 +31,7 @@ from ithrl.execution import (
 )
 from ithrl.mutation import MutationError, TextAppend, TextMutation
 from ithrl.text_sections import TextSectionRemoval
+from ithrl.tool_output_text import ToolOutputTextSpanRemoval
 
 type AttemptPhase = Literal["calibration", "search", "discovery", "simplification", "confirmation"]
 type AttemptArm = Literal["baseline", "candidate", "selected"]
@@ -413,6 +414,8 @@ def prepare_candidate(
                 raise MutationError("section removal overlaps a whole-record dependency closure")
             if isinstance(edit, TextSectionRemoval):
                 evidence.validate_text_sections(edit)
+            elif isinstance(edit, ToolOutputTextSpanRemoval):
+                evidence.validate_tool_output_text_span(edit)
             elif removed:
                 raise MutationError("text mutation requires the unchanged original context")
         if evidence.has_request:

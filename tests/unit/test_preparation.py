@@ -124,6 +124,99 @@ def _sections(evidence: CaseEvidence, section_ids: tuple[str, ...] | None = None
     )
 
 
+@pytest.mark.parametrize(
+    "choices", ["defaults", "explicit-defaults", "model", "effort", "both", "provider", "all"]
+)
+def test_preparation_preserves_resolved_native_execution_choices(
+    recorded_case: tuple[CaseEvidence, NativePreparationReceipt],
+    tmp_path: Path,
+    choices: str,
+) -> None:
+    evidence, baseline = recorded_case
+    harness = baseline.source_plan.capability.runner_type
+    capability = baseline.source_plan.capability
+    if harness == "codex":
+        capability = capability.model_copy(update={"provider": evidence.manifest.provider})
+    provider = (
+        "alternate-provider"
+        if choices in {"provider", "all"} and harness == "codex"
+        else capability.provider
+        if choices in {"provider", "all", "explicit-defaults"}
+        else None
+    )
+    if provider is not None:
+        capability = capability.model_copy(update={"provider": provider})
+    model = (
+        "prospective-model"
+        if choices in {"model", "both", "all"}
+        else evidence.manifest.model_requested
+        if choices == "explicit-defaults"
+        else None
+    )
+    effort = "low" if choices in {"effort", "both", "all"} else None
+    settings = ReductionPreparationSettings.from_toml(SETTINGS)
+    default = parse_experiment_toml(evidence.default_experiment)
+    calibration = SampledExperimentDefinition(
+        target=default.target,
+        oracle=default.oracle,
+        runner=NativeRunnerConfig.model_validate(
+            {
+                "type": harness,
+                "required_capability_digest": capability.digest,
+                "provider": provider,
+                "model": model,
+                "reasoning_effort": effort,
+            }
+        ),
+        calibration=settings.calibration,
+    )
+    policy = baseline.source_plan.safety_policy.model_copy(
+        update={"allowed_provider": capability.provider}
+    )
+    report = resolve_execution_plan(
+        capability,
+        calibration,
+        evidence=evidence,
+        runner_fingerprint=baseline.source_plan.runner_fingerprint,
+        safety_policy=policy,
+        resource_limits=baseline.source_plan.resource_limits,
+    )
+    assert report.ready, report.issues
+    assert report.plan is not None
+    receipt = NativePreparationReceipt.create(report.plan, calibration, tmp_path / "original")
+    prepared = prepare_reduction(evidence, receipt, settings)
+    assert isinstance(prepared.runner, NativeRunnerConfig)
+    expected_model = model if model != evidence.manifest.model_requested else None
+    expected_provider = (
+        provider if harness == "codex" and provider != evidence.manifest.provider else None
+    )
+    assert prepared.runner.model == expected_model
+    assert prepared.runner.provider == expected_provider
+    assert prepared.runner.reasoning_effort == effort
+    assert "codex_replay" not in prepared.runner.model_dump()
+    for name, value in (
+        ("model", expected_model),
+        ("provider", expected_provider),
+        ("reasoning_effort", effort),
+    ):
+        if value is None:
+            assert name not in prepared.runner.model_dump()
+    assert SampledExperimentDefinition.from_toml(prepared.to_toml()) == prepared
+    rebound = resolve_execution_plan(
+        capability,
+        prepared,
+        evidence=evidence,
+        runner_fingerprint=report.plan.runner_fingerprint,
+        safety_policy=policy,
+        resource_limits=report.plan.resource_limits,
+    )
+    assert rebound.ready
+    assert rebound.plan is not None
+    assert rebound.plan.model_dump(exclude={"experiment_digest"}) == report.plan.model_dump(
+        exclude={"experiment_digest"}
+    )
+
+
 def test_prepare_accepts_an_exact_request_without_a_native_decision(tmp_path: Path) -> None:
     evidence = extract_inference(
         Path(__file__).parents[1] / "fixtures/synthetic-trace.json",
@@ -305,13 +398,12 @@ def test_statistical_choices_have_no_preparation_defaults(choice: str) -> None:
         ReductionPreparationSettings.from_toml(SETTINGS.replace(choice, ""))
 
 
-@pytest.mark.parametrize("changed", ["case_digest", "model_requested", "target_digest"])
+@pytest.mark.parametrize("changed", ["case_digest", "target_digest"])
 def test_recorded_identity_mismatch_refuses(
     recorded_case: tuple[CaseEvidence, NativePreparationReceipt], changed: str
 ) -> None:
     evidence, receipt = recorded_case
-    value = "b" * 64 if changed.endswith("digest") else "different-model"
-    plan = receipt.source_plan.model_copy(update={changed: value})
+    plan = receipt.source_plan.model_copy(update={changed: "b" * 64})
     receipt = receipt.model_copy(update={"source_plan": plan, "source_plan_digest": plan.digest})
     with pytest.raises(PreparationError, match="preflight-evidence-mismatch"):
         prepare_reduction(evidence, receipt, ReductionPreparationSettings.from_toml(SETTINGS))

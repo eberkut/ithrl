@@ -80,8 +80,9 @@ The project-wide documentation review is complete in
 
 The [v0.5.0 milestone](https://github.com/eberkut/ithrl/milestone/4) groups broader
 ordinary-workflow evidence, public benchmark feasibility, self-describing sampled reports, cost
-estimates, a first-party agent skill and comparative debugging. The comparison workflow binds two
-explicit contexts to one immutable source, with repair/degradation objectives and independent fresh
+estimates, a first-party agent skill, comparative debugging and localized tool-output interventions.
+The comparison workflow binds two explicit contexts to one immutable source, with
+repair/degradation objectives and independent fresh
 confirmation in [#88](https://github.com/eberkut/ithrl/issues/88). Constructed and ordinary
 Codex/Copilot investigations qualified the tested profiles in
 [#89](https://github.com/eberkut/ithrl/issues/89); the
@@ -94,10 +95,10 @@ Codex/Copilot investigations qualified the tested profiles in
 | Completed in [#84](https://github.com/eberkut/ithrl/pull/84) | [#73: sampled inspection metadata](https://github.com/eberkut/ithrl/issues/73) | Offline reports explain digest-bound reconstruction and policy declarations separately from recorded attempt evidence |
 | Completed in [#86](https://github.com/eberkut/ithrl/pull/86) | [#77: model cost estimates](https://github.com/eberkut/ithrl/issues/77) | Offline pricing with genai-prices, usage/rate provenance and explicit coverage; estimates and scenarios remain distinct from actual billing |
 | Completed in [#87](https://github.com/eberkut/ithrl/pull/87) | [#78: first-party agent skill](https://github.com/eberkut/ithrl/issues/78) | One portable skill source, Python-package and repository distribution, installed-copy validation and concise installation guidance |
-| Implemented and qualified | [#13: comparative debugging](https://github.com/eberkut/ithrl/issues/13) | Explicit source-bound contexts, repair/degradation objectives, constructed repair tasks and useful ordinary investigations |
-| Implemented | [#88: explicit-context comparison](https://github.com/eberkut/ithrl/issues/88) | Comparison CLI, two-arm calibration, fresh confirmation, accounting, recovery and offline reports |
-| Qualification complete; acceptance pending merge | [#89: qualify comparative debugging](https://github.com/eberkut/ithrl/issues/89) | Constructed and ordinary Codex/Copilot investigations through the normal CLI and installed artifacts, with successful and unsuccessful costs and explicit limits; [PR #90](https://github.com/eberkut/ithrl/pull/90) records the evidence for acceptance |
-| Committed assessment | [#74: tool-output interventions](https://github.com/eberkut/ithrl/issues/74) | Establish native output visibility, source bindings and a useful localized intervention before deciding whether to add an edit domain |
+| Completed in [#90](https://github.com/eberkut/ithrl/pull/90) | [#13: comparative debugging](https://github.com/eberkut/ithrl/issues/13) | Explicit source-bound contexts, repair/degradation objectives, constructed repair tasks and useful ordinary investigations |
+| Completed in [#90](https://github.com/eberkut/ithrl/pull/90) | [#88: explicit-context comparison](https://github.com/eberkut/ithrl/issues/88) | Comparison CLI, two-arm calibration, fresh confirmation, accounting, recovery and offline reports |
+| Completed in [#90](https://github.com/eberkut/ithrl/pull/90) | [#89: qualify comparative debugging](https://github.com/eberkut/ithrl/issues/89) | Constructed and ordinary Codex/Copilot investigations through the normal CLI and installed artifacts, with successful and unsuccessful costs and explicit limits |
+| Implemented and qualified | [#74: tool-output interventions](https://github.com/eberkut/ithrl/issues/74) | Exact span deletion for final-response comparisons, with native input controls, practical review and complete study costs in the [worked investigations](docs/research/tool-output-interventions.md) |
 
 ## Evidence guiding the next investigations
 
@@ -124,12 +125,6 @@ developer conclusions alongside reduction, reliability and cost.
 The [comparative-debugging study](docs/research/comparative-debugging.md) establishes useful
 context-bundle effects under the tested Codex and Copilot profiles. Broader ordinary cohorts can
 assess how often comparison helps; historical contrasts alone cannot establish those effects.
-
-Issue #74 can use the #16 and #81 evidence alongside those comparisons for its provider-free
-assessment. It must distinguish original tool output, delivered representation and saved evidence
-before proposing a localized edit. Its v0.5 commitment is the assessment; tool-output implementation
-requires a separate decision. Existing whole-record comparisons remain available without expanding
-the edit domain. Native probes and provider execution require separate approval.
 
 The review of
 [SkillOpt's training method](https://github.com/microsoft/SkillOpt/blob/45f65ca04f5f6713bca7b9797b495696ba812751/docs/guide/training-loop.md)

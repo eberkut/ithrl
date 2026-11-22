@@ -6,8 +6,9 @@ reduces that behavior. Install `ithrl[compare]` for statistical inference.
 
 Both contexts keep the same triggering input, target, grader, model, reconstruction, policy and
 attempt limits. A second historical capture can suggest an intervention; it cannot serve as the
-other execution source. The [worked investigations](research/comparative-debugging.md) record
-qualified profiles, costs and interpretation.
+other execution source. The [bundle](research/comparative-debugging.md) and
+[tool output investigations](research/tool-output-interventions.md) record qualified profiles,
+costs and interpretation.
 
 ## Try without a provider
 
@@ -99,10 +100,11 @@ The comparison configuration sets sample counts, direction, freshness and resour
 the experiment retains the target and grader.
 
 Each selection lists `removed_context_ids`, with dependency closure applied, and an optional
-source-bound `mutation`. An empty selection means the full original. Selections use the same
-[text edit contracts](architecture.md#source-bound-text-sections) as reduction and fuzzing;
-unsupported edits and removal of the triggering input are refused before sampling. A selection
-may restore a bundle of records removed by an earlier reduction.
+source-bound `mutation`. An empty selection means the full original. Prior-user edits use the same
+[text contracts](architecture.md#source-bound-text-sections) as reduction and fuzzing; comparison
+also implements the [tool output text span contract](architecture.md#source-bound-tool-output-text).
+Unsupported edits and removal of the triggering input are refused before sampling. A selection may
+restore a bundle of records removed by an earlier reduction.
 
 ### Select records and text
 
@@ -149,6 +151,92 @@ text-field edit. Appends require an otherwise unchanged context; section removal
 record removals when the edited field survives. Native admission checks support for the selected
 target and edit before sampling.
 
+### Select tool output text
+
+Tool output text discovery and edit authoring are provider-free. The
+[tool output investigations](research/tool-output-interventions.md) qualify the tested
+final-response profiles; discovery alone does not qualify a native profile. See the
+[supported inputs](https://github.com/eberkut/ithrl#supported-inputs).
+
+List eligible prior tool output fields:
+
+```bash
+ithrl inspect tool CASE --format json
+```
+
+Select a reported `field_id`. Use the bounded
+[tool output text display](results.md#inspect-tool-output) to examine it privately.
+
+Ranges are nonempty and half-open, in original Unicode codepoints. For example, a string containing
+`é`, one LF and `X` has three codepoints and four UTF-8 bytes. The range `[0, 1)` removes `é`;
+`[1, 2)` removes the LF. An escaped display such as `é\nX` has different positions from the source.
+Select text from the original field, not its escaped display or UTF-8 byte positions.
+
+Save the exact substring in a private UTF-8 file without changing escapes, line endings or trailing
+characters. The helper below locates a unique occurrence and reports original codepoint offsets.
+Run it in the Python environment containing the same ithrl installation or build as your CLI.
+Replace `CASE`, `FIELD_ID` and `SNIPPET` with the case path, discovered field ID and private snippet
+file:
+
+```bash
+python - CASE FIELD_ID SNIPPET <<'PY'
+import sys
+from pathlib import Path
+from ithrl.case import CaseWorkspace
+
+evidence = CaseWorkspace.open(Path(sys.argv[1])).load()
+_, site = evidence.tool_output_text_field(sys.argv[2])
+snippet = Path(sys.argv[3]).read_bytes().decode("utf-8")
+start = site.original_text.find(snippet)
+if not snippet or start < 0 or site.original_text.find(snippet, start + 1) >= 0:
+    raise SystemExit("The snippet must occur exactly once in the original field.")
+print(f"START={start}\nEND={start + len(snippet)}")
+PY
+```
+
+The example reads verified source text without changing it and prints only offsets. Reading the
+snippet as bytes avoids newline conversion; an added newline or different escaping will not match.
+For manual source inspection, the field's `context_id` locates its node in `context.jsonl`;
+`source`, `selector.line` and `field_path` identify the native snapshot, JSONL line and JSON
+pointer.
+
+Use the reported integer `START` and `END` values:
+
+```bash
+ithrl inspect tool CASE --field FIELD_ID --start START --end END --format json
+```
+
+The report's `mutation.edits[0]` supplies the edit, including digests derived from immutable source.
+Copy its values into the shape below. Replace the quoted uppercase placeholders with the reported
+strings: `field_id` includes the `tool-output-text-` prefix and 64 hexadecimal digits; both text
+digests have 64 hexadecimal digits. Replace the integer offsets with the reported `start` and `end`;
+the values shown delete the first codepoint of the selected field.
+
+```toml
+[reference]
+removed_context_ids = []
+
+[candidate]
+removed_context_ids = []
+
+[[candidate.mutation.edits]]
+operation = "remove-tool-output-text-span"
+context_id = "CONTEXT_ID"
+field_id = "FIELD_ID"
+original_text_digest = "ORIGINAL_TEXT_DIGEST"
+start = 0
+end = 1
+removed_text_digest = "REMOVED_TEXT_DIGEST"
+```
+
+Keep the reference unmutated and both selections' resulting dependency-closed record partitions
+identical. Only the candidate may contain one span deletion. Common record omissions are allowed
+when the field and its dependencies survive. The edit preserves the result envelope, fixed input
+and other fields. It does not decode escaped text, edit a display cache, or introduce text from
+another source. Removing a complete field materializes an empty string; native reconstruction may
+elide an empty content block. Common omissions condition the comparison on the retained context.
+Shrink and fuzz do not accept this operation.
+
 ### Choose direction and samples
 
 Set `objective` according to the question:
@@ -163,6 +251,19 @@ The positive arm must reach `positive_minimum_matches`; the other arm must have 
 gate ends with `calibration-failed`, without confirmation. Calibration checks the declared contrast;
 its observations receive no credit toward confirmation.
 
+To permit replacement attempts, set `eligibility_policy = "safe-provider-transport"` before any TOML
+tables. Keep `required_valid` fixed and set a larger `max_attempts` for each arm before collection.
+The policy permits a fresh scheduled attempt after a verified typed transport failure, preventive
+timeout or structured overload with no behavioral output. It requires no requested actions, enforced
+action denial, unchanged protected state and verified cleanup. Unknown provider acceptance and the
+full conservative call charge remain recorded; errors never count as behavioral losses. Captured
+behavioral output, unsafe attempts and unresolved dispatches remain ineligible. The default strict
+policy and the narrower `safe-provider-overload` policy retain their existing rules.
+
+Replacement uses only frozen spare slots and resource allowance, preserves completed progress and
+never extends a terminal plan. See [comparison results](results.md#inspect-a-context-comparison)
+for interpreting failure counts and conditional match rates.
+
 After calibration, the command durably selects the pair and collects one fresh, randomized
 confirmation block. A confirmed effect requires its one-sided lower bound to exceed `minimum_effect`
 at the declared `alpha`. See [comparison results](results.md#inspect-a-context-comparison) for
@@ -171,10 +272,9 @@ outcomes, statistical assumptions and accounting.
 ## Prepare native execution
 
 Use the [native prerequisites](native-runs.md#native-prerequisites). Execution uses the captured
-model and provider unless you select the
-[optional Codex profile](#choose-a-prospective-codex-profile). Keep the observation store and
-profile outside the case and original workspace. The native runner preserves source evidence,
-protects the original workspace and denies execution of returned actions. The
+model and provider unless you [select execution settings](#choose-execution-settings). Keep the
+observation store and profile outside the case and original workspace. The native runner preserves
+source evidence, protects the original workspace and denies execution of returned actions. The
 [supported-inputs table](https://github.com/eberkut/ithrl#supported-inputs) owns public capability
 claims; structural detection alone does not establish experimental support.
 
@@ -223,22 +323,27 @@ The four arms may schedule at most 1,000 attempts in total. Large context bindin
 smaller plan to fit the private result snapshot; preparation reports `comparison-evidence-capacity`
 before collecting observations.
 
-### Choose a prospective Codex profile
+### Choose execution settings
 
-To test the contexts under a different Codex model or provider, add this table before detection.
-Replace `MODEL` with a model available through the selected provider's local authentication:
+Before detecting capabilities, place any execution overrides before the first TOML table in
+`comparison.toml`. The same settings apply to both harnesses; replace the placeholders with
+supported values and omit settings you do not need:
 
 ```toml
-[codex_replay]
-provider = "openai"
-model = "MODEL"
-reasoning = "omit"
+model = "MODEL_ID"
+reasoning_effort = "EFFORT_LEVEL"
 ```
 
-Both arms use the declared profile. Reconstruction omits historical reasoning records, including
-summaries, from both inputs and reports `reasoning_omitted`; the source evidence and fixed trigger
-remain unchanged. The comparison tests that profile, without reproducing historical reasoning
-state. Changing the profile requires a new configuration, detection and fresh observations.
+Omitting model or provider retains the captured choice. Omitting `reasoning_effort` leaves effort
+selection to the runner; set it explicitly when the investigation requires a fixed level.
+Codex can select a locally configured provider with `provider = "PROVIDER_ID"`. Copilot uses
+`github-copilot` and rejects other providers.
+
+Both arms use the same resolved settings. Detection records the execution and history policy in the
+profile; native execution verifies the requested settings before forwarding inference. Source
+evidence remains unchanged. Inspect the resolved policy and report any history projection separately
+from the context edit. Changing execution settings requires a new profile and fresh observations;
+observations from different settings cannot be pooled.
 
 ### Stop after calibration
 

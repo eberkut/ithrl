@@ -100,9 +100,11 @@ def test_process_preparation_refuses_invalid_private_inputs_before_launch(
 
 
 @pytest.mark.parametrize("target", ["final-response", "shell-action"])
+@pytest.mark.parametrize("reasoning_effort", [None, "low"])
 def test_prepares_private_target_specific_worker_state(
     tmp_path: Path,
     target: CopilotTarget,
+    reasoning_effort: str | None,
 ) -> None:
     state = OwnedAttemptState.create(tmp_path / "state", ATTEMPT_ID)
     worker = _program(tmp_path / "worker.py", "#!/usr/bin/python3\n")
@@ -116,6 +118,7 @@ def test_prepares_private_target_specific_worker_state(
         session_id="session-1",
         system_message="private guidance",
         model="fixture-model",
+        reasoning_effort=reasoning_effort,
         target=target,
         worker_source=worker,
         worker_digest=program_digest(worker),
@@ -126,6 +129,10 @@ def test_prepares_private_target_specific_worker_state(
     assert request["sessionId"] == "session-1"
     assert request["systemMessage"] == "private guidance"
     assert request["model"] == "fixture-model"
+    if reasoning_effort is None:
+        assert "reasoningEffort" not in request
+    else:
+        assert request["reasoningEffort"] == reasoning_effort
     assert request["commandFlags"] == [
         *target_policy(target).command_flags,
         "--secret-env-vars=GH_TOKEN",

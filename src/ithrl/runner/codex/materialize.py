@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 from ithrl.adapters import AdapterError
+from ithrl.adapters.codex.context import is_text_tool_output
 from ithrl.adapters.contracts import NativeSession
 from ithrl.adapters.registry import decision_input_node_id
 from ithrl.case import CaseFormatError
@@ -30,6 +31,11 @@ from ithrl.runner.codex.policy import (
 )
 from ithrl.runner.contracts import PreparedAttempt, _validate_attempt_identities
 from ithrl.text_sections import TextSectionError, TextSectionRemoval, remove_text_sections
+from ithrl.tool_output_text import (
+    ToolOutputTextError,
+    ToolOutputTextSpanRemoval,
+    remove_tool_output_text_span,
+)
 
 _SOURCE_PATH = "source/rollout.jsonl"
 _IGNORED_RECORD_TYPES = frozenset(
@@ -94,7 +100,7 @@ def materialize_codex_attempt(attempt: PreparedAttempt) -> CodexMaterialization:
     """Re-derive and materialize one selected Codex final-response attempt."""
 
     if any(
-        not isinstance(edit, (TextAppend, TextSectionRemoval))
+        not isinstance(edit, (TextAppend, TextSectionRemoval, ToolOutputTextSpanRemoval))
         for edit in attempt.candidate.mutation.edits
     ):
         raise CodexMaterializationError(
@@ -131,7 +137,10 @@ def materialize_codex_attempt(attempt: PreparedAttempt) -> CodexMaterialization:
             CodexMaterializationErrorCode.INCOMPATIBLE_CASE,
             "the case has no supported Codex source artifact",
         )
-    if any(isinstance(edit, TextSectionRemoval) for edit in attempt.candidate.mutation.edits):
+    if any(
+        isinstance(edit, (TextSectionRemoval, ToolOutputTextSpanRemoval))
+        for edit in attempt.candidate.mutation.edits
+    ):
         try:
             _validate_attempt_identities(attempt)
         except ValueError:
@@ -208,7 +217,9 @@ def _materialize_session(
         )
 
     edit = next(iter(attempt.candidate.mutation.edits), None)
-    if edit is not None and not isinstance(edit, (TextAppend, TextSectionRemoval)):
+    if edit is not None and not isinstance(
+        edit, (TextAppend, TextSectionRemoval, ToolOutputTextSpanRemoval)
+    ):
         raise CodexMaterializationError(
             CodexMaterializationErrorCode.UNSUPPORTED_CONTEXT,
             "Codex reconstruction requires a supported text intervention",
@@ -235,6 +246,8 @@ def _materialize_session(
                     try:
                         if isinstance(edit, TextAppend):
                             payload = append_message_text(payload, edit)
+                        elif isinstance(edit, ToolOutputTextSpanRemoval):
+                            payload = _remove_tool_output_text(payload, attempt, edit)
                         else:
                             catalog = evidence.validate_text_sections(edit)
                             retained_text = remove_text_sections(
@@ -243,12 +256,15 @@ def _materialize_session(
                             payload = replace_message_text(
                                 payload, edit.content_index, retained_text
                             )
-                    except (MutationError, TextSectionError) as error:
+                    except (MutationError, TextSectionError, ToolOutputTextError) as error:
                         raise CodexMaterializationError(
                             CodexMaterializationErrorCode.UNSUPPORTED_CONTEXT, str(error)
                         ) from error
                     applied = True
-                history.append(copy.deepcopy(payload))
+                else:
+                    # Edit helpers already return independent copies.
+                    payload = copy.deepcopy(payload)
+                history.append(payload)
             continue
         if record_type not in _IGNORED_RECORD_TYPES:
             raise CodexMaterializationError(
@@ -259,7 +275,7 @@ def _materialize_session(
     if not applied:
         raise CodexMaterializationError(
             CodexMaterializationErrorCode.UNSUPPORTED_CONTEXT,
-            "mutation does not address a retained prior user message",
+            "mutation does not address a retained editable context field",
         )
     if trigger is None:
         raise CodexMaterializationError(
@@ -276,7 +292,8 @@ def _materialize_session(
     return CodexMaterialization(
         model=replay.model if replay is not None else model,
         provider=replay.provider if replay is not None else provider,
-        effort=_optional_turn_setting(turn_context, "effort"),
+        effort=attempt.execution_plan.reasoning_effort
+        or _optional_turn_setting(turn_context, "effort"),
         personality=_optional_turn_setting(turn_context, "personality"),
         base_instructions=_optional_instruction(metadata, "base_instructions", allow_document=True),
         developer_instructions=(
@@ -287,6 +304,38 @@ def _materialize_session(
         history=tuple(history),
         turn_input=turn_input,
     )
+
+
+def _remove_tool_output_text(
+    payload: JsonObject, attempt: PreparedAttempt, edit: ToolOutputTextSpanRemoval
+) -> JsonObject:
+    field, _ = attempt.evidence.validate_tool_output_text_span(edit)
+    result = copy.deepcopy(payload)
+    output = result.get("output")
+    if payload.get("type") not in {"custom_tool_call_output", "function_call_output"} or not (
+        is_text_tool_output(output)
+    ):
+        raise ToolOutputTextError("the Codex tool output uses an unsupported content shape")
+    if field.field_path == "/payload/output" and isinstance(output, str):
+        result["output"] = remove_tool_output_text_span(output, field, edit)
+        return result
+    parts = field.field_path.split("/")
+    if (
+        len(parts) == 5
+        and parts[:3] == ["", "payload", "output"]
+        and parts[4] == "text"
+        and parts[3].isascii()
+        and parts[3].isdigit()
+        and str(int(parts[3])) == parts[3]
+        and isinstance(output, list)
+        and int(parts[3]) < len(output)
+    ):
+        item = _object(output[int(parts[3])])
+        text = item.get("text")
+        if isinstance(text, str):
+            item["text"] = remove_tool_output_text_span(text, field, edit)
+            return result
+    raise ToolOutputTextError("the Codex tool output text field does not match its source location")
 
 
 def editable_codex_text(attempt: PreparedAttempt) -> tuple[EditableText, ...]:
@@ -312,7 +361,7 @@ def validate_codex_output_limit(
         if item.get("type") not in {"custom_tool_call_output", "function_call_output"}:
             continue
         output = item.get("output")
-        if not _is_text_tool_output(output):
+        if not is_text_tool_output(output):
             raise CodexMaterializationError(
                 CodexMaterializationErrorCode.UNSUPPORTED_CONTEXT,
                 "the Codex tool output uses an unsupported content shape",
@@ -363,7 +412,7 @@ def _turn_input(trigger: JsonObject, history: list[JsonObject]) -> CodexTurnInpu
             )
         _required_string(calls[0].get("name"), "Codex tool call has no name")
         output = trigger.get("output")
-        if not _is_text_tool_output(output):
+        if not is_text_tool_output(output):
             raise CodexMaterializationError(
                 CodexMaterializationErrorCode.UNSUPPORTED_CONTEXT,
                 "the Codex tool output uses an unsupported content shape",
@@ -376,18 +425,6 @@ def _turn_input(trigger: JsonObject, history: list[JsonObject]) -> CodexTurnInpu
     raise CodexMaterializationError(
         CodexMaterializationErrorCode.UNSUPPORTED_CONTEXT,
         "the Codex decision trigger cannot be reconstructed by this runner",
-    )
-
-
-def _is_text_tool_output(value: JsonValue | None) -> bool:
-    return isinstance(value, str) or (
-        isinstance(value, list)
-        and all(
-            isinstance(item, dict)
-            and item.get("type") == "input_text"
-            and isinstance(item.get("text"), str)
-            for item in value
-        )
     )
 
 

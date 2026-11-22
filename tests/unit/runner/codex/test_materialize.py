@@ -3,10 +3,11 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from ithrl.adapters import enumerate_decisions, parse_session
+from ithrl.adapters import AdapterError, enumerate_decisions, parse_session
 from ithrl.adapters.contracts import NativeSession
 from ithrl.case import CaseEvidence, SourceArtifact
 from ithrl.context import JsonObject, JsonValue, content_digest
@@ -112,6 +113,244 @@ def _evidence_from_records(tmp_path: Path, records: list[dict[str, object]]) -> 
         target_id=decision.targets[0].target_id,
         case_path=tmp_path / "case",
     ).load()
+
+
+def _prior_tool_records(
+    output: JsonValue, call_type: str = "function_call"
+) -> list[dict[str, Any]]:
+    records = [
+        json.loads(line)
+        for line in (FIXTURES / "codex-session/rollout.jsonl").read_bytes().splitlines()
+    ]
+    records[5:5] = [
+        {
+            "type": "response_item",
+            "timestamp": "2026-01-01T00:00:04.100Z",
+            "payload": {
+                "type": call_type,
+                "id": "prior-tool-call-item",
+                "call_id": "prior-tool-call",
+                "name": "fixture_tool",
+                "arguments" if call_type == "function_call" else "input": "fixture-input",
+                "metadata": {"keep": [True, None]},
+            },
+        },
+        {
+            "type": "response_item",
+            "timestamp": "2026-01-01T00:00:04.200Z",
+            "payload": {
+                "type": call_type + "_output",
+                "id": "prior-tool-output-item",
+                "call_id": "prior-tool-call",
+                "output": output,
+                "success": False,
+                "metadata": {"keep": ["fixture", 1]},
+            },
+        },
+    ]
+    return records
+
+
+@pytest.mark.parametrize("call_type", ["function_call", "custom_tool_call"])
+@pytest.mark.parametrize("array_output", [False, True])
+@pytest.mark.parametrize("remove_all", [False, True])
+def test_tool_span_removal_preserves_exact_native_values(
+    tmp_path: Path, call_type: str, array_output: bool, remove_all: bool
+) -> None:
+    text = '{"result":"Keep Ω e\u0301.\\nRemove \\"detail\\".\\r\\nEnd."}\r\n'
+    assert json.loads(text)["result"].startswith("Keep Ω")
+    output: JsonValue = (
+        [
+            {"type": "input_text", "text": "Unedited neighbor.", "opaque": [True]},
+            {"type": "input_text", "text": text, "opaque": {"keep": None}},
+        ]
+        if array_output
+        else text
+    )
+    records = _prior_tool_records(output, call_type)
+    evidence = _evidence_from_records(tmp_path, records)
+    original = _attempt(evidence)
+    baseline = materialize_codex_attempt(original)
+    before = evidence.digest, evidence.source_artifacts, (tmp_path / "rollout.jsonl").read_bytes()
+    site = next(site for site in evidence.editable_tool_output_text() if site.original_text == text)
+    field = next(
+        field
+        for field in evidence.tool_output_text_fields()
+        if field.context_id == site.context_id and field.field_path == site.field_path
+    )
+    start, end = (0, len(text)) if remove_all else (text.index("Remove"), text.index("End"))
+    edit = field.removal(text, start=start, end=end)
+    result = materialize_codex_attempt(_with_mutation(original, TextMutation(edits=(edit,))))
+
+    expected = json.loads(json.dumps(records[6]["payload"]))
+    retained = text[:start] + text[end:]
+    if array_output:
+        expected["output"][1]["text"] = retained
+        assert field.field_path == "/payload/output/1/text"
+    else:
+        expected["output"] = retained
+        assert field.field_path == "/payload/output"
+    history = tuple(
+        expected
+        if item.get("call_id") == "prior-tool-call" and item.get("type") == call_type + "_output"
+        else item
+        for item in baseline.history
+    )
+    assert result == replace(baseline, history=history)
+    assert result.history[-1] == baseline.history[-1]
+    assert (
+        evidence.digest,
+        evidence.source_artifacts,
+        (tmp_path / "rollout.jsonl").read_bytes(),
+    ) == before
+    assert materialize_codex_attempt(original) == baseline
+    if not remove_all:
+        assert json.loads(retained)["result"].endswith("End.")
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "orphan",
+        "duplicate-call",
+        "duplicate-output",
+        "wrong-call-kind",
+        "late-call",
+        "missing-name",
+        "unsupported",
+    ],
+)
+def test_tool_span_discovery_refuses_ambiguous_and_unsupported_prior_results(
+    tmp_path: Path, change: str
+) -> None:
+    records = _prior_tool_records("Fixture prior output.")
+    if change == "orphan":
+        del records[5]
+    elif change == "duplicate-call":
+        records.insert(5, json.loads(json.dumps(records[5])))
+        records[5]["payload"]["id"] = "duplicate-prior-call"
+    elif change == "duplicate-output":
+        records.insert(7, json.loads(json.dumps(records[6])))
+        records[7]["payload"]["id"] = "duplicate-prior-output"
+    elif change == "wrong-call-kind":
+        records[5]["payload"]["type"] = "custom_tool_call"
+    elif change == "late-call":
+        records[5], records[6] = records[6], records[5]
+    elif change == "missing-name":
+        del records[5]["payload"]["name"]
+    else:
+        records[6]["payload"]["output"] = [
+            {"type": "input_text", "text": "Fixture prior output."},
+            {"type": "input_image", "image_url": "fixture-only"},
+        ]
+    if change in {"unsupported", "missing-name"}:
+        evidence = _evidence_from_records(tmp_path, records)
+        assert evidence.editable_tool_output_text() == ()
+        assert evidence.tool_output_text_fields() == ()
+    else:
+        with pytest.raises(AdapterError):
+            _evidence_from_records(tmp_path, records)
+
+
+def test_tool_span_refuses_stale_bindings_and_removed_parent(tmp_path: Path) -> None:
+    original = _attempt(_evidence_from_records(tmp_path, _prior_tool_records("A Ω\r\nB")))
+    field = original.evidence.tool_output_text_fields()[0]
+    site = original.evidence.editable_tool_output_text()[0]
+    edit = field.removal(site.original_text, start=2, end=3)
+    for key, value in (
+        ("field_id", "tool-output-text-" + "0" * 64),
+        ("original_text_digest", "0" * 64),
+        ("removed_text_digest", "0" * 64),
+        ("end", len(site.original_text) + 1),
+        ("context_id", original.evidence.context.nodes[0].id),
+    ):
+        stale = edit.model_copy(update={key: value})
+        with pytest.raises(MutationError):
+            _with_mutation(original, TextMutation(edits=(stale,)))
+    with pytest.raises(MutationError, match="whole-record dependency closure"):
+        prepare_candidate(
+            original.evidence,
+            original.execution_plan,
+            (field.context_id,),
+            mutation=TextMutation(edits=(edit,)),
+        )
+    changed = _with_mutation(original, TextMutation(edits=(edit,)))
+    object.__setattr__(
+        changed,
+        "candidate",
+        changed.candidate.model_copy(update={"source_artifact_digests": ("0" * 64,)}),
+    )
+    with pytest.raises(CodexMaterializationError) as caught:
+        materialize_codex_attempt(changed)
+    assert caught.value.code is CodexMaterializationErrorCode.CHANGED_EVIDENCE
+
+
+def test_tool_span_refuses_fixed_trigger_and_missing_retained_call(tmp_path: Path) -> None:
+    records = _prior_tool_records("Fixture prior output.")
+    original = _attempt(_evidence_from_records(tmp_path, records))
+    evidence = original.evidence
+    field = evidence.tool_output_text_fields()[0]
+    site = evidence.editable_tool_output_text()[0]
+    edit = field.removal(site.original_text, start=0, end=1)
+    trigger = next(
+        node for node in evidence.context.nodes if node.selector and node.selector.line == 11
+    )
+    assert all(site.context_id != trigger.id for site in evidence.editable_tool_output_text())
+    with pytest.raises(MutationError):
+        _with_mutation(
+            original, TextMutation(edits=(edit.model_copy(update={"context_id": trigger.id}),))
+        )
+    changed = _with_mutation(original, TextMutation(edits=(edit,)))
+    call = next(
+        node for node in evidence.context.nodes if node.selector and node.selector.line == 6
+    )
+    object.__setattr__(
+        changed,
+        "candidate",
+        changed.candidate.model_copy(
+            update={
+                "retained_context_ids": tuple(
+                    node_id
+                    for node_id in changed.candidate.retained_context_ids
+                    if node_id != call.id
+                )
+            }
+        ),
+    )
+    with pytest.raises(CodexMaterializationError) as refused:
+        materialize_codex_attempt(changed)
+    assert refused.value.code is CodexMaterializationErrorCode.CHANGED_EVIDENCE
+
+
+def test_tool_span_preserves_common_removals_replay_and_output_limits(tmp_path: Path) -> None:
+    records = _prior_tool_records("Keep Ω.\r\nRemove this.\r\nEnd.")
+    evidence = _evidence_from_records(tmp_path, records)
+    original = _attempt(evidence, replay=CodexReplayConfig(provider="replay", model="fixture"))
+    user = next(node for node in evidence.context.nodes if node.kind == "response_item.message")
+    reference = replace(
+        original, candidate=prepare_candidate(evidence, original.execution_plan, (user.id,))
+    )
+    field = evidence.tool_output_text_fields()[0]
+    text = evidence.editable_tool_output_text()[0].original_text
+    edit = field.removal(text, start=text.index("Remove"), end=text.index("End"))
+    candidate = replace(
+        original,
+        candidate=prepare_candidate(
+            evidence, original.execution_plan, (user.id,), mutation=TextMutation(edits=(edit,))
+        ),
+    )
+
+    baseline = materialize_codex_attempt(reference)
+    result = materialize_codex_attempt(candidate)
+
+    assert not any(item["type"] == "reasoning" for item in result.history)
+    assert result.history[0] == baseline.history[0]
+    assert result.history[2:] == baseline.history[2:]
+    assert result.history[1]["output"] == "Keep Ω.\r\nEnd."
+    assert result.turn_input == baseline.turn_input
+    validate_codex_output_limit(result, 65536)
+    with pytest.raises(CodexMaterializationError, match="explicit adequate"):
+        validate_codex_output_limit(result, None)
 
 
 @pytest.mark.parametrize("remove_all", [False, True])
@@ -244,6 +483,7 @@ def _attempt(
             "dependency-closed-removal",
             "append-text",
             "remove-text-sections",
+            "remove-tool-output-text-span",
         ),
         reconstruction_method="codex-app-server-inject-checkpoint-v1",
         supported_targets=("final-response",),

@@ -16,12 +16,16 @@ from ithrl.comparison.contracts import (
     ComparisonLimits,
 )
 from ithrl.execution import ExecutionPlanMetadata
+from ithrl.inspection import ToolOutputTextSelectionInspection, inspect_tool_output_text_selection
 from ithrl.mutation import TextAppend
 from ithrl.observations import SamplingArmCounts
 from ithrl.run_state import SampledRunUsage
 from ithrl.runner import Candidate
+from ithrl.text_sections import TextSectionRemoval
+from ithrl.tool_output_text import ToolOutputTextSpanRemoval
 
 if TYPE_CHECKING:
+    from ithrl.case import CaseEvidence
     from ithrl.comparison.results import ComparisonEvidence
 
 type _ReportIdentifier = Annotated[str, Field(max_length=256, pattern=r"^[A-Za-z0-9._:/+-]+$")]
@@ -39,10 +43,29 @@ class ContextReport(BaseModel):
     text_content_index: int | None = None
     appended_utf8_bytes: int | None = None
     removed_section_ids: tuple[str, ...] = ()
+    tool_output_text_edit: ToolOutputTextSpanRemoval | None = None
+    tool_output_text_field: ToolOutputTextSelectionInspection | None = None
 
     @classmethod
-    def from_candidate(cls, candidate: Candidate) -> ContextReport:
+    def from_candidate(
+        cls,
+        candidate: Candidate,
+        *,
+        case_evidence: CaseEvidence | None = None,
+        show_text: bool = False,
+        max_text_bytes: int = 4096,
+    ) -> ContextReport:
         edit = next(iter(candidate.mutation.edits), None)
+        tool_output_text_field = None
+        if isinstance(edit, ToolOutputTextSpanRemoval) and case_evidence is not None:
+            descriptor, _ = case_evidence.tool_output_text_field(edit.field_id)
+            tool_output_text_field = inspect_tool_output_text_selection(
+                case_evidence,
+                descriptor,
+                edit=edit,
+                show_text=show_text,
+                max_text_bytes=max_text_bytes,
+            )
         return cls(
             candidate_digest=candidate.digest,
             retained_context_count=len(candidate.retained_context_ids),
@@ -50,11 +73,13 @@ class ContextReport(BaseModel):
             mutation_digest=candidate.mutation.digest,
             text_operation=edit.operation if edit is not None else None,
             text_context_id=edit.context_id if edit is not None else None,
-            text_content_index=edit.content_index if edit is not None else None,
+            text_content_index=edit.content_index
+            if isinstance(edit, (TextAppend, TextSectionRemoval))
+            else None,
             appended_utf8_bytes=len(edit.text.encode()) if isinstance(edit, TextAppend) else None,
-            removed_section_ids=edit.section_ids
-            if edit is not None and not isinstance(edit, TextAppend)
-            else (),
+            removed_section_ids=edit.section_ids if isinstance(edit, TextSectionRemoval) else (),
+            tool_output_text_edit=edit if isinstance(edit, ToolOutputTextSpanRemoval) else None,
+            tool_output_text_field=tool_output_text_field,
         )
 
 
@@ -89,6 +114,7 @@ class ComparisonOutput(BaseModel):
     result_path: str | None = None
     harness: Literal["fake", "codex", "copilot"] | None = None
     model: _ReportIdentifier | None = None
+    reasoning_effort: _ReportIdentifier | None = None
     provider: _ReportIdentifier | None = None
     harness_started: bool | None = False
     capability_source: Literal["builtin", "saved-detection", "current-detection", "unverified"] = (
@@ -123,6 +149,7 @@ class ComparisonOutput(BaseModel):
     next_action: str | None = None
     next_command: str | None = None
     next_command_shell: Literal["posix", "powershell"] | None = None
+    text_requested: bool = False
 
     def public(self) -> dict[str, object]:
         result = self.model_dump(mode="json")
@@ -159,7 +186,13 @@ def _recorded_identity(
     return safe_display_identifier(values.pop())
 
 
-def result_report(result: ComparisonEvidence) -> ComparisonOutput:
+def result_report(
+    result: ComparisonEvidence,
+    *,
+    case_evidence: CaseEvidence | None = None,
+    show_text: bool = False,
+    max_text_bytes: int = 4096,
+) -> ComparisonOutput:
     from ithrl.comparison.engine import calibration_passes
 
     binding = result.binding
@@ -182,10 +215,17 @@ def result_report(result: ComparisonEvidence) -> ComparisonOutput:
         case_digest=result.original_identity.case_digest,
         comparison_digest=binding.digest,
         model=_recorded_identity(result, "model_requested"),
+        reasoning_effort=result.execution_metadata.reasoning_effort,
         provider=_recorded_identity(result, "provider"),
         execution_metadata=result.execution_metadata,
         reference_context=ContextReport.from_candidate(binding.reference),
-        candidate_context=ContextReport.from_candidate(binding.candidate),
+        candidate_context=ContextReport.from_candidate(
+            binding.candidate,
+            case_evidence=case_evidence,
+            show_text=show_text,
+            max_text_bytes=max_text_bytes,
+        ),
+        text_requested=show_text,
         calibration_plan=ComparisonCalibration(
             reference=binding.procedure.calibration.original,
             candidate=binding.procedure.calibration.candidate,
@@ -228,6 +268,7 @@ def render_comparison(
         ("direction", report.effect_direction),
         ("harness", report.harness),
         ("model", report.model),
+        ("reasoning effort", report.reasoning_effort),
         ("provider", report.provider),
         ("attempt ceiling", report.planned_attempts),
         ("provider-call ceiling", report.planned_provider_calls),
@@ -274,9 +315,14 @@ def render_comparison(
                 soft_wrap=True,
             )
             if context.text_operation is not None:
+                field = (
+                    context.tool_output_text_edit.field_id
+                    if context.tool_output_text_edit is not None
+                    else f"{context.text_context_id}/{context.text_content_index}"
+                )
                 print_plain(
                     target,
-                    f"    edit: {context.text_operation}; field {context.text_context_id}/{context.text_content_index}",
+                    f"    edit: {context.text_operation}; field {field}",
                 )
                 print_plain(target, f"    mutation digest: {context.mutation_digest}")
                 if context.appended_utf8_bytes is not None:
@@ -287,6 +333,36 @@ def render_comparison(
                         f"    removed sections: {json.dumps(context.removed_section_ids)}",
                         soft_wrap=True,
                     )
+                if context.tool_output_text_edit is not None:
+                    edit = context.tool_output_text_edit
+                    print_plain(target, f"    source codepoints: [{edit.start}, {edit.end})")
+                    print_plain(target, f"    original text digest: {edit.original_text_digest}")
+                    print_plain(target, f"    removed text digest: {edit.removed_text_digest}")
+                if context.tool_output_text_field is not None:
+                    detail = context.tool_output_text_field
+                    print_plain(target, f"    source field: {detail.field.field_path}")
+                    print_plain(
+                        target,
+                        f"    original: {detail.field.original_codepoints} codepoints; {detail.field.original_utf8_bytes} UTF-8 bytes",
+                    )
+                    print_plain(
+                        target,
+                        f"    removed: {detail.removed_codepoints} codepoints; {detail.removed_utf8_bytes} UTF-8 bytes",
+                    )
+                    print_plain(
+                        target,
+                        f"    retained: {detail.retained_codepoints} codepoints; {detail.retained_utf8_bytes} UTF-8 bytes",
+                    )
+                    if detail.text is not None:
+                        print_plain(
+                            target,
+                            f"    private retained tool output text: {detail.text}",
+                            soft_wrap=True,
+                        )
+                        print_plain(
+                            target,
+                            f"    displayed text bytes: {detail.text_bytes}; truncated: {detail.text_truncated}",
+                        )
     for label, plan in (
         ("calibration", report.calibration_plan),
         ("confirmation", report.confirmation_plan),

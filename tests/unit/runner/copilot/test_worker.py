@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import ssl
 import sys
@@ -17,17 +18,131 @@ from ithrl.runner.copilot import worker
 
 
 @pytest.mark.parametrize(
+    "kind",
+    ["model.message", "model.response", "model.model_call_success", "model.future_telemetry"],
+)
+def test_large_opaque_model_telemetry_is_projected_without_mutating_native_event(kind: str) -> None:
+    data = {"content": "fixture-private-response-\u00e9" * 100_000}
+    document: dict[str, object] = {
+        "type": kind,
+        "id": "event-1",
+        "timestamp": "fixture-time",
+        "data": data,
+    }
+    encoded = json.dumps(data, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode(
+        "utf-8"
+    )
+    projected = worker._project_native_event(document)
+    assert projected == {
+        **document,
+        "data": {
+            "omitted_data_bytes": len(encoded),
+            "omitted_data_sha256": hashlib.sha256(encoded).hexdigest(),
+        },
+    }
+    assert document["data"] is data
+    assert len(json.dumps(projected).encode()) < 512
+    assert "fixture-private-response" not in json.dumps(projected)
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "model.call_start",
+        "model.call_finished",
+        "model.call_final_result",
+        "model.call_failure",
+        "assistant.message",
+        "assistant.reasoning",
+        "assistant.usage",
+        "tool.execution_start",
+        "tool.execution_complete",
+        "session.usage_info",
+    ],
+)
+def test_native_behavior_and_critical_model_events_are_not_projected(kind: str) -> None:
+    document: dict[str, object] = {
+        "type": kind,
+        "data": {"content": "fixture-private-content", "usage": {}},
+    }
+    assert worker._project_native_event(document) is document
+
+
+def test_opaque_model_telemetry_preserves_malformed_data_for_protocol_refusal() -> None:
+    document: dict[str, object] = {"type": "model.future_telemetry", "data": "invalid"}
+    assert worker._project_native_event(document) is document
+
+
+@pytest.mark.parametrize(
     ("detail", "reason"),
     [
         ("certificate private-detail", "Copilot TLS certificate validation failed"),
         ("auth private-detail", "Copilot authentication was unavailable to the SDK session"),
         ("model private-detail", "Copilot could not initialize the requested model"),
         ("network private-detail", "Copilot could not establish the required connection"),
-        ("private-detail", "Copilot rejected the SDK operation"),
+        ("private-detail", "Copilot SDK operation failed"),
     ],
 )
 def test_sdk_failures_have_fixed_content_safe_diagnostics(detail: str, reason: str) -> None:
     assert worker._failure_reason(RuntimeError(detail)) == reason
+
+
+@pytest.mark.parametrize(
+    ("error_type", "reason"),
+    [
+        (httpx.ConnectTimeout, "Copilot SDK transport timed out"),
+        (httpx.ReadTimeout, "Copilot SDK transport timed out"),
+        (httpx.WriteTimeout, "Copilot SDK transport timed out"),
+        (httpx.PoolTimeout, "Copilot SDK transport timed out"),
+        (httpx.ProxyError, "Copilot SDK proxy connection failed"),
+        (httpx.LocalProtocolError, "Copilot SDK transport protocol failed"),
+        (httpx.RemoteProtocolError, "Copilot SDK transport protocol failed"),
+        (httpx.ConnectError, "Copilot could not establish the required connection"),
+        (httpx.ReadError, "Copilot could not read from the required connection"),
+        (httpx.WriteError, "Copilot could not write to the required connection"),
+        (httpx.TransportError, "Copilot SDK operation failed"),
+    ],
+)
+def test_sdk_transport_failures_have_fixed_content_safe_diagnostics(
+    error_type: type[httpx.TransportError], reason: str
+) -> None:
+    secret = "fixture-private-token"
+    request = httpx.Request(
+        "POST",
+        f"https://private.example.test/path?token={secret}",
+        headers={"Authorization": f"Bearer {secret}"},
+        content=secret,
+    )
+    error = error_type(f"{secret} {request.url}", request=request)
+    diagnostic = worker._failure_reason(error)
+    assert diagnostic == reason
+    assert secret not in diagnostic
+    assert "private.example.test" not in diagnostic
+
+
+@pytest.mark.parametrize(
+    ("error", "reason"),
+    [
+        (
+            worker.WorkerError("Copilot native inference context is unverified"),
+            "Copilot native inference context is unverified",
+        ),
+        (
+            httpx.ConnectError("certificate fixture-private-token"),
+            "Copilot TLS certificate validation failed",
+        ),
+        (
+            httpx.ProxyError("credential fixture-private-token"),
+            "Copilot authentication was unavailable to the SDK session",
+        ),
+        (
+            httpx.ReadError("model fixture-private-token"),
+            "Copilot could not initialize the requested model",
+        ),
+    ],
+)
+def test_sdk_failure_diagnostic_precedence_is_preserved(error: Exception, reason: str) -> None:
+    assert worker._failure_reason(error) == reason
 
 
 def _request(tmp_path: Path) -> dict[str, Any]:
@@ -60,6 +175,51 @@ def test_request_parser_has_no_trigger_or_semantic_import(tmp_path: Path) -> Non
     value["trigger"] = "invented continuation"
     with pytest.raises(worker.WorkerError, match="unsupported shape"):
         worker._parse_request(json.dumps(value).encode())
+
+
+@pytest.mark.parametrize("effort", ["low", "future-effort"])
+def test_explicit_reasoning_effort_reaches_sdk_resume_options(tmp_path: Path, effort: str) -> None:
+    request = {**_request(tmp_path), "reasoningEffort": effort}
+    parsed = worker._parse_request(json.dumps(request).encode())
+    options = worker._resume_options(parsed, on_event=None, on_permission_request=None)
+    assert options["reasoning_effort"] == effort
+    original = worker._resume_options(_request(tmp_path), on_event=None, on_permission_request=None)
+    assert "reasoning_effort" not in original
+
+
+@pytest.mark.parametrize("effort", [None, "", "bad effort", "x" * 65])
+def test_private_request_refuses_invalid_reasoning_effort(tmp_path: Path, effort: object) -> None:
+    request = {**_request(tmp_path), "reasoningEffort": effort}
+    with pytest.raises(worker.WorkerError, match="invalid fields"):
+        worker._parse_request(json.dumps(request).encode())
+
+
+@pytest.mark.parametrize(
+    "body",
+    [{"reasoning": {"effort": "low", "summary": "auto"}}, {"reasoning_effort": "low"}],
+)
+def test_physical_request_verifies_selected_reasoning_effort(body: dict[str, object]) -> None:
+    request = httpx.Request("POST", "https://api.githubcopilot.com/responses", json=body)
+    assert (
+        worker._managed_request(request, _context(), session_id="session-1", reasoning_effort="low")
+        == request.content
+    )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"opaque",
+        b"{}",
+        b'{"reasoning":{"effort":"high"}}',
+        b'{"reasoning":{"effort":"low"},"reasoning_effort":"low"}',
+        b'{"reasoning":{"effort":"low","effort":"high"}}',
+    ],
+)
+def test_physical_request_refuses_unverified_reasoning_effort(body: bytes) -> None:
+    request = httpx.Request("POST", "https://api.githubcopilot.com/responses", content=body)
+    with pytest.raises(worker.WorkerError, match="reasoning effort"):
+        worker._managed_request(request, _context(), session_id="session-1", reasoning_effort="low")
 
 
 @pytest.mark.parametrize(
@@ -393,7 +553,8 @@ def test_session_metadata_access_requires_strict_managed_route_and_selected_cont
         ("certificate", 1, 0, "model-catalog-tls", []),
         ("catalog-refused", 1, 0, "model-catalog-failed", []),
         ("duplicate-catalog", 1, 0, "model-catalog-failed", []),
-        ("inference-failed", 1, 1, "inference-request-refused", []),
+        ("inference-failed", 1, 1, "inference-transport-failed", []),
+        ("inference-unknown", 1, 1, "inference-request-refused", []),
         ("cancelled", 1, 0, None, [0.5]),
         ("policy-revoked", 1, 0, "managed-policy-unverified", [0.5]),
     ],
@@ -477,6 +638,8 @@ def test_catalogue_recovery_is_bounded_and_never_replays_inference(
                 recorded["inference"] += 1
                 if scenario == "inference-failed":
                     raise httpx.ConnectError("fixture inference connection refusal")
+                if scenario == "inference-unknown":
+                    raise RuntimeError("http transport connection failed")
             return httpx.Response(200, request=outgoing, content=b"{}")
 
     _install_sdk(monkeypatch, client=Client, handler=Handler)
@@ -487,7 +650,19 @@ def test_catalogue_recovery_is_bounded_and_never_replays_inference(
             asyncio.run(invocation)
     else:
         assert asyncio.run(invocation) == (0 if reason is None else 70)
-    complete = json.loads(capsys.readouterr().out.splitlines()[-1])
+    receipts = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    complete = receipts[-1]
+    responses = [event for event in receipts if event["type"] == "ithrl.copilot.response"]
+    assert len(responses) == (
+        inference_calls if scenario not in {"inference-failed", "inference-unknown"} else 0
+    )
+    for response in responses:
+        assert response == {
+            "type": "ithrl.copilot.response",
+            "schema_version": 1,
+            "request_sha256": complete["request_sha256"],
+            "status_code": 200,
+        }
     assert recorded["catalog"] == complete["catalog_requests_started"] == catalog_calls
     assert recorded["inference"] == complete["provider_calls_started"] == inference_calls
     assert recorded["delays"] == delays
@@ -498,7 +673,7 @@ def test_catalogue_recovery_is_bounded_and_never_replays_inference(
             "managed-policy"
             if scenario == "policy-revoked"
             else "inference-request"
-            if scenario == "inference-failed"
+            if scenario in {"inference-failed", "inference-unknown"}
             else "model-catalog"
         )
 
@@ -843,8 +1018,9 @@ def test_sdk_worker_empty_batch_adds_no_messages_and_emits_native_events(
             return Session(options["on_event"])
 
     class Handler:
-        async def send_request(self, request: object, context: object) -> None:
+        async def send_request(self, request: object, context: object) -> httpx.Response:
             recorded["physical_forwards"] = recorded.get("physical_forwards", 0) + 1
+            return httpx.Response(200)
 
     _install_sdk(monkeypatch, client=Client, handler=Handler)
     assert asyncio.run(worker._run_session(Path("/fixture/copilot"), request)) == exit_code

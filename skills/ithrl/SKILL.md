@@ -21,6 +21,7 @@ development builds. The agent using this skill need not be the harness that prod
 | What was repeated or recaptured around compaction? | `ithrl inspect reacquire SESSION --format json` |
 | What remains after a saved reduction, and what was tested? | `ithrl inspect retained CASE --result RESULT --format json` |
 | Which paragraphs are eligible for removal? | `ithrl inspect sections CASE --format json` |
+| Which captured tool output text can I inspect or select? | `ithrl inspect tool CASE --format json` |
 | Which context can be removed while preserving a decision? | Extract a case, then prepare a reduction |
 | Can a text append decrease the selected behavior's match rate? | Extract a case, then configure fuzzing |
 | Does restoring or removing this context change the selected behavior? | Extract a case, then configure `ithrl compare` |
@@ -78,7 +79,7 @@ Operational errors are not behavioral losses. Interpret each workflow's evidence
   the candidate is confirmed.
 - Fuzzing confirms at most one selected decrease in match rate. Keep generation and simplification
   observations separate from fresh confirmation.
-- Comparison concerns the declared direction and complete tested bundle between two frozen
+- Comparison concerns the declared direction and complete intervention between two frozen
   contexts. It establishes neither a search result nor a unique historical cause. A second capture
   may suggest an intervention but cannot replace the shared source for one arm.
 - Passive inspection reports captured fields and their completeness, without establishing current

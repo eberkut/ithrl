@@ -175,6 +175,12 @@ class Observation(BaseModel):
             raise ValueError(
                 "overload replacement evidence requires the structured overload category"
             )
+        if self.attempt_evidence.transport_replacement_safe and (
+            self.outcome is not ObservationOutcome.RUNNER_ERROR
+            or self.error_category
+            != ("timeout" if self.attempt_evidence.termination_reason == "timeout" else "transport")
+        ):
+            raise ValueError("transport replacement evidence requires the transport category")
         return self
 
     @property
@@ -217,8 +223,18 @@ class Observation(BaseModel):
     def allows_fresh_attempt(self, policy: SamplingEligibilityPolicy) -> bool:
         """Apply the frozen policy; this never authorizes replaying an unresolved dispatch."""
 
-        return self.attempt_evidence.automatic_retry_safe or (
-            policy == "safe-provider-overload" and self.safe_provider_overload
+        return self.attempt_evidence.automatic_retry_safe or self.allows_provider_replacement(
+            policy
+        )
+
+    def allows_provider_replacement(self, policy: SamplingEligibilityPolicy) -> bool:
+        """Apply the explicit provider-error policy independently of preaccept exclusions."""
+
+        return (
+            policy in {"safe-provider-overload", "safe-provider-transport"}
+            and self.safe_provider_overload
+        ) or (
+            policy == "safe-provider-transport" and self.attempt_evidence.transport_replacement_safe
         )
 
 
@@ -550,9 +566,8 @@ class SamplingBlockEvidence(_SamplingContract):
             if not self.plan.frozen_at <= observation.recorded_at < self.plan.expires_at:
                 return "stale-observation"
             if not observation.valid:
-                if not item.replaceable and not (
-                    self.plan.procedure.eligibility_policy == "safe-provider-overload"
-                    and observation.safe_provider_overload
+                if not item.replaceable and not observation.allows_provider_replacement(
+                    self.plan.procedure.eligibility_policy
                 ):
                     return "ineligible-exclusion"
                 continue

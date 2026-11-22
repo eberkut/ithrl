@@ -44,7 +44,7 @@ from ithrl.runner.copilot.policy import (
     target_policy,
 )
 from ithrl.runner.copilot.protocol import CopilotProtocolError, CopilotProtocolOutcome, parse_output
-from ithrl.runner.copilot.protocol.parser import physical_forward_count
+from ithrl.runner.copilot.protocol.parser import parse_output_free_timeout, physical_forward_count
 from ithrl.runner.runtime import (
     PROCESS_CANCELLATION_GRACE_SECONDS,
     NativeOutputStoreError,
@@ -100,6 +100,8 @@ class CopilotRunner:
         self._target = target
         self._worker_source = Path(__file__).with_name("worker.py")
         self._worker_digest = program_digest(self._worker_source)
+        self._materializer_source = Path(__file__).with_name("materialize.py")
+        self._materializer_digest = program_digest(self._materializer_source)
         self._state_parent = state_root
         self._output_store = ProtectedOutputStore.open(absolute_output_root)
         self._source_paths = sources
@@ -117,6 +119,7 @@ class CopilotRunner:
             "capability": self._capability.digest,
             "configuration": self._configuration.public_digest,
             "materialization": self._capability.reconstruction_method,
+            "materializer": self._materializer_digest,
             "policy": POLICY_VERSION,
             "runtime": self._runtime.identity,
             "target": self._target,
@@ -170,6 +173,7 @@ class CopilotRunner:
                     session_id=materialized.session_id,
                     system_message=materialized.system_message,
                     model=model,
+                    reasoning_effort=attempt.execution_plan.reasoning_effort,
                     target=self._target,
                     worker_source=self._worker_source,
                     worker_digest=self._worker_digest,
@@ -200,6 +204,8 @@ class CopilotRunner:
                 error.native_output,
                 output_store=self._output_store,
                 reason_code=error.reason_code,
+                native_session=materialized.native_session,
+                system_message=materialized.system_message,
             ) from error
         except CopilotIsolationError as error:
             raise _preparation_error(attempt, str(error), self._capability) from error
@@ -219,11 +225,14 @@ class CopilotRunner:
                 expected=self._target,
                 native_session=materialized.native_session,
                 system_message=materialized.system_message,
+                expected_model=attempt.execution_plan.model_requested,
             )
         except (CopilotProtocolError, NativeOutputStoreError) as error:
             raise _runtime_error(
                 attempt,
-                RunnerErrorCode.PROTOCOL,
+                RunnerErrorCode.TRANSPORT
+                if isinstance(error, CopilotProtocolError) and not error.behavior_output_observed
+                else RunnerErrorCode.PROTOCOL,
                 "Copilot runner output could not be validated",
                 execution.report,
                 execution.native_output,
@@ -231,6 +240,11 @@ class CopilotRunner:
                 reason_code=error.code
                 if isinstance(error, CopilotProtocolError)
                 else "native-output-unavailable",
+                behavior_output_observed=(
+                    error.behavior_output_observed
+                    if isinstance(error, CopilotProtocolError)
+                    else True
+                ),
             ) from error
 
         _validate_completion(attempt, self._target, execution.returncode, execution.report, outcome)
@@ -241,13 +255,16 @@ class CopilotRunner:
     def _validate_attempt(self, attempt: PreparedAttempt) -> None:
         try:
             self._runtime.assert_unchanged()
-            worker_unchanged = program_digest(self._worker_source) == self._worker_digest
+            implementation_unchanged = (
+                program_digest(self._worker_source) == self._worker_digest
+                and program_digest(self._materializer_source) == self._materializer_digest
+            )
         except CopilotIsolationError as error:
             raise RunnerError(
                 RunnerErrorCode.PREPARATION,
                 "Copilot runner inputs changed after capability detection",
             ) from error
-        if not worker_unchanged:
+        if not implementation_unchanged:
             raise RunnerError(
                 RunnerErrorCode.PREPARATION,
                 "Copilot runner inputs changed after capability detection",
@@ -390,11 +407,34 @@ def _runtime_error(
     *,
     output_store: ProtectedOutputStore | None = None,
     reason_code: str | None = None,
+    behavior_output_observed: bool = True,
+    native_session: bytes | None = None,
+    system_message: str | None = None,
 ) -> RunnerError:
     physical_calls = None
     if output_store is not None and native_output is not None:
         with suppress(NativeOutputStoreError):
-            physical_calls = physical_forward_count(output_store.read(native_output).stdout)
+            protected = output_store.read(native_output)
+            physical_calls = physical_forward_count(protected.stdout)
+            if (
+                code is RunnerErrorCode.TIMEOUT
+                and native_session is not None
+                and report.cleanup_outcome == "verified"
+                and report.process_outcome == "terminated"
+                and report.residual_disposable_state_bytes == 0
+                and report.residual_disposable_state_entries == 0
+                and report.source_store_effect == "unchanged"
+                and report.original_workspace_effect == "unchanged"
+                and parse_output_free_timeout(
+                    protected.stdout,
+                    expected=attempt.target.type,
+                    native_session=native_session,
+                    system_message=system_message,
+                    expected_model=attempt.execution_plan.model_requested,
+                )
+            ):
+                reason_code = "inference-output-free-timeout"
+                behavior_output_observed = False
     started = (
         report.process_outcome != "not-started" if physical_calls is None else bool(physical_calls)
     )
@@ -402,6 +442,7 @@ def _runtime_error(
         code,
         message,
         reason_code=reason_code,
+        behavior_output_observed=behavior_output_observed,
         provider_acceptance_state=(
             ProviderAcceptanceState.UNKNOWN if started else ProviderAcceptanceState.NOT_STARTED
         ),

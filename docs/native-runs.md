@@ -66,10 +66,9 @@ You need:
   configuration and the observation store.
 
 By default, the model and provider come from captured evidence and supported local harness
-configuration. A [comparison](comparison.md#choose-a-prospective-codex-profile) can declare a
-prospective Codex execution profile; there is no general `--model` option. Returned actions are
-observed and denied; they never execute. Tool-side network access, hosted tools and MCP are
-disabled for the current runner profiles.
+configuration. A comparison can [select execution settings](comparison.md#choose-execution-settings)
+without rewriting captured evidence. Returned actions are observed and denied; they never execute.
+Tool-side network access, hosted tools and MCP are disabled for the current runner profiles.
 
 ### Codex tool-output limits
 
@@ -127,13 +126,16 @@ adapter reads event schema `1`. Both adapters preserve unknown records without i
 Local operation, permission, isolation and action-denial checks plus calibration determine whether
 a run can proceed. Public support also requires a qualified live workflow for that profile; see
 [supported inputs](https://github.com/eberkut/ithrl/blob/main/README.md#supported-inputs). Versions
-are recorded, not allowlisted. After a harness or configuration change, export a new receipt and
-prepare a new experiment; a changed digest blocks old pinned plans and incompatible saved runs.
+are recorded, not allowlisted. After changing the harness or its configuration, repeat the selected
+workflow's capability checks and create a new receipt or profile. Changed identities invalidate old
+pinned plans and incompatible saved runs.
 
-The [measurements](measurements.md) and
-[worked comparisons](research/comparative-debugging.md) record tested profiles, outcomes and costs.
-Other releases go through the same local compatibility checks. Request and wall-time limits are
-administrative ceilings; use those results to estimate usage for the recorded workloads.
+The [measurements](measurements.md), [bundle comparisons](research/comparative-debugging.md) and
+[tool output comparisons](research/tool-output-interventions.md) record tested profiles, outcomes
+and costs. Tool output text qualification covers final-response targets; denied-shell bundle
+comparisons retain their separate scope. Other releases go through the same local compatibility
+checks. Request and wall-time limits are administrative ceilings; use those results to estimate
+usage for the recorded workloads.
 
 ### Codex reconstruction
 
@@ -154,15 +156,21 @@ warning after verification stops the attempt.
 The Codex final-response profile appends a fixed developer instruction declaring a context-only
 continuation: tools are unavailable, the response must use the restored context, and missing
 evidence must be stated. Captured developer instructions remain its prefix. The default
-reconstruction preserves captured history and the decision input. A
-[prospective Codex profile](comparison.md#choose-a-prospective-codex-profile) can declare omission
-of historical reasoning records; source evidence remains unchanged. The runner fingerprint binds
-the continuation instruction and replay selection.
+reconstruction preserves captured history and the decision input. When the selected model or
+provider differs from the capture, reconstruction omits historical reasoning records, including
+summaries, from both inputs. The profile records this policy and
+reports `reasoning_omitted`; source evidence and the fixed trigger remain unchanged. Interpret the
+comparison under that resolved history policy. The runner fingerprint binds the continuation
+instruction and resolved settings.
 
 ### Copilot reconstruction
 
-Copilot restores the selected session prefix through its installed CLI and SDK. Final-response
-profiles support eligible prior-user text edits. The shell-action profile keeps the native `bash`
-request visible while denying execution; it supports whole-record removal, not text edits. The
+Copilot restores the selected session prefix through its installed CLI and SDK. Eligible prior-user
+appends and paragraph removals require final-response targets. Reconstruction also implements
+whole-record removal and comparison's
+[source-bound tool output text spans](architecture.md#source-bound-tool-output-text). The
+shell-action profile keeps the native `bash` request visible while denying execution. The
+[supported-inputs table](https://github.com/eberkut/ithrl/blob/main/README.md#supported-inputs) and
+[worked comparisons](research/comparative-debugging.md) define qualified experimental use. The
 [compatibility checks](#compatibility-and-measurements) apply to the CLI, SDK and effective policy
 together; a working SDK import alone does not establish a usable native profile.

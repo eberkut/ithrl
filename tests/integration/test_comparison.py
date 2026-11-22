@@ -12,7 +12,9 @@ from typing import Any, Literal, cast, override
 
 import pytest
 
-from ithrl.behavior import FinalResponseTarget
+from ithrl.adapters import enumerate_decisions
+from ithrl.adapters.registry import parse_session_bytes
+from ithrl.behavior import FinalResponseTarget, ShellActionTarget
 from ithrl.case import CaseEvidence
 from ithrl.cli.comparison_output import result_report
 from ithrl.comparison import engine as comparison_engine
@@ -47,6 +49,7 @@ from ithrl.experiment import (
     SamplingArmTarget,
     StructuralOracleConfig,
 )
+from ithrl.extraction import extract_decision
 from ithrl.mutation import ContextSelection, MutationError, TextAppend, TextMutation
 from ithrl.observations import ObservationStore, SamplingBlockEvidence, SamplingBudgetAllowance
 from ithrl.run_state import RunStateError, SampledRunStateFile, SamplingBudgetApproval
@@ -58,11 +61,15 @@ from ithrl.runner import (
     RunAccounting,
     RunnerRegistry,
     RunResult,
+    ToolCall,
 )
 from ithrl.runner.contracts import RunnerError, RunnerErrorCode
 from ithrl.runner.fake import FakeRunner
 from ithrl.synthetic import extract_inference
+from ithrl.tool_output_text import ToolOutputTextSpanRemoval, remove_tool_output_text_span
 from ithrl.workflow import PreparedExperiment, prepare_experiment
+from native_support.codex import _tool_output_text_records as codex_tool_output_text_records
+from native_support.copilot import _tool_output_text_records as copilot_tool_output_text_records
 
 FIXTURE = Path(__file__).parents[1] / "fixtures/synthetic-trace.json"
 
@@ -212,15 +219,21 @@ def _fixture(
     freshness_seconds: int = 600,
     pacing_seconds: int = 0,
     runner: CountingRunner | None = None,
+    evidence: CaseEvidence | None = None,
+    selection_pair: tuple[ContextSelection, ContextSelection] | None = None,
+    target: FinalResponseTarget | ShellActionTarget | None = None,
 ) -> ComparisonFixture:
-    evidence = extract_inference(
-        FIXTURE, inference_call_id="synthetic-ac-001", case_path=tmp_path / "case"
-    ).load()
+    evidence = (
+        evidence
+        or extract_inference(
+            FIXTURE, inference_call_id="synthetic-ac-001", case_path=tmp_path / "case"
+        ).load()
+    )
     runner = runner or CountingRunner()
     profile = runner.capability_profile
     provider_calls = profile.provider_calls_per_attempt
     experiment = SampledExperimentDefinition(
-        target=FinalResponseTarget(text_equals="BLUE"),
+        target=target or FinalResponseTarget(text_equals="BLUE"),
         oracle=StructuralOracleConfig(),
         runner=NativeRunnerConfig(
             type=cast(Literal["codex", "copilot"], profile.runner_type),
@@ -244,26 +257,15 @@ def _fixture(
         resource_limits=ResourceLimits(max_provider_calls=provider_calls, max_wall_time_seconds=1),
     )
     nodes = {node.path: node.id for node in evidence.context.nodes}
-    absent = (nodes["/input/0"],) + ((nodes["/input/1"],) if both_nonfull else ())
-    present = (nodes["/input/1"],) if both_nonfull or indistinguishable else ()
-    if indistinguishable:
-        absent = ()
-    reference, candidate = (absent, present) if objective == "repair" else (present, absent)
-    reference_selection = ContextSelection(removed_context_ids=reference)
-    candidate_selection = ContextSelection(removed_context_ids=candidate)
-    if append:
-        reference_selection = ContextSelection()
-        candidate_selection = ContextSelection(
-            mutation=TextMutation(
-                edits=(
-                    TextAppend(
-                        context_id=nodes["/input/0"],
-                        content_index=0,
-                        original_text_digest=content_digest("A"),
-                        text="\nAdditional context.",
-                    ),
-                )
-            )
+    if selection_pair is not None:
+        reference_selection, candidate_selection = selection_pair
+    else:
+        reference_selection, candidate_selection = _selections(
+            nodes,
+            objective=objective,
+            both_nonfull=both_nonfull,
+            indistinguishable=indistinguishable,
+            append=append,
         )
     one = SamplingArmTarget(required_valid=1, max_attempts=1)
     seven = SamplingArmTarget(required_valid=7, max_attempts=7)
@@ -320,6 +322,219 @@ def _fixture(
         ),
     )
     return ComparisonFixture(evidence, prepared, configuration, state, store, runner, admission)
+
+
+def _selections(
+    nodes: dict[str | None, str],
+    *,
+    objective: Literal["repair", "degradation"],
+    both_nonfull: bool,
+    indistinguishable: bool,
+    append: bool,
+) -> tuple[ContextSelection, ContextSelection]:
+    absent = (nodes["/input/0"],) + ((nodes["/input/1"],) if both_nonfull else ())
+    present = (nodes["/input/1"],) if both_nonfull or indistinguishable else ()
+    if indistinguishable:
+        absent = ()
+    reference, candidate = (absent, present) if objective == "repair" else (present, absent)
+    reference_selection = ContextSelection(removed_context_ids=reference)
+    candidate_selection = ContextSelection(removed_context_ids=candidate)
+    if append:
+        reference_selection = ContextSelection()
+        candidate_selection = ContextSelection(
+            mutation=TextMutation(
+                edits=(
+                    TextAppend(
+                        context_id=nodes["/input/0"],
+                        content_index=0,
+                        original_text_digest=content_digest("A"),
+                        text="\nAdditional context.",
+                    ),
+                )
+            )
+        )
+    return reference_selection, candidate_selection
+
+
+_TOOL_OUTPUT_TEXT = 'Keep é🙂.\r\n{"recipe":"DELETE-ME\\nexact"}\r\nRetain diagnostics.'
+
+
+class ToolOutputTextCountingRunner(CountingRunner):
+    """Observe a validated source string without invoking a native materializer."""
+
+    def __init__(self, harness: Literal["codex", "copilot"]) -> None:
+        super().__init__()
+        self.harness = harness
+
+    @property
+    @override
+    def capability_profile(self) -> CapabilityProfile:
+        return CapabilityProfile.model_validate(
+            {
+                **super().capability_profile.model_dump(),
+                "harness": self.harness,
+                "source_schema": "codex-rollout-jsonl"
+                if self.harness == "codex"
+                else "copilot-events-jsonl",
+                "supported_capture_types": ("logical-session",),
+                "supported_materializations": ("source-backed",),
+                "supported_context_operations": (
+                    "dependency-closed-removal",
+                    "remove-tool-output-text-span",
+                ),
+            }
+        )
+
+    @override
+    async def run(
+        self, attempt: PreparedAttempt, *, runtime_deadline: float | None = None
+    ) -> RunResult:
+        self.attempts.append(attempt)
+        text = attempt.evidence.editable_tool_output_text()[0].original_text
+        for edit in attempt.candidate.mutation.edits:
+            assert isinstance(edit, ToolOutputTextSpanRemoval)
+            descriptor, original = attempt.evidence.validate_tool_output_text_span(edit)
+            text = remove_tool_output_text_span(original.original_text, descriptor, edit)
+        matched = "DELETE-ME" in text
+        calls = (
+            (ToolCall(name="bash", arguments={"command": "pwd"}),)
+            if (matched and self.harness == "copilot")
+            else ()
+        )
+        return RunResult(
+            attempt_id=attempt.attempt_id,
+            effective_policy_digest=attempt.safety_policy.digest,
+            final_text="BLUE" if matched and self.harness == "codex" else "No match.",
+            tool_calls=calls,
+            provider="fake",
+            model_requested=attempt.execution_plan.model_requested,
+            model_returned=attempt.execution_plan.model_requested,
+            accounting=RunAccounting(actions_requested=len(calls), actions_denied=len(calls)),
+        )
+
+
+def _tool_output_text_fixture(
+    tmp_path: Path,
+    *,
+    harness: Literal["codex", "copilot"] = "codex",
+    common_removal: bool = False,
+) -> ComparisonFixture:
+    """Sanitized native evidence with one prior tool field and a fixed later input."""
+
+    if harness == "codex":
+        records = codex_tool_output_text_records(_TOOL_OUTPUT_TEXT)
+        records[-1]["payload"]["last_agent_message"] = "BLUE"
+    else:
+        records = copilot_tool_output_text_records(_TOOL_OUTPUT_TEXT, "shell-action")
+        records[5]["data"]["detailedContent"] = "Display-only unchanged."
+    session = parse_session_bytes("\n".join(json.dumps(r) for r in records).encode())
+    decision = enumerate_decisions(session)[-1]
+    evidence = extract_decision(
+        session,
+        decision_id=decision.decision_id,
+        target_id=decision.targets[0].target_id,
+        case_path=tmp_path / "case",
+    ).load()
+    field = evidence.tool_output_text_fields()[0]
+    start = _TOOL_OUTPUT_TEXT.index("DELETE-ME")
+    edit = evidence.tool_output_text_removal(
+        field.field_id, start=start, end=start + len("DELETE-ME")
+    )
+    removed = ()
+    if common_removal:
+        removable = evidence.editable_text()[0]
+        # The common omission must leave the edited call/result bundle retained.
+        removed = (removable.context_id,)
+    return _fixture(
+        tmp_path,
+        objective="degradation",
+        evidence=evidence,
+        runner=ToolOutputTextCountingRunner(harness),
+        selection_pair=(
+            ContextSelection(removed_context_ids=removed),
+            ContextSelection(removed_context_ids=removed, mutation=TextMutation(edits=(edit,))),
+        ),
+        target=FinalResponseTarget(text_equals="BLUE")
+        if harness == "codex"
+        else ShellActionTarget(tool_name_equals="bash", command_equals="pwd"),
+    )
+
+
+@pytest.mark.parametrize("harness", ["codex", "copilot"])
+@pytest.mark.parametrize("common_removal", [False, True])
+def test_tool_span_comparison_persists_calibration_confirmation_and_terminal_resume(
+    tmp_path: Path, harness: Literal["codex", "copilot"], common_removal: bool
+) -> None:
+    fixture = _tool_output_text_fixture(tmp_path, harness=harness, common_removal=common_removal)
+    before = fixture.evidence.digest, tuple(a.content for a in fixture.evidence.source_artifacts)
+    pilot = fixture.run(calibration_only=True)
+    assert pilot.calibration is not None
+    assert pilot.calibration.complete
+    assert pilot.confirmation is None
+    assert len(fixture.runner.attempts) == 2
+    result = fixture.run()
+    assert result.outcome is ComparisonOutcome.CONFIRMED_DEGRADATION
+    assert result.confirmation is not None
+    assert len(result.confirmation.attempts) == 14
+    path = write_comparison_result(tmp_path / "result.json", result)
+    loaded = load_comparison_result(path, case_evidence=fixture.evidence)
+    assert loaded == result
+    assert fixture.run().blocks == result.blocks
+    assert len(fixture.runner.attempts) == 16
+    assert (
+        fixture.evidence.digest,
+        tuple(a.content for a in fixture.evidence.source_artifacts),
+    ) == before
+
+
+@pytest.mark.parametrize("harness", ["codex", "copilot"])
+def test_tool_span_comparison_refuses_different_record_partitions_before_dispatch(
+    tmp_path: Path, harness: Literal["codex", "copilot"]
+) -> None:
+    fixture = _tool_output_text_fixture(tmp_path, harness=harness)
+    removed = fixture.evidence.editable_text()[0].context_id
+    candidate = fixture.configuration.candidate.model_copy(
+        update={"removed_context_ids": (removed,)}
+    )
+    configuration = ComparisonConfiguration.model_validate(
+        {
+            **fixture.configuration.model_dump(),
+            "candidate": candidate,
+        }
+    )
+    with pytest.raises(ValueError, match="identical record partitions"):
+        prepare_comparison(fixture.evidence, fixture.prepared, configuration)
+    assert fixture.runner.attempts == []
+
+
+@pytest.mark.parametrize("harness", ["codex", "copilot"])
+def test_tool_span_comparison_refuses_tampered_source_binding_and_saved_results(
+    tmp_path: Path, harness: Literal["codex", "copilot"]
+) -> None:
+    fixture = _tool_output_text_fixture(tmp_path, harness=harness)
+    edit = fixture.configuration.candidate.mutation.edits[0]
+    assert isinstance(edit, ToolOutputTextSpanRemoval)
+    changed = edit.model_copy(update={"removed_text_digest": "f" * 64})
+    candidate = fixture.configuration.candidate.model_copy(
+        update={"mutation": TextMutation(edits=(changed,))}
+    )
+    configuration = ComparisonConfiguration.model_validate(
+        {
+            **fixture.configuration.model_dump(),
+            "candidate": candidate,
+        }
+    )
+    with pytest.raises(MutationError, match="original field and span"):
+        prepare_comparison(fixture.evidence, fixture.prepared, configuration)
+    assert fixture.runner.attempts == []
+    result = fixture.run()
+    path = write_comparison_result(tmp_path / "tampered-result.json", result)
+    raw = path.read_text()
+    assert edit.removed_text_digest in raw
+    path.write_text(raw.replace(edit.removed_text_digest, "f" * 64))
+    with pytest.raises(ValueError, match="comparison"):
+        load_comparison_result(path, case_evidence=fixture.evidence)
+    assert len(fixture.runner.attempts) == 16
 
 
 @pytest.mark.parametrize("objective", ["repair", "degradation"])
@@ -481,7 +696,7 @@ def test_declared_replay_mismatch_refuses_before_candidate_admission(
     fixture = _fixture(tmp_path)
     replay = CodexReplayConfig(provider="openai", model="declared-model")
     configuration = fixture.configuration.model_copy(
-        update={"codex_replay": replay if declared else None}
+        update={"model": replay.model} if declared else {}
     )
     prepared = fixture.prepared
     if not declared:
@@ -490,7 +705,7 @@ def test_declared_replay_mismatch_refuses_before_candidate_admission(
             execution_plan=prepared.execution_plan.model_copy(update={"codex_replay": replay}),
         )
     admitted = len(fixture.runner.admissions)
-    with pytest.raises(ValueError, match="replay differs"):
+    with pytest.raises(ValueError, match=r"model differs|replay differs"):
         prepare_comparison(fixture.evidence, prepared, configuration)
     assert len(fixture.runner.admissions) == admitted
     assert fixture.runner.attempts == []

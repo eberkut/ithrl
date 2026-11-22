@@ -59,18 +59,50 @@ def _sampled_experiment() -> SampledExperimentDefinition:
     )
 
 
-def test_codex_replay_round_trips_and_binds_execution_selection() -> None:
+def test_provider_round_trips_and_binds_execution_selection() -> None:
     original = _sampled_experiment()
-    replay = CodexReplayConfig(provider="replay-provider", model="replay-model")
     experiment = original.model_copy(
-        update={"runner": original.runner.model_copy(update={"codex_replay": replay})}
+        update={"runner": original.runner.model_copy(update={"provider": "other-provider"})}
     )
     restored = parse_experiment_toml(experiment.to_toml())
     assert restored == experiment
     assert restored.digest != original.digest
     assert "codex_replay" not in original.runner.model_dump()
-    with pytest.raises(ValidationError, match="Codex replay requires"):
-        NativeRunnerConfig(type="copilot", required_capability_digest="a" * 64, codex_replay=replay)
+    with pytest.raises(ValidationError, match="Extra inputs"):
+        NativeRunnerConfig.model_validate(
+            {"type": "codex", "required_capability_digest": "a" * 64, "codex_replay": {}}
+        )
+
+
+@pytest.mark.parametrize("harness", ["codex", "copilot"])
+@pytest.mark.parametrize(
+    ("field", "value"), [("model", "prospective-model"), ("reasoning_effort", "low")]
+)
+def test_native_execution_setting_round_trips_and_changes_identity(
+    harness: str, field: str, value: str
+) -> None:
+    original = _sampled_experiment()
+    runner = NativeRunnerConfig.model_validate(
+        {"type": harness, "required_capability_digest": "a" * 64, field: value}
+    )
+    experiment = original.model_copy(update={"runner": runner})
+    assert parse_experiment_toml(experiment.to_toml()) == experiment
+    assert experiment.digest != original.digest
+    assert field not in original.runner.model_dump()
+
+
+@pytest.mark.parametrize("model", ["", "bad model", "bad\nmodel", "x" * 257])
+def test_native_model_requires_a_bounded_identifier(model: str) -> None:
+    with pytest.raises(ValidationError):
+        NativeRunnerConfig(type="copilot", required_capability_digest="a" * 64, model=model)
+
+
+@pytest.mark.parametrize("effort", ["", "bad effort", "bad\neffort", "x" * 65])
+def test_reasoning_effort_requires_a_bounded_identifier(effort: str) -> None:
+    with pytest.raises(ValidationError):
+        NativeRunnerConfig(
+            type="copilot", required_capability_digest="a" * 64, reasoning_effort=effort
+        )
 
 
 @pytest.mark.parametrize(

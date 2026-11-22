@@ -26,6 +26,7 @@ from ithrl.experiment import (
     SamplingArmTarget,
 )
 from ithrl.measurement import RunnerExecutionError, observe_once
+from ithrl.mutation import MutationError, TextMutation
 from ithrl.observations import (
     Observation,
     ObservationRole,
@@ -52,6 +53,7 @@ from ithrl.runner import (
 )
 from ithrl.sampling import collect_sampling_block
 from ithrl.synthetic import extract_inference
+from ithrl.tool_output_text import describe_tool_output_text
 from ithrl.workflow import PreparedExperiment, prepare_experiment
 
 FIXTURE = Path(__file__).parents[1] / "fixtures/synthetic-trace.json"
@@ -92,29 +94,41 @@ class SequenceRunner:
         outcome = self.outcomes[len(self.calls) - 1]
         if isinstance(outcome, RunnerErrorCode):
             overload = outcome is RunnerErrorCode.PROVIDER_OVERLOADED
+            transport = outcome is RunnerErrorCode.TRANSPORT
+            timeout = outcome is RunnerErrorCode.TIMEOUT
+            replacement = overload or transport or timeout
             raise RunnerError(
                 outcome,
                 "sanitized synthetic runner failure",
+                reason_code=(
+                    "inference-output-free-timeout"
+                    if timeout
+                    else "inference-transport-failed"
+                    if transport
+                    else None
+                ),
                 provider_acceptance_state=(
                     ProviderAcceptanceState.UNKNOWN
-                    if overload
+                    if replacement
                     else ProviderAcceptanceState.NOT_STARTED
                 ),
                 accounting=RunAccounting(
-                    provider_calls_started=int(overload),
-                    native_output_bytes=100 if overload else 0,
-                    process_outcome="exited" if overload else "not-started",
-                    cleanup_outcome="verified" if overload else "not-required",
+                    provider_calls_started=int(replacement),
+                    provider_connections_started=int(replacement),
+                    native_output_bytes=100 if replacement else 0,
+                    process_outcome="exited" if replacement else "not-started",
+                    cleanup_outcome="verified" if replacement else "not-required",
                 ),
                 native_output=NativeOutputReference(
                     artifact_id="synthetic-overload",
                     sha256="a" * 64,
                     media_type="application/json",
                     size_bytes=100,
+                    complete=not timeout,
                 )
-                if overload
+                if replacement
                 else None,
-                behavior_output_observed=not overload,
+                behavior_output_observed=not replacement,
                 model_requested=attempt.execution_plan.model_requested,
                 provider=_PROVIDER,
                 endpoint=_ENDPOINT,
@@ -165,7 +179,7 @@ def _prepared(
     max_attempts: int = 2,
     freshness_seconds: int = 600,
     eligibility_policy: Literal[
-        "independent-safe-preaccept-only", "safe-provider-overload"
+        "independent-safe-preaccept-only", "safe-provider-overload", "safe-provider-transport"
     ] = "independent-safe-preaccept-only",
     calibration_max_attempts: int = 1,
 ) -> tuple[CaseEvidence, PreparedExperiment, SequenceRunner, tuple[str, ...]]:
@@ -195,7 +209,9 @@ def _prepared(
         target=deterministic.target,
         oracle=deterministic.oracle,
         runner=NativeRunnerConfig(
-            type="codex", required_capability_digest=runner.capability_profile.digest
+            type="codex",
+            required_capability_digest=runner.capability_profile.digest,
+            provider=_PROVIDER,
         ),
         calibration=SampledCalibrationPhase(
             required_valid=1, minimum_matches=1, max_attempts=calibration_max_attempts
@@ -350,6 +366,42 @@ async def _collect(
             clock=clock,
             **kwargs,
         )
+
+
+def test_tool_span_is_refused_outside_comparison_before_dispatch(tmp_path: Path) -> None:
+    now = datetime.now(UTC)
+    case, prepared, runner, removed = _prepared(tmp_path, outcomes=(True, True))
+    state_file, store = _run_state(tmp_path, case, prepared, now=now)
+    plan = _plan(case, prepared, removed, now=now, required_valid=1, max_attempts=1, seed=19)
+    node = case.context.by_id[removed[0]]
+    field = describe_tool_output_text(
+        case_digest=case.digest,
+        context_id=node.id,
+        context_digest=node.digest,
+        field_path="/output",
+        text="synthetic diagnostic",
+    )
+    mutation = TextMutation(edits=(field.removal("synthetic diagnostic", start=0, end=9),))
+
+    with pytest.raises(MutationError, match="explicit context comparison"):
+        asyncio.run(
+            _collect(
+                case,
+                prepared,
+                removed,
+                plan,
+                state_file,
+                store,
+                MutableClock(now),
+                mutation=mutation,
+            )
+        )
+
+    assert runner.calls == []
+    with state_file.acquire_lock(store):
+        state = state_file.load(store)
+    assert state.pending is None
+    assert state.blocks == ()
 
 
 def test_collects_seeded_two_arm_block_and_skips_finished_arm_slots(tmp_path: Path) -> None:
@@ -521,12 +573,17 @@ def test_safe_preaccept_failure_without_verifier_refuses_replacement(tmp_path: P
 
 @pytest.mark.parametrize("role", ["search", "confirmation"])
 @pytest.mark.parametrize("seed", [3, 9])
-@pytest.mark.parametrize("policy", ["independent-safe-preaccept-only", "safe-provider-overload"])
+@pytest.mark.parametrize(
+    "policy",
+    ["independent-safe-preaccept-only", "safe-provider-overload", "safe-provider-transport"],
+)
 def test_overload_replacement_is_frozen_bounded_and_keeps_unknown_charge(
     tmp_path: Path,
     role: Literal["search", "confirmation"],
     seed: int,
-    policy: Literal["independent-safe-preaccept-only", "safe-provider-overload"],
+    policy: Literal[
+        "independent-safe-preaccept-only", "safe-provider-overload", "safe-provider-transport"
+    ],
 ) -> None:
     now = datetime.now(UTC)
     case, prepared, runner, removed = _prepared(
@@ -565,12 +622,66 @@ def test_overload_replacement_is_frozen_bounded_and_keeps_unknown_charge(
         assert len(runner.calls) == 3
 
 
-def test_overload_replacements_exhaust_existing_arm_slots(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "policy",
+    ["independent-safe-preaccept-only", "safe-provider-overload", "safe-provider-transport"],
+)
+@pytest.mark.parametrize("error", [RunnerErrorCode.TRANSPORT, RunnerErrorCode.TIMEOUT])
+def test_transport_failure_keeps_prior_valid_sample_and_uses_only_frozen_spares(
+    tmp_path: Path,
+    error: RunnerErrorCode,
+    policy: Literal[
+        "independent-safe-preaccept-only", "safe-provider-overload", "safe-provider-transport"
+    ],
+) -> None:
     now = datetime.now(UTC)
     case, prepared, runner, removed = _prepared(
         tmp_path,
-        outcomes=(RunnerErrorCode.PROVIDER_OVERLOADED,) * 4,
-        eligibility_policy="safe-provider-overload",
+        outcomes=(True, error, True),
+        required_valid=1,
+        max_attempts=2,
+        eligibility_policy=policy,
+    )
+    state_file, store = _run_state(tmp_path, case, prepared, now=now)
+    plan = _plan(case, prepared, removed, now=now, required_valid=1, max_attempts=2, seed=3)
+    clock = MutableClock(now)
+    result = asyncio.run(_collect(case, prepared, removed, plan, state_file, store, clock))
+    first = result.evidence.attempts[0].observation
+    failed = result.evidence.attempts[1].observation
+    assert first.valid
+    assert failed.attempt_evidence.transport_replacement_safe
+    assert failed.target_observed is None
+    assert failed.attempt_evidence.acceptance_unknown
+    assert failed.attempt_evidence.provider_call_charge(1) == 1
+    if policy == "safe-provider-transport":
+        assert result.complete
+        assert result.evidence.eligible
+        assert len(runner.calls) == len(set(result.evidence.attempt_ids)) == 3
+        assert result.evidence.original_counts.valid == result.evidence.candidate_counts.valid == 1
+        assert result.usage.charged_provider_calls == 3
+    else:
+        assert result.stop_reason == "ineligible-exclusion"
+        assert not result.complete
+        assert len(runner.calls) == 2
+    call_count = len(runner.calls)
+    resumed = asyncio.run(_collect(case, prepared, removed, plan, state_file, store, clock))
+    if policy == "safe-provider-transport":
+        assert resumed == result
+    else:
+        assert resumed.stop_reason == "ineligible-prior-block"
+    assert resumed.evidence.attempts[0].observation == first
+    assert len(runner.calls) == call_count
+
+
+@pytest.mark.parametrize("error", [RunnerErrorCode.PROVIDER_OVERLOADED, RunnerErrorCode.TRANSPORT])
+def test_provider_replacements_exhaust_existing_arm_slots(
+    tmp_path: Path, error: RunnerErrorCode
+) -> None:
+    now = datetime.now(UTC)
+    case, prepared, runner, removed = _prepared(
+        tmp_path,
+        outcomes=(error,) * 4,
+        eligibility_policy="safe-provider-transport",
     )
     state_file, store = _run_state(tmp_path, case, prepared, now=now)
     plan = _plan(case, prepared, removed, now=now, required_valid=1, max_attempts=2, seed=3)
@@ -585,23 +696,32 @@ def test_overload_replacements_exhaust_existing_arm_slots(tmp_path: Path) -> Non
     assert result.evidence.original_counts.valid == result.evidence.candidate_counts.valid == 0
 
 
-@pytest.mark.parametrize("policy", ["independent-safe-preaccept-only", "safe-provider-overload"])
+@pytest.mark.parametrize(
+    "policy",
+    ["independent-safe-preaccept-only", "safe-provider-overload", "safe-provider-transport"],
+)
+@pytest.mark.parametrize("error", [RunnerErrorCode.PROVIDER_OVERLOADED, RunnerErrorCode.TIMEOUT])
 def test_calibration_overload_policy_is_preserved_in_snapshot(
     tmp_path: Path,
-    policy: Literal["independent-safe-preaccept-only", "safe-provider-overload"],
+    error: RunnerErrorCode,
+    policy: Literal[
+        "independent-safe-preaccept-only", "safe-provider-overload", "safe-provider-transport"
+    ],
 ) -> None:
     from ithrl.calibration import run_sampled_calibration, save_sampled_calibration_result
     from ithrl.case import CaseWorkspace
 
     case, prepared, runner, _ = _prepared(
         tmp_path,
-        outcomes=(RunnerErrorCode.PROVIDER_OVERLOADED, True),
+        outcomes=(error, True),
         eligibility_policy=policy,
         calibration_max_attempts=2,
     )
     store = ObservationStore(tmp_path / "calibration.sqlite")
     result = run_sampled_calibration(evidence=case, prepared=prepared, store=store)
-    if policy == "safe-provider-overload":
+    if policy == "safe-provider-transport" or (
+        policy == "safe-provider-overload" and error is RunnerErrorCode.PROVIDER_OVERLOADED
+    ):
         assert result.outcome == "measurable"
         assert result.valid_samples == result.matches == 1
         assert len(runner.calls) == 2

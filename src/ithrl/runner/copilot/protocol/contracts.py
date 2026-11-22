@@ -23,6 +23,7 @@ SUPPORTED_EVENTS = frozenset(
     {
         "ithrl.copilot.input",
         "ithrl.copilot.forward",
+        "ithrl.copilot.response",
         "ithrl.copilot.complete",
         "session.resume",
         "sandbox.decision",
@@ -73,9 +74,10 @@ STARTUP_EVENTS = frozenset(
 class CopilotProtocolError(ValueError):
     """A content-safe refusal to interpret Copilot CLI output."""
 
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(self, code: str, message: str, *, behavior_output_observed: bool = True) -> None:
         super().__init__(message)
         self.code = code
+        self.behavior_output_observed = behavior_output_observed
 
 
 @dataclass(frozen=True, slots=True)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Iterator
 from typing import cast
 
 from ithrl.adapters.contracts import NativeSession, validate_decision_selector
@@ -19,6 +20,7 @@ from ithrl.context import (
 )
 from ithrl.decisions import DecisionSelector
 from ithrl.mutation import EditableText
+from ithrl.tool_output_text import EditableToolOutputText
 
 _HARNESS = "copilot"
 _SOURCE = "source/events.jsonl"
@@ -50,6 +52,36 @@ def editable_text(
 ) -> tuple[EditableText, ...]:
     """Discover effective historical user text, excluding the fixed current input."""
 
+    sites = []
+    for node, record in _editable_prior_records(session, selector, context):
+        if record.get("type") != "user.message":
+            continue
+        data = _object(record.get("data"))
+        content = data.get("transformedContent", data.get("content"))
+        if isinstance(content, str):
+            sites.append(EditableText(node.id, 0, content))
+    return tuple(sites)
+
+
+def editable_tool_output_text(
+    session: NativeSession, selector: DecisionSelector, context: ContextGraph
+) -> tuple[EditableToolOutputText, ...]:
+    """Discover prior model-facing tool output text without editing the fixed current input."""
+
+    sites = []
+    for node, record in _editable_prior_records(session, selector, context):
+        if record.get("type") != "tool.execution_complete":
+            continue
+        result = _object(_object(record.get("data")).get("result"))
+        content = result.get("content")
+        if isinstance(content, str):
+            sites.append(EditableToolOutputText(node.id, "/data/result/content", content))
+    return tuple(sites)
+
+
+def _editable_prior_records(
+    session: NativeSession, selector: DecisionSelector, context: ContextGraph
+) -> Iterator[tuple[ContextNode, JsonObject]]:
     records = session.records
     validate_decision_selector(
         session,
@@ -60,19 +92,14 @@ def editable_text(
         record_selector=source_selector,
     )
     fixed_input = decision_input_node_id(context.nodes, records, selector)
-    sites = []
-    for node in context.nodes:
-        native_selector = node.selector
-        if not node.mutable or node.protected or native_selector is None or node.id == fixed_input:
-            continue
-        record = records[native_selector.line - 1]
-        if record.get("type") != "user.message":
-            continue
-        data = _object(record.get("data"))
-        content = data.get("transformedContent", data.get("content"))
-        if isinstance(content, str):
-            sites.append(EditableText(node.id, 0, content))
-    return tuple(sites)
+    return (
+        (node, records[node.selector.line - 1])
+        for node in context.nodes
+        if node.mutable
+        and not node.protected
+        and node.selector is not None
+        and node.id != fixed_input
+    )
 
 
 def decision_input_node_id(
@@ -211,9 +238,10 @@ def _remember_tool_relationship(
         for request in tool_requests:
             if isinstance(request, dict) and (tool_call_id := _string(request.get("toolCallId"))):
                 requests[tool_call_id] = node_id
-    elif record_type == "tool.execution_start":
-        if tool_call_id := _string(data.get("toolCallId")):
-            starts[tool_call_id] = node_id
+    elif record_type == "tool.execution_start" and (
+        tool_call_id := _string(data.get("toolCallId"))
+    ):
+        starts[tool_call_id] = node_id
 
 
 def _is_mutable(record_type: str) -> bool:

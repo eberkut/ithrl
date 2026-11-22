@@ -121,6 +121,7 @@ RUNTIME_MODULES = frozenset(
         PurePosixPath("ithrl/sampled_run_metadata.py"),
         PurePosixPath("ithrl/sampling.py"),
         PurePosixPath("ithrl/text_sections.py"),
+        PurePosixPath("ithrl/tool_output_text.py"),
         PurePosixPath("ithrl/runner/__init__.py"),
         PurePosixPath("ithrl/runner/contracts.py"),
         PurePosixPath("ithrl/runner/codex/__init__.py"),
@@ -1118,6 +1119,64 @@ attempt_timeout_seconds = 1
     assert inspected["source_validation"] == "verified"
     assert inspected["status"] == collected["status"]
     assert inspected["usage"] == collected["usage"]
+    _assert_installed_tool_output_text(executable, runtime, child_environment)
+
+
+def _assert_installed_tool_output_text(
+    executable: Path, runtime: Path, environment: dict[str, str]
+) -> None:
+    """Author native spans and revalidate saved source bindings using installed code."""
+
+    from integration.test_comparison import _TOOL_OUTPUT_TEXT, _tool_output_text_fixture
+    from ithrl.comparison.results import write_comparison_result
+
+    for harness in ("codex", "copilot"):
+        parent = runtime / f"tool-output-text-{harness}"
+        parent.mkdir(mode=0o700)
+        fixture = _tool_output_text_fixture(parent, harness=harness)
+        case = parent / "case"
+        arguments = (str(executable), "inspect", "tool", str(case), "--format", "json")
+        listed = _run(*arguments, cwd=runtime, env=environment)
+        fields = json.loads(listed.stdout)["fields"]
+        assert len(fields) == 1
+        assert "DELETE-ME" not in listed.stdout
+        start = _TOOL_OUTPUT_TEXT.index("DELETE-ME")
+        authored = _run(
+            *arguments,
+            "--field",
+            fields[0]["field_id"],
+            "--start",
+            str(start),
+            "--end",
+            str(start + len("DELETE-ME")),
+            cwd=runtime,
+            env=environment,
+        )
+        assert json.loads(authored.stdout)["mutation"] == json.loads(
+            fixture.admission.binding.candidate.mutation.model_dump_json()
+        )
+        result = write_comparison_result(parent / "comparison.json", fixture.run())
+        for database in parent.glob("observations.sqlite*"):
+            database.unlink()
+        inspected = _run(
+            str(executable),
+            "inspect",
+            "comparison",
+            str(result),
+            "--case",
+            str(case),
+            "--show-text",
+            "--format",
+            "json",
+            cwd=runtime,
+            env=environment,
+        )
+        report = json.loads(inspected.stdout)
+        assert report["source_validation"] == "verified"
+        field = report["candidate_context"]["tool_output_text_field"]
+        assert field["removed_codepoints"] == len("DELETE-ME")
+        assert "DELETE-ME" not in field["text"]
+        assert "Retain diagnostics." in field["text"]
 
 
 def _assert_installed_resume(executable: Path, runtime: Path, environment: dict[str, str]) -> None:

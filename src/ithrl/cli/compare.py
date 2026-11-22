@@ -87,8 +87,6 @@ def prepare_comparison_profile(
         persisted.runner, (FakeRunnerConfig, NativeRunnerConfig, UnavailableRunnerConfig)
     ):
         raise ComparisonInputRefusal("unsupported-comparison-runner")
-    if configuration.codex_replay is not None and evidence.manifest.harness != "codex":
-        raise ComparisonInputRefusal("codex-replay-requires-codex")
     # The generic execution identity still has a calibration field. Comparison collection
     # uses its separately frozen two-arm plan, not the legacy full-context collector.
     placeholder = SampledCalibrationPhase(required_valid=1, minimum_matches=1, max_attempts=1)
@@ -105,6 +103,12 @@ def prepare_comparison_profile(
     if isinstance(experiment, SampledExperimentDefinition) and isinstance(
         experiment.runner, FakeRunnerConfig
     ):
+        if configuration.model is not None:
+            raise ComparisonInputRefusal("model-selection-native-only")
+        if configuration.reasoning_effort is not None:
+            raise ComparisonInputRefusal("reasoning-effort-native-only")
+        if configuration.provider is not None:
+            raise ComparisonInputRefusal("provider-selection-native-only")
         if max_provider_calls_per_attempt not in (None, 0):
             raise ComparisonInputRefusal("provider-call-limit-native-only")
         prepared = prepare_experiment(
@@ -126,7 +130,9 @@ def prepare_comparison_profile(
             calibration=placeholder,
             max_provider_calls_per_attempt=max_provider_calls_per_attempt,
             attempt_timeout_seconds=configuration.limits.attempt_timeout_seconds,
-            codex_replay=configuration.codex_replay,
+            model=configuration.model,
+            reasoning_effort=configuration.reasoning_effort,
+            provider=configuration.provider,
         )
         prepared = prepare_experiment(
             evidence,
@@ -188,6 +194,7 @@ def report_for_profile(profile: ComparisonProfile, *, harness_started: bool) -> 
         comparison_digest=profile.binding.digest,
         harness=harness,
         model=safe_display_identifier(plan.model_requested),
+        reasoning_effort=safe_display_identifier(plan.reasoning_effort),
         provider=safe_display_identifier(plan.capability.provider),
         harness_started=harness_started,
         capability_source="builtin"

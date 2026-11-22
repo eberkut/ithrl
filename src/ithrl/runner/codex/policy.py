@@ -39,7 +39,12 @@ CONTINUATION_INSTRUCTIONS = (
 )
 RUNNER_VERSION = "1"
 CAPTURE_TYPE = "logical-session"
-CONTEXT_OPERATIONS = ("dependency-closed-removal", "append-text", "remove-text-sections")
+CONTEXT_OPERATIONS = (
+    "dependency-closed-removal",
+    "append-text",
+    "remove-text-sections",
+    "remove-tool-output-text-span",
+)
 MATERIALIZATION = "source-backed"
 RECONSTRUCTION_METHOD = "codex-app-server-inject-checkpoint-v1"
 SOURCE_SCHEMA = "codex-rollout-jsonl"

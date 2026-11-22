@@ -23,6 +23,12 @@ from ithrl.text_sections import (
     TextSectionRemoval,
     remove_text_sections,
 )
+from ithrl.tool_output_text import (
+    ToolOutputTextError,
+    ToolOutputTextField,
+    ToolOutputTextSpanRemoval,
+    remove_tool_output_text_span,
+)
 
 _SOURCE_PATH = "source/events.jsonl"
 _MAX_NATIVE_SESSION_BYTES = 64 * 1024 * 1024
@@ -59,7 +65,7 @@ def materialize_copilot_attempt(attempt: PreparedAttempt) -> CopilotMaterializat
     """Overlay one candidate on the immutable prefix through its native turn start."""
 
     if any(
-        not isinstance(edit, (TextAppend, TextSectionRemoval))
+        not isinstance(edit, (TextAppend, TextSectionRemoval, ToolOutputTextSpanRemoval))
         for edit in attempt.candidate.mutation.edits
     ):
         _unsupported("Copilot reconstruction requires a supported text intervention")
@@ -74,7 +80,10 @@ def materialize_copilot_attempt(attempt: PreparedAttempt) -> CopilotMaterializat
     try:
         _validate_attempt_identities(attempt)
     except ValueError:
-        if any(isinstance(edit, TextSectionRemoval) for edit in attempt.candidate.mutation.edits):
+        if any(
+            isinstance(edit, (TextSectionRemoval, ToolOutputTextSpanRemoval))
+            for edit in attempt.candidate.mutation.edits
+        ):
             raise CopilotMaterializationError(
                 CopilotMaterializationErrorCode.CHANGED_EVIDENCE,
                 "the Copilot candidate does not match its evidence and execution plan",
@@ -157,18 +166,27 @@ def _materialize_session(
             "the candidate removes the native input for the selected decision",
         )
     edit = next(iter(attempt.candidate.mutation.edits), None)
-    if edit is not None and not isinstance(edit, (TextAppend, TextSectionRemoval)):
+    if edit is not None and not isinstance(
+        edit, (TextAppend, TextSectionRemoval, ToolOutputTextSpanRemoval)
+    ):
         _unsupported("Copilot reconstruction requires a supported text intervention")
     catalog = None
+    tool_field = None
     if edit is not None:
         if edit.context_id == fixed_input:
             raise CopilotMaterializationError(
                 CopilotMaterializationErrorCode.MISSING_TRIGGER,
                 "mutation cannot change the current decision input",
             )
-        eligible = {site.context_id for site in attempt.evidence.editable_text()}
-        if edit.context_id not in eligible:
-            _unsupported("mutation requires an editable prior user message")
+        if isinstance(edit, ToolOutputTextSpanRemoval):
+            try:
+                tool_field, _ = attempt.evidence.validate_tool_output_text_span(edit)
+            except (MutationError, ToolOutputTextError):
+                _unsupported("span removal does not match the prior tool output text")
+        else:
+            eligible = {site.context_id for site in attempt.evidence.editable_text()}
+            if edit.context_id not in eligible:
+                _unsupported("mutation requires an editable prior user message")
         if isinstance(edit, TextSectionRemoval):
             try:
                 catalog = attempt.evidence.validate_text_sections(edit)
@@ -176,7 +194,7 @@ def _materialize_session(
                 _unsupported("section removal does not match the effective prior user text")
     raw_lines = session.native_bytes.splitlines(keepends=True)
     output = [
-        _mutate_record(raw_lines[line - 1], record, edit, catalog)
+        _mutate_record(raw_lines[line - 1], record, edit, catalog, tool_field)
         if edit is not None and node_id == edit.context_id
         else raw_lines[line - 1]
         for line, node_id, record in selected
@@ -218,15 +236,27 @@ def _selected_context(
 def _mutate_record(
     raw: bytes,
     record: JsonObject,
-    edit: TextAppend | TextSectionRemoval,
+    edit: TextAppend | TextSectionRemoval | ToolOutputTextSpanRemoval,
     catalog: TextSectionCatalog | None,
+    tool_field: ToolOutputTextField | None,
 ) -> bytes:
     record = copy.deepcopy(record)
     data = _object(record.get("data"))
     effective_field = "transformedContent" if "transformedContent" in data else "content"
     try:
         message: JsonObject = {"role": "user", "content": data.get(effective_field)}
-        if isinstance(edit, TextAppend):
+        if isinstance(edit, ToolOutputTextSpanRemoval):
+            result = _object(data.get("result"))
+            content = result.get("content")
+            if (
+                tool_field is None
+                or tool_field.field_path != "/data/result/content"
+                or record.get("type") != "tool.execution_complete"
+                or not isinstance(content, str)
+            ):
+                _unsupported("span removal requires its original tool output text field")
+            result["content"] = remove_tool_output_text_span(content, tool_field, edit)
+        elif isinstance(edit, TextAppend):
             changed = append_message_text(message, edit)
             data[effective_field] = changed["content"]
         else:
@@ -235,6 +265,8 @@ def _mutate_record(
             data[effective_field] = remove_text_sections(
                 message_text(message, edit.content_index), catalog, edit
             )
+    except ToolOutputTextError:
+        _unsupported("span removal does not match the prior tool output text")
     except (MutationError, TextSectionError):
         _unsupported("mutation does not match the effective prior user text")
     ending = b"\r\n" if raw.endswith(b"\r\n") else b"\n" if raw.endswith(b"\n") else b""
