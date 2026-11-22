@@ -17,6 +17,7 @@ from ithrl.context import (
     decode_pointer,
 )
 from ithrl.text_sections import TextSectionRemoval
+from ithrl.tool_output_text import ToolOutputTextSpanRemoval
 
 MAX_MUTATION_TEXT_BYTES = 64 * 1024
 
@@ -73,19 +74,26 @@ class TextMutation(BaseModel):
 
     schema_version: Literal[1] = 1
     edits: Annotated[
-        tuple[Annotated[TextAppend | TextSectionRemoval, Field(discriminator="operation")], ...],
+        tuple[
+            Annotated[
+                TextAppend | TextSectionRemoval | ToolOutputTextSpanRemoval,
+                Field(discriminator="operation"),
+            ],
+            ...,
+        ],
         Field(max_length=1),
     ] = ()
 
     @field_validator("edits")
     @classmethod
     def normalize_empty(
-        cls, value: tuple[TextAppend | TextSectionRemoval, ...]
-    ) -> tuple[TextAppend | TextSectionRemoval, ...]:
+        cls, value: tuple[TextAppend | TextSectionRemoval | ToolOutputTextSpanRemoval, ...]
+    ) -> tuple[TextAppend | TextSectionRemoval | ToolOutputTextSpanRemoval, ...]:
         return tuple(
             edit
             for edit in value
-            if (edit.text if isinstance(edit, TextAppend) else edit.section_ids)
+            if isinstance(edit, ToolOutputTextSpanRemoval)
+            or (edit.text if isinstance(edit, TextAppend) else edit.section_ids)
         )
 
     @property

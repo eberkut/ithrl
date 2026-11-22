@@ -121,6 +121,7 @@ RUNTIME_MODULES = frozenset(
         PurePosixPath("ithrl/sampled_run_metadata.py"),
         PurePosixPath("ithrl/sampling.py"),
         PurePosixPath("ithrl/text_sections.py"),
+        PurePosixPath("ithrl/tool_output_text.py"),
         PurePosixPath("ithrl/runner/__init__.py"),
         PurePosixPath("ithrl/runner/contracts.py"),
         PurePosixPath("ithrl/runner/codex/__init__.py"),
@@ -949,14 +950,15 @@ def _assert_installed_preparation(
         assert json.loads(repeated.stdout)["error_code"] == "preparation-invalid"
 
 
-def test_installed_fuzz_extra_provides_exact_numerics(
-    distributions: tuple[Path, Path], tmp_path: Path
+@pytest.mark.parametrize("extra", ["fuzz", "all"])
+def test_installed_fuzz_feature_provides_exact_numerics(
+    distributions: tuple[Path, Path], tmp_path: Path, extra: str
 ) -> None:
     wheel, _ = distributions
     environment = tmp_path / "fuzz-environment"
     _run("uv", "venv", "--python", sys.executable, str(environment), cwd=tmp_path)
     python = environment / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
-    _run("uv", "pip", "install", "--python", str(python), f"{wheel}[fuzz]", cwd=tmp_path)
+    _run("uv", "pip", "install", "--python", str(python), f"{wheel}[{extra}]", cwd=tmp_path)
     _run(
         str(python),
         "-I",
@@ -972,8 +974,9 @@ def test_installed_fuzz_extra_provides_exact_numerics(
 
 
 @pytest.mark.parametrize("origin", ["wheel", "sdist"])
+@pytest.mark.parametrize("extra", ["compare", "all"])
 def test_installed_comparison_collects_confirms_and_inspects(
-    distributions: tuple[Path, Path], tmp_path: Path, origin: str
+    distributions: tuple[Path, Path], tmp_path: Path, origin: str, extra: str
 ) -> None:
     wheel, sdist = distributions
     if origin == "sdist":
@@ -982,7 +985,7 @@ def test_installed_comparison_collects_confirms_and_inspects(
     _run("uv", "venv", "--python", sys.executable, str(environment), cwd=tmp_path)
     python = environment / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     executable = environment / ("Scripts/ithrl.exe" if os.name == "nt" else "bin/ithrl")
-    _run("uv", "pip", "install", "--python", str(python), f"{wheel}[compare]", cwd=tmp_path)
+    _run("uv", "pip", "install", "--python", str(python), f"{wheel}[{extra}]", cwd=tmp_path)
     runtime = tmp_path / "runtime"
     runtime.mkdir()
     case = runtime / "case"
@@ -1118,6 +1121,78 @@ attempt_timeout_seconds = 1
     assert inspected["source_validation"] == "verified"
     assert inspected["status"] == collected["status"]
     assert inspected["usage"] == collected["usage"]
+    _assert_installed_tool_output_text(python, executable, runtime, child_environment)
+
+
+def _assert_installed_tool_output_text(
+    python: Path, executable: Path, runtime: Path, environment: dict[str, str]
+) -> None:
+    """Author native spans and revalidate saved source bindings using installed code."""
+
+    for harness in ("codex", "copilot"):
+        parent = runtime / f"tool-output-text-{harness}"
+        parent.mkdir(mode=0o700)
+        generated = _run(
+            str(python),
+            "-I",
+            "-c",
+            "import json, sys\n"
+            "from pathlib import Path\n"
+            "sys.path.insert(0, sys.argv[1])\n"
+            "from native_support.comparison import _TOOL_OUTPUT_TEXT, _tool_output_text_fixture\n"
+            "from ithrl.comparison.results import write_comparison_result\n"
+            "parent = Path(sys.argv[2])\n"
+            "fixture = _tool_output_text_fixture(parent, harness=sys.argv[3])\n"
+            "write_comparison_result(parent / 'comparison.json', fixture.run())\n"
+            "print(json.dumps({'start': _TOOL_OUTPUT_TEXT.index('DELETE-ME'), "
+            "'mutation': fixture.admission.binding.candidate.mutation.model_dump(mode='json')}))\n",
+            str(PROJECT_ROOT / "tests"),
+            str(parent),
+            harness,
+            cwd=runtime,
+            env=environment,
+        )
+        expected = json.loads(generated.stdout)
+        case = parent / "case"
+        arguments = (str(executable), "inspect", "tool", str(case), "--format", "json")
+        listed = _run(*arguments, cwd=runtime, env=environment)
+        fields = json.loads(listed.stdout)["fields"]
+        assert len(fields) == 1
+        assert "DELETE-ME" not in listed.stdout
+        start = expected["start"]
+        authored = _run(
+            *arguments,
+            "--field",
+            fields[0]["field_id"],
+            "--start",
+            str(start),
+            "--end",
+            str(start + len("DELETE-ME")),
+            cwd=runtime,
+            env=environment,
+        )
+        assert json.loads(authored.stdout)["mutation"] == expected["mutation"]
+        for database in parent.glob("observations.sqlite*"):
+            database.unlink()
+        inspected = _run(
+            str(executable),
+            "inspect",
+            "comparison",
+            str(parent / "comparison.json"),
+            "--case",
+            str(case),
+            "--show-text",
+            "--format",
+            "json",
+            cwd=runtime,
+            env=environment,
+        )
+        report = json.loads(inspected.stdout)
+        assert report["source_validation"] == "verified"
+        field = report["candidate_context"]["tool_output_text_field"]
+        assert field["removed_codepoints"] == len("DELETE-ME")
+        assert "DELETE-ME" not in field["text"]
+        assert "Retain diagnostics." in field["text"]
 
 
 def _assert_installed_resume(executable: Path, runtime: Path, environment: dict[str, str]) -> None:

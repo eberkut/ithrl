@@ -40,7 +40,7 @@ type Assumption = Literal[
     "valid-only-does-not-estimate-execution-reliability",
     "no-campaign-wide-error-guarantee",
     "independent-stationary-attempts-with-prespecified-validity",
-    "overload-replacement-estimates-behavior-conditional-on-validity",
+    "provider-replacement-estimates-behavior-conditional-on-validity",
 ]
 
 _ASSUMPTIONS: tuple[Assumption, ...] = (

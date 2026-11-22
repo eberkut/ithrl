@@ -750,6 +750,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+all = [
+    { name = "scipy" },
+]
 compare = [
     { name = "scipy" },
 ]
@@ -795,6 +798,7 @@ requires-dist = [
     { name = "filelock", specifier = ">=3.32.4" },
     { name = "genai-prices", specifier = "==0.2.4" },
     { name = "github-copilot-sdk", specifier = "==1.0.28" },
+    { name = "ithrl", extras = ["compare", "fuzz"], marker = "extra == 'all'" },
     { name = "jsonschema", specifier = ">=4.25" },
     { name = "packaging", specifier = ">=24.2" },
     { name = "platformdirs", specifier = ">=4.3" },
@@ -804,7 +808,7 @@ requires-dist = [
     { name = "scipy", marker = "extra == 'fuzz'", specifier = ">=1.18" },
     { name = "typer", specifier = ">=0.16" },
 ]
-provides-extras = ["compare", "fuzz"]
+provides-extras = ["all", "compare", "fuzz"]
 
 [package.metadata.requires-dev]
 audit = [{ name = "pip-audit", specifier = "==2.10.1" }]

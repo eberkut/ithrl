@@ -226,6 +226,7 @@ $ ithrl inspect [OPTIONS] COMMAND [ARGS]...
 
 * `costs`: Inspect a saved cost estimate without...
 * `comparison`: Inspect a saved comparison without a...
+* `tool`: Inspect captured tool output and select...
 * `reacquire`: Inspect recorded operations and results...
 * `sections`: List eligible section IDs and half-open...
 * `retained`: Explain retained context and recorded...
@@ -266,7 +267,36 @@ $ ithrl inspect comparison [OPTIONS] {result}
 **Options**:
 
 * `--case <path>`: Revalidate both context selections against this source case.
+* `--show-text`: Include bounded retained tool output text; requires --case.
+* `--max-text-bytes <int range>`: Total escaped text byte limit.  [default: 4096; 0&lt;=x&lt;=65536]
 * `--format <human|json>`: [default: human]
+* `--help`: Show this message and exit.
+
+### `ithrl inspect tool`
+
+Inspect captured tool output and select text to remove.
+
+Offsets select a nonempty half-open range in the original string. Sizes are UTF-8 bytes.
+Text display shows the retained field when a range is selected.
+
+**Usage**:
+
+```console
+$ ithrl inspect tool [OPTIONS] {case}
+```
+
+**Arguments**:
+
+* `case`: Case containing captured tool output.  [required]
+
+**Options**:
+
+* `--field <str>`: Discovered source-bound tool output text field ID.
+* `--start <int range>`: Inclusive original Unicode codepoint offset.  [x&gt;=0]
+* `--end <int range>`: Exclusive original Unicode codepoint offset.  [x&gt;=1]
+* `--show-text`: Include bounded escaped text; requires --field. Keep private.
+* `--max-text-bytes <int range>`: Escaped text byte limit.  [default: 4096; 0&lt;=x&lt;=65536]
+* `--format <human|json>`: Human-readable or JSON output.  [default: human]
 * `--help`: Show this message and exit.
 
 ### `ithrl inspect reacquire`

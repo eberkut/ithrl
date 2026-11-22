@@ -94,9 +94,8 @@ def _validate_status_phase_outcomes(summary: ResultSummary) -> None:
     elif summary.status == "confirmation-failed":
         if summary.confirmation_result != "failed":
             raise ValueError("confirmation-failed status requires a failed confirmation")
-    elif summary.status == "not-observed":
-        if summary.calibration_result != "not-observed":
-            raise ValueError("not-observed status requires a not-observed calibration")
+    elif summary.status == "not-observed" and summary.calibration_result != "not-observed":
+        raise ValueError("not-observed status requires a not-observed calibration")
 
 
 def _validate_phase_sequence(summary: ResultSummary) -> None:

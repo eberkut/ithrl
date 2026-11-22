@@ -39,6 +39,7 @@ from ithrl.run_state import (
 )
 from ithrl.runner import Candidate, PreparedAttempt, prepare_candidate
 from ithrl.text_sections import TextSectionRemoval
+from ithrl.tool_output_text import ToolOutputTextSpanRemoval
 
 if TYPE_CHECKING:
     from ithrl.workflow import PreparedExperiment
@@ -70,6 +71,10 @@ def _validate_sampling_mutation(mutation: TextMutation | None, plan: SamplingBlo
         return
     mutation = TextMutation.model_validate(mutation.model_dump())
     for edit in mutation.edits:
+        if isinstance(edit, ToolOutputTextSpanRemoval):
+            raise MutationError(
+                "tool output text span removal requires an explicit context comparison"
+            )
         if isinstance(edit, TextSectionRemoval):
             procedure = plan.procedure
             config = getattr(procedure, "section_search", None)
@@ -127,8 +132,9 @@ async def collect_sampling_block(
     The trusted verifier must establish that a specific safe preaccept failure is independent
     of the potential behavioral outcome, then return its private evidence digest. Error labels
     and digests alone do not establish independence. Without a verifier, preaccept exclusions
-    are refused. The frozen opt-in overload policy instead requires its validated safety proof
-    and scopes inference to valid observations under independent, stationary attempt draws.
+    are refused. Frozen opt-in provider-failure replacement policies instead require their
+    validated safety proof and scope inference to valid observations under independent,
+    stationary attempt draws.
     Recorded attempts are reconciled before continuation; an unresolved dispatch is never
     replayed. Callers own selection and statistical classification in later workflow layers.
 

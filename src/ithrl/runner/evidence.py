@@ -48,6 +48,7 @@ class AttemptEvidence(BaseModel):
     native_output: NativeOutputReference | None = None
     retry_safe: bool = False
     overload_replacement_safe: bool = False
+    transport_replacement_safe: bool = Field(default=False, exclude_if=lambda value: not value)
     grading: GradeEvidence | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @field_validator("reason_code", mode="before")
@@ -70,14 +71,19 @@ class AttemptEvidence(BaseModel):
             raise ValueError("grading evidence requires the matching completed native attempt")
         if self.retry_safe:
             self._validate_safe_retry()
-        if self.overload_replacement_safe:
+        if self.overload_replacement_safe or self.transport_replacement_safe:
             accounting = self.accounting
+            timeout = (
+                self.transport_replacement_safe
+                and self.termination_reason == "timeout"
+                and self.reason_code == "inference-output-free-timeout"
+            )
             if (
-                self.termination_reason != "failed"
+                (self.termination_reason != "failed" and not timeout)
                 or self.retry_safe
                 or self.effective_policy_digest is None
                 or accounting is None
-                or not _safe_overload_accounting(accounting)
+                or not _safe_replacement_accounting(accounting)
                 or self.provider_calls_possible < accounting.provider_calls_started
                 or (self.usage is not None and self.usage.output_tokens != 0)
                 or self.provider_acceptance_state is not ProviderAcceptanceState.UNKNOWN
@@ -85,7 +91,14 @@ class AttemptEvidence(BaseModel):
                 or not self.native_output.complete
                 or self.native_output.size_bytes != accounting.native_output_bytes
             ):
-                raise ValueError("overload replacement requires complete bounded safety evidence")
+                kind = "overload" if self.overload_replacement_safe else "transport"
+                raise ValueError(f"{kind} replacement requires complete bounded safety evidence")
+            if self.transport_replacement_safe and (
+                self.overload_replacement_safe
+                or (self.reason_code != "inference-transport-failed" and not timeout)
+                or accounting.provider_calls_completed != 0
+            ):
+                raise ValueError("transport replacement requires an output-free transport failure")
         return self
 
     def _validate_completed_attempt(self) -> None:
@@ -214,6 +227,18 @@ class AttemptEvidence(BaseModel):
             native_output=error.native_output,
             retry_safe=_error_retry_safe(attempt, error, acceptance),
             overload_replacement_safe=_error_overload_replacement_safe(attempt, error, acceptance),
+            transport_replacement_safe=(
+                (
+                    (
+                        error.code is RunnerErrorCode.TRANSPORT
+                        and error.reason_code == "inference-transport-failed"
+                    )
+                    or _is_output_free_timeout(error)
+                )
+                and error.accounting is not None
+                and error.accounting.provider_calls_completed == 0
+                and _error_provider_replacement_safe(attempt, error, acceptance)
+            ),
         )
 
 
@@ -263,14 +288,23 @@ def _error_overload_replacement_safe(
 ) -> bool:
     """Qualify a fresh sample without asserting unobserved provider work did not occur."""
 
+    return error.code is RunnerErrorCode.PROVIDER_OVERLOADED and _error_provider_replacement_safe(
+        attempt, error, acceptance
+    )
+
+
+def _error_provider_replacement_safe(
+    attempt: PreparedAttempt,
+    error: RunnerError,
+    acceptance: ProviderAcceptanceState,
+) -> bool:
     accounting = error.accounting
     capability = attempt.execution_plan.capability
     return (
-        error.code is RunnerErrorCode.PROVIDER_OVERLOADED
-        and acceptance is ProviderAcceptanceState.UNKNOWN
+        acceptance is ProviderAcceptanceState.UNKNOWN
         and error.behavior_output_observed is False
         and accounting is not None
-        and _safe_overload_accounting(accounting)
+        and _safe_replacement_accounting(accounting)
         and (error.usage is None or error.usage.output_tokens == 0)
         and capability.provider_calls_per_attempt >= 1
         and capability.action_denial == "enforced"
@@ -287,7 +321,14 @@ def _error_overload_replacement_safe(
     )
 
 
-def _safe_overload_accounting(accounting: RunAccounting) -> bool:
+def _is_output_free_timeout(error: RunnerError) -> bool:
+    return (
+        error.code is RunnerErrorCode.TIMEOUT
+        and error.reason_code == "inference-output-free-timeout"
+    )
+
+
+def _safe_replacement_accounting(accounting: RunAccounting) -> bool:
     return (
         _safe_cleanup_and_effects(accounting)
         and accounting.cleanup_outcome == "verified"
@@ -320,8 +361,11 @@ def _retry_limits_allow(
     accounting: RunAccounting,
 ) -> bool:
     limits = attempt.resource_limits
+    elapsed_limit = limits.max_wall_time_seconds
+    if _is_output_free_timeout(error):
+        elapsed_limit += attempt.execution_plan.capability.cancellation_grace_seconds
     within_limits = (
-        accounting.elapsed_milliseconds <= limits.max_wall_time_seconds * 1000,
+        accounting.elapsed_milliseconds <= elapsed_limit * 1000,
         accounting.native_output_bytes <= limits.max_native_output_bytes,
         accounting.disposable_state_bytes <= limits.max_disposable_state_bytes,
         accounting.disposable_state_entries <= limits.max_disposable_state_entries,

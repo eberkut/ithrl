@@ -57,6 +57,16 @@ def comparison(
         Path | None,
         typer.Option("--case", help="Revalidate both context selections against this source case."),
     ] = None,
+    show_text: Annotated[
+        bool,
+        typer.Option(
+            "--show-text", help="Include bounded retained tool output text; requires --case."
+        ),
+    ] = False,
+    max_text_bytes: Annotated[
+        int,
+        typer.Option("--max-text-bytes", min=0, max=65_536, help="Total escaped text byte limit."),
+    ] = 4096,
     output_format: Annotated[OutputFormat, typer.Option("--format")] = OutputFormat.HUMAN,
 ) -> None:
     """Inspect a saved comparison without a runner or observation database."""
@@ -64,10 +74,23 @@ def comparison(
     from ithrl.cli.comparison_output import render_comparison, result_report
     from ithrl.comparison.results import load_comparison_result
 
+    if show_text and case is None:
+        fail(
+            "Comparison text display requires source validation with --case.",
+            ExitCode.USAGE,
+            output_format,
+            "inspect",
+            "invalid-inspection-options",
+        )
     try:
         evidence = None if case is None else CaseWorkspace.open(case).load()
         saved = load_comparison_result(result, case_evidence=evidence)
-        report = result_report(saved).model_copy(
+        report = result_report(
+            saved,
+            case_evidence=evidence,
+            show_text=show_text,
+            max_text_bytes=max_text_bytes,
+        ).model_copy(
             update={
                 "result_path": str(result.absolute()),
                 "source_validation": "not-requested" if evidence is None else "verified",
@@ -90,6 +113,96 @@ def comparison(
             "comparison-invalid",
         )
     render_comparison(report, output_format)
+
+
+@app.command("tool")
+@command_boundary("inspect")
+def tool_output_text(
+    case: Annotated[Path, typer.Argument(help="Case containing captured tool output.")],
+    field_id: Annotated[
+        str | None,
+        typer.Option("--field", help="Discovered source-bound tool output text field ID."),
+    ] = None,
+    start: Annotated[
+        int | None,
+        typer.Option("--start", min=0, help="Inclusive original Unicode codepoint offset."),
+    ] = None,
+    end: Annotated[
+        int | None,
+        typer.Option("--end", min=1, help="Exclusive original Unicode codepoint offset."),
+    ] = None,
+    show_text: Annotated[
+        bool,
+        typer.Option(
+            "--show-text", help="Include bounded escaped text; requires --field. Keep private."
+        ),
+    ] = False,
+    max_text_bytes: Annotated[
+        int,
+        typer.Option("--max-text-bytes", min=0, max=65_536, help="Escaped text byte limit."),
+    ] = 4096,
+    output_format: Annotated[
+        OutputFormat, typer.Option("--format", help="Human-readable or JSON output.")
+    ] = OutputFormat.HUMAN,
+) -> None:
+    """Inspect captured tool output and select text to remove.
+
+    Offsets select a nonempty half-open range in the original string. Sizes are UTF-8 bytes.
+    Text display shows the retained field when a range is selected.
+    """
+    from ithrl.case import CaseWorkspace
+    from ithrl.extraction import load_extracted_case
+    from ithrl.inspection import inspect_tool_output_text
+
+    if (
+        (start is None) != (end is None)
+        or (start is not None and field_id is None)
+        or (show_text and field_id is None)
+    ):
+        fail(
+            "A span requires --field, --start and --end; text display requires --field.",
+            ExitCode.USAGE,
+            output_format,
+            "inspect",
+            "invalid-inspection-options",
+        )
+    try:
+        report = inspect_tool_output_text(
+            load_extracted_case(CaseWorkspace.open(case)),
+            field_id=field_id,
+            start=start,
+            end=end,
+            show_text=show_text,
+            max_text_bytes=max_text_bytes,
+        )
+    except (OSError, ValueError):
+        fail(
+            "Cannot inspect the case tool output text or validate the selected source span.",
+            ExitCode.USAGE,
+            output_format,
+            "inspect",
+            "inspection-invalid",
+        )
+    data = report.model_dump(mode="json")
+    if output_format is OutputFormat.JSON:
+        typer.echo(json.dumps(data, ensure_ascii=True, sort_keys=True))
+        return
+    print_plain(console, "Case tool output text (untested)")
+    print_plain(console, f"  case digest: {report.case_digest}")
+    for descriptor in report.fields:
+        print_plain(console, f"  field: {descriptor.model_dump_json()}", soft_wrap=True)
+    for unavailable in report.unavailable_fields:
+        print_plain(console, f"  unavailable: {unavailable.model_dump_json()}", soft_wrap=True)
+    print_plain(
+        console,
+        f"  omitted fields: {report.omitted_field_count}; metadata limit: {report.metadata_limit}",
+    )
+    if report.selection is not None:
+        print_plain(console, f"  selection: {report.selection.model_dump_json()}", soft_wrap=True)
+    if report.mutation is not None:
+        print_plain(console, f"  mutation: {report.mutation.model_dump_json()}", soft_wrap=True)
+    print_plain(console, "Field discovery does not establish delivery of the edited input.")
+    print_plain(console, "No harness probes, provider calls or actions were executed.")
 
 
 @app.command("reacquire")

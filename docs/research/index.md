@@ -16,6 +16,7 @@ capabilities. A research result can precede a supported integration.
 | [Context fuzzing](context-fuzzing.md) | A bounded synthetic discovery/simplification/confirmation design, exact inference and validity sensitivities |
 | [Public debugging tasks](https://github.com/eberkut/ithrl/tree/main/research/benchmarks) | Pinned tasks, offline repair graders and bounded Codex/Copilot CLI reductions with fresh confirmation |
 | [Comparative debugging](comparative-debugging.md) | Source-bound contexts, directed fresh confirmation, constructed repair tasks and ordinary Codex/Copilot investigations, with costs and interpretation limits |
+| [Localized tool output interventions](tool-output-interventions.md) | Source-bound field edits, native delivery controls, ordinary final-response confirmation, practical review and complete-study costs |
 
 ## Reproduce the synthetic studies
 

@@ -53,6 +53,7 @@ nav:
           - Passive compaction investigation: research/passive-compaction-investigation.md
           - Context fuzzing: research/context-fuzzing.md
           - Comparative debugging design: research/comparative-debugging.md
+          - Tool output interventions: research/tool-output-interventions.md
       - Roadmap: https://github.com/eberkut/ithrl/blob/main/ROADMAP.md
 # Navigation alone does not restrict which files MkDocs publishes.
 exclude_docs: |

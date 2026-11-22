@@ -124,9 +124,9 @@ under this policy rather than partially catalogued.
 Case-level discovery omits fields beyond these limits while preserving complete catalogs for
 other eligible fields. Explicit validation still refuses an edit to an unavailable field.
 
-The mutation envelope distinguishes `append-text` and `remove-text-sections`; empty and append-only
-candidates keep their serialization and identities. Appending requires unchanged context. Section
-edits can accompany dependency-closed record removal only if the edited field's parent survives.
+Prior-user text edits use `append-text` or `remove-text-sections`. Appending requires unchanged
+context. Section removal may accompany dependency-closed record removal when the edited field
+survives.
 
 Exact-request materialization edits a defensive copy, locating the original message before adjusting
 for removed positions. Combined section edits refuse removal touching the original last input,
@@ -249,10 +249,11 @@ selection uses existing dependency-closed removals and optional source-bound tex
 context may omit supported material. Preparation admits the immutable original and both selections,
 and protects the fixed triggering input independently of caller-supplied edit flags.
 
-Capture-time model and provider remain source provenance. An explicit prospective Codex profile
-binds the effective model and provider and omits complete historical reasoning records from both
-execution copies. The plan and report declare this common projection separately from context edits;
-the immutable source and fixed input remain intact.
+Capture-time model and provider remain source provenance. Shared `model`, `provider` and
+`reasoning_effort` settings bind execution choices for both harnesses. Codex omits historical
+reasoning from both execution copies when the effective model or provider differs from capture;
+an effort-only change does not activate that projection. The plan and report declare the resolved
+policy separately from context edits. Source evidence and fixed input remain intact.
 
 The comparison procedure binds both selections, repair or degradation direction, calibration gates,
 fixed confirmation counts, freshness and eligibility policy. Administrative ceilings remain
@@ -272,6 +273,36 @@ from them. Offline inspection validates their identities and chronology without 
 or starting a runner. Supplying the case additionally re-derives source partitions and text edits.
 [ADR 0006](decisions/0006-explicit-context-comparison.md) records the decision; the
 [comparison guide](comparison.md) owns configuration and recovery procedures.
+
+## Source-bound tool output text
+
+`tool_output_text.py` defines metadata-only native text fields and `remove-tool-output-text-span`.
+Adapters enumerate field locations in verified logical-session evidence; callers select a
+digest-bound field ID rather than supply a native write path. The field identity binds the case,
+context node, native field path, complete text digest and original sizes. Case-level discovery is
+cached against the exact immutable owner and evidence inputs; copied or rebound evidence revalidates
+discovery.
+
+The one-field edit stores a nonempty half-open Unicode codepoint range and the removed substring's
+digest. Validation re-derives the field and exact substring from source, enforcing the 1 MiB
+UTF-8 field limit. Materialization copies the native record and splices the string without
+decoding embedded content or changing retained text. Complete source-field deletion preserves an
+empty string and its enclosing record; native reconstruction can elide an empty content block.
+Each runner owns native path resolution, call/result pairing, fixed trigger protection and existing
+reconstruction limits.
+
+This operation is confined to explicit-context comparison: the reference must be unmutated, the
+candidate contains one span deletion, and both actual dependency-closed record partitions must
+match. Configuration and saved bindings validate that contract; result loading additionally
+checks source eligibility when a case is supplied. Existing paragraph and append rules remain
+separate. The active-resume implementation digest includes the span and mutation algorithms.
+
+`inspect tool` exposes bounded field metadata and can author a deletion from immutable source
+bytes. Optional text is escaped under a shared byte allowance. Comparison reports retain the edit
+descriptor and can re-derive its sizes and retained text with the source case. The
+[supported-inputs table](https://github.com/eberkut/ithrl/blob/main/README.md#supported-inputs)
+defines qualified experimental support; discovery and reconstruction support alone do not establish
+native input visibility or behavioral qualification.
 
 ## Execution and privacy boundary
 
@@ -317,7 +348,7 @@ but a turn may need several requests. HTTP completion alone proves neither model
 native turn completion.
 
 Copilot's Python SDK drives the CLI over stdio, resuming the copied prefix at the selected model
-turn, including after tool results, without a new user message or resume bookkeeping event.
+turn, including after tool outputs, without a new user message or resume bookkeeping event.
 Selected environment tokens are passed explicitly to the SDK session; managed login uses the
 isolated configuration. When present, captured system
 guidance is restored and verified before inference; current custom-instruction and skill retrieval
@@ -380,7 +411,7 @@ Python module names are not public API commitments.
 | `adapters/codex/`, `adapters/copilot/` | Harness-specific `parser.py`, `discovery.py`, `decisions.py` and `context.py` |
 | `extraction.py`, `decisions.py` | Selected-decision contracts and case construction/revalidation |
 | `case/contracts.py`, `case/evidence.py`, `case/storage.py`, `case/source.py`, `case/source_context.py`, `case/source_storage.py`, `case/filesystem.py` | Immutable case evidence, source verification and private workspace persistence |
-| `context.py`, `mutation.py`, `text_sections.py` | Context graph, dependency closure, stable selectors and bounded text-edit contracts |
+| `context.py`, `mutation.py`, `text_sections.py`, `tool_output_text.py` | Context graph, dependency closure, stable selectors and bounded text-edit contracts |
 | `behavior.py`, `experiment.py` | Structural targets and frozen deterministic/sampled experimental definitions |
 | `preparation.py`, `cli/preparation.py` | Recorded preflight receipts, offline settings binding and private experiment publication |
 | `execution/contracts.py`, `execution/preflight.py`, `execution/budget.py` | Capabilities, policy, resolved plans, refusal and admission arithmetic |
@@ -410,6 +441,5 @@ Python module names are not public API commitments.
 Before 1.0, project-owned schema tags remain `1` while formats evolve directly. Strict structure,
 kind, evidence identity and safety validation still apply. Breaking changes may require artifact
 regeneration; the project does not add pre-1.0 migrations or compatibility readers. Captured
-upstream versions remain evidence facts. The execution-plan identity above makes snapshots and
-resumes bound to the earlier identity incompatible. Do not edit captured source or retained
+upstream versions remain evidence facts. Do not edit captured source or retained
 evidence to manufacture new metadata or a matching identity. Revisit format-version policy for 1.0.

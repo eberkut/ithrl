@@ -18,6 +18,7 @@ from ithrl.context import (
 )
 from ithrl.decisions import DecisionSelector
 from ithrl.mutation import EditableText, editable_message_text
+from ithrl.tool_output_text import EditableToolOutputText
 
 _HARNESS = "codex"
 _SOURCE = "source/rollout.jsonl"
@@ -69,6 +70,63 @@ def editable_text(
         for record in (records[node.selector.line - 1],)
         if record.get("type") == "response_item"
         for site in editable_message_text(node, _object(record.get("payload")))
+    )
+
+
+def editable_tool_output_text(
+    session: NativeSession, selector: DecisionSelector, context: ContextGraph
+) -> tuple[EditableToolOutputText, ...]:
+    """Discover prior output fields through the verified native call dependency."""
+
+    records = session.records
+    trigger_id = decision_input_node_id(context.nodes, records, selector)
+    by_id = context.by_id
+    sites: list[EditableToolOutputText] = []
+    for node in context.nodes:
+        if (
+            node.id == trigger_id
+            or not node.mutable
+            or node.protected
+            or node.selector is None
+            or len(node.depends_on) != 1
+            or node.kind
+            not in {"response_item.custom_tool_call_output", "response_item.function_call_output"}
+        ):
+            continue
+        call = by_id[node.depends_on[0]]
+        if call.selector is None:
+            continue
+        call_payload = _object(records[call.selector.line - 1].get("payload"))
+        if not _string(call_payload.get("name")):
+            continue
+        payload = _object(records[node.selector.line - 1].get("payload"))
+        for path, text in _tool_output_fields(payload.get("output")):
+            sites.append(EditableToolOutputText(node.id, path, text))
+    return tuple(sites)
+
+
+def is_text_tool_output(value: JsonValue | None) -> bool:
+    """Recognize a string or a complete list of native text blocks, including an empty list."""
+
+    return isinstance(value, str) or (
+        isinstance(value, list)
+        and all(
+            isinstance(item, dict)
+            and item.get("type") == "input_text"
+            and isinstance(item.get("text"), str)
+            for item in value
+        )
+    )
+
+
+def _tool_output_fields(output: JsonValue | None) -> tuple[tuple[str, str], ...]:
+    if not is_text_tool_output(output):
+        return ()
+    if isinstance(output, str):
+        return (("/payload/output", output),)
+    return tuple(
+        (f"/payload/output/{index}/text", cast(str, cast(JsonObject, item)["text"]))
+        for index, item in enumerate(cast(list[JsonValue], output))
     )
 
 

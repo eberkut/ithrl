@@ -24,6 +24,7 @@ The skill installer does not install or upgrade ithrl.
 | Prepare and execute context removal | `docs/reduction.md` |
 | Configure and run text-append fuzzing | `docs/fuzzing.md` |
 | Compare two explicit contexts for repair or degradation | `docs/comparison.md` |
+| Select an exact tool output text span | `docs/comparison.md#select-tool-output-text` |
 | Inspect results, resume work and estimate token costs | `docs/results.md` |
 | Resolve reported failures | `docs/troubleshooting.md` |
 | Understand measured outcomes and limits | `docs/measurements.md` |
@@ -43,6 +44,12 @@ For a reduction, `inspect retained` explains dependencies, retained units and re
 Joint or earlier-context trials cannot explain each retained item individually. `inspect sections`
 lists editable prior-user fields and source-bound paragraph IDs; eligibility does not prove that
 coarse search will retain a field or that removing a paragraph preserves behavior.
+
+`inspect tool CASE` lists prior native tool output fields without displaying text.
+Select a reported `--field FIELD_ID` and `--start START --end END` to derive an exact span-deletion
+descriptor from source; positions are original Unicode codepoints. Bounded private display requires
+`--field` and `--show-text`. Check the matching documentation's supported-inputs table before
+proposing native execution.
 
 ## Extract a decision
 
@@ -107,12 +114,22 @@ extra. Bind reference and candidate selections to one immutable case. Keep the t
 target, grader and current execution profile identical between arms. A historical capture may
 suggest a change but supplies no experimental sample credit.
 
+For tool output edits, follow the matching source ref's span-selection guide above. Keep the
+reference unmutated and both dependency-closed record partitions identical, with one candidate span
+deletion; edit authoring establishes neither qualified native support nor execution authorization.
+
 Use the normal `ithrl compare` detection, dry-run and execution workflow from that guide.
 Calibration checks the declared contrast; confirmation uses fresh observations. A saved run resumes
-with its original inputs and allowance. An explicit prospective Codex profile can select a different
-model or provider and omit historical reasoning from both execution copies. Report that projection
-separately from the tested context edit; it does not establish historical equivalence. Do not select
-a model from the agent's own defaults.
+with its original inputs and allowance. Use the shared `model`, `provider` and `reasoning_effort`
+settings for supported execution choices, keeping any history projection separate from the context
+edit. Changed settings require a new profile and fresh observations, with no pooling across
+settings. Do not select a model from the agent's own defaults.
+
+If replacement is needed, select `safe-provider-transport` and reserve bounded spare attempts before
+collection, keeping valid-sample targets fixed. Follow the Comparison guide's eligibility rules and
+the Results guide's conditional match-rate interpretation; retain failed attempts and their full
+charges. Preserve completed progress; never edit saved state, discard samples or extend a terminal
+plan to retry a failure.
 
 ## Interpret results and costs
 

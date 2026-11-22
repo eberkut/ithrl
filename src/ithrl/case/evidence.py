@@ -40,6 +40,15 @@ from ithrl.text_sections import (
     catalog_text_sections,
     remove_text_sections,
 )
+from ithrl.tool_output_text import (
+    EditableToolOutputText,
+    ToolOutputTextError,
+    ToolOutputTextField,
+    ToolOutputTextLimitError,
+    ToolOutputTextSpanRemoval,
+    describe_tool_output_text,
+    validate_tool_output_text_removal,
+)
 
 
 def case_digest(
@@ -66,7 +75,7 @@ def case_digest(
 
 
 @dataclass(frozen=True, slots=True, repr=False)
-class _VerifiedEditableText:
+class _VerifiedEditableText[Site]:
     """Derived text bound to one owner and its exact immutable evidence inputs."""
 
     owner: ReferenceType[CaseEvidence]
@@ -74,7 +83,16 @@ class _VerifiedEditableText:
     context: ContextGraph
     decision: DecisionEvidence | None
     sources: tuple[SourceArtifact, ...]
-    sites: tuple[EditableText, ...]
+    sites: tuple[Site, ...]
+
+    def matches(self, evidence: CaseEvidence) -> bool:
+        return (
+            self.owner() is evidence
+            and self.manifest is evidence._manifest
+            and self.context is evidence._context
+            and self.decision is evidence._decision
+            and self.sources is evidence._source_artifacts
+        )
 
 
 class CaseEvidence:
@@ -90,6 +108,8 @@ class CaseEvidence:
         "_request",
         "_source_artifacts",
         "_verified_editable_text",
+        "_verified_tool_output_text",
+        "_verified_tool_output_text_field",
     )
 
     def __init__(
@@ -117,7 +137,16 @@ class CaseEvidence:
         self._default_experiment = default_experiment
         self._source_artifacts = sources
         self._digest = case_digest(manifest, request, context.nodes, sources, decision)
-        self._verified_editable_text: _VerifiedEditableText | None = None
+        self._verified_editable_text: _VerifiedEditableText[EditableText] | None = None
+        self._verified_tool_output_text: _VerifiedEditableText[EditableToolOutputText] | None = None
+        self._verified_tool_output_text_field: (
+            tuple[
+                _VerifiedEditableText[EditableToolOutputText],
+                ToolOutputTextField,
+                EditableToolOutputText,
+            ]
+            | None
+        ) = None
 
     @property
     def manifest(self) -> CaseManifest:
@@ -167,6 +196,10 @@ class CaseEvidence:
             if mutation is None
             else TextMutation.model_validate(mutation.model_dump())
         )
+        if any(isinstance(edit, ToolOutputTextSpanRemoval) for edit in mutation.edits):
+            raise MutationError(
+                "tool output text removal requires source-backed native materialization"
+            )
         if any(isinstance(edit, TextAppend) for edit in mutation.edits) and requested:
             raise MutationError("text mutation requires the unchanged original context")
         removed = self._context.dependency_closure(requested)
@@ -185,7 +218,7 @@ class CaseEvidence:
             inputs = cast(list[JsonValue], request["input"])
             if isinstance(edit, TextAppend):
                 inputs[index] = append_message_text(original, edit)
-            else:
+            elif isinstance(edit, TextSectionRemoval):
                 catalog = self.validate_text_sections(edit)
                 retained = remove_text_sections(
                     message_text(original, edit.content_index), catalog, edit
@@ -228,14 +261,7 @@ class CaseEvidence:
             from ithrl.extraction import editable_extracted_text
 
             verified = self._verified_editable_text
-            if (
-                verified is not None
-                and verified.owner() is self
-                and verified.manifest is self._manifest
-                and verified.context is self._context
-                and verified.decision is self._decision
-                and verified.sources is self._source_artifacts
-            ):
+            if verified is not None and verified.matches(self):
                 return verified.sites
             # Retain only immutable text facts, never the adapter's mutable native
             # session. Rebound evidence and copied owners must verify afresh.
@@ -258,6 +284,91 @@ class CaseEvidence:
                 continue
             found.extend(editable_message_text(node, message))
         return tuple(found)
+
+    def editable_tool_output_text(self) -> tuple[EditableToolOutputText, ...]:
+        """Return adapter-enumerated prior tool strings from verified logical evidence."""
+
+        if self._manifest.capture.request != "logical-session":
+            return ()
+        from ithrl.extraction import editable_extracted_tool_output_text
+
+        verified = self._verified_tool_output_text
+        if verified is not None and verified.matches(self):
+            return verified.sites
+        sites = editable_extracted_tool_output_text(self)
+        self._verified_tool_output_text = _VerifiedEditableText(
+            ref(self), self._manifest, self._context, self._decision, self._source_artifacts, sites
+        )
+        self._verified_tool_output_text_field = None
+        return sites
+
+    def _tool_output_text_field(self, site: EditableToolOutputText) -> ToolOutputTextField:
+        return describe_tool_output_text(
+            case_digest=self.digest,
+            context_id=site.context_id,
+            context_digest=self._context.by_id[site.context_id].digest,
+            field_path=site.field_path,
+            text=site.original_text,
+        )
+
+    def tool_output_text_fields(self) -> tuple[ToolOutputTextField, ...]:
+        """Describe complete eligible fields without exposing their private strings."""
+
+        fields = []
+        for site in self.editable_tool_output_text():
+            try:
+                fields.append(self._tool_output_text_field(site))
+            except ToolOutputTextLimitError:
+                continue
+            except ToolOutputTextError as error:
+                raise MutationError(str(error)) from None
+        return tuple(fields)
+
+    def tool_output_text_removal(
+        self, field_id: str, *, start: int, end: int
+    ) -> ToolOutputTextSpanRemoval:
+        """Create a digest-bound span from the verified source field."""
+
+        descriptor, site = self.tool_output_text_field(field_id)
+        try:
+            return descriptor.removal(site.original_text, start=start, end=end)
+        except ToolOutputTextError as error:
+            raise MutationError(str(error)) from None
+
+    def tool_output_text_field(
+        self, field_id: str
+    ) -> tuple[ToolOutputTextField, EditableToolOutputText]:
+        """Resolve one field, memoizing only its binding under verified discovery ownership."""
+
+        sites = self.editable_tool_output_text()
+        verified = self._verified_tool_output_text
+        selected = self._verified_tool_output_text_field
+        if selected is not None and selected[0] is verified and selected[1].field_id == field_id:
+            return selected[1], selected[2]
+        for site in sites:
+            try:
+                descriptor = self._tool_output_text_field(site)
+                if descriptor.field_id == field_id:
+                    if verified is not None:
+                        self._verified_tool_output_text_field = (verified, descriptor, site)
+                    return descriptor, site
+            except ToolOutputTextLimitError:
+                continue
+            except ToolOutputTextError as error:
+                raise MutationError(str(error)) from None
+        raise MutationError("tool output text removal requires an eligible source field")
+
+    def validate_tool_output_text_span(
+        self, edit: ToolOutputTextSpanRemoval
+    ) -> tuple[ToolOutputTextField, EditableToolOutputText]:
+        """Re-derive one native field, its eligibility and the complete exact deletion."""
+
+        descriptor, site = self.tool_output_text_field(edit.field_id)
+        try:
+            validate_tool_output_text_removal(site.original_text, descriptor, edit)
+        except ToolOutputTextError as error:
+            raise MutationError(str(error)) from None
+        return descriptor, site
 
     def text_sections(self) -> tuple[TextSectionCatalog, ...]:
         """List complete catalogs for eligible fields within the paragraph policy limits."""

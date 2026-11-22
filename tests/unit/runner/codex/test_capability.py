@@ -208,6 +208,7 @@ def test_detects_support_from_structure_without_version_allowlist(
         "dependency-closed-removal",
         "append-text",
         "remove-text-sections",
+        "remove-tool-output-text-span",
     )
     assert capability.action_execution == "denied"
     assert capability.provider_calls_per_attempt == (

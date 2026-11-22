@@ -162,6 +162,102 @@ def test_sampled_preflight_refuses_incompatible_deterministic_profiles(
             resolve_execution_plan(capability, experiment, **arguments)
 
 
+@pytest.mark.parametrize("provider", [None, "synthetic-provider"])
+@pytest.mark.parametrize("model", [None, "prospective-model"])
+def test_synthetic_runner_type_does_not_enable_native_codex_replay(
+    tmp_path: Path, provider: str | None, model: str | None
+) -> None:
+    evidence = _evidence(tmp_path)
+    source_digest = evidence.digest
+    capability = CapabilityProfile.deterministic_fake().model_copy(
+        update={
+            "runner_type": "codex",
+            "deterministic": False,
+            "provider_transport": "required",
+            "provider_calls_per_attempt": 1,
+            "provider": "synthetic-provider",
+            "endpoint": "https://example.invalid",
+            "protected_state_enforcement": "preventive",
+        }
+    )
+    original = _shell_experiment()
+    experiment = SampledExperimentDefinition(
+        target=original.target,
+        oracle=original.oracle,
+        runner=NativeRunnerConfig(
+            type="codex",
+            required_capability_digest=capability.digest,
+            provider=provider,
+            model=model,
+        ),
+        calibration=SampledCalibrationPhase(required_valid=1, minimum_matches=1, max_attempts=1),
+    )
+    report = resolve_execution_plan(
+        capability,
+        experiment,
+        evidence=evidence,
+        runner_fingerprint="synthetic-collector",
+        safety_policy=SafetyPolicy(
+            provider_transport="allowed",
+            allowed_provider=capability.provider,
+            allowed_endpoint=capability.endpoint,
+        ),
+        resource_limits=ResourceLimits(max_provider_calls=1),
+    )
+    assert report.ready, report.issues
+    assert report.plan is not None
+    assert report.plan.codex_replay is None
+    assert report.plan.model_requested == (model or evidence.manifest.model_requested)
+    assert not report.plan.inspection_metadata.reasoning_omitted
+    assert evidence.digest == source_digest
+
+
+@pytest.mark.parametrize("provider", [None, "different-provider"])
+def test_registry_checks_explicit_provider_without_inferring_a_source_override(
+    tmp_path: Path, provider: str | None
+) -> None:
+    from native_support import codex, copilot
+
+    _, evidence = codex._case(tmp_path)
+    capability = copilot._capability("final-response").model_copy(
+        update={
+            "runner_type": "codex",
+            "harness": "codex",
+            "source_schema": "codex-rollout-jsonl",
+            "reconstruction_method": "codex-app-server-inject-checkpoint-v1",
+        }
+    )
+    assert capability.provider != evidence.manifest.provider
+    source = ExperimentDefinition.from_toml(evidence.default_experiment)
+    experiment = SampledExperimentDefinition(
+        target=source.target,
+        oracle=source.oracle,
+        runner=NativeRunnerConfig(
+            type="codex", required_capability_digest=capability.digest, provider=provider
+        ),
+        calibration=SampledCalibrationPhase(required_valid=1, minimum_matches=1, max_attempts=1),
+    )
+    report = resolve_execution_plan(
+        capability,
+        experiment,
+        evidence=evidence,
+        runner_fingerprint="registry-owned-provider",
+        safety_policy=SafetyPolicy(
+            provider_transport="allowed",
+            allowed_provider=capability.provider,
+            allowed_endpoint=capability.endpoint,
+        ),
+        resource_limits=ResourceLimits(max_provider_calls=1),
+    )
+    if provider is None:
+        assert report.ready, report.issues
+        assert report.plan is not None
+        assert report.plan.codex_replay is None
+    else:
+        assert not report.ready
+        assert [issue.code for issue in report.issues] == ["runner-evidence-mismatch"]
+
+
 def test_fake_capability_resolves_bounded_credential_free_plan(tmp_path: Path) -> None:
     experiment = _shell_experiment()
     capability = CapabilityProfile.deterministic_fake()

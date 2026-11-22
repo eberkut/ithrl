@@ -436,6 +436,65 @@ def test_environment_refuses_missing_metadata_or_non_system_python(
         bind_environment(tmp_path)
 
 
+def test_environment_refuses_a_relative_path_at_the_environment_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ithrl.grading.bundle import bind_environment
+
+    monkeypatch.chdir(tmp_path)
+    Path("relative-environment").mkdir()
+    with pytest.raises(GradingError, match="grading-unsafe-environment"):
+        bind_environment(Path("relative-environment"))
+
+
+def test_environment_refuses_metadata_changed_during_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ithrl.grading import bundle
+
+    (tmp_path / "pyvenv.cfg").write_text(
+        "home = /usr/bin\nversion_info = 3.12.1\ninclude-system-site-packages = false\n"
+    )
+    original = os.fstat
+    calls = 0
+
+    def changed(fd: int):
+        nonlocal calls
+        calls += 1
+        result = original(fd)
+        if calls == 2:
+            return SimpleNamespace(
+                st_mode=result.st_mode,
+                st_size=result.st_size,
+                st_mtime_ns=result.st_mtime_ns + 1,
+                st_ctime_ns=result.st_ctime_ns,
+            )
+        return result
+
+    monkeypatch.setattr(bundle.os, "fstat", changed)
+    with pytest.raises(GradingError, match="grading-environment-changed"):
+        bundle.bind_environment(tmp_path)
+
+
+@pytest.mark.parametrize("platform", ["linux", "darwin"])
+def test_grading_refuses_when_required_runtime_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch, platform: str
+) -> None:
+    from ithrl.grading import bundle
+
+    monkeypatch.setattr(bundle.sys, "platform", platform)
+    monkeypatch.setattr(bundle.os, "access", Mock(return_value=False))
+    config = PatchGradingConfig(
+        bundle_path="/private/bundle",
+        bundle_digest="a" * 64,
+        environment_path="/private/environment",
+        environment_digest="b" * 64,
+    )
+    with pytest.raises(GradingError, match="grading-runtime-unavailable"):
+        bundle.validate_grading(config)
+
+
 @pytest.mark.parametrize("manifest", [None, b"not json"])
 def test_invalid_bundle_manifest_is_refused_before_environment_access(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, manifest: bytes | None

@@ -23,6 +23,38 @@ def test_sections_rejects_missing_case_without_echoing_its_path(tmp_path: Path) 
     assert "private-case-path" not in result.output
 
 
+def test_comparison_inspection_translates_invalid_saved_result_without_echoing_path(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "private-comparison-path"
+    result = CliRunner().invoke(app, ["inspect", "comparison", str(source), "--format", "json"])
+    assert result.exit_code == 2, result.output
+    error = json.loads(result.stdout)
+    assert error["error_code"] == "comparison-invalid"
+    assert "Cannot validate the saved comparison" in error["message"]
+    assert "private-comparison-path" not in result.output
+
+
+def test_comparison_inspection_reports_missing_optional_extra(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ithrl.comparison import results
+
+    def missing_extra(*_args: object, **_kwargs: object) -> object:
+        raise ImportError("optional comparison dependency unavailable")
+
+    monkeypatch.setattr(results, "load_comparison_result", missing_extra)
+    result = CliRunner().invoke(
+        app,
+        ["inspect", "comparison", str(tmp_path / "private-comparison-path"), "--format", "json"],
+    )
+    assert result.exit_code == 2, result.output
+    error = json.loads(result.stdout)
+    assert error["error_code"] == "comparison-extra-required"
+    assert "requires ithrl[compare]" in error["message"]
+    assert "private-comparison-path" not in result.output
+
+
 def test_sections_human_output_uses_saved_catalogs(reduced_example: tuple[Path, Path]) -> None:
     case, _ = reduced_example
     result = CliRunner().invoke(app, ["inspect", "sections", str(case)])

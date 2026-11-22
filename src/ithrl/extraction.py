@@ -21,7 +21,11 @@ from ithrl.adapters import (
     resolve_session,
     select_decision,
 )
-from ithrl.adapters.registry import editable_session_text, parse_session_bytes
+from ithrl.adapters.registry import (
+    editable_session_text,
+    editable_session_tool_output_text,
+    parse_session_bytes,
+)
 from ithrl.behavior import BehaviorTarget, evaluate_target
 from ithrl.case import (
     CaptureFacts,
@@ -41,6 +45,7 @@ from ithrl.experiment import (
     UnavailableRunnerConfig,
 )
 from ithrl.mutation import EditableText
+from ithrl.tool_output_text import EditableToolOutputText
 
 
 def extract_decision(
@@ -159,6 +164,21 @@ def editable_extracted_text(evidence: CaseEvidence) -> tuple[EditableText, ...]:
         return editable_session_text(session, decision.selector, evidence.context)
     except AdapterError:
         raise CaseFormatError("logical-session editable text cannot be derived safely") from None
+
+
+def editable_extracted_tool_output_text(
+    evidence: CaseEvidence,
+) -> tuple[EditableToolOutputText, ...]:
+    """Discover native tool fields after independently re-deriving their source case."""
+
+    session = _rederive_extracted_case(evidence)
+    decision = evidence.decision
+    if session is None or decision is None:
+        return ()
+    try:
+        return editable_session_tool_output_text(session, decision.selector, evidence.context)
+    except AdapterError:
+        raise CaseFormatError("logical-session tool output text cannot be derived safely") from None
 
 
 def _rederive_extracted_case(evidence: CaseEvidence) -> NativeSession | None:

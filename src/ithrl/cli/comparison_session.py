@@ -59,11 +59,49 @@ class ComparisonProfile(_PrivateModel):
     def consistent_identity(self) -> ComparisonProfile:
         plan = self.execution_plan
         runner = self.experiment.runner
-        if (
-            isinstance(runner, NativeRunnerConfig)
-            and runner.codex_replay != self.configuration.codex_replay
+        replay = plan.codex_replay
+        if replay is not None and (
+            not isinstance(runner, NativeRunnerConfig)
+            or runner.type != "codex"
+            or replay.model != plan.model_requested
+            or replay.provider != plan.capability.provider
         ):
-            raise ValueError("comparison replay configuration differs from its runner")
+            raise ValueError("comparison replay policy differs from its runner")
+        if (
+            self.configuration.provider is not None
+            and isinstance(runner, NativeRunnerConfig)
+            and runner.provider != self.configuration.provider
+        ):
+            raise ValueError("comparison provider configuration differs from its runner")
+        if self.configuration.provider is not None and (
+            self.configuration.provider != plan.capability.provider
+        ):
+            raise ValueError("comparison provider configuration differs from its execution plan")
+        if (
+            self.configuration.model is not None
+            and isinstance(runner, NativeRunnerConfig)
+            and runner.model != self.configuration.model
+        ):
+            raise ValueError("comparison model configuration differs from its runner")
+        if self.configuration.reasoning_effort is not None and (
+            self.configuration.reasoning_effort != plan.reasoning_effort
+            or (
+                isinstance(runner, NativeRunnerConfig)
+                and runner.reasoning_effort != self.configuration.reasoning_effort
+            )
+        ):
+            raise ValueError("comparison reasoning effort differs from its execution profile")
+        if self.configuration.model is not None and (
+            not isinstance(runner, NativeRunnerConfig)
+            or plan.model_requested != self.configuration.model
+        ):
+            raise ValueError("comparison model configuration differs from its execution plan")
+        if isinstance(runner, NativeRunnerConfig) and (
+            (runner.model is not None and runner.model != plan.model_requested)
+            or (runner.provider is not None and runner.provider != plan.capability.provider)
+            or runner.reasoning_effort != plan.reasoning_effort
+        ):
+            raise ValueError("comparison runner settings differ from its execution plan")
         if (
             self.identity.case_digest != plan.case_digest
             or self.identity.experiment_digest != self.experiment.digest
@@ -71,7 +109,6 @@ class ComparisonProfile(_PrivateModel):
             or self.identity.execution_plan_digest != plan.digest
             or self.identity.target_digest != self.experiment.target.digest
             or plan.target_digest != self.experiment.target.digest
-            or plan.codex_replay != self.configuration.codex_replay
             or self.identity.runner_fingerprint != plan.runner_fingerprint
             or self.identity.algorithm_digest != self.configuration.policy_digest
             or self.binding.procedure != self.configuration.procedure

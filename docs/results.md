@@ -84,6 +84,39 @@ Complete captures need not contain entire resources. Usage stays unknown; saving
 and compaction's causal effects remain unestablished. Active reconstruction and normalized,
 heuristic, resume, fork, handoff or cross-harness comparisons are unsupported.
 
+## Inspect tool output
+
+List source-bound native tool output text fields without a harness, credentials or model call:
+
+```bash
+ithrl inspect tool CASE --format json
+```
+
+Codex fields are paired `function_call_output` or `custom_tool_call_output` records: either a
+string `payload.output`, or each `text` string in an output array containing only `input_text`
+blocks. Copilot fields are string `data.result.content` values in prior `tool.execution_complete`
+events. Copilot `detailedContent`, structured values and mixed Codex output arrays are excluded.
+
+Each field reports its identity, source node and native field path, original-text digest,
+codepoint count and UTF-8 byte size. Only prior eligible fields are included; the current decision
+input remains fixed. Fields beyond the 1 MiB policy appear in `unavailable_fields`.
+`metadata_limit` bounds the combined field listings at 4,096 entries; `omitted_field_count`
+reports additional entries. A partial listing does not mean the omitted fields are ineligible.
+
+To inspect one field privately, replace `FIELD_ID` with a reported identity:
+
+```bash
+ithrl inspect tool CASE --field FIELD_ID --show-text --max-text-bytes 4096
+```
+
+Display is escaped and bounded in UTF-8 bytes. `text_truncated` reports incomplete display;
+displayed escape characters are not source offsets. Select ranges in the original Unicode string
+using the [source-location procedure](comparison.md#select-tool-output-text).
+Supplying `--start START --end END` creates a source-bound deletion
+descriptor; with `--show-text`, the displayed field is the retained text after that deletion.
+See [comparison configuration](comparison.md#select-tool-output-text) for its use and supported
+profiles. Discovery alone establishes neither native delivery nor a behavioral effect.
+
 ## Inspect retained context
 
 Inspect a saved reduction alongside its original case:
@@ -238,7 +271,7 @@ Both search stages can be incomplete at final selection. `search-reduced` requir
 and fine coverage when fine search is configured; `coarse_final_sweep_complete` describes only the
 whole-record sweep. The fresh holdout cannot reopen either stage or select a different edit.
 
-The opt-in Codex `safe-provider-overload` policy permits a fresh attempt after a verified structured
+The opt-in `safe-provider-overload` policy permits a fresh attempt after a verified structured
 overload with no captured output, unchanged protected state and verified cleanup. Failed
 observations, unknown acceptance and their full conservative call charge remain recorded. Its
 valid-only interpretation assumes independent, stationary attempts with prespecified validity.
@@ -290,6 +323,20 @@ Both forms validate the snapshot's identities, phase chronology and observation 
 `verified`; otherwise that field is `not-requested`. The snapshot and case remain private. Default
 output contains edit metadata and accounting without session text or model responses.
 
+For a tool output text edit, `candidate_context.tool_output_text_edit` preserves its source-bound
+selector and range. With `--case`, `candidate_context.tool_output_text_field` also reports original,
+removed and retained codepoint and UTF-8 byte counts. To display the retained field privately:
+
+```bash
+ithrl inspect comparison RESULT --case CASE --show-text --max-text-bytes 4096
+```
+
+This preview reconstructs the retained string from the verified source and edit; it is not a capture
+of native delivered input. It uses the same escaped byte allowance as tool output text inspection.
+Common record omissions may remove duplicate carriers from both arms. The native envelope and
+surviving carriers still condition the result; deleting one occurrence does not establish absence of
+that information.
+
 The report includes both context digests, removed IDs, text-edit metadata, sampling counts and
 execution declarations. Recorded requested model and provider appear when their known values agree;
 absent, conflicting or unsafe identifiers are omitted. Neither source validation nor the recorded
@@ -309,6 +356,18 @@ and pending provider calls remain distinct. Inference assumes independent, stati
 under the prespecified eligibility policy. The result concerns the complete intervention, without
 establishing component necessity, minimality, an interaction or a unique historical cause.
 See the [comparison guide](comparison.md) for configuration, limits and continuation.
+
+With `safe-provider-transport`, eligible output-free transport failures, preventive timeouts and
+structured overloads may consume frozen spare attempts while completed samples remain intact.
+Replacement requires complete native-output capture, no requested actions, unchanged protected
+state, enforced action denial and verified cleanup. Unknown acceptance retains the full conservative
+call charge. The match rate estimates `P(match | valid)`; it does not include operational failures
+as nonmatches. Read invalid counts and remaining spare capacity alongside the valid-sample target.
+Strict and overload-only policies retain their own rules.
+
+Safety and cleanup checks do not prove that failures are independent of behavior. A timeout can
+select on response latency, which may relate to the answer. The conditional match rate therefore
+does not establish the unconditional match probability or execution reliability.
 
 ## Budgets and resume
 
@@ -483,6 +542,9 @@ from recorded usage and never fill telemetry gaps. For duration-specific cache w
 Cases can contain prompts, source code, command output, paths and credentials. Keep cases, traces,
 observation stores and native output private. Never commit them or attach them to a public issue
 without reviewing and sanitizing their contents.
+
+Native traces can summarize ignored model telemetry with a byte count and digest. Behavioral
+output, actions and usage evidence remain exact; a telemetry summary does not supply missing usage.
 
 By default, observations are stored in the platform's standard user-data directory. Use
 `--observation-store PATH` for a dedicated SQLite store inside a private directory. On POSIX

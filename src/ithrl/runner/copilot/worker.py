@@ -74,6 +74,33 @@ def _emit(document: dict[str, object]) -> None:
     sys.stdout.flush()
 
 
+def _project_native_event(document: dict[str, object]) -> dict[str, object]:
+    """Bound opaque model telemetry while retaining its native event envelope."""
+
+    kind = document.get("type")
+    data = document.get("data")
+    if (
+        not isinstance(kind, str)
+        or not kind.startswith("model.")
+        or kind
+        in {
+            "model.call_start",
+            "model.call_finished",
+            "model.call_final_result",
+            "model.call_failure",
+        }
+        or not isinstance(data, dict)
+    ):
+        return document
+    encoded = json.dumps(data, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode(
+        "utf-8"
+    )
+    return {
+        **document,
+        "data": {"omitted_data_bytes": len(encoded), "omitted_data_sha256": _digest(encoded)},
+    }
+
+
 def _digest(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
@@ -116,7 +143,7 @@ def _parse_request(raw: bytes) -> dict[str, Any]:
         )
     except (UnicodeError, ValueError, RecursionError) as error:
         raise WorkerError("Copilot worker request contains invalid JSON") from error
-    if not isinstance(value, dict) or set(value) != {
+    if not isinstance(value, dict) or set(value) - {"reasoningEffort"} != {
         "commandFlags",
         "model",
         "nativeSession",
@@ -138,6 +165,13 @@ def _parse_request(raw: bytes) -> dict[str, Any]:
             for flag in flags
         )
         or not _bounded_text(value["model"], _MAX_MODEL_BYTES)
+        or (
+            "reasoningEffort" in value
+            and (
+                not isinstance(value["reasoningEffort"], str)
+                or not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", value["reasoningEffort"])
+            )
+        )
         or not isinstance(value["sessionId"], str)
         or not _SESSION_ID.fullmatch(value["sessionId"])
         or value["target"] not in {"final-response", "shell-action"}
@@ -156,6 +190,7 @@ def _managed_request(
     context: Any,
     *,
     session_id: str,
+    reasoning_effort: str | None = None,
 ) -> bytes:
     """Refuse inherited custom routing before the physical forwarding seam."""
     url = urlsplit(str(request.url))
@@ -174,11 +209,31 @@ def _managed_request(
         or context.transport != "http"
     ):
         raise WorkerError("Copilot inference routing is outside the managed profile")
-    # Provider payload encoding is SDK-owned. Verify model and system guidance
-    # through native session events, rather than assuming a Chat Completions body.
+    # Model and system guidance are verified through native session events.
     content = request.content
     if len(content) > MAX_NATIVE_SESSION_BYTES:
         raise WorkerError("Copilot inference request exceeds its byte limit")
+    if reasoning_effort is not None:
+        try:
+            body = json.loads(
+                content,
+                object_pairs_hook=_object_without_duplicates,
+                parse_constant=_reject_constant,
+            )
+        except (UnicodeError, ValueError, RecursionError):
+            raise WorkerError("Copilot inference reasoning effort is unverified") from None
+        if not isinstance(body, dict):
+            raise WorkerError("Copilot inference reasoning effort is unverified")
+        reasoning = body.get("reasoning")
+        if "reasoning" in body and "reasoning_effort" in body:
+            raise WorkerError("Copilot inference reasoning effort is ambiguous")
+        actual_effort = (
+            reasoning.get("effort") if isinstance(reasoning, dict) else body.get("reasoning_effort")
+        )
+        if actual_effort != reasoning_effort:
+            raise WorkerError(
+                "Copilot inference reasoning effort differs from the selected profile"
+            )
     return content
 
 
@@ -292,6 +347,8 @@ def _resume_options(
     }
     if request["systemMessage"] is not None:
         options["system_message"] = {"mode": "replace", "content": request["systemMessage"]}
+    if request.get("reasoningEffort") is not None:
+        options["reasoning_effort"] = request["reasoningEffort"]
     if github_token is not None:
         options["github_token"] = github_token
     return options
@@ -367,6 +424,7 @@ async def _run_session(
                 raise WorkerError("Copilot attempted more than one physical inference request")
             catalog = False
             metadata = False
+            inference_forwarding = False
             try:
                 await policy_proof.wait()
                 if failed or not effective_policy_verified:
@@ -401,6 +459,7 @@ async def _run_session(
                     request,
                     ctx,
                     session_id=settings["sessionId"],
+                    reasoning_effort=settings.get("reasoningEffort"),
                 )
                 await context_proof.wait()
                 if failed or not system_message_verified or not model_verified:
@@ -416,7 +475,17 @@ async def _run_session(
                         "provider_calls_started": 1,
                     }
                 )
-                return await super().send_request(request, ctx)
+                inference_forwarding = True
+                response = await super().send_request(request, ctx)
+                _emit(
+                    {
+                        "type": "ithrl.copilot.response",
+                        "schema_version": 1,
+                        "request_sha256": dispatch_digest,
+                        "status_code": response.status_code,
+                    }
+                )
+                return response
             except Exception as error:
                 failed = True
                 if failure_stage is None:
@@ -446,6 +515,10 @@ async def _run_session(
                         failure_code = "managed-policy-unverified"
                     elif not system_message_verified or not model_verified:
                         failure_code = "native-context-unverified"
+                    elif inference_forwarding and isinstance(error, httpx.TransportError):
+                        # Only the actual one-shot HTTP transport can establish
+                        # this code. No response was returned and no retry occurs.
+                        failure_code = "inference-transport-failed"
                     else:
                         failure_code = "inference-request-refused"
                 done.set()
@@ -482,7 +555,7 @@ async def _run_session(
             policy_proof.set()
             context_proof.set()
             return
-        _emit(document)
+        _emit(_project_native_event(document))
         if kind not in _ALLOWED_EVENTS and not kind.startswith(("model.", "session.")):
             failed = True
             done.set()
@@ -676,6 +749,8 @@ def _failure_reason(error: Exception) -> str:
 
     if isinstance(error, WorkerError):
         return str(error)  # Only runner-owned fixed messages use this exception.
+    import httpx
+
     message = str(error).lower()
     if "certificate" in message:
         return "Copilot TLS certificate validation failed"
@@ -683,9 +758,21 @@ def _failure_reason(error: Exception) -> str:
         return "Copilot authentication was unavailable to the SDK session"
     if "model" in message:
         return "Copilot could not initialize the requested model"
+    if isinstance(error, httpx.TimeoutException):
+        return "Copilot SDK transport timed out"
+    if isinstance(error, httpx.ProxyError):
+        return "Copilot SDK proxy connection failed"
+    if isinstance(error, httpx.ProtocolError):
+        return "Copilot SDK transport protocol failed"
+    if isinstance(error, httpx.ConnectError):
+        return "Copilot could not establish the required connection"
+    if isinstance(error, httpx.ReadError):
+        return "Copilot could not read from the required connection"
+    if isinstance(error, httpx.WriteError):
+        return "Copilot could not write to the required connection"
     if any(word in message for word in ("network", "connect", "fetch", "certificate")):
         return "Copilot could not establish the required connection"
-    return "Copilot rejected the SDK operation"
+    return "Copilot SDK operation failed"
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import stat
+import time
 from dataclasses import replace
 from pathlib import Path
 
@@ -186,6 +187,35 @@ def test_worker_change_is_refused_before_dispatch(tmp_path: Path) -> None:
     runner._worker_source.write_text("# Changed fixture worker\n")
     with pytest.raises(RunnerError) as refused:
         asyncio.run(runner.run(attempt))
+    assert refused.value.code is RunnerErrorCode.PREPARATION
+    assert not marker.exists()
+
+
+def test_fingerprint_binds_materializer_content(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source, workspace, evidence = _case(tmp_path, "final-response")
+    implementation = tmp_path / "implementation"
+    implementation.mkdir()
+    (implementation / "worker.py").write_bytes(b"# Fixture worker source.\n")
+    materializer = implementation / "materialize.py"
+    materializer.write_bytes(b"# Original fixture materializer.\n")
+    monkeypatch.setattr(copilot_runner_module, "__file__", str(implementation / "runner.py"))
+    original, marker = _runner(tmp_path, source, workspace, target="final-response")
+    attempt = _attempt(evidence, original)
+    same, _ = _runner(tmp_path, source, workspace, target="final-response")
+    assert same.fingerprint == original.fingerprint
+
+    materializer.write_bytes(b"# Changed fixture materializer.\n")
+    changed, _ = _runner(tmp_path, source, workspace, target="final-response")
+
+    assert changed.capability_profile == original.capability_profile
+    assert changed._runtime.identity == original._runtime.identity
+    assert changed._configuration.public_digest == original._configuration.public_digest
+    assert changed._worker_digest == original._worker_digest
+    assert changed.fingerprint != original.fingerprint
+    with pytest.raises(RunnerError) as refused:
+        original._validate_attempt(attempt)
     assert refused.value.code is RunnerErrorCode.PREPARATION
     assert not marker.exists()
 
@@ -555,6 +585,82 @@ def test_maps_invalid_native_output_without_exposing_content(
     assert "private-fixture-token" not in str(refused.value)
     assert refused.value.accounting is not None
     assert refused.value.accounting.cleanup_outcome == "verified"
+
+
+@pytest.mark.parametrize("failure", ["transport", "timeout", "headers-timeout", "partial-timeout"])
+def test_output_free_failure_retains_safety_and_refuses_post_response_timeout(
+    tmp_path: Path,
+    failure: str,
+) -> None:
+    source, workspace, evidence = _case(tmp_path, "final-response")
+    runner, _ = _runner(tmp_path, source, workspace, target="final-response")
+    worker_source = runner._worker_source
+    fixture = worker_source.read_text(encoding="utf-8")
+    fixture = fixture.replace(
+        'receipt("forward", request_sha256=request_digest, provider_calls_started=1)', ""
+    )
+    fixture = fixture.replace(
+        'emit("assistant.turn_start",',
+        """emit("session.managed_settings_resolved", {
+    "clientManaged": True, "bypassPermissionsDisabled": True, "failClosed": False,
+    "permissionsContext": {"permissions": {
+        "disableBypassPermissionsMode": "disable", "disableAssistedPermissionsMode": True,
+        "deny": ["Shell(*)"]}}})
+if settings["systemMessage"] is not None:
+    emit("system.message", {"content": settings["systemMessage"]})
+emit("assistant.turn_start",""",
+    )
+    failure_source = """receipt("complete", provider_calls_started=1, requests_rejected=0,
+        websockets_rejected=0, permissions_denied=0, request_sha256=request_digest,
+        success=False, failure_stage="inference-request", failure_code="inference-transport-failed")
+raise SystemExit(70)"""
+    if failure != "transport":
+        failure_source = "time.sleep(60)"
+        if failure in {"headers-timeout", "partial-timeout"}:
+            failure_source = (
+                'receipt("response", request_sha256=request_digest, status_code=200)\n'
+                + (
+                    'emit("assistant.reasoning", {"content": "partial output"})\n'
+                    if failure == "partial-timeout"
+                    else ""
+                )
+                + failure_source
+            )
+    fixture = fixture.replace(
+        'emit(\n    "model.call_finished",',
+        'receipt("forward", request_sha256=request_digest, provider_calls_started=1)\n'
+        + failure_source
+        + '\nemit(\n    "model.call_finished",',
+    )
+    worker_source.write_text(fixture, encoding="utf-8")
+    runner._worker_digest = program_digest(worker_source)
+    attempt = _attempt(evidence, runner)
+    with pytest.raises(RunnerError) as caught:
+        asyncio.run(runner.run(attempt, runtime_deadline=time.monotonic() + 1))
+    error = caught.value
+    eligible = failure in {"transport", "timeout"}
+    assert error.code is (
+        RunnerErrorCode.TRANSPORT if failure == "transport" else RunnerErrorCode.TIMEOUT
+    )
+    if eligible:
+        assert error.reason_code == (
+            "inference-transport-failed"
+            if failure == "transport"
+            else "inference-output-free-timeout"
+        )
+    assert error.behavior_output_observed is (not eligible)
+    assert error.native_output is not None
+    assert error.native_output.complete
+    assert error.accounting is not None
+    assert error.accounting.provider_calls_started == 1
+    assert error.accounting.provider_calls_completed == 0
+    assert error.accounting.cleanup_outcome == "verified"
+    assert error.provider_acceptance_state is ProviderAcceptanceState.UNKNOWN
+    persisted = AttemptEvidence.from_error(attempt, error)
+    assert persisted.transport_replacement_safe is eligible
+    assert AttemptEvidence.model_validate_json(persisted.model_dump_json()) == persisted
+    assert not persisted.automatic_retry_safe
+    assert persisted.provider_call_charge(1) == 1
 
 
 @pytest.mark.parametrize(("mode", "actual_calls"), [("sleep", 1), ("startup-sleep", 0)])

@@ -15,6 +15,9 @@ from ithrl.adapters.codex import PARSER as CODEX_PARSER
 from ithrl.adapters.codex.context import compile_context as compile_codex_context
 from ithrl.adapters.codex.context import decision_input_node_id as codex_decision_input_node_id
 from ithrl.adapters.codex.context import editable_text as editable_codex_text
+from ithrl.adapters.codex.context import (
+    editable_tool_output_text as editable_codex_tool_output_text,
+)
 from ithrl.adapters.codex.decisions import enumerate_decisions as enumerate_codex_decisions
 from ithrl.adapters.codex.discovery import discover_sources as discover_codex_sources
 from ithrl.adapters.codex.reacquisition import project_reacquisition as project_codex_reacquisition
@@ -23,6 +26,9 @@ from ithrl.adapters.copilot import PARSER as COPILOT_PARSER
 from ithrl.adapters.copilot.context import compile_context as compile_copilot_context
 from ithrl.adapters.copilot.context import decision_input_node_id as copilot_decision_input_node_id
 from ithrl.adapters.copilot.context import editable_text as editable_copilot_text
+from ithrl.adapters.copilot.context import (
+    editable_tool_output_text as editable_copilot_tool_output_text,
+)
 from ithrl.adapters.copilot.decisions import enumerate_decisions as enumerate_copilot_decisions
 from ithrl.adapters.copilot.discovery import discover_sources as discover_copilot_sources
 from ithrl.adapters.copilot.reacquisition import (
@@ -42,6 +48,7 @@ from ithrl.adapters.reacquisition import PassiveProjection
 from ithrl.context import ContextGraph, ContextNode, JsonObject
 from ithrl.decisions import DecisionDraft, DecisionSelector, DecisionSummary, SelectedDecision
 from ithrl.mutation import EditableText
+from ithrl.tool_output_text import EditableToolOutputText
 
 
 class NativeSessionParser(Protocol):
@@ -86,6 +93,14 @@ class TextDiscoverer(Protocol):
     ) -> tuple[EditableText, ...]: ...
 
 
+class ToolOutputTextDiscoverer(Protocol):
+    """Locate native tool output strings without granting execution support."""
+
+    def __call__(
+        self, session: NativeSession, selector: DecisionSelector, context: ContextGraph
+    ) -> tuple[EditableToolOutputText, ...]: ...
+
+
 class DecisionInputLocator(Protocol):
     """Identify the fixed native input in an already validated decision context."""
 
@@ -106,6 +121,7 @@ class _AdapterRegistration:
     context_compiler: ContextCompiler
     decision_input_locator: DecisionInputLocator
     text_discoverer: TextDiscoverer | None = None
+    tool_output_text_discoverer: ToolOutputTextDiscoverer | None = None
     passive_projector: Callable[[JsonlDocument], PassiveProjection] | None = None
 
 
@@ -126,6 +142,7 @@ _BUILTIN_ADAPTERS = (
         context_compiler=compile_codex_context,
         decision_input_locator=codex_decision_input_node_id,
         text_discoverer=editable_codex_text,
+        tool_output_text_discoverer=editable_codex_tool_output_text,
         passive_projector=project_codex_reacquisition,
     ),
     _AdapterRegistration(
@@ -136,6 +153,7 @@ _BUILTIN_ADAPTERS = (
         context_compiler=compile_copilot_context,
         decision_input_locator=copilot_decision_input_node_id,
         text_discoverer=editable_copilot_text,
+        tool_output_text_discoverer=editable_copilot_tool_output_text,
         passive_projector=project_copilot_reacquisition,
     ),
 )
@@ -182,6 +200,17 @@ def editable_session_text(
     if adapter is None or adapter.text_discoverer is None:
         return ()
     return adapter.text_discoverer(session, selector, context)
+
+
+def editable_session_tool_output_text(
+    session: NativeSession, selector: DecisionSelector, context: ContextGraph
+) -> tuple[EditableToolOutputText, ...]:
+    """Discover only native tool fields enumerated by their registered adapter."""
+
+    adapter = _ADAPTERS_BY_FORMAT.get(session.metadata.format.name)
+    if adapter is None or adapter.tool_output_text_discoverer is None:
+        return ()
+    return adapter.tool_output_text_discoverer(session, selector, context)
 
 
 def discover_sessions(

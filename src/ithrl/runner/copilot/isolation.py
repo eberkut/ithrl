@@ -83,6 +83,7 @@ def prepare_copilot_process(
     target: CopilotTarget,
     worker_source: Path,
     worker_digest: str,
+    reasoning_effort: str | None = None,
 ) -> ProcessSpec:
     """Write private worker inputs and return one direct Bubblewrap invocation."""
 
@@ -110,6 +111,7 @@ def prepare_copilot_process(
         target=target,
         command_flags=policy.command_flags,
         secret_environment_names=configuration.environment_names,
+        reasoning_effort=reasoning_effort,
     )
     try:
         session_state = _private_directory(copilot_home / "session-state")
@@ -166,6 +168,7 @@ def _worker_request(
     target: CopilotTarget,
     command_flags: tuple[str, ...],
     secret_environment_names: tuple[str, ...],
+    reasoning_effort: str | None = None,
 ) -> bytes:
     flags = list(command_flags)
     if secret_environment_names:
@@ -179,6 +182,12 @@ def _worker_request(
         "target": target,
         "workspace": f"{SANDBOX_ROOT}/workspace",
     }
+    if reasoning_effort is not None:
+        import re
+
+        if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", reasoning_effort):
+            raise CopilotIsolationError("Copilot reasoning effort is invalid")
+        document["reasoningEffort"] = reasoning_effort
     return json.dumps(
         document,
         allow_nan=False,

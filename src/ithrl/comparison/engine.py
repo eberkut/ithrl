@@ -273,7 +273,27 @@ def prepare_comparison(
         or prepared.runner.capability_profile != prepared.execution_plan.capability
     ):
         raise ValueError("comparison runner differs from its prepared execution plan")
-    if configuration.codex_replay != prepared.execution_plan.codex_replay:
+    replay = prepared.execution_plan.codex_replay
+    if (
+        configuration.reasoning_effort is not None
+        and configuration.reasoning_effort != prepared.execution_plan.reasoning_effort
+    ):
+        raise ValueError("comparison reasoning effort differs from its prepared execution plan")
+    if (
+        configuration.model is not None
+        and configuration.model != prepared.execution_plan.model_requested
+    ):
+        raise ValueError("comparison model differs from its prepared execution plan")
+    if (
+        configuration.provider is not None
+        and configuration.provider != prepared.execution_plan.capability.provider
+    ):
+        raise ValueError("comparison provider differs from its prepared execution plan")
+    if replay is not None and (
+        prepared.execution_plan.harness != "codex"
+        or replay.model != prepared.execution_plan.model_requested
+        or replay.provider != prepared.execution_plan.capability.provider
+    ):
         raise ValueError("comparison replay differs from its prepared execution plan")
     partitions: list[Candidate] = []
     selections: tuple[tuple[ContextSelection, Literal["baseline", "candidate"]], ...] = (

@@ -35,6 +35,8 @@ from ithrl.experiment import (
     UnavailableRunnerConfig,
 )
 from ithrl.extraction import extract_decision
+from ithrl.runner import PreparedAttempt, prepare_candidate
+from ithrl.runner.codex.materialize import materialize_codex_attempt
 from ithrl.runner.copilot.capability import CopilotCapabilityErrorCode
 from ithrl.workflow import OraclePrerequisiteError, PreflightRefusedError
 
@@ -316,7 +318,7 @@ def test_ordinary_case_resolves_explicit_samples_without_rewriting_evidence(
 
 
 @pytest.mark.parametrize("saved", [False, True])
-def test_explicit_codex_replay_uses_the_declared_provider_and_persists_selection(
+def test_explicit_provider_and_model_persist_selection_and_resolve_native_policy(
     native_case: tuple[CaseWorkspace, CaseEvidence, Path],
     mocked_runtime: tuple[Mock, Mock],
     monkeypatch: pytest.MonkeyPatch,
@@ -337,7 +339,8 @@ def test_explicit_codex_replay_uses_the_declared_provider_and_persists_selection
             runner=NativeRunnerConfig(
                 type="codex",
                 required_capability_digest=effective_profile.digest,
-                codex_replay=replay,
+                model=replay.model,
+                provider=replay.provider,
             ),
             calibration=PHASE,
         )
@@ -349,12 +352,13 @@ def test_explicit_codex_replay_uses_the_declared_provider_and_persists_selection
         original_workspace=original,
         experiment=experiment,
         calibration=PHASE,
-        codex_replay=None if saved else replay,
+        model=None if saved else replay.model,
+        provider=None if saved else replay.provider,
     )
     assert resolver.call_args.kwargs["provider_id"] == replay.provider
     assert constructor.call_args.kwargs["codex_replay"] == replay
     assert isinstance(selection.experiment.runner, NativeRunnerConfig)
-    assert selection.experiment.runner.codex_replay == replay
+    assert selection.experiment.runner.provider == replay.provider
     report = resolve_execution_plan(
         effective_profile,
         selection.experiment,
@@ -370,42 +374,262 @@ def test_explicit_codex_replay_uses_the_declared_provider_and_persists_selection
     assert report.plan.inspection_metadata.reasoning_omitted
 
 
-@pytest.mark.parametrize("fault", ["mismatch", "copilot"])
-def test_codex_replay_refusals_precede_native_detection(
+@pytest.mark.parametrize("harness", ["codex", "copilot"])
+@pytest.mark.parametrize("saved", [False, True])
+@pytest.mark.parametrize("reasoning_effort", [None, "medium"])
+def test_native_model_selection_binds_execution_without_changing_source(
+    native_case: tuple[CaseWorkspace, CaseEvidence, Path],
+    profile: CapabilityProfile,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    harness: str,
+    saved: bool,
+    reasoning_effort: str | None,
+) -> None:
+    workspace, evidence, original = native_case
+    if harness == "copilot":
+        from native_support.copilot import _capability, _case
+
+        root = tmp_path / "copilot"
+        root.mkdir()
+        _, workspace, evidence = _case(root, "final-response")
+        profile = _capability("final-response")
+    source_digest = evidence.digest
+    source_model = evidence.manifest.model_requested
+    decision = evidence.decision
+    default = ExperimentDefinition.from_toml(evidence.default_experiment)
+    baseline = SampledExperimentDefinition(
+        target=default.target,
+        oracle=default.oracle,
+        runner=NativeRunnerConfig.model_validate(
+            {"type": harness, "required_capability_digest": profile.digest}
+        ),
+        calibration=PHASE,
+    )
+    replay = (
+        CodexReplayConfig(provider="fixture-provider", model="gpt-6-luna")
+        if harness == "codex"
+        else None
+    )
+    configured = baseline.model_copy(
+        update={
+            "runner": baseline.runner.model_copy(
+                update={
+                    "model": "gpt-6-luna",
+                    "reasoning_effort": reasoning_effort,
+                }
+            )
+        }
+    )
+    runner = SimpleNamespace(capability_profile=profile, fingerprint="fixture-native-v1")
+    monkeypatch.setattr(native, f"_{harness}_runner", Mock(return_value=runner))
+    selection = native.native_selection(
+        workspace,
+        evidence,
+        original_workspace=original,
+        experiment=configured if saved else baseline,
+        model=None if saved else "gpt-6-luna",
+        reasoning_effort=None if saved else reasoning_effort,
+    )
+    assert selection.experiment == configured
+    assert isinstance(selection.experiment.runner, NativeRunnerConfig)
+    assert selection.experiment.runner.provider is None
+    plans = []
+    for experiment in (baseline, selection.experiment):
+        report = resolve_execution_plan(
+            profile,
+            experiment,
+            evidence=evidence,
+            runner_fingerprint=runner.fingerprint,
+            safety_policy=selection.safety_policy,
+            resource_limits=selection.resource_limits,
+        )
+        assert report.ready, report.issues
+        assert report.plan is not None
+        plans.append(report.plan)
+        if harness == "codex":
+            materialized = materialize_codex_attempt(
+                PreparedAttempt(
+                    evidence=evidence,
+                    candidate=prepare_candidate(evidence, report.plan),
+                    target=experiment.target,
+                    execution_plan=report.plan,
+                    safety_policy=selection.safety_policy,
+                    resource_limits=selection.resource_limits,
+                    phase="calibration",
+                    arm="baseline",
+                )
+            )
+            assert materialized.model == report.plan.model_requested
+            if experiment is selection.experiment and reasoning_effort is not None:
+                assert materialized.effort == reasoning_effort
+            assert report.plan.inspection_metadata.reasoning_omitted is (
+                report.plan.codex_replay is not None
+            )
+    assert plans[0].model_requested == source_model
+    assert plans[1].model_requested == "gpt-6-luna"
+    assert plans[1].codex_replay == replay
+    assert plans[1].reasoning_effort == reasoning_effort
+    assert plans[1].inspection_metadata.reasoning_effort == reasoning_effort
+    assert plans[0].reasoning_effort is None
+    assert "reasoning_effort" not in plans[0].model_dump()
+    assert "reasoning_effort" not in plans[0].inspection_metadata.model_dump()
+    assert plans[0].digest != plans[1].digest
+    assert plans[0].target_digest == plans[1].target_digest == default.target.digest
+    assert workspace.load().digest == source_digest
+    assert workspace.load().manifest.model_requested == source_model
+    assert workspace.load().decision == decision
+
+
+@pytest.mark.parametrize("saved", [False, True])
+def test_codex_changed_model_resolves_captured_provider_and_omits_reasoning(
     native_case: tuple[CaseWorkspace, CaseEvidence, Path],
     mocked_runtime: tuple[Mock, Mock],
     profile: CapabilityProfile,
-    fault: str,
+    saved: bool,
 ) -> None:
     workspace, evidence, original = native_case
-    replay = CodexReplayConfig(provider="replay-provider", model="replay-model")
     default = ExperimentDefinition.from_toml(evidence.default_experiment)
-    experiment = (
-        SampledExperimentDefinition(
-            target=default.target,
-            oracle=default.oracle,
-            runner=NativeRunnerConfig(
-                type="codex", required_capability_digest=profile.digest, codex_replay=replay
-            ),
-            calibration=PHASE,
-        )
-        if fault == "mismatch"
-        else default.model_copy(update={"runner": UnavailableRunnerConfig(harness="copilot")})
+    experiment = SampledExperimentDefinition(
+        target=default.target,
+        oracle=default.oracle,
+        runner=NativeRunnerConfig(
+            type="codex",
+            required_capability_digest=profile.digest,
+            model="changed-model" if saved else None,
+        ),
+        calibration=PHASE,
     )
-    requested = replay.model_copy(update={"model": "different-model"})
+    selection = native.native_selection(
+        workspace,
+        evidence,
+        original_workspace=original,
+        experiment=experiment,
+        model=None if saved else "changed-model",
+    )
+    assert isinstance(selection.experiment.runner, NativeRunnerConfig)
+    assert selection.experiment.runner.model == "changed-model"
+    assert mocked_runtime[1].call_args.kwargs["codex_replay"] == CodexReplayConfig(
+        provider="fixture-provider", model="changed-model", reasoning="omit"
+    )
+    assert workspace.load().manifest.provider == evidence.manifest.provider
+
+
+def test_codex_explicit_captured_model_preserves_native_execution_identity(
+    native_case: tuple[CaseWorkspace, CaseEvidence, Path],
+    mocked_runtime: tuple[Mock, Mock],
+    profile: CapabilityProfile,
+) -> None:
+    workspace, evidence, original = native_case
+    selection = native.native_selection(
+        workspace,
+        evidence,
+        original_workspace=original,
+        calibration=PHASE,
+        model=evidence.manifest.model_requested,
+    )
+    report = resolve_execution_plan(
+        profile,
+        selection.experiment,
+        evidence=evidence,
+        runner_fingerprint="fixture-native-v1",
+        safety_policy=selection.safety_policy,
+        resource_limits=selection.resource_limits,
+    )
+    assert report.ready
+    assert report.plan is not None
+    materialized = materialize_codex_attempt(
+        PreparedAttempt(
+            evidence=evidence,
+            candidate=prepare_candidate(evidence, report.plan),
+            target=selection.experiment.target,
+            execution_plan=report.plan,
+            safety_policy=selection.safety_policy,
+            resource_limits=selection.resource_limits,
+            phase="calibration",
+            arm="baseline",
+        )
+    )
+    assert materialized.model == report.plan.model_requested == evidence.manifest.model_requested
+    assert materialized.provider == evidence.manifest.provider
+    assert report.plan.codex_replay is None
+
+
+def test_native_model_mismatch_refuses_before_detection(
+    native_case: tuple[CaseWorkspace, CaseEvidence, Path],
+    mocked_runtime: tuple[Mock, Mock],
+    profile: CapabilityProfile,
+) -> None:
+    workspace, evidence, original = native_case
+    default = ExperimentDefinition.from_toml(evidence.default_experiment)
+    experiment = SampledExperimentDefinition(
+        target=default.target,
+        oracle=default.oracle,
+        runner=NativeRunnerConfig(
+            type="codex",
+            required_capability_digest=profile.digest,
+            model="gpt-6-luna",
+        ),
+        calibration=PHASE,
+    )
     with pytest.raises(native.NativeSelectionError) as refused:
         native.native_selection(
             workspace,
             evidence,
             original_workspace=original,
             experiment=experiment,
-            calibration=PHASE,
-            codex_replay=requested,
+            model="other-model",
         )
-    assert refused.value.code == (
-        "replay-mismatch" if fault == "mismatch" else "unsupported-replay"
-    )
+    assert refused.value.code == "model-mismatch"
     mocked_runtime[0].assert_not_called()
+
+
+def test_saved_provider_mismatch_refuses_before_detection(
+    native_case: tuple[CaseWorkspace, CaseEvidence, Path],
+    mocked_runtime: tuple[Mock, Mock],
+    profile: CapabilityProfile,
+) -> None:
+    workspace, evidence, original = native_case
+    default = ExperimentDefinition.from_toml(evidence.default_experiment)
+    experiment = SampledExperimentDefinition(
+        target=default.target,
+        oracle=default.oracle,
+        runner=NativeRunnerConfig(
+            type="codex", required_capability_digest=profile.digest, provider="saved-provider"
+        ),
+        calibration=PHASE,
+    )
+    with pytest.raises(native.NativeSelectionError) as refused:
+        native.native_selection(
+            workspace,
+            evidence,
+            original_workspace=original,
+            experiment=experiment,
+            provider="other-provider",
+        )
+    assert refused.value.code == "provider-mismatch"
+    mocked_runtime[0].assert_not_called()
+
+
+def test_copilot_refuses_a_different_provider_before_detection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from native_support.copilot import _case
+
+    _, workspace, evidence = _case(tmp_path, "final-response")
+    probe = Mock()
+    monkeypatch.setattr(native, "_copilot_runner", probe)
+    with pytest.raises(native.NativeSelectionError) as refused:
+        native.native_selection(
+            workspace,
+            evidence,
+            original_workspace=tmp_path,
+            calibration=PHASE,
+            provider="other-provider",
+        )
+    assert refused.value.code == "unsupported-provider"
+    probe.assert_not_called()
 
 
 @pytest.mark.parametrize(

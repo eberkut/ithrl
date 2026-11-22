@@ -18,6 +18,9 @@ For explicit-context comparisons, see the
 [comparative-debugging study](research/comparative-debugging.md). It reports constructed and
 ordinary Codex/Copilot investigations, calibration, fresh confirmation and costs including
 unsuccessful work.
+The [localized tool output study](research/tool-output-interventions.md) reports exact field edits,
+native delivery controls, final-response confirmation and independent practical review, including
+unsuccessful packages and complete-study costs.
 
 ## Saved-session experiments
 

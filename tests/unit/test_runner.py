@@ -1192,3 +1192,105 @@ def test_completed_http_overload_preserves_full_charge_without_a_behavior_verdic
     assert usage.actual_provider_calls == 1
     assert usage.possible_provider_calls == 3
     assert usage.charged_provider_calls == 4
+
+
+@pytest.mark.parametrize(
+    "unsafe", [None, "output", "incomplete-output", "cleanup", "actions", "reason"]
+)
+@pytest.mark.parametrize("code", [RunnerErrorCode.TRANSPORT, RunnerErrorCode.TIMEOUT])
+def test_transport_replacement_requires_typed_output_free_bounded_safety(
+    tmp_path: Path, unsafe: str | None, code: RunnerErrorCode
+) -> None:
+    attempt, error = _overloaded_provider_attempt(
+        tmp_path, provider_calls_per_attempt=4, completed=0
+    )
+    error.code = code
+    error.reason_code = (
+        "inference-output-free-timeout"
+        if code is RunnerErrorCode.TIMEOUT
+        else "inference-transport-failed"
+    )
+    if unsafe == "incomplete-output":
+        assert error.native_output is not None
+        error.native_output = error.native_output.model_copy(update={"complete": False})
+    if unsafe == "output":
+        error.behavior_output_observed = True
+    elif unsafe == "reason":
+        error.reason_code = "unknown-transport-error"
+    elif unsafe in {"cleanup", "actions"}:
+        assert error.accounting is not None
+        error.accounting = error.accounting.model_copy(
+            update={"cleanup_outcome": "failed"}
+            if unsafe == "cleanup"
+            else {"actions_requested": 1, "actions_denied": 1}
+        )
+    evidence = AttemptEvidence.from_error(attempt, error)
+    assert evidence.transport_replacement_safe is (unsafe is None)
+    assert not evidence.overload_replacement_safe
+    assert not evidence.automatic_retry_safe
+    assert evidence.provider_call_charge(4) == 4
+    assert AttemptEvidence.model_validate_json(evidence.model_dump_json()) == evidence
+    if unsafe is not None:
+        assert "transport_replacement_safe" not in evidence.model_dump()
+    if unsafe == "incomplete-output":
+        with pytest.raises(ValueError, match="complete bounded safety evidence"):
+            AttemptEvidence.model_validate(
+                {**evidence.model_dump(), "transport_replacement_safe": True}
+            )
+
+
+def test_transport_safety_marker_requires_matching_persisted_error_category(tmp_path: Path) -> None:
+    attempt, error = _overloaded_provider_attempt(
+        tmp_path, provider_calls_per_attempt=1, completed=0
+    )
+    error.code = RunnerErrorCode.TRANSPORT
+    error.reason_code = "inference-transport-failed"
+    observation = Observation(
+        case_digest=attempt.evidence.digest,
+        candidate_digest=attempt.candidate.digest,
+        experiment_digest=attempt.execution_plan.experiment_digest,
+        runner_fingerprint=attempt.execution_plan.runner_fingerprint,
+        execution_plan_digest=attempt.execution_plan.digest,
+        target_digest=attempt.target.digest,
+        algorithm_digest="a" * 64,
+        role=ObservationRole.CALIBRATION,
+        arm=ObservationArm.BASELINE,
+        attempt=1,
+        outcome=ObservationOutcome.RUNNER_ERROR,
+        error_category="transport",
+        attempt_evidence=AttemptEvidence.from_error(attempt, error),
+    )
+    assert observation.allows_fresh_attempt("safe-provider-transport")
+    assert not observation.allows_fresh_attempt("safe-provider-overload")
+    with pytest.raises(ValidationError, match="requires the transport category"):
+        Observation.model_validate(observation.model_dump() | {"error_category": "protocol"})
+
+
+@pytest.mark.parametrize(("cleanup_ms", "replaceable"), [(1, True), (3000, True), (3001, False)])
+def test_output_free_deadline_allows_only_declared_cleanup_grace(
+    tmp_path: Path, cleanup_ms: int, replaceable: bool
+) -> None:
+    attempt, error = _overloaded_provider_attempt(
+        tmp_path, provider_calls_per_attempt=1, completed=0
+    )
+    plan = attempt.execution_plan.model_copy(
+        update={
+            "capability": attempt.execution_plan.capability.model_copy(
+                update={"cancellation_grace_seconds": 3}
+            )
+        }
+    )
+    attempt = replace(
+        attempt, execution_plan=plan, candidate=prepare_candidate(attempt.evidence, plan)
+    )
+    error.code = RunnerErrorCode.TIMEOUT
+    error.reason_code = "inference-output-free-timeout"
+    assert error.native_output is not None
+    assert error.accounting is not None
+    error.accounting = error.accounting.model_copy(
+        update={
+            "elapsed_milliseconds": attempt.resource_limits.max_wall_time_seconds * 1000
+            + cleanup_ms
+        }
+    )
+    assert AttemptEvidence.from_error(attempt, error).transport_replacement_safe is replaceable

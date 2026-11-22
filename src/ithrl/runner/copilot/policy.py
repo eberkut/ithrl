@@ -42,7 +42,12 @@ def target_policy(target: CopilotTarget) -> CopilotTargetPolicy:
             command_flags=(),
             action_visibility="not-applicable",
             action_denial="enforced",
-            context_operations=(CONTEXT_OPERATION, "append-text", "remove-text-sections"),
+            context_operations=(
+                CONTEXT_OPERATION,
+                "append-text",
+                "remove-text-sections",
+                "remove-tool-output-text-span",
+            ),
         )
     if target == "shell-action":
         return CopilotTargetPolicy(
@@ -50,7 +55,7 @@ def target_policy(target: CopilotTarget) -> CopilotTargetPolicy:
             command_flags=(),
             action_visibility="visible",
             action_denial="enforced",
-            context_operations=(CONTEXT_OPERATION,),
+            context_operations=(CONTEXT_OPERATION, "remove-tool-output-text-span"),
         )
     raise ValueError("unsupported Copilot target")
 

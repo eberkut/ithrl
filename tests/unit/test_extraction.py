@@ -53,6 +53,25 @@ def test_exact_request_cases_have_no_native_editable_text(tmp_path: Path) -> Non
     ).load()
     assert validate_extracted_case(evidence) is None
     assert extraction.editable_extracted_text(evidence) == ()
+    assert extraction.editable_extracted_tool_output_text(evidence) == ()
+
+
+def test_editable_tool_output_text_normalizes_adapter_refusal_without_exposing_content(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    evidence = _native_case_evidence(tmp_path)
+    adapter = Mock(
+        side_effect=AdapterError(AdapterErrorCode.INVALID_SESSION, "private-tool-output-detail")
+    )
+    monkeypatch.setattr(extraction, "editable_session_tool_output_text", adapter)
+
+    with pytest.raises(
+        CaseFormatError, match="tool output text cannot be derived safely"
+    ) as refused:
+        extraction.editable_extracted_tool_output_text(evidence)
+
+    adapter.assert_called_once()
+    assert "private-tool-output-detail" not in str(refused.value)
 
 
 def test_open_native_session_refuses_a_harness_mismatch() -> None:

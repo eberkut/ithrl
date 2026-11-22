@@ -210,6 +210,29 @@ def test_runner_fingerprint_binds_workspace_protection_policy(
     assert runner.fingerprint != original
 
 
+def test_runner_fingerprint_binds_materialization_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace, evidence = _case(tmp_path)
+    first = _runner(tmp_path, workspace)
+    identical = _runner(tmp_path, workspace)
+    assert first.fingerprint == identical.fingerprint
+    assert all(source.name != "materialize.py" for source, _ in first._support_programs)
+    original = _attempt(evidence, first)
+
+    def changed_materialization_digest(source: Path) -> str:
+        return "0" * 64 if source.name == "materialize.py" else program_digest(source)
+
+    monkeypatch.setattr(codex_runner_module, "program_digest", changed_materialization_digest)
+    with pytest.raises(RunnerError) as refused:
+        first._validate_attempt(original)
+    assert refused.value.code is RunnerErrorCode.PREPARATION
+    changed = _runner(tmp_path, workspace)
+
+    assert changed.capability_profile == first.capability_profile
+    assert changed.fingerprint != first.fingerprint
+
+
 def test_runner_fingerprint_binds_continuation_instructions(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

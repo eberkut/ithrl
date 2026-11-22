@@ -36,7 +36,12 @@ from ithrl.experiment import (
     StructuralOracleConfig,
     TextSectionSearchPlan,
 )
-from ithrl.inspection import _confirmation, _section_fields, build_retained_inspection
+from ithrl.inspection import (
+    _bounded_text,
+    _confirmation,
+    _section_fields,
+    build_retained_inspection,
+)
 from ithrl.mutation import TextMutation
 from ithrl.observations import (
     Observation,
@@ -72,6 +77,21 @@ from ithrl.text_sections import MAX_TEXT_SECTION_BYTES, TextSectionRemoval
 
 _TIME = datetime(2026, 10, 4, tzinfo=UTC)
 _PRIVATE = "PRIVATE_CONTEXT_NOT_FOR_DEFAULT_OUTPUT"
+
+
+def test_tool_preview_distinguishes_literal_escapes_from_control_characters() -> None:
+    control_first = "\n\\u000a"
+    literal_first = "\\u000a\n"
+    assert _bounded_text(control_first, 100) == _bounded_text(literal_first, 100)
+    first, truncated = _bounded_text(control_first, 100, escape_backslashes=True)
+    second, other_truncated = _bounded_text(literal_first, 100, escape_backslashes=True)
+    assert first == "\\u000a\\\\u000a"
+    assert second == "\\\\u000a\\u000a"
+    assert first != second
+    assert not truncated
+    assert not other_truncated
+    assert _bounded_text("\\", 1, escape_backslashes=True) == ("", True)
+    assert _bounded_text("\\", 2, escape_backslashes=True) == ("\\\\", False)
 
 
 def _case() -> tuple[CaseEvidence, ExperimentDefinition]:

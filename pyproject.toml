@@ -46,6 +46,9 @@ Changelog = "https://github.com/eberkut/ithrl/releases"
 ithrl = "ithrl.cli:app"
 
 [project.optional-dependencies]
+all = [
+    "ithrl[compare,fuzz]",
+]
 compare = [
     "scipy>=1.18",
 ]

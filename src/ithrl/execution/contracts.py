@@ -19,7 +19,12 @@ type CaptureType = Literal[
     "unknown",
 ]
 type CandidateMaterialization = Literal["exact-request", "source-backed"]
-type ContextOperation = Literal["dependency-closed-removal", "append-text", "remove-text-sections"]
+type ContextOperation = Literal[
+    "dependency-closed-removal",
+    "append-text",
+    "remove-text-sections",
+    "remove-tool-output-text-span",
+]
 type ProviderTransport = Literal["forbidden", "required"]
 type ProviderTransportPolicy = Literal["forbidden", "allowed"]
 type ToolNetworkAccess = Literal["forbidden", "possible"]
@@ -239,6 +244,9 @@ class ExecutionPlanMetadata(_ImmutableContract):
     declared_policy: SafetyPolicyDeclarations
     resource_limits: ResourceLimits
     reasoning_omitted: bool = Field(default=False, exclude_if=lambda value: value is False)
+    reasoning_effort: Annotated[
+        str | None, Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._-]+$")
+    ] = Field(default=None, exclude_if=lambda value: value is None)
 
     @property
     def digest(self) -> str:
@@ -259,6 +267,9 @@ class ResolvedExecutionPlan(_ImmutableContract):
     source_harness_version: Annotated[str | None, Field(min_length=1, max_length=128)] = None
     source_schema: Annotated[str | None, Field(min_length=1, max_length=128)] = None
     model_requested: Annotated[str | None, Field(min_length=1, max_length=256)] = None
+    reasoning_effort: Annotated[
+        str | None, Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._-]+$")
+    ] = Field(default=None, exclude_if=lambda value: value is None)
     codex_replay: CodexReplayConfig | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
@@ -308,6 +319,7 @@ class ResolvedExecutionPlan(_ImmutableContract):
             declared_policy=self.safety_policy.declarations,
             resource_limits=self.resource_limits,
             reasoning_omitted=self.codex_replay is not None,
+            reasoning_effort=self.reasoning_effort,
         )
 
     @property

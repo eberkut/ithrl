@@ -585,11 +585,11 @@ def _reduction_preflight(
         next_command=command,
         next_command_shell=shell,
     )
-    if reduction.eligibility_policy == "safe-provider-overload":
+    if reduction.eligibility_policy in {"safe-provider-overload", "safe-provider-transport"}:
         values["assumptions"] = (
             *SampledReductionOutput.model_fields["assumptions"].default,
             "independent-stationary-attempts-with-prespecified-validity",
-            "overload-replacement-estimates-behavior-conditional-on-validity",
+            "provider-replacement-estimates-behavior-conditional-on-validity",
         )
     return SampledReductionOutput.model_validate(values)
 

@@ -20,7 +20,6 @@ from ithrl.context import content_digest
 from ithrl.execution.contracts import MAX_WALL_TIME_SECONDS
 from ithrl.experiment import (
     MAX_SAMPLING_FRESHNESS_SECONDS,
-    CodexReplayConfig,
     SampledChangeConfirmation,
     SampledComparisonPlan,
     SamplingArmTarget,
@@ -29,6 +28,7 @@ from ithrl.experiment import (
 )
 from ithrl.mutation import ContextSelection
 from ithrl.runner.contracts import Candidate
+from ithrl.tool_output_text import ToolOutputTextSpanRemoval
 
 MAX_COMPARISON_ATTEMPTS = 1000
 MAX_COMPARISON_RESULT_BYTES = 64 * 1024 * 1024
@@ -75,9 +75,15 @@ class ComparisonConfiguration(_Contract):
     eligibility_policy: SamplingEligibilityPolicy
     freshness_seconds: Annotated[int, Field(ge=1, le=MAX_SAMPLING_FRESHNESS_SECONDS)]
     limits: ComparisonLimits
-    codex_replay: CodexReplayConfig | None = Field(
-        default=None, exclude_if=lambda value: value is None
-    )
+    model: Annotated[
+        str | None, Field(min_length=1, max_length=256, pattern=r"^[A-Za-z0-9._:/+-]+$")
+    ] = Field(default=None, exclude_if=lambda value: value is None)
+    reasoning_effort: Annotated[
+        str | None, Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._-]+$")
+    ] = Field(default=None, exclude_if=lambda value: value is None)
+    provider: Annotated[
+        str | None, Field(min_length=1, max_length=128, pattern=r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
+    ] = Field(default=None, exclude_if=lambda value: value is None)
 
     @field_validator("schema_version", mode="before")
     @classmethod
@@ -107,7 +113,11 @@ class ComparisonConfiguration(_Contract):
 
     @property
     def policy_digest(self) -> str:
-        return content_digest(self.model_dump(mode="json", exclude={"limits", "codex_replay"}))
+        return content_digest(
+            self.model_dump(
+                mode="json", exclude={"limits", "model", "reasoning_effort", "provider"}
+            )
+        )
 
     @property
     def digest(self) -> str:
@@ -188,6 +198,13 @@ class BoundComparison(_Contract):
                 or selection.mutation != candidate.mutation
             ):
                 raise ValueError("comparison candidate differs from its selected context")
+        if any(
+            isinstance(edit, ToolOutputTextSpanRemoval) for edit in self.candidate.mutation.edits
+        ) and (
+            self.reference.retained_context_ids != self.candidate.retained_context_ids
+            or self.reference.removed_context_ids != self.candidate.removed_context_ids
+        ):
+            raise ValueError("tool output text comparison requires identical record partitions")
         return self
 
     @property
@@ -213,7 +230,14 @@ def comparison_implementation_digest() -> str:
         **{name: package / name for name in ("contracts.py", "engine.py", "results.py")},
         **{
             name: shared / name
-            for name in ("sampling.py", "observations.py", "run_state.py", "statistics.py")
+            for name in (
+                "sampling.py",
+                "observations.py",
+                "run_state.py",
+                "statistics.py",
+                "mutation.py",
+                "tool_output_text.py",
+            )
         },
     }
     return content_digest(

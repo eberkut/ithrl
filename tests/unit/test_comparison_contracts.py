@@ -9,12 +9,15 @@ import pytest
 from pydantic import ValidationError
 
 from ithrl.comparison.contracts import BoundComparison, ComparisonConfiguration, ComparisonProgress
+from ithrl.comparison.engine import comparison_budget_bounds
+from ithrl.context import content_digest
+from ithrl.execution.budget import SamplingAttemptCost
 from ithrl.experiment import (
-    CodexReplayConfig,
     SampledComparisonPlan,
     SampledReductionPlan,
     SampledSearchPhase,
 )
+from ithrl.mutation import ContextSelection, TextAppend, TextMutation
 from ithrl.observations import (
     ObservationIdentity,
     SamplingBlockPlan,
@@ -23,6 +26,7 @@ from ithrl.observations import (
 )
 from ithrl.run_state import SampledRunState, SamplingBlockProgress, SamplingBudgetApproval
 from ithrl.runner import Candidate
+from ithrl.tool_output_text import ToolOutputTextSpanRemoval
 
 NOW = datetime(2026, 11, 20, tzinfo=UTC)
 
@@ -116,6 +120,18 @@ def test_administrative_limits_do_not_reinterpret_comparison_policy(
     assert extended.digest != configuration.digest
 
 
+@pytest.mark.parametrize("delay", [-1, True, 86401])
+def test_comparison_budget_rejects_invalid_pacing(
+    configuration: ComparisonConfiguration, delay: int
+) -> None:
+    with pytest.raises(ValueError, match="pacing must be a bounded nonnegative integer"):
+        comparison_budget_bounds(
+            configuration,
+            SamplingAttemptCost(provider_calls=1, runner_seconds=1),
+            inter_attempt_delay_seconds=delay,
+        )
+
+
 def test_comparison_bounds_the_total_scheduled_attempts(
     configuration: ComparisonConfiguration,
 ) -> None:
@@ -132,13 +148,44 @@ def test_comparison_bounds_the_total_scheduled_attempts(
 def test_prospective_execution_is_bound_separately_from_the_sampling_procedure(
     configuration: ComparisonConfiguration,
 ) -> None:
-    replay = CodexReplayConfig(provider="openai", model="test-model", reasoning="omit")
     prospective = ComparisonConfiguration.model_validate(
-        {**configuration.model_dump(), "codex_replay": replay}
+        {**configuration.model_dump(), "provider": "other-provider"}
     )
     assert prospective.digest != configuration.digest
     assert prospective.procedure == configuration.procedure
-    assert prospective.codex_replay == replay
+    assert prospective.provider == "other-provider"
+
+
+def test_prospective_model_is_bound_separately_from_the_sampling_procedure(
+    configuration: ComparisonConfiguration,
+) -> None:
+    prospective = ComparisonConfiguration.model_validate(
+        {**configuration.model_dump(), "model": "gpt-6-luna"}
+    )
+    assert prospective.digest != configuration.digest
+    assert prospective.procedure == configuration.procedure
+    assert prospective.model == "gpt-6-luna"
+    assert "model" not in configuration.model_dump()
+    assert ComparisonConfiguration.model_validate_json(prospective.model_dump_json()) == prospective
+
+
+def test_comparison_refuses_removed_codex_replay_table(
+    configuration: ComparisonConfiguration,
+) -> None:
+    with pytest.raises(ValidationError, match="Extra inputs"):
+        ComparisonConfiguration.model_validate({**configuration.model_dump(), "codex_replay": {}})
+
+
+def test_reasoning_effort_binds_execution_separately_from_sampling_policy(
+    configuration: ComparisonConfiguration,
+) -> None:
+    selected = ComparisonConfiguration.model_validate(
+        {**configuration.model_dump(), "reasoning_effort": "low"}
+    )
+    assert selected.digest != configuration.digest
+    assert selected.procedure == configuration.procedure
+    assert "reasoning_effort" not in configuration.model_dump()
+    assert ComparisonConfiguration.model_validate_json(selected.model_dump_json()) == selected
 
 
 @pytest.mark.parametrize("field", ["objective", "alpha", "minimum_effect", "seed"])
@@ -239,3 +286,137 @@ def test_state_binds_both_contexts_and_excludes_legacy_calibration_reuse(
         SampledRunState.model_validate(
             {**state.model_dump(), "blocks": (SamplingBlockProgress(plan=changed),)}
         )
+
+
+def _span_selection() -> ContextSelection:
+    return ContextSelection(
+        mutation=TextMutation(
+            edits=(
+                ToolOutputTextSpanRemoval(
+                    context_id="tool-result",
+                    field_id="tool-output-text-" + "a" * 64,
+                    original_text_digest="b" * 64,
+                    start=1,
+                    end=2,
+                    removed_text_digest="c" * 64,
+                ),
+            )
+        )
+    )
+
+
+@pytest.mark.parametrize("reference_edit", ["tool", "append", "section"])
+def test_tool_comparison_requires_an_unmutated_reference_in_configuration_and_saved_plan(
+    configuration: ComparisonConfiguration, reference_edit: str
+) -> None:
+    from ithrl.text_sections import TEXT_SECTION_POLICY_DIGEST, TextSectionRemoval
+
+    reference = {
+        "tool": _span_selection(),
+        "append": ContextSelection(
+            mutation=TextMutation(
+                edits=(
+                    TextAppend(
+                        context_id="prior",
+                        content_index=0,
+                        original_text_digest="a" * 64,
+                        text="extra",
+                    ),
+                )
+            )
+        ),
+        "section": ContextSelection(
+            mutation=TextMutation(
+                edits=(
+                    TextSectionRemoval(
+                        context_id="prior",
+                        content_index=0,
+                        original_text_digest="a" * 64,
+                        policy_digest=TEXT_SECTION_POLICY_DIGEST,
+                        section_ids=("section-" + "b" * 64,),
+                    ),
+                )
+            )
+        ),
+    }[reference_edit]
+    payload = {**configuration.model_dump(), "reference": reference, "candidate": _span_selection()}
+    with pytest.raises(ValidationError, match="unmutated reference"):
+        ComparisonConfiguration.model_validate(payload)
+    valid = ComparisonConfiguration.model_validate(
+        {
+            **configuration.model_dump(),
+            "reference": ContextSelection(),
+            "candidate": _span_selection(),
+        }
+    )
+    procedure = valid.procedure.model_copy(update={"reference": reference})
+    procedure = procedure.model_copy(
+        update={"comparison_digest": content_digest(procedure.policy_projection)}
+    )
+    with pytest.raises(ValidationError, match="unmutated reference"):
+        SampledComparisonPlan.model_validate_json(procedure.model_dump_json())
+
+
+def test_bound_tool_comparison_requires_identical_materialized_record_partitions(
+    configuration: ComparisonConfiguration,
+) -> None:
+    configuration = ComparisonConfiguration.model_validate(
+        {
+            **configuration.model_dump(),
+            "reference": ContextSelection(),
+            "candidate": _span_selection(),
+        }
+    )
+    common = {
+        "case_digest": "a" * 64,
+        "execution_plan_digest": "b" * 64,
+    }
+    reference = Candidate(
+        **common,
+        materialization="source-backed",
+        retained_context_ids=("prior", "tool-result"),
+        removed_context_ids=(),
+    )
+    candidate = Candidate(
+        **common,
+        materialization="source-backed",
+        retained_context_ids=("tool-result",),
+        removed_context_ids=("prior",),
+        mutation=configuration.candidate.mutation,
+    )
+    with pytest.raises(ValidationError, match="identical record partitions"):
+        BoundComparison(procedure=configuration.procedure, reference=reference, candidate=candidate)
+
+
+def test_tool_comparison_binds_closed_partitions_instead_of_requested_roots(
+    configuration: ComparisonConfiguration,
+) -> None:
+    candidate_selection = _span_selection().model_copy(
+        update={"removed_context_ids": ("prior", "dependent")}
+    )
+    configuration = ComparisonConfiguration.model_validate(
+        {
+            **configuration.model_dump(),
+            "reference": ContextSelection(removed_context_ids=("prior",)),
+            "candidate": candidate_selection,
+        }
+    )
+    common = {
+        "case_digest": "a" * 64,
+        "execution_plan_digest": "b" * 64,
+        "retained_context_ids": ("tool-result",),
+        "removed_context_ids": ("prior", "dependent"),
+    }
+    pair = BoundComparison(
+        procedure=configuration.procedure,
+        reference=Candidate(**common, materialization="source-backed"),
+        candidate=Candidate(
+            **common, materialization="source-backed", mutation=candidate_selection.mutation
+        ),
+    )
+    assert BoundComparison.model_validate_json(pair.model_dump_json()) == pair
+    payload = json.loads(pair.model_dump_json())
+    payload["reference"]["removed_context_ids"] = ["prior"]
+    payload["reference"]["retained_context_ids"] = ["tool-result", "dependent"]
+    with pytest.raises(ValidationError, match="identical record partitions"):
+        BoundComparison.model_validate_json(json.dumps(payload))

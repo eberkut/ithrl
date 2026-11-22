@@ -219,7 +219,20 @@ def _prepare_reduction(
         target=FinalResponseTarget() if source.grading is not None else default.target,
         oracle=default.oracle,
         runner=NativeRunnerConfig(
-            type=runner_type, required_capability_digest=source.capability.digest
+            type=runner_type,
+            required_capability_digest=source.capability.digest,
+            model=(
+                source.model_requested
+                if source.model_requested != evidence.manifest.model_requested
+                else None
+            ),
+            provider=(
+                source.codex_replay.provider
+                if source.codex_replay is not None
+                and source.codex_replay.provider != evidence.manifest.provider
+                else None
+            ),
+            reasoning_effort=source.reasoning_effort,
         ),
         calibration=settings.calibration,
         reduction=reduction,

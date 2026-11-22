@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import MappingProxyType
+from typing import Any
 
 from ithrl.adapters import enumerate_decisions, parse_session
 from ithrl.case import CaseEvidence, CaseWorkspace
@@ -168,6 +169,28 @@ emit("summary", {
 """
 
 
+def _tool_output_text_records(text: str) -> list[dict[str, Any]]:
+    """One editable prior tool result followed by a fixed user trigger."""
+    source = FIXTURES / "codex-session/rollout.jsonl"
+    records = [json.loads(line) for line in source.read_bytes().splitlines()]
+    records[8]["payload"]["output"][0]["text"] = text
+    records.insert(
+        9,
+        {
+            "ordinal": 13,
+            "timestamp": "2026-01-01T00:00:08.500Z",
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "user",
+                "id": "fixed-later-input",
+                "content": [{"type": "input_text", "text": "Fixed later input."}],
+            },
+        },
+    )
+    return records
+
+
 def _case(tmp_path: Path, *, context_sensitive: bool = False) -> tuple[CaseWorkspace, CaseEvidence]:
     source = FIXTURES / "codex-session" / "rollout.jsonl"
     if context_sensitive:
@@ -263,6 +286,7 @@ def _capability(
             "dependency-closed-removal",
             "append-text",
             "remove-text-sections",
+            "remove-tool-output-text-span",
         ),
         reconstruction_method="codex-app-server-inject-checkpoint-v1",
         supported_targets=("final-response",),

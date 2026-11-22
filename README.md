@@ -23,12 +23,12 @@ compare two selected contexts from the same source.
 With [uv](https://docs.astral.sh/uv/):
 
 ```bash
-uv tool install ithrl
+uv tool install 'ithrl[all]'
 ```
 
-You can also install with `pipx install ithrl` or, in an existing virtual environment,
-`python -m pip install ithrl`. Install `'ithrl[fuzz]'` for context fuzzing or `'ithrl[compare]'`
-for context comparison.
+This installs all features. You can also use `pipx install 'ithrl[all]'` or, in an existing virtual
+environment, `python -m pip install 'ithrl[all]'`. For a smaller installation, use `ithrl` without
+extras, or select `'ithrl[fuzz]'` for context fuzzing and `'ithrl[compare]'` for context comparison.
 
 Tested on Python 3.12–3.14. Native runners require Linux. APIs and saved formats may change before
 1.0; keep your source sessions and record the version used for each case.
@@ -89,6 +89,9 @@ For a saved session, provide its path and ask:
 - `ithrl shrink CASE` searches for context removals that preserve the selected behavior.
 - `ithrl inspect sections CASE` lists editable text fields and paragraph boundaries without
   displaying text or requiring a reduction result.
+- `ithrl inspect tool CASE` lists source-bound tool output fields and can describe an
+  exact span deletion without model access. See
+  [tool output text inspection](https://github.com/eberkut/ithrl/blob/main/docs/results.md#inspect-tool-output).
 - `ithrl inspect reacquire SESSION` compares recorded operations and captured results across
   compaction. See
   [passive inspection](https://github.com/eberkut/ithrl/blob/main/docs/results.md#inspect-recorded-compaction).
@@ -122,8 +125,8 @@ private.
 | Input | Extracted decisions | Reduction | Fuzzing | Comparison | Passive inspection |
 | --- | --- | --- | --- | --- | --- |
 | Bundled synthetic example | Synthetic tool request | Deterministic local runner | Local fake runner | Local fake runner | — |
-| Codex CLI rollouts | Final responses | Experimental native runner; [paragraph-removal measurements](https://github.com/eberkut/ithrl/blob/main/docs/measurements.md#ordinary-session-paragraph-removal) | Experimental prior-user text appends | Experimental final-response contexts | Exact recorded-operation and captured-result comparisons across compaction |
-| Copilot CLI session events | Final responses and shell requests | Experimental final-response paragraph removal and denied `bash` runner | Experimental prior-user text appends for final-response targets | Experimental final-response and denied `bash` contexts | Exact recorded-operation and captured-result comparisons across compaction |
+| Codex CLI rollouts | Final responses | Experimental native runner; [paragraph-removal measurements](https://github.com/eberkut/ithrl/blob/main/docs/measurements.md#ordinary-session-paragraph-removal) | Experimental prior-user text appends | Experimental final-response [context bundles](https://github.com/eberkut/ithrl/blob/main/docs/research/comparative-debugging.md) and [tool output text spans](https://github.com/eberkut/ithrl/blob/main/docs/research/tool-output-interventions.md) under their qualified profiles | Exact recorded-operation and captured-result comparisons across compaction |
+| Copilot CLI session events | Final responses and shell requests | Experimental final-response paragraph removal and denied `bash` runner | Experimental prior-user text appends for final-response targets | Experimental final-response and denied `bash` [context bundles](https://github.com/eberkut/ithrl/blob/main/docs/research/comparative-debugging.md); final-response [tool output text spans](https://github.com/eberkut/ithrl/blob/main/docs/research/tool-output-interventions.md) under their qualified profiles | Exact recorded-operation and captured-result comparisons across compaction |
 
 Passive inspection reads saved evidence without a harness or model access. The
 [worked investigation](https://github.com/eberkut/ithrl/blob/main/docs/research/passive-compaction-investigation.md)
@@ -134,10 +137,12 @@ input. The
 [fuzzing walkthrough](https://github.com/eberkut/ithrl/blob/main/docs/fuzzing.md)
 covers a local example and native execution.
 
-Ordinary Codex and Copilot comparisons confirmed how the tested context bundles affected reporting
-a permission restriction and selecting a test command. The
-[worked comparisons](https://github.com/eberkut/ithrl/blob/main/docs/research/comparative-debugging.md)
-record their profiles, costs and interpretation. Each result concerns the complete selected change.
+[Worked comparisons](https://github.com/eberkut/ithrl/blob/main/docs/research/comparative-debugging.md)
+test complete context changes in ordinary Codex and Copilot investigations. For localized changes,
+[select a source-bound tool output text span](https://github.com/eberkut/ithrl/blob/main/docs/comparison.md#select-tool-output-text);
+the
+[tool output study](https://github.com/eberkut/ithrl/blob/main/docs/research/tool-output-interventions.md)
+records qualified final-response profiles and outcomes.
 
 Ordinary Codex and Copilot paragraph-removal experiments passed fresh confirmation at a
 20-percentage-point preservation margin. See the

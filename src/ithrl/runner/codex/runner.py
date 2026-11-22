@@ -118,6 +118,8 @@ class CodexRunner:
         self._client_version = distribution_version("ithrl")
         self._worker_source = Path(__file__).with_name("worker.py")
         self._worker_digest = program_digest(self._worker_source)
+        self._materializer_source = Path(__file__).with_name("materialize.py")
+        self._materializer_digest = program_digest(self._materializer_source)
         support_sources = tuple(
             Path(__file__).with_name(name)
             for name in ("protocol.py", "protocol_contracts.py", "relay.py")
@@ -142,6 +144,7 @@ class CodexRunner:
             "client_version": self._client_version,
             "capability": self._capability.digest,
             "materialization": self._capability.reconstruction_method,
+            "materializer": self._materializer_digest,
             "policy": POLICY_VERSION,
             "continuation_instructions": CONTINUATION_INSTRUCTIONS,
             "workspace_protection": WORKSPACE_PROTECTION_POLICY,
@@ -295,8 +298,12 @@ class CodexRunner:
     def _validate_attempt(self, attempt: PreparedAttempt) -> None:
         try:
             self._runtime.assert_unchanged()
-            programs_unchanged = program_digest(self._worker_source) == self._worker_digest and all(
-                program_digest(source) == digest for source, digest in self._support_programs
+            programs_unchanged = (
+                program_digest(self._worker_source) == self._worker_digest
+                and program_digest(self._materializer_source) == self._materializer_digest
+                and all(
+                    program_digest(source) == digest for source, digest in self._support_programs
+                )
             )
         except CodexIsolationError as error:
             raise RunnerError(
@@ -403,6 +410,14 @@ def _validate_materialized_identity(
         raise CodexMaterializationError(
             code=CodexMaterializationErrorCode.INCOMPATIBLE_CASE,
             message="the selected Codex provider differs from the execution plan",
+        )
+    if (
+        attempt.execution_plan.reasoning_effort is not None
+        and materialized.effort != attempt.execution_plan.reasoning_effort
+    ):
+        raise CodexMaterializationError(
+            code=CodexMaterializationErrorCode.INCOMPATIBLE_CASE,
+            message="the selected Codex reasoning effort differs from the execution plan",
         )
 
 

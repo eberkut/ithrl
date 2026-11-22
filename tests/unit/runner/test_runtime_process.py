@@ -76,6 +76,7 @@ async def _run(
     prepare: Callable[[OwnedAttemptState], ProcessSpec],
     *,
     limits: ResourceLimits | None = None,
+    runtime_deadline: float | None = None,
 ) -> tuple[ProtectedOutputStore, ProcessExecution]:
     source_paths, workspace_paths = _protected_paths(tmp_path)
     store = ProtectedOutputStore.open(tmp_path / "outputs")
@@ -94,6 +95,7 @@ async def _run(
         workspace_paths=workspace_paths,
         max_protected_entries=16,
         max_protected_bytes=4096,
+        runtime_deadline=runtime_deadline,
     )
     return store, result
 
@@ -482,6 +484,101 @@ def test_timeout_forces_a_term_ignoring_process_to_stop(tmp_path: Path) -> None:
     assert raised.value.report.process_outcome == "terminated"
     assert raised.value.report.forced_termination
     assert raised.value.report.cleanup_outcome == "verified"
+
+
+def test_timeout_drains_output_written_by_sigterm_handler(tmp_path: Path) -> None:
+    script = (
+        "import signal,sys,time\n"
+        "def finish(*_):\n"
+        " sys.stdout.write('term-stdout\\n'); sys.stdout.flush()\n"
+        " sys.stderr.write('term-stderr\\n'); sys.stderr.flush()\n"
+        " raise SystemExit(0)\n"
+        "signal.signal(signal.SIGTERM, finish)\n"
+        "print('before-timeout', flush=True)\n"
+        "time.sleep(60)\n"
+    )
+
+    with pytest.raises(ProcessRuntimeError) as raised:
+        asyncio.run(
+            _run(
+                tmp_path,
+                lambda state: ProcessSpec(
+                    argv=(sys.executable, "-c", script),
+                    cwd=state.root,
+                    environment={},
+                ),
+                runtime_deadline=time.monotonic() + 1,
+            )
+        )
+
+    assert raised.value.code is RunnerErrorCode.TIMEOUT
+    assert raised.value.native_output is not None
+    assert raised.value.native_output.complete
+    output = ProtectedOutputStore.open(tmp_path / "outputs").read(raised.value.native_output)
+    assert output.stdout == b"before-timeout\nterm-stdout\n"
+    assert output.stderr == b"term-stderr\n"
+
+
+def test_timeout_drain_that_does_not_settle_is_bounded_and_incomplete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(runtime_process, "PROCESS_CANCELLATION_GRACE_SECONDS", 0.05)
+    communicate = runtime_process._communicate
+
+    async def delayed_communicate(*args: Any, **kwargs: Any) -> None:
+        await communicate(*args, **kwargs)
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(runtime_process, "_communicate", delayed_communicate)
+    script = "import time; print('prefix', flush=True); time.sleep(60)"
+    started = time.monotonic()
+
+    with pytest.raises(ProcessRuntimeError) as raised:
+        asyncio.run(
+            _run(
+                tmp_path,
+                lambda state: ProcessSpec(
+                    argv=(sys.executable, "-c", script),
+                    cwd=state.root,
+                    environment={},
+                ),
+                runtime_deadline=time.monotonic() + 1,
+            )
+        )
+
+    assert time.monotonic() - started < 2
+    assert raised.value.code is RunnerErrorCode.TIMEOUT
+    assert raised.value.native_output is not None
+    assert not raised.value.native_output.complete
+    output = ProtectedOutputStore.open(tmp_path / "outputs").read(raised.value.native_output)
+    assert output.stdout == b"prefix\n"
+
+
+def test_timeout_drain_output_limit_keeps_capture_incomplete(tmp_path: Path) -> None:
+    script = (
+        "import signal,sys,time\n"
+        "def finish(*_):\n"
+        " sys.stdout.write('x' * 8192); sys.stdout.flush(); raise SystemExit(0)\n"
+        "signal.signal(signal.SIGTERM, finish)\n"
+        "time.sleep(60)\n"
+    )
+
+    with pytest.raises(ProcessRuntimeError) as raised:
+        asyncio.run(
+            _run(
+                tmp_path,
+                lambda state: ProcessSpec(
+                    argv=(sys.executable, "-c", script),
+                    cwd=state.root,
+                    environment={},
+                ),
+                runtime_deadline=time.monotonic() + 1,
+            )
+        )
+
+    assert raised.value.code is RunnerErrorCode.TIMEOUT
+    assert raised.value.native_output is not None
+    assert not raised.value.native_output.complete
 
 
 def test_cancellation_waits_for_termination_and_cleanup(tmp_path: Path) -> None:
