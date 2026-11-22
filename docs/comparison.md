@@ -334,8 +334,9 @@ model = "MODEL_ID"
 reasoning_effort = "EFFORT_LEVEL"
 ```
 
-Omitting model or provider retains the captured choice. Omitting `reasoning_effort` leaves effort
-selection to the runner; set it explicitly when the investigation requires a fixed level.
+Omitted settings use the values saved in the experiment supplied with `--experiment`. Explicit
+values that conflict with saved values are refused. Without a saved value, provider and model use
+the captured values when available, and the runner selects reasoning effort.
 Codex can select a locally configured provider with `provider = "PROVIDER_ID"`. Copilot uses
 `github-copilot` and rejects other providers.
 

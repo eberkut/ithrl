@@ -274,7 +274,10 @@ def prepare_comparison(
     ):
         raise ValueError("comparison runner differs from its prepared execution plan")
     replay = prepared.execution_plan.codex_replay
-    if configuration.reasoning_effort != prepared.execution_plan.reasoning_effort:
+    if (
+        configuration.reasoning_effort is not None
+        and configuration.reasoning_effort != prepared.execution_plan.reasoning_effort
+    ):
         raise ValueError("comparison reasoning effort differs from its prepared execution plan")
     if (
         configuration.model is not None

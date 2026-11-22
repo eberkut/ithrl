@@ -124,7 +124,7 @@ class SequenceRunner:
                     sha256="a" * 64,
                     media_type="application/json",
                     size_bytes=100,
-                    complete=not timeout,
+                    complete=True,
                 )
                 if replacement
                 else None,

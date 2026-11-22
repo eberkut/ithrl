@@ -68,7 +68,8 @@ class ComparisonProfile(_PrivateModel):
         ):
             raise ValueError("comparison replay policy differs from its runner")
         if (
-            isinstance(runner, NativeRunnerConfig)
+            self.configuration.provider is not None
+            and isinstance(runner, NativeRunnerConfig)
             and runner.provider != self.configuration.provider
         ):
             raise ValueError("comparison provider configuration differs from its runner")
@@ -76,11 +77,18 @@ class ComparisonProfile(_PrivateModel):
             self.configuration.provider != plan.capability.provider
         ):
             raise ValueError("comparison provider configuration differs from its execution plan")
-        if isinstance(runner, NativeRunnerConfig) and runner.model != self.configuration.model:
+        if (
+            self.configuration.model is not None
+            and isinstance(runner, NativeRunnerConfig)
+            and runner.model != self.configuration.model
+        ):
             raise ValueError("comparison model configuration differs from its runner")
-        if self.configuration.reasoning_effort != plan.reasoning_effort or (
-            isinstance(runner, NativeRunnerConfig)
-            and runner.reasoning_effort != self.configuration.reasoning_effort
+        if self.configuration.reasoning_effort is not None and (
+            self.configuration.reasoning_effort != plan.reasoning_effort
+            or (
+                isinstance(runner, NativeRunnerConfig)
+                and runner.reasoning_effort != self.configuration.reasoning_effort
+            )
         ):
             raise ValueError("comparison reasoning effort differs from its execution profile")
         if self.configuration.model is not None and (
@@ -88,6 +96,12 @@ class ComparisonProfile(_PrivateModel):
             or plan.model_requested != self.configuration.model
         ):
             raise ValueError("comparison model configuration differs from its execution plan")
+        if isinstance(runner, NativeRunnerConfig) and (
+            (runner.model is not None and runner.model != plan.model_requested)
+            or (runner.provider is not None and runner.provider != plan.capability.provider)
+            or runner.reasoning_effort != plan.reasoning_effort
+        ):
+            raise ValueError("comparison runner settings differ from its execution plan")
         if (
             self.identity.case_digest != plan.case_digest
             or self.identity.experiment_digest != self.experiment.digest

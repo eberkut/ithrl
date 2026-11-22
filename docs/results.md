@@ -359,11 +359,11 @@ See the [comparison guide](comparison.md) for configuration, limits and continua
 
 With `safe-provider-transport`, eligible output-free transport failures, preventive timeouts and
 structured overloads may consume frozen spare attempts while completed samples remain intact.
-Replacement requires no requested actions, unchanged protected state, enforced action denial and
-verified cleanup. Unknown acceptance retains the full conservative call charge. The match rate
-estimates `P(match | valid)`; it does not include operational failures as nonmatches. Read invalid
-counts and remaining spare capacity alongside the valid-sample target. Strict and overload-only
-policies retain their own rules.
+Replacement requires complete native-output capture, no requested actions, unchanged protected
+state, enforced action denial and verified cleanup. Unknown acceptance retains the full conservative
+call charge. The match rate estimates `P(match | valid)`; it does not include operational failures
+as nonmatches. Read invalid counts and remaining spare capacity alongside the valid-sample target.
+Strict and overload-only policies retain their own rules.
 
 Safety and cleanup checks do not prove that failures are independent of behavior. A timeout can
 select on response latency, which may relate to the answer. The conditional match rate therefore

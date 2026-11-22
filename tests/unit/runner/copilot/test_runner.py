@@ -649,6 +649,8 @@ raise SystemExit(70)"""
             else "inference-output-free-timeout"
         )
     assert error.behavior_output_observed is (not eligible)
+    assert error.native_output is not None
+    assert error.native_output.complete
     assert error.accounting is not None
     assert error.accounting.provider_calls_started == 1
     assert error.accounting.provider_calls_completed == 0

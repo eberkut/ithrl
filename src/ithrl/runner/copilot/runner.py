@@ -418,6 +418,7 @@ def _runtime_error(
             physical_calls = physical_forward_count(protected.stdout)
             if (
                 code is RunnerErrorCode.TIMEOUT
+                and protected.complete
                 and native_session is not None
                 and report.cleanup_outcome == "verified"
                 and report.process_outcome == "terminated"

@@ -327,7 +327,7 @@ def parse_output_free_timeout(
     system_message: str | None,
     expected_model: str | None,
 ) -> bool:
-    """Verify a complete output-free prefix; the parent must prove timeout and cleanup."""
+    """Validate output-free events; the caller proves capture completeness, timeout and cleanup."""
 
     if not output.endswith(b"\n"):
         return False

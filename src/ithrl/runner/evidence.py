@@ -88,7 +88,7 @@ class AttemptEvidence(BaseModel):
                 or (self.usage is not None and self.usage.output_tokens != 0)
                 or self.provider_acceptance_state is not ProviderAcceptanceState.UNKNOWN
                 or self.native_output is None
-                or (not self.native_output.complete and not timeout)
+                or not self.native_output.complete
                 or self.native_output.size_bytes != accounting.native_output_bytes
             ):
                 kind = "overload" if self.overload_replacement_safe else "transport"
@@ -316,7 +316,7 @@ def _error_provider_replacement_safe(
         and _retry_limits_allow(attempt, error, accounting)
         and _retry_plan_matches(attempt, error)
         and error.native_output is not None
-        and (error.native_output.complete or _is_output_free_timeout(error))
+        and error.native_output.complete
         and _native_output_is_consistent(error.native_output, accounting.native_output_bytes)
     )
 

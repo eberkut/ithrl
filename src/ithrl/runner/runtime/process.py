@@ -370,10 +370,11 @@ async def _run_child_with_output(
                 stdout_stop_event=stdout_stop_event,
                 state_capacity=limits.max_disposable_state_bytes,
                 state_entry_capacity=limits.max_disposable_state_entries,
-                deadline=deadline,
             )
         )
-        stdout_stop_matched = await _wait_until_complete_or_stop(waiter, stdout_stop_event)
+        # Keep the shielded capture alive so termination can drain both pipes to EOF.
+        async with asyncio.timeout_at(deadline):
+            stdout_stop_matched = await _wait_until_complete_or_stop(waiter, stdout_stop_event)
         return await _finalize_child(
             process,
             waiter,
@@ -398,7 +399,7 @@ async def _run_child_with_output(
             waiter,
             error=error,
             cancelled=False,
-            drain_output=False,
+            drain_output=isinstance(error, TimeoutError),
             stdout_stop_matched=(stdout_stop_event is not None and stdout_stop_event.is_set()),
         )
 
@@ -455,14 +456,15 @@ async def _finalize_child(
         cancelled or cancelled_during_termination or cancelled_during_settlement,
         process_outcome,
         forced,
-        drain_output and waiter_error is None,
+        drain_output and waiter is not None and waiter_error is None,
         stdout_stop_matched,
     )
 
 
 async def _settle_waiter(task: asyncio.Task[None]) -> BaseException | None:
     try:
-        await task
+        async with asyncio.timeout(PROCESS_CANCELLATION_GRACE_SECONDS):
+            await task
     except (asyncio.CancelledError, Exception) as error:
         return error
     return None
@@ -526,7 +528,6 @@ async def _wait_for_process(
     stdout_stop_event: asyncio.Event | None,
     state_capacity: int,
     state_entry_capacity: int,
-    deadline: float,
 ) -> None:
     stdout_pipe = process.stdout
     stderr_pipe = process.stderr
@@ -556,11 +557,10 @@ async def _wait_for_process(
             _monitor_state(state, usage, state_capacity, state_entry_capacity)
         )
         try:
-            async with asyncio.timeout_at(deadline):
-                done, _ = await asyncio.wait({work, monitor}, return_when=asyncio.FIRST_COMPLETED)
-                if monitor in done:
-                    await monitor
-                await work
+            done, _ = await asyncio.wait({work, monitor}, return_when=asyncio.FIRST_COMPLETED)
+            if monitor in done:
+                await monitor
+            await work
         finally:
             await _cancel_and_wait(work, monitor)
     finally:

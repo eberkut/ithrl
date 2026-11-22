@@ -507,6 +507,7 @@ def test_explicit_unavailable_experiment_controls_mode_and_preserves_target(
 @pytest.mark.parametrize("model", [None, "gpt-6-luna"])
 @pytest.mark.parametrize("harness", ["codex", "copilot"])
 @pytest.mark.parametrize("reasoning_effort", [None, "low"])
+@pytest.mark.parametrize("settings_source", ["comparison", "experiment"])
 def test_native_comparison_binds_a_prospective_predicate_without_changing_the_capture(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -514,6 +515,7 @@ def test_native_comparison_binds_a_prospective_predicate_without_changing_the_ca
     model: str | None,
     harness: str,
     reasoning_effort: str | None,
+    settings_source: str,
 ) -> None:
     from ithrl.behavior import FinalResponseTarget, ShellActionTarget
     from ithrl.cli.comparison_session import load_comparison_profile
@@ -565,8 +567,16 @@ def test_native_comparison_binds_a_prospective_predicate_without_changing_the_ca
     )
     removals = iter([[], [removable_id]])
     config.write_text(
-        (f"model = {json.dumps(model)}\n" if model is not None else "")
-        + (f"reasoning_effort = {json.dumps(reasoning_effort)}\n" if reasoning_effort else "")
+        (
+            f"model = {json.dumps(model)}\n"
+            if model is not None and settings_source == "comparison"
+            else ""
+        )
+        + (
+            f"reasoning_effort = {json.dumps(reasoning_effort)}\n"
+            if reasoning_effort and settings_source == "comparison"
+            else ""
+        )
         + "\n".join(
             f"removed_context_ids = {json.dumps(next(removals))}"
             if line.startswith("removed_context_ids = ")
@@ -612,8 +622,17 @@ def test_native_comparison_binds_a_prospective_predicate_without_changing_the_ca
         calibration: SampledCalibrationPhase,
         model: str | None,
         reasoning_effort: str | None,
+        provider: str | None,
         **_kwargs: object,
     ) -> NativeSelection:
+        if isinstance(experiment.runner, NativeRunnerConfig):
+            model = model if model is not None else experiment.runner.model
+            reasoning_effort = (
+                reasoning_effort
+                if reasoning_effort is not None
+                else experiment.runner.reasoning_effort
+            )
+            provider = provider if provider is not None else experiment.runner.provider
         return NativeSelection(
             RunnerRegistry({harness: lambda _config, _evidence: PureRunner()}),
             SafetyPolicy(
@@ -631,6 +650,7 @@ def test_native_comparison_binds_a_prospective_predicate_without_changing_the_ca
                         "required_capability_digest": capability.digest,
                         "model": model,
                         "reasoning_effort": reasoning_effort,
+                        "provider": provider,
                     }
                 ),
                 calibration=calibration,
@@ -641,6 +661,25 @@ def test_native_comparison_binds_a_prospective_predicate_without_changing_the_ca
     with pytest.raises(PreflightRefusedError) as refused:
         prepare_experiment(evidence, experiment=experiment)
     assert [issue.code for issue in refused.value.report.issues] == ["runner-evidence-mismatch"]
+
+    if settings_source == "experiment":
+        experiment = SampledExperimentDefinition(
+            target=experiment.target,
+            oracle=experiment.oracle,
+            runner=NativeRunnerConfig.model_validate(
+                {
+                    "type": harness,
+                    "required_capability_digest": capability.digest,
+                    "model": model,
+                    "reasoning_effort": reasoning_effort,
+                    "provider": capability.provider,
+                }
+            ),
+            calibration=SampledCalibrationPhase(
+                required_valid=1, minimum_matches=1, max_attempts=1
+            ),
+        )
+        explicit.write_text(experiment.to_toml())
 
     monkeypatch.setattr("ithrl.cli.native.native_selection", select)
     args[1] = str(case.root)
@@ -666,9 +705,11 @@ def test_native_comparison_binds_a_prospective_predicate_without_changing_the_ca
         assert profile.experiment.target == target
         assert profile.identity.target_digest == target.digest
         assert profile.execution_plan.target_digest == target.digest
-        assert profile.configuration.model == model
+        assert profile.configuration.model == (model if settings_source == "comparison" else None)
         assert "codex_replay" not in profile.configuration.model_dump()
-        assert profile.configuration.reasoning_effort == reasoning_effort
+        assert profile.configuration.reasoning_effort == (
+            reasoning_effort if settings_source == "comparison" else None
+        )
         assert profile.execution_plan.reasoning_effort == reasoning_effort
         assert profile.execution_plan.inspection_metadata.reasoning_effort == reasoning_effort
         assert profile.execution_plan.model_requested == (
@@ -677,22 +718,66 @@ def test_native_comparison_binds_a_prospective_predicate_without_changing_the_ca
         assert isinstance(profile.experiment.runner, NativeRunnerConfig)
         assert profile.experiment.runner.model == model
         assert profile.experiment.runner.reasoning_effort == reasoning_effort
+        assert profile.experiment.runner.provider == (
+            capability.provider if settings_source == "experiment" else None
+        )
         assert case.load().decision == original_decision
-        if model is not None:
-            from pydantic import ValidationError
+        from pydantic import ValidationError
 
-            changed_configuration = profile.configuration.model_copy(update={"model": "other"})
-            with pytest.raises(ValidationError, match="configuration differs"):
+        for setting in ("model", "provider", "reasoning_effort"):
+            changed_configuration = profile.configuration.model_copy(update={setting: "other"})
+            with pytest.raises(
+                ValidationError, match=r"configuration differs|reasoning effort differs"
+            ):
                 type(profile).model_validate(
                     {**profile.model_dump(), "configuration": changed_configuration}
                 )
+        if model is not None:
             changed_plan = profile.execution_plan.model_copy(update={"model_requested": "other"})
             with pytest.raises(
-                ValidationError, match=r"model configuration differs|resolved execution identity"
+                ValidationError,
+                match=r"model configuration differs|resolved execution identity|runner settings differ",
             ):
                 type(profile).model_validate(
                     {**profile.model_dump(), "execution_plan": changed_plan}
                 )
+        if settings_source == "experiment":
+            omitted = profile.configuration.model_copy(
+                update={"model": None, "provider": None, "reasoning_effort": None}
+            )
+            for setting in ("model", "provider", "reasoning_effort"):
+                changed_runner = profile.experiment.runner.model_copy(update={setting: "other"})
+                changed_experiment = profile.experiment.model_copy(
+                    update={"runner": changed_runner}
+                )
+                changed_plan = profile.execution_plan.model_copy(
+                    update={"experiment_digest": changed_experiment.digest}
+                )
+                changed_binding = profile.binding.model_copy(
+                    update={
+                        arm: getattr(profile.binding, arm).model_copy(
+                            update={"execution_plan_digest": changed_plan.digest}
+                        )
+                        for arm in ("reference", "candidate")
+                    }
+                )
+                changed_identity = profile.identity.model_copy(
+                    update={
+                        "experiment_digest": changed_experiment.digest,
+                        "execution_plan_digest": changed_plan.digest,
+                    }
+                )
+                with pytest.raises(ValidationError, match="runner settings differ"):
+                    type(profile).model_validate(
+                        {
+                            **profile.model_dump(),
+                            "configuration": omitted,
+                            "experiment": changed_experiment,
+                            "execution_plan": changed_plan,
+                            "binding": changed_binding,
+                            "identity": changed_identity,
+                        }
+                    )
     else:
         assert result.exit_code != 0
         assert json.loads(result.stdout)["error_code"] == "comparison-input-or-execution-refused"
