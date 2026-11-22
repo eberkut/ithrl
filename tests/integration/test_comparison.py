@@ -4,109 +4,51 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Literal, cast, override
+from typing import Any, Literal, override
 
 import pytest
 
-from ithrl.adapters import enumerate_decisions
-from ithrl.adapters.registry import parse_session_bytes
-from ithrl.behavior import FinalResponseTarget, ShellActionTarget
-from ithrl.case import CaseEvidence
 from ithrl.cli.comparison_output import result_report
 from ithrl.comparison import engine as comparison_engine
 from ithrl.comparison.contracts import (
-    ComparisonCalibration,
     ComparisonConfiguration,
-    ComparisonConfirmation,
-    ComparisonLimits,
     ComparisonOutcome,
-    ComparisonProgress,
 )
 from ithrl.comparison.engine import (
-    PreparedComparison,
-    comparison_budget_bounds,
     prepare_comparison,
     run_comparison,
 )
 from ithrl.comparison.results import (
     ComparisonEvidence,
     load_comparison_result,
+    validate_comparison_source,
     write_comparison_result,
 )
-from ithrl.context import content_digest
-from ithrl.execution import CapabilityProfile, ResourceLimits, SafetyPolicy
-from ithrl.execution.budget import sampling_attempt_cost
+from ithrl.execution import CapabilityProfile
+from ithrl.execution.budget import SamplingAttemptCost
 from ithrl.experiment import (
     CodexReplayConfig,
-    FakeRunnerConfig,
-    NativeRunnerConfig,
-    SampledCalibrationPhase,
-    SampledExperimentDefinition,
-    SamplingArmTarget,
-    StructuralOracleConfig,
 )
-from ithrl.extraction import extract_decision
-from ithrl.mutation import ContextSelection, MutationError, TextAppend, TextMutation
-from ithrl.observations import ObservationStore, SamplingBlockEvidence, SamplingBudgetAllowance
-from ithrl.run_state import RunStateError, SampledRunStateFile, SamplingBudgetApproval
+from ithrl.mutation import ContextSelection, MutationError, TextMutation
+from ithrl.observations import SamplingBlockEvidence
+from ithrl.run_state import RunStateError
 from ithrl.runner import (
-    Candidate,
     NativeOutputReference,
     PreparedAttempt,
     ProviderAcceptanceState,
     RunAccounting,
-    RunnerRegistry,
     RunResult,
-    ToolCall,
 )
 from ithrl.runner.contracts import RunnerError, RunnerErrorCode
-from ithrl.runner.fake import FakeRunner
-from ithrl.synthetic import extract_inference
-from ithrl.tool_output_text import ToolOutputTextSpanRemoval, remove_tool_output_text_span
-from ithrl.workflow import PreparedExperiment, prepare_experiment
-from native_support.codex import _tool_output_text_records as codex_tool_output_text_records
-from native_support.copilot import _tool_output_text_records as copilot_tool_output_text_records
-
-FIXTURE = Path(__file__).parents[1] / "fixtures/synthetic-trace.json"
-
-
-class CountingRunner(FakeRunner):
-    def __init__(self) -> None:
-        super().__init__(required_markers=frozenset({"A", "C"}), final_text="BLUE")
-        self.attempts: list[PreparedAttempt] = []
-        self.fail = False
-        self.power_loss = False
-        self.lose_effect = False
-        self.cancel = False
-        self.model_drift = False
-        self.admissions: list[Candidate] = []
-
-    def validate_candidate(self, attempt: PreparedAttempt) -> None:
-        self.admissions.append(attempt.candidate)
-
-    @override
-    async def run(
-        self, attempt: PreparedAttempt, *, runtime_deadline: float | None = None
-    ) -> RunResult:
-        self.attempts.append(attempt)
-        if self.cancel:
-            raise asyncio.CancelledError
-        if self.power_loss:
-            raise SystemExit("simulated process loss")
-        if self.fail:
-            raise RunnerError(RunnerErrorCode.CONTRACT, "sanitized test refusal")
-        result = await super().run(attempt, runtime_deadline=runtime_deadline)
-        if self.model_drift:
-            return result.model_copy(update={"model_returned": "different-model"})
-        return (
-            result.model_copy(update={"final_text": "BLUE"})
-            if self.lose_effect and attempt.phase == "confirmation"
-            else result
-        )
+from ithrl.tool_output_text import ToolOutputTextSpanRemoval
+from native_support.comparison import (
+    CountingRunner,
+    _fixture,
+    _tool_output_text_fixture,
+)
 
 
 class OverloadRunner(CountingRunner):
@@ -174,290 +116,6 @@ class OverloadRunner(CountingRunner):
                 ),
             }
         )
-
-
-@dataclass
-class ComparisonFixture:
-    evidence: CaseEvidence
-    prepared: PreparedExperiment
-    configuration: ComparisonConfiguration
-    state: SampledRunStateFile
-    store: ObservationStore
-    runner: CountingRunner
-    admission: PreparedComparison
-
-    def run(
-        self,
-        *,
-        on_progress: Callable[[SamplingBlockEvidence], None] | None = None,
-        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
-        calibration_only: bool = False,
-    ) -> ComparisonEvidence:
-        return asyncio.run(
-            run_comparison(
-                evidence=self.evidence,
-                prepared=self.prepared,
-                configuration=self.configuration,
-                state_file=self.state,
-                store=self.store,
-                admission=self.admission,
-                on_progress=on_progress,
-                clock=clock,
-                calibration_only=calibration_only,
-            )
-        )
-
-
-def _fixture(
-    tmp_path: Path,
-    *,
-    objective: Literal["repair", "degradation"] = "repair",
-    both_nonfull: bool = False,
-    indistinguishable: bool = False,
-    append: bool = False,
-    wall_seconds: int = 1000,
-    freshness_seconds: int = 600,
-    pacing_seconds: int = 0,
-    runner: CountingRunner | None = None,
-    evidence: CaseEvidence | None = None,
-    selection_pair: tuple[ContextSelection, ContextSelection] | None = None,
-    target: FinalResponseTarget | ShellActionTarget | None = None,
-) -> ComparisonFixture:
-    evidence = (
-        evidence
-        or extract_inference(
-            FIXTURE, inference_call_id="synthetic-ac-001", case_path=tmp_path / "case"
-        ).load()
-    )
-    runner = runner or CountingRunner()
-    profile = runner.capability_profile
-    provider_calls = profile.provider_calls_per_attempt
-    experiment = SampledExperimentDefinition(
-        target=target or FinalResponseTarget(text_equals="BLUE"),
-        oracle=StructuralOracleConfig(),
-        runner=NativeRunnerConfig(
-            type=cast(Literal["codex", "copilot"], profile.runner_type),
-            required_capability_digest=profile.digest,
-        )
-        if provider_calls
-        else FakeRunnerConfig(required_markers=("A", "C"), final_text="BLUE"),
-        calibration=SampledCalibrationPhase(required_valid=1, minimum_matches=1, max_attempts=1),
-    )
-    prepared = prepare_experiment(
-        evidence,
-        experiment=experiment,
-        registry=RunnerRegistry({profile.runner_type: lambda _config, _evidence: runner}),
-        safety_policy=SafetyPolicy(
-            provider_transport="allowed",
-            allowed_provider=profile.provider,
-            allowed_endpoint=profile.endpoint,
-        )
-        if provider_calls
-        else None,
-        resource_limits=ResourceLimits(max_provider_calls=provider_calls, max_wall_time_seconds=1),
-    )
-    nodes = {node.path: node.id for node in evidence.context.nodes}
-    if selection_pair is not None:
-        reference_selection, candidate_selection = selection_pair
-    else:
-        reference_selection, candidate_selection = _selections(
-            nodes,
-            objective=objective,
-            both_nonfull=both_nonfull,
-            indistinguishable=indistinguishable,
-            append=append,
-        )
-    one = SamplingArmTarget(required_valid=1, max_attempts=1)
-    seven = SamplingArmTarget(required_valid=7, max_attempts=7)
-    configuration = ComparisonConfiguration(
-        objective=objective,
-        reference=reference_selection,
-        candidate=candidate_selection,
-        calibration=ComparisonCalibration(
-            reference=one, candidate=one, positive_minimum_matches=1, negative_maximum_matches=0
-        ),
-        confirmation=ComparisonConfirmation(reference=seven, candidate=seven, alpha=0.05),
-        minimum_effect=0.1,
-        seed=7,
-        eligibility_policy="safe-provider-overload"
-        if provider_calls
-        else "independent-safe-preaccept-only",
-        freshness_seconds=freshness_seconds,
-        limits=ComparisonLimits(
-            max_provider_calls=100 * provider_calls,
-            max_wall_time_seconds=wall_seconds,
-            attempt_timeout_seconds=1,
-            inter_attempt_delay_seconds=pacing_seconds,
-        ),
-    )
-    admission = prepare_comparison(evidence, prepared, configuration)
-    prepared, binding = admission.prepared, admission.binding
-    bounds = comparison_budget_bounds(
-        configuration, sampling_attempt_cost(runner.capability_profile, prepared.resource_limits)
-    )
-    store = ObservationStore(tmp_path / "observations.sqlite")
-    store.initialize()
-    started = datetime.now(UTC)
-    state = SampledRunStateFile.create(
-        case_root=tmp_path / "case",
-        run_id="direct-comparison",
-        store=store,
-        started_at=started,
-        original_identity=prepared.identity,
-        original_candidate_digest=binding.reference.digest,
-        provider_calls_per_attempt=provider_calls,
-        comparison_progress=ComparisonProgress(binding=binding),
-        approval=SamplingBudgetApproval(
-            approval_id="provider-free-test",
-            approved_at=started,
-            allowance=SamplingBudgetAllowance(
-                run_id="direct-comparison",
-                max_provider_calls=100 * provider_calls,
-                max_wall_time_seconds=wall_seconds,
-                max_candidate_comparisons=1,
-                confirmation_provider_calls=bounds.confirmation_provider_calls,
-                confirmation_runner_seconds=bounds.confirmation_runner_seconds,
-                inter_attempt_delay_seconds=pacing_seconds,
-            ),
-        ),
-    )
-    return ComparisonFixture(evidence, prepared, configuration, state, store, runner, admission)
-
-
-def _selections(
-    nodes: dict[str | None, str],
-    *,
-    objective: Literal["repair", "degradation"],
-    both_nonfull: bool,
-    indistinguishable: bool,
-    append: bool,
-) -> tuple[ContextSelection, ContextSelection]:
-    absent = (nodes["/input/0"],) + ((nodes["/input/1"],) if both_nonfull else ())
-    present = (nodes["/input/1"],) if both_nonfull or indistinguishable else ()
-    if indistinguishable:
-        absent = ()
-    reference, candidate = (absent, present) if objective == "repair" else (present, absent)
-    reference_selection = ContextSelection(removed_context_ids=reference)
-    candidate_selection = ContextSelection(removed_context_ids=candidate)
-    if append:
-        reference_selection = ContextSelection()
-        candidate_selection = ContextSelection(
-            mutation=TextMutation(
-                edits=(
-                    TextAppend(
-                        context_id=nodes["/input/0"],
-                        content_index=0,
-                        original_text_digest=content_digest("A"),
-                        text="\nAdditional context.",
-                    ),
-                )
-            )
-        )
-    return reference_selection, candidate_selection
-
-
-_TOOL_OUTPUT_TEXT = 'Keep é🙂.\r\n{"recipe":"DELETE-ME\\nexact"}\r\nRetain diagnostics.'
-
-
-class ToolOutputTextCountingRunner(CountingRunner):
-    """Observe a validated source string without invoking a native materializer."""
-
-    def __init__(self, harness: Literal["codex", "copilot"]) -> None:
-        super().__init__()
-        self.harness = harness
-
-    @property
-    @override
-    def capability_profile(self) -> CapabilityProfile:
-        return CapabilityProfile.model_validate(
-            {
-                **super().capability_profile.model_dump(),
-                "harness": self.harness,
-                "source_schema": "codex-rollout-jsonl"
-                if self.harness == "codex"
-                else "copilot-events-jsonl",
-                "supported_capture_types": ("logical-session",),
-                "supported_materializations": ("source-backed",),
-                "supported_context_operations": (
-                    "dependency-closed-removal",
-                    "remove-tool-output-text-span",
-                ),
-            }
-        )
-
-    @override
-    async def run(
-        self, attempt: PreparedAttempt, *, runtime_deadline: float | None = None
-    ) -> RunResult:
-        self.attempts.append(attempt)
-        text = attempt.evidence.editable_tool_output_text()[0].original_text
-        for edit in attempt.candidate.mutation.edits:
-            assert isinstance(edit, ToolOutputTextSpanRemoval)
-            descriptor, original = attempt.evidence.validate_tool_output_text_span(edit)
-            text = remove_tool_output_text_span(original.original_text, descriptor, edit)
-        matched = "DELETE-ME" in text
-        calls = (
-            (ToolCall(name="bash", arguments={"command": "pwd"}),)
-            if (matched and self.harness == "copilot")
-            else ()
-        )
-        return RunResult(
-            attempt_id=attempt.attempt_id,
-            effective_policy_digest=attempt.safety_policy.digest,
-            final_text="BLUE" if matched and self.harness == "codex" else "No match.",
-            tool_calls=calls,
-            provider="fake",
-            model_requested=attempt.execution_plan.model_requested,
-            model_returned=attempt.execution_plan.model_requested,
-            accounting=RunAccounting(actions_requested=len(calls), actions_denied=len(calls)),
-        )
-
-
-def _tool_output_text_fixture(
-    tmp_path: Path,
-    *,
-    harness: Literal["codex", "copilot"] = "codex",
-    common_removal: bool = False,
-) -> ComparisonFixture:
-    """Sanitized native evidence with one prior tool field and a fixed later input."""
-
-    if harness == "codex":
-        records = codex_tool_output_text_records(_TOOL_OUTPUT_TEXT)
-        records[-1]["payload"]["last_agent_message"] = "BLUE"
-    else:
-        records = copilot_tool_output_text_records(_TOOL_OUTPUT_TEXT, "shell-action")
-        records[5]["data"]["detailedContent"] = "Display-only unchanged."
-    session = parse_session_bytes("\n".join(json.dumps(r) for r in records).encode())
-    decision = enumerate_decisions(session)[-1]
-    evidence = extract_decision(
-        session,
-        decision_id=decision.decision_id,
-        target_id=decision.targets[0].target_id,
-        case_path=tmp_path / "case",
-    ).load()
-    field = evidence.tool_output_text_fields()[0]
-    start = _TOOL_OUTPUT_TEXT.index("DELETE-ME")
-    edit = evidence.tool_output_text_removal(
-        field.field_id, start=start, end=start + len("DELETE-ME")
-    )
-    removed = ()
-    if common_removal:
-        removable = evidence.editable_text()[0]
-        # The common omission must leave the edited call/result bundle retained.
-        removed = (removable.context_id,)
-    return _fixture(
-        tmp_path,
-        objective="degradation",
-        evidence=evidence,
-        runner=ToolOutputTextCountingRunner(harness),
-        selection_pair=(
-            ContextSelection(removed_context_ids=removed),
-            ContextSelection(removed_context_ids=removed, mutation=TextMutation(edits=(edit,))),
-        ),
-        target=FinalResponseTarget(text_equals="BLUE")
-        if harness == "codex"
-        else ShellActionTarget(tool_name_equals="bash", command_equals="pwd"),
-    )
 
 
 @pytest.mark.parametrize("harness", ["codex", "copilot"])
@@ -708,6 +366,79 @@ def test_declared_replay_mismatch_refuses_before_candidate_admission(
     with pytest.raises(ValueError, match=r"model differs|replay differs"):
         prepare_comparison(fixture.evidence, prepared, configuration)
     assert len(fixture.runner.admissions) == admitted
+    assert fixture.runner.attempts == []
+
+
+@pytest.mark.parametrize(
+    ("changed", "message"),
+    [
+        ("timeout", "timeout differs"),
+        ("fingerprint", "runner differs"),
+        ("capability", "runner differs"),
+        ("reasoning-effort", "reasoning effort differs"),
+        ("provider", "provider differs"),
+    ],
+)
+def test_comparison_refuses_execution_drift_before_admitting_candidates(
+    tmp_path: Path, changed: str, message: str
+) -> None:
+    fixture = _fixture(tmp_path)
+    prepared, configuration = fixture.prepared, fixture.configuration
+    if changed == "timeout":
+        prepared = replace(
+            prepared,
+            resource_limits=prepared.resource_limits.model_copy(
+                update={"max_wall_time_seconds": 2}
+            ),
+        )
+    elif changed in {"fingerprint", "capability"}:
+        change = (
+            {"runner_fingerprint": "different-runner"}
+            if changed == "fingerprint"
+            else {
+                "capability": prepared.execution_plan.capability.model_copy(
+                    update={"runner_version": "different-version"}
+                )
+            }
+        )
+        prepared = replace(
+            prepared, execution_plan=prepared.execution_plan.model_copy(update=change)
+        )
+    else:
+        change = (
+            {"reasoning_effort": "low"}
+            if changed == "reasoning-effort"
+            else {"provider": "different-provider"}
+        )
+        configuration = configuration.model_copy(update=change)
+    admitted = len(fixture.runner.admissions)
+    with pytest.raises(ValueError, match=message):
+        prepare_comparison(fixture.evidence, prepared, configuration)
+    assert len(fixture.runner.admissions) == admitted
+    assert fixture.runner.attempts == []
+
+
+@pytest.mark.parametrize(
+    ("limit", "provider_calls", "reason"),
+    [
+        ("max_provider_calls", 1, "provider-call-budget"),
+        ("max_wall_time_seconds", 0, "wall-time-budget"),
+    ],
+)
+def test_comparison_budget_reserves_confirmation_before_calibration(
+    tmp_path: Path, limit: str, provider_calls: int, reason: str
+) -> None:
+    fixture = _fixture(tmp_path)
+    configuration = fixture.configuration.model_copy(
+        update={"limits": fixture.configuration.limits.model_copy(update={limit: 1})}
+    )
+    assert (
+        comparison_engine.comparison_budget_refusal(
+            configuration,
+            SamplingAttemptCost(provider_calls=provider_calls, runner_seconds=1),
+        )
+        == reason
+    )
     assert fixture.runner.attempts == []
 
 
@@ -977,6 +708,8 @@ def completed_evidence(tmp_path_factory: pytest.TempPathFactory) -> ComparisonEv
         "early-time",
         "metadata",
         "missing-block",
+        "late-stop",
+        "reference-count",
         "reference",
         "effective-policy",
         "refusal",
@@ -996,6 +729,14 @@ def test_offline_result_rejects_inconsistent_persisted_evidence(
         payload["execution_metadata"]["plan_content_digest"] = "0" * 64
     elif defect == "missing-block":
         payload["blocks"] = payload["blocks"][:-1]
+    elif defect == "late-stop":
+        payload["state"]["comparison_progress"].update(
+            terminal="incomplete",
+            stop_reason="wall-time-exhausted",
+            stopped_at="2099-01-01T00:00:00Z",
+        )
+    elif defect == "reference-count":
+        payload["state"]["blocks"][0]["observations"] = []
     elif defect == "reference":
         payload["state"]["blocks"][0]["observations"][0]["observation_id"] = "different-observation"
     elif defect == "effective-policy":
@@ -1004,11 +745,163 @@ def test_offline_result_rejects_inconsistent_persisted_evidence(
         ] = "0" * 64
     else:
         payload["refusal"] = "unresolved-dispatch"
+    if defect in {"late-stop", "reference-count"}:
+        message = (
+            "stop follows its evidence snapshot"
+            if defect == "late-stop"
+            else "references omit recorded attempts"
+        )
+        with pytest.raises(ValueError, match=message):
+            ComparisonEvidence.model_validate_json(json.dumps(payload))
     path = tmp_path / "invalid.json"
     path.write_text(json.dumps(payload))
     path.chmod(0o600)
     with pytest.raises(ValueError, match="cannot load private comparison evidence"):
         load_comparison_result(path)
+
+
+@pytest.mark.parametrize(
+    "defect",
+    ["case", "fixed-input", "append-digest"],
+)
+def test_offline_result_revalidates_saved_pair_against_source(tmp_path: Path, defect: str) -> None:
+    fixture = (
+        _tool_output_text_fixture(tmp_path)
+        if defect == "fixed-input"
+        else _fixture(tmp_path, append=defect == "append-digest")
+    )
+    result = fixture.run()
+    if defect == "case":
+        binding = result.binding.model_copy(
+            update={
+                "reference": result.binding.reference.model_copy(update={"case_digest": "0" * 64})
+            }
+        )
+        with pytest.raises(ValueError, match="different case evidence"):
+            validate_comparison_source(binding, result.execution_metadata, fixture.evidence)
+        return
+    if defect == "fixed-input":
+        from ithrl.adapters.registry import decision_input_node_id
+        from ithrl.extraction import validate_extracted_case
+
+        decision = fixture.evidence.decision
+        session = validate_extracted_case(fixture.evidence)
+        assert decision is not None
+        assert session is not None
+        trigger_id = decision_input_node_id(
+            session, decision.selector, fixture.evidence.context, records=session.records
+        )
+        assert trigger_id is not None
+        procedure = result.binding.procedure.model_copy(
+            update={"candidate": ContextSelection(removed_context_ids=(trigger_id,))}
+        )
+        candidate = result.binding.candidate.model_copy(
+            update={"removed_context_ids": (trigger_id,)}
+        )
+        binding = result.binding.model_copy(update={"procedure": procedure, "candidate": candidate})
+        with pytest.raises(ValueError, match="fixed decision input"):
+            validate_comparison_source(binding, result.execution_metadata, fixture.evidence)
+        return
+    if defect == "append-digest":
+        edit = result.binding.candidate.mutation.edits[0].model_copy(
+            update={"original_text_digest": "0" * 64}
+        )
+        mutation = TextMutation(edits=(edit,))
+        procedure = result.binding.procedure.model_copy(
+            update={"candidate": ContextSelection(mutation=mutation)}
+        )
+        candidate = result.binding.candidate.model_copy(update={"mutation": mutation})
+        binding = result.binding.model_copy(update={"procedure": procedure, "candidate": candidate})
+        with pytest.raises(ValueError, match="original text digest does not match"):
+            validate_comparison_source(binding, result.execution_metadata, fixture.evidence)
+        return
+
+
+@pytest.mark.parametrize("defect", ["permissions", "hard-link"])
+def test_saved_comparison_requires_private_single_link_file(tmp_path: Path, defect: str) -> None:
+    fixture = _fixture(tmp_path)
+    result = fixture.run()
+    path = tmp_path / "private" / "comparison.json"
+    write_comparison_result(path, result)
+    if defect == "permissions":
+        path.chmod(0o644)
+    else:
+        (tmp_path / "linked-copy.json").hardlink_to(path)
+    with pytest.raises(ValueError, match="cannot load private comparison evidence"):
+        load_comparison_result(path)
+
+
+@pytest.mark.parametrize(
+    ("defect", "message"),
+    [
+        ("missing-progress", "progress is missing"),
+        ("stop-on-live", "cannot carry a terminal refusal"),
+        ("bad-terminal", "calibration outcome differs"),
+        ("selection-before-samples", "must follow all calibration observations"),
+        ("bad-plan", "block differs from its frozen contexts"),
+    ],
+)
+def test_comparison_progress_rejects_forged_state(
+    completed_evidence: ComparisonEvidence, defect: str, message: str
+) -> None:
+    from ithrl.comparison.engine import validate_comparison_progress
+
+    result = completed_evidence
+    state = result.state
+    blocks = result.blocks
+    if defect == "missing-progress":
+        state = state.model_copy(update={"comparison_progress": None})
+    elif defect == "stop-on-live":
+        progress = state.comparison_progress
+        assert progress is not None
+        state = state.model_copy(
+            update={
+                "comparison_progress": progress.model_copy(
+                    update={"terminal": None, "stop_reason": "fake-refusal"}
+                )
+            }
+        )
+    elif defect == "bad-terminal":
+        progress = state.comparison_progress
+        assert progress is not None
+        state = state.model_copy(
+            update={
+                "comparison_progress": progress.model_copy(
+                    update={"terminal": ComparisonOutcome.CALIBRATION_FAILED}
+                )
+            }
+        )
+    elif defect == "selection-before-samples":
+        progress = state.comparison_progress
+        selection = state.selection
+        assert progress is not None
+        assert selection is not None
+        earlier = state.started_at
+        progress = progress.model_copy(update={"selected_at": earlier})
+        selection = selection.model_copy(
+            update={
+                "checkpoint_digest": progress.selection_digest,
+                "selected_at": earlier,
+                "plan": selection.plan.model_copy(update={"selected_at": earlier}),
+            }
+        )
+        state = state.model_copy(update={"comparison_progress": progress, "selection": selection})
+        confirmation = blocks[1]
+        blocks = (
+            blocks[0],
+            confirmation.model_copy(
+                update={"plan": confirmation.plan.model_copy(update={"selected_at": earlier})}
+            ),
+        )
+    else:
+        progress = state.comparison_progress
+        assert progress is not None
+        changed = blocks[0].model_copy(
+            update={"plan": blocks[0].plan.model_copy(update={"candidate_digest": "0" * 64})}
+        )
+        blocks = (changed, *blocks[1:])
+    with pytest.raises(RunStateError, match=message):
+        validate_comparison_progress(state, (), blocks)
 
 
 def test_historical_inspection_survives_implementation_change_but_resume_refuses(

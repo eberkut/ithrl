@@ -63,6 +63,13 @@ def test_authoring_refuses_empty_reversed_or_out_of_bounds_spans(start: int, end
         _field("text").removal("text", start=start, end=end)
 
 
+def test_span_model_rejects_empty_forward_range() -> None:
+    edit = _field("text").removal("text", start=0, end=1)
+
+    with pytest.raises(ValidationError, match="nonempty forward span"):
+        type(edit).model_validate({**edit.model_dump(), "start": 1, "end": 1})
+
+
 @pytest.mark.parametrize(
     "change",
     [
@@ -132,3 +139,14 @@ def test_unicode_refusal_and_private_representations() -> None:
 def test_empty_and_maximum_size_fields_have_complete_metadata() -> None:
     assert _field("").original_utf8_bytes == 0
     assert _field("x" * MAX_TEXT_SECTION_BYTES).original_utf8_bytes == MAX_TEXT_SECTION_BYTES
+
+
+def test_field_model_rejects_byte_count_smaller_than_codepoint_count() -> None:
+    data = _field("é").model_dump()
+    data["original_codepoints"] = 2
+    data["original_utf8_bytes"] = 1
+    binding = {key: value for key, value in data.items() if key != "field_id"}
+    data["field_id"] = "tool-output-text-" + content_digest(binding)
+
+    with pytest.raises(ValidationError, match="byte size cannot be smaller"):
+        ToolOutputTextField.model_validate(data)

@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+import ithrl.cost_reporting as cost_reporting
 from ithrl.case import CaseExistsError
 from ithrl.context import content_digest
 from ithrl.cost_reporting import hypothetical_report, load_cost_report, write_cost_report
@@ -385,6 +386,44 @@ def test_rehashed_report_cannot_change_component_counts_independently(tmp_path: 
     envelope["sha256"] = content_digest(envelope["report"])
     path.write_text(json.dumps(envelope))
     with pytest.raises(ValueError, match="count differs from usage"):
+        load_cost_report(path)
+
+
+def test_report_writer_enforces_byte_limit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    report = hypothetical_report(
+        CostUsage(input_tokens=100, output_tokens=10, cached_input_tokens=0, cache_write_tokens=0),
+        PriceBook(spec()),
+    )
+    destination = tmp_path / "cost.json"
+    monkeypatch.setattr(cost_reporting, "MAX_COST_REPORT_BYTES", 1)
+    with pytest.raises(ValueError, match="exceeds its byte limit"):
+        write_cost_report(destination, report)
+    assert not destination.exists()
+
+
+@pytest.mark.parametrize(
+    "envelope",
+    [[], {"report": {}, "sha256": "0" * 64, "unexpected": True}],
+)
+def test_report_loader_rejects_invalid_envelope(tmp_path: Path, envelope: object) -> None:
+    path = tmp_path / "cost.json"
+    path.write_text(json.dumps(envelope))
+    path.chmod(0o600)
+    with pytest.raises(ValueError, match="invalid cost report envelope"):
+        load_cost_report(path)
+
+
+def test_report_loader_checks_envelope_digest(tmp_path: Path) -> None:
+    report = hypothetical_report(
+        CostUsage(input_tokens=100, output_tokens=10, cached_input_tokens=0, cache_write_tokens=0),
+        PriceBook(spec()),
+    )
+    path = tmp_path / "cost.json"
+    write_cost_report(path, report)
+    envelope = json.loads(path.read_text())
+    envelope["sha256"] = "0" * 64
+    path.write_text(json.dumps(envelope))
+    with pytest.raises(ValueError, match="digest differs"):
         load_cost_report(path)
 
 

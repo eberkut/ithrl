@@ -12,7 +12,6 @@ from typing import Literal
 import pytest
 from typer.testing import CliRunner
 
-from integration.test_comparison import _TOOL_OUTPUT_TEXT, _tool_output_text_fixture
 from ithrl.adapters import enumerate_decisions, parse_session
 from ithrl.case import CaseEvidence, CaseFormatError, CaseWorkspace, SourceArtifact
 from ithrl.cli import app
@@ -24,6 +23,7 @@ from ithrl.observations import ObservationStore
 from ithrl.text_sections import MAX_TEXT_SECTION_BYTES
 from ithrl.tool_output_text import ToolOutputTextField
 from native_support.codex import _tool_output_text_records as codex_tool_output_text_records
+from native_support.comparison import _TOOL_OUTPUT_TEXT, _tool_output_text_fixture
 from native_support.copilot import _tool_output_text_records as copilot_tool_output_text_records
 
 _PRIVATE = "PRIVATE_TOOL_SENTINEL"
@@ -111,6 +111,11 @@ def test_tool_output_text_span_authors_bound_mutation_and_shows_only_retained_te
     assert detail["removed_utf8_bytes"] == len(_PRIVATE.encode())
     assert detail["retained_codepoints"] == len(_TEXT) - len(_PRIVATE)
     assert detail["retained_utf8_bytes"] == len(_TEXT.encode()) - len(_PRIVATE.encode())
+    human = CliRunner().invoke(app, args[:-2])
+    assert human.exit_code == 0, human.output
+    assert "selection:" in human.stdout
+    assert "mutation:" in human.stdout
+    assert _PRIVATE not in human.stdout
     private = CliRunner().invoke(app, [*args, "--show-text", "--max-text-bytes", "65536"])
     assert private.exit_code == 0, private.output
     selected = json.loads(private.stdout)["selection"]
@@ -217,6 +222,19 @@ def test_tool_output_text_reports_inspection_and_field_policy_limits(
     assert policy.omitted_field_count == 0
     assert described_paths == [site.field_path, "/fixture/1", "/fixture/2"]
     assert _PRIVATE not in policy.model_dump_json()
+
+
+def test_tool_output_text_human_output_reports_unavailable_field(
+    tool_case: tuple[Path, CaseEvidence], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    case, _evidence = tool_case
+    monkeypatch.setattr("ithrl.tool_output_text.MAX_TEXT_SECTION_BYTES", 1)
+
+    result = CliRunner().invoke(app, ["inspect", "tool", str(case)])
+    assert result.exit_code == 0, result.output
+    assert "unavailable:" in result.stdout
+    assert "tool-output-text-policy-limit" in result.stdout
+    assert _PRIVATE not in result.stdout
 
 
 def test_tool_output_text_can_select_beyond_visible_prefix_without_rehashing_catalog(

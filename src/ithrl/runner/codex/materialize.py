@@ -8,7 +8,6 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 from ithrl.adapters import AdapterError
-from ithrl.adapters.codex.context import is_text_tool_output
 from ithrl.adapters.contracts import NativeSession
 from ithrl.adapters.registry import decision_input_node_id
 from ithrl.case import CaseFormatError
@@ -313,7 +312,7 @@ def _remove_tool_output_text(
     result = copy.deepcopy(payload)
     output = result.get("output")
     if payload.get("type") not in {"custom_tool_call_output", "function_call_output"} or not (
-        is_text_tool_output(output)
+        _is_text_tool_output(output)
     ):
         raise ToolOutputTextError("the Codex tool output uses an unsupported content shape")
     if field.field_path == "/payload/output" and isinstance(output, str):
@@ -361,7 +360,7 @@ def validate_codex_output_limit(
         if item.get("type") not in {"custom_tool_call_output", "function_call_output"}:
             continue
         output = item.get("output")
-        if not is_text_tool_output(output):
+        if not _is_text_tool_output(output):
             raise CodexMaterializationError(
                 CodexMaterializationErrorCode.UNSUPPORTED_CONTEXT,
                 "the Codex tool output uses an unsupported content shape",
@@ -412,7 +411,7 @@ def _turn_input(trigger: JsonObject, history: list[JsonObject]) -> CodexTurnInpu
             )
         _required_string(calls[0].get("name"), "Codex tool call has no name")
         output = trigger.get("output")
-        if not is_text_tool_output(output):
+        if not _is_text_tool_output(output):
             raise CodexMaterializationError(
                 CodexMaterializationErrorCode.UNSUPPORTED_CONTEXT,
                 "the Codex tool output uses an unsupported content shape",
@@ -425,6 +424,20 @@ def _turn_input(trigger: JsonObject, history: list[JsonObject]) -> CodexTurnInpu
     raise CodexMaterializationError(
         CodexMaterializationErrorCode.UNSUPPORTED_CONTEXT,
         "the Codex decision trigger cannot be reconstructed by this runner",
+    )
+
+
+def _is_text_tool_output(value: JsonValue | None) -> bool:
+    """Validate native reconstruction independently of adapter field discovery."""
+
+    return isinstance(value, str) or (
+        isinstance(value, list)
+        and all(
+            isinstance(item, dict)
+            and item.get("type") == "input_text"
+            and isinstance(item.get("text"), str)
+            for item in value
+        )
     )
 
 

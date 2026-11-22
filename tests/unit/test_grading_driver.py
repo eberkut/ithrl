@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import runpy
 import sys
 import unittest
 from pathlib import Path
@@ -137,6 +138,31 @@ def test_test_driver_main_sets_limits_and_emits_only_the_bound_report(
     ]
 
 
+def test_test_driver_script_entrypoint_runs_main(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    spec = {
+        "python_path": ".",
+        "suite": {"kind": "unittest", "selector": "test*.py"},
+        "role": "independent",
+        "nonce": "script-entrypoint",
+    }
+    monkeypatch.setattr(Path, "read_text", Mock(return_value=json.dumps(spec)))
+    monkeypatch.setattr(driver.resource, "setrlimit", Mock())
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    monkeypatch.setattr(unittest.TestLoader, "discover", Mock(return_value=unittest.TestSuite()))
+
+    runpy.run_path(str(Path(driver.__file__)), run_name="__main__")
+
+    assert json.loads(capsys.readouterr().out) == {
+        "nonce": "script-entrypoint",
+        "collected": 0,
+        "passed": 0,
+        "failed": 0,
+        "errors": 0,
+    }
+
+
 def test_patch_driver_main_binds_application_and_report(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -150,6 +176,25 @@ def test_patch_driver_main_binds_application_and_report(
     apply.assert_called_once_with(Path("/work"), Path("/repair.patch"), ["app.py"])
     assert json.loads(capsys.readouterr().out) == {"nonce": "bound-patch", "patch_exit": 1}
     limits.assert_any_call(patch_driver.resource.RLIMIT_FSIZE, (4096, 4096))
+
+
+def test_patch_driver_script_entrypoint_runs_main(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    spec = {"editable_paths": ["app.py"], "max_bytes": 4096, "nonce": "script-entrypoint"}
+    monkeypatch.setattr(Path, "read_text", Mock(return_value=json.dumps(spec)))
+    monkeypatch.setattr(patch_driver.resource, "setrlimit", Mock())
+    monkeypatch.setattr(patch_driver.os, "walk", Mock(return_value=()))
+    monkeypatch.setattr(
+        patch_driver.subprocess, "run", Mock(return_value=SimpleNamespace(returncode=7, stdout=b""))
+    )
+
+    runpy.run_path(str(Path(patch_driver.__file__)), run_name="__main__")
+
+    assert json.loads(capsys.readouterr().out) == {
+        "nonce": "script-entrypoint",
+        "patch_exit": 7,
+    }
 
 
 @pytest.mark.parametrize("stage", ["parse", "check", "apply"])
@@ -172,3 +217,38 @@ def test_patch_driver_stops_at_the_first_git_failure(
         assert patch_driver.apply_patch(tmp_path, tmp_path / "repair.patch", ["app.py"]) == 7
     assert run.call_count == count
     assert (tmp_path / "app.py").read_text() == "value = 1\n"
+
+
+@pytest.mark.parametrize(
+    ("editable", "replacement", "mutate_tree", "expected"),
+    [
+        ("app.py", "value = 2\n", False, 0),
+        ("app.txt", "plain text\n", False, 0),
+        ("app.py", "value = 2\n", True, 1),
+        ("app.py", "invalid syntax !\n", False, 1),
+    ],
+)
+def test_patch_driver_verifies_tree_and_python_syntax_after_application(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    editable: str,
+    replacement: str,
+    mutate_tree: bool,
+    expected: int,
+) -> None:
+    source = tmp_path / editable
+    source.write_text("value = 1\n")
+
+    def git(command: list[str], **_kwargs: object) -> SimpleNamespace:
+        if "--numstat" in command:
+            return SimpleNamespace(returncode=0, stdout=f"1\t1\t{editable}\0".encode())
+        if "--check" in command:
+            return SimpleNamespace(returncode=0, stdout=b"")
+        source.write_text(replacement)
+        if mutate_tree:
+            (tmp_path / "unexpected.txt").write_text("unexpected tree entry")
+        return SimpleNamespace(returncode=0, stdout=b"")
+
+    monkeypatch.setattr(patch_driver.subprocess, "run", git)
+    assert patch_driver.apply_patch(tmp_path, tmp_path / "repair.patch", [editable]) == expected
+    assert source.read_text() == replacement

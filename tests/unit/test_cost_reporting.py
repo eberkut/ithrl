@@ -15,8 +15,14 @@ from typer.testing import CliRunner
 
 from ithrl.cli import app
 from ithrl.context import content_digest
-from ithrl.cost_reporting import CostReport, load_cost_report, recorded_report, write_cost_report
-from ithrl.costs import PriceBook, PricingSpec, RecordedSource
+from ithrl.cost_reporting import (
+    CostReport,
+    hypothetical_report,
+    load_cost_report,
+    recorded_report,
+    write_cost_report,
+)
+from ithrl.costs import CostUsage, PriceBook, PricingSpec, RecordedSource
 from ithrl.observations import (
     _INSERT_OBSERVATION,
     Observation,
@@ -321,7 +327,16 @@ def test_conflicting_physical_attempt_refuses_without_rewriting_source(tmp_path:
     assert store.path.read_bytes() == before
 
 
-@pytest.mark.parametrize("change", ["scope", "duplicate", "reason", "attribution", "zero"])
+def test_recorded_report_requires_explicit_source_mapping(tmp_path: Path) -> None:
+    store = ObservationStore(tmp_path / "observations.sqlite")
+    pricing = PriceBook(book().spec.model_copy(update={"recorded_source": None}))
+    with pytest.raises(ValueError, match="explicit source-to-pricing mapping"):
+        recorded_report(store, case_digest="a" * 64, experiment_digest="c" * 64, book=pricing)
+
+
+@pytest.mark.parametrize(
+    "change", ["scope", "duplicate", "reason", "missing_reason", "attribution", "zero"]
+)
 def test_saved_recorded_report_rejects_inconsistent_evidence(tmp_path: Path, change: str) -> None:
     store = ObservationStore(tmp_path / "observations.sqlite")
     store.append(observation(1))
@@ -334,12 +349,33 @@ def test_saved_recorded_report_rejects_inconsistent_evidence(tmp_path: Path, cha
         data["observations"].append(row.copy())
     elif change == "reason":
         row["reason"] = "usage-unavailable"
+    elif change == "missing_reason":
+        row.update(charges=None, reason=None)
     elif change == "attribution":
         row["attribution_digest"] = "f" * 64
     else:
         row.update(charges=None, reason="no-provider-calls")
-    with pytest.raises(ValueError, match=r"scope|repeats|refused|attribution|zero-call"):
+    with pytest.raises(
+        ValueError,
+        match=r"scope|repeats|refused|unpriced attempt|attribution|zero-call",
+    ):
         CostReport.model_validate_json(json.dumps(data))
+
+
+def test_hypothetical_report_rejects_recorded_scope() -> None:
+    report = hypothetical_report(
+        CostUsage.model_validate(
+            {"input_tokens": 100, "output_tokens": 10, "cached_input_tokens": 0}
+        ),
+        book(),
+    )
+    with pytest.raises(ValueError, match="only scenario inputs"):
+        CostReport.model_validate(
+            {
+                **report.model_dump(),
+                "case_digest": "a" * 64,
+            }
+        )
 
 
 def test_read_only_snapshot_rejects_links_and_limits(tmp_path: Path) -> None:
@@ -650,3 +686,38 @@ def test_human_scenario_reports_a_missing_duration_rate(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     assert "cache_write_5m_tokens: rate-unavailable" in result.output
     assert "observations:" not in result.output
+
+
+def test_human_scenario_with_complete_pricing_omits_unpriced_section(tmp_path: Path) -> None:
+    pricing, usage = tmp_path / "pricing.json", tmp_path / "usage.json"
+    priced_book = book().spec.model_copy(
+        update={
+            "custom_rates": {
+                "input_mtok": Decimal(2),
+                "output_mtok": Decimal(10),
+                "cache_read_mtok": Decimal("0.1"),
+                "cache_write_mtok": Decimal(1),
+            }
+        }
+    )
+    pricing.write_text(priced_book.model_dump_json())
+    usage.write_text(
+        '{"input_tokens":100,"output_tokens":10,"cached_input_tokens":0,"cache_write_tokens":0}'
+    )
+    for path in (pricing, usage):
+        path.chmod(0o600)
+    result = CliRunner().invoke(
+        app,
+        [
+            "cost",
+            "--scenario",
+            str(usage),
+            "--pricing",
+            str(pricing),
+            "--output",
+            str(tmp_path / "costs.json"),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "Unpriced token dimensions" not in result.output
+    assert "report SHA-256:" in result.output

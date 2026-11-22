@@ -11,7 +11,12 @@ from pydantic import ValidationError
 from ithrl.adapters._jsonl import JsonlDocument, read_jsonl
 from ithrl.adapters.codex import PARSER
 from ithrl.adapters.codex import decisions as codex_decisions
-from ithrl.adapters.codex.context import compile_context, decision_input_node_id, editable_text
+from ithrl.adapters.codex.context import (
+    compile_context,
+    decision_input_node_id,
+    editable_text,
+    editable_tool_output_text,
+)
 from ithrl.adapters.codex.decisions import enumerate_decisions
 from ithrl.adapters.contracts import NativeSession, ParsingLimits, SourceFacts
 from ithrl.behavior import FinalResponseTarget
@@ -219,6 +224,38 @@ def test_final_response_context_preserves_call_output_dependency(
     assert output.depends_on == (call.id,)
     assert not by_ordinal[6].mutable
     assert 9 not in by_ordinal
+
+
+def test_tool_output_text_requires_a_source_backed_call_node(tmp_path: Path) -> None:
+    records = [json.loads(line) for line in FIXTURE.read_text(encoding="utf-8").splitlines()]
+    records[10] = {
+        "ordinal": 10,
+        "timestamp": "2026-01-01T00:00:10.000Z",
+        "type": "response_item",
+        "payload": {
+            "type": "message",
+            "id": "message-fixture-user-002",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "Continue."}],
+        },
+    }
+    modified_fixture = tmp_path / "rollout.jsonl"
+    modified_fixture.write_text(
+        "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8"
+    )
+    session = PARSER.parse(read_jsonl(modified_fixture, limits=ParsingLimits()))
+    final = enumerate_decisions(session)[0]
+    context = compile_context(session, final.selector)
+    call = next(node for node in context.nodes if _source_selector(node).identity_value == 5)
+    derived_call = call.model_copy(update={"selector": None, "path": "/input/0"})
+    nodes = tuple(derived_call if node.id == call.id else node for node in context.nodes)
+    context_without_call_source = ContextGraph(nodes=nodes)
+
+    sites = editable_tool_output_text(session, final.selector, context)
+    assert [(site.field_path, site.original_text) for site in sites] == [
+        ("/payload/output/0/text", "Fixture result.")
+    ]
+    assert editable_tool_output_text(session, final.selector, context_without_call_source) == ()
 
 
 @pytest.mark.parametrize("invalid", ["other-source", "decision-boundary"])

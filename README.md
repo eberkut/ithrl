@@ -23,12 +23,12 @@ compare two selected contexts from the same source.
 With [uv](https://docs.astral.sh/uv/):
 
 ```bash
-uv tool install ithrl
+uv tool install 'ithrl[all]'
 ```
 
-You can also install with `pipx install ithrl` or, in an existing virtual environment,
-`python -m pip install ithrl`. Install `'ithrl[fuzz]'` for context fuzzing or `'ithrl[compare]'`
-for context comparison.
+This installs all features. You can also use `pipx install 'ithrl[all]'` or, in an existing virtual
+environment, `python -m pip install 'ithrl[all]'`. For a smaller installation, use `ithrl` without
+extras, or select `'ithrl[fuzz]'` for context fuzzing and `'ithrl[compare]'` for context comparison.
 
 Tested on Python 3.12–3.14. Native runners require Linux. APIs and saved formats may change before
 1.0; keep your source sessions and record the version used for each case.

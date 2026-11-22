@@ -23,8 +23,8 @@ expected package version. `--all` includes installed packages outside declared d
 For Claude Code, add `--claude` when installing to also create `.claude/skills/ithrl`.
 
 The default destination is the project's `.agents/skills/ithrl`. This route has no user-wide
-installation option. Library Skills does not automatically discover an isolated
-`uv tool install ithrl` environment; use the repository route for that installation.
+installation option. Library Skills does not automatically discover an isolated `uv tool`
+environment; use the repository route for that installation.
 
 ## From the repository
 

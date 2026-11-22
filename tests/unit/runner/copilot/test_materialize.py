@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from ithrl.adapters import AdapterError, enumerate_decisions, parse_session
+from ithrl.adapters import AdapterError, AdapterErrorCode, enumerate_decisions, parse_session
 from ithrl.adapters.copilot.context import editable_tool_output_text
 from ithrl.adapters.registry import editable_session_text
 from ithrl.case import CaseEvidence, CaseFormatError
@@ -645,6 +646,34 @@ def test_revalidates_candidate_identity_and_excludes_combined_mutation_removal(
     )
     with pytest.raises(CopilotMaterializationError, match="does not match"):
         materialize_copilot_attempt(attempt)
+
+
+def test_materialization_refuses_changed_source(tmp_path: Path) -> None:
+    evidence = _evidence(tmp_path, _history_records())
+    source = evidence.source_artifacts[0]
+    object.__setattr__(
+        evidence, "_source_artifacts", (replace(source, content=source.content + b" "),)
+    )
+    with pytest.raises(CopilotMaterializationError) as changed:
+        materialize_copilot_attempt(_attempt(evidence))
+    assert changed.value.code is CopilotMaterializationErrorCode.CHANGED_EVIDENCE
+
+
+def test_reconstructed_prefix_parse_refusal_is_sanitized(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import ithrl.runner.copilot.materialize as materialize
+
+    evidence = _evidence(tmp_path, _history_records())
+
+    def refuse(_content: bytes) -> None:
+        raise AdapterError(AdapterErrorCode.INVALID_SESSION, "malformed retained relationships")
+
+    monkeypatch.setattr(materialize, "parse_session_bytes", refuse)
+    with pytest.raises(CopilotMaterializationError) as caught:
+        materialize.materialize_copilot_attempt(_attempt(evidence))
+    assert caught.value.code is CopilotMaterializationErrorCode.UNSUPPORTED_CONTEXT
+    assert "malformed retained relationships" not in str(caught.value)
 
 
 @pytest.mark.parametrize("kind", ["user.message", "assistant.message"])

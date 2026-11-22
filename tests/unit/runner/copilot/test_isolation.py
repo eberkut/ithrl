@@ -24,6 +24,7 @@ from ithrl.runner.copilot.isolation import (
     CopilotRuntime,
     _bubblewrap_argv,
     _discovery_argv,
+    _worker_request,
     prepare_copilot_process,
     program_digest,
 )
@@ -182,6 +183,22 @@ def test_prepares_private_target_specific_worker_state(
         "remoteSessions": False,
         "remoteExport": False,
     }
+
+
+@pytest.mark.parametrize("reasoning_effort", ["", "low effort", "x" * 65])
+def test_rejects_invalid_reasoning_effort(
+    reasoning_effort: str,
+) -> None:
+    with pytest.raises(CopilotIsolationError, match="reasoning effort is invalid"):
+        _worker_request(
+            session_id="session-1",
+            system_message=None,
+            model="fixture-model",
+            target="final-response",
+            command_flags=(),
+            secret_environment_names=(),
+            reasoning_effort=reasoning_effort,
+        )
 
 
 def test_worker_ignores_unfingerprinted_installed_bytecode(tmp_path: Path) -> None:

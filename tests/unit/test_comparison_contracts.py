@@ -9,7 +9,9 @@ import pytest
 from pydantic import ValidationError
 
 from ithrl.comparison.contracts import BoundComparison, ComparisonConfiguration, ComparisonProgress
+from ithrl.comparison.engine import comparison_budget_bounds
 from ithrl.context import content_digest
+from ithrl.execution.budget import SamplingAttemptCost
 from ithrl.experiment import (
     SampledComparisonPlan,
     SampledReductionPlan,
@@ -116,6 +118,18 @@ def test_administrative_limits_do_not_reinterpret_comparison_policy(
     assert extended.policy_digest == configuration.policy_digest
     assert extended.procedure == configuration.procedure
     assert extended.digest != configuration.digest
+
+
+@pytest.mark.parametrize("delay", [-1, True, 86401])
+def test_comparison_budget_rejects_invalid_pacing(
+    configuration: ComparisonConfiguration, delay: int
+) -> None:
+    with pytest.raises(ValueError, match="pacing must be a bounded nonnegative integer"):
+        comparison_budget_bounds(
+            configuration,
+            SamplingAttemptCost(provider_calls=1, runner_seconds=1),
+            inter_attempt_delay_seconds=delay,
+        )
 
 
 def test_comparison_bounds_the_total_scheduled_attempts(

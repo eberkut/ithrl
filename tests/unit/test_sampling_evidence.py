@@ -28,7 +28,12 @@ from ithrl.observations import (
     SamplingBudgetAllowance,
     sampling_schedule,
 )
-from ithrl.runner import AttemptEvidence, ProviderAcceptanceState, RunAccounting
+from ithrl.runner import (
+    AttemptEvidence,
+    NativeOutputReference,
+    ProviderAcceptanceState,
+    RunAccounting,
+)
 
 _TIME = datetime(2026, 10, 4, tzinfo=UTC)
 
@@ -494,6 +499,37 @@ def test_failed_accepted_or_ambiguous_work_cannot_be_replaced(
     assert not block.eligible
     assert block.original_counts.runner_errors + block.candidate_counts.runner_errors == 1
     assert block.point_difference is None
+
+
+def test_transport_replacement_rejects_overlapping_replacement_classification() -> None:
+    accounting = RunAccounting(
+        provider_calls_started=1,
+        provider_calls_completed=0,
+        provider_connections_started=1,
+        process_outcome="exited",
+        cleanup_outcome="verified",
+        native_output_bytes=1,
+    )
+    output = NativeOutputReference(
+        artifact_id="native-output",
+        sha256="a" * 64,
+        media_type="application/json",
+        size_bytes=1,
+    )
+    with pytest.raises(ValueError, match="output-free transport failure"):
+        AttemptEvidence(
+            attempt_id="attempt-" + "a" * 32,
+            attempt_digest="b" * 64,
+            termination_reason="failed",
+            reason_code="inference-transport-failed",
+            provider_acceptance_state=ProviderAcceptanceState.UNKNOWN,
+            provider_calls_possible=1,
+            effective_policy_digest="c" * 64,
+            accounting=accounting,
+            native_output=output,
+            overload_replacement_safe=True,
+            transport_replacement_safe=True,
+        )
 
 
 def test_confirmation_budget_covers_frozen_attempts_and_profile_call_bound() -> None:

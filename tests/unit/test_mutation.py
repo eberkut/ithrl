@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from ithrl.context import ContextNode, JsonObject, content_digest
 from ithrl.mutation import (
     MAX_MUTATION_TEXT_BYTES,
+    ContextSelection,
     MutationError,
     TextAppend,
     TextMutation,
@@ -35,6 +36,15 @@ def _append(**changes: Any) -> TextAppend:
             **changes,
         }
     )
+
+
+def test_context_selection_rejects_duplicate_ids_and_binds_its_digest() -> None:
+    with pytest.raises(ValidationError, match="must not repeat removed IDs"):
+        ContextSelection(removed_context_ids=("ctx-a", "ctx-a"))
+
+    selection = ContextSelection(removed_context_ids=("ctx-a", "ctx-b"))
+    assert selection.digest == ContextSelection(removed_context_ids=("ctx-a", "ctx-b")).digest
+    assert selection.digest != ContextSelection(removed_context_ids=("ctx-a",)).digest
 
 
 @pytest.mark.parametrize(
