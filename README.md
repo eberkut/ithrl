@@ -95,7 +95,8 @@ Choose a workflow for your debugging question:
 
 Inspection covers retained context and removal trials (`inspect retained`), editable paragraph
 boundaries (`inspect sections`), source-bound tool output (`inspect tool`) and recorded operations
-across compaction (`inspect reacquire`). Default inspection output omits private text.
+across compaction (`inspect reacquire`). Default inspection output omits captured text but may
+include local paths. Review output before sharing it.
 
 For example, extract a saved session file:
 
