@@ -1,9 +1,14 @@
 # Native reduction
 
-Find a smaller context that preserves a selected behavior. First
-[extract a decision](native-runs.md#select-a-saved-decision) and check the
-[native prerequisites](native-runs.md#native-prerequisites). Preparation and plan inspection make
-no provider calls; execution requires explicit acknowledgement.
+Find a smaller context that preserves a selected behavior. Before starting:
+
+- [Extract a decision](native-runs.md#select-a-saved-decision) and choose its behavior predicate.
+- Check the [native prerequisites](native-runs.md#native-prerequisites).
+- Choose a private directory outside the case and original workspace, with mode `0700`.
+
+Replace `CASE` with the case directory, `ORIGINAL` with the original workspace and `PRIVATE` with
+that private directory in the commands below. Preflight makes no provider calls; execution requires
+explicit acknowledgement.
 
 ## 1. Inspect the local capabilities
 
@@ -17,19 +22,17 @@ ithrl shrink CASE --original-workspace ORIGINAL \
   --dry-run --save-preflight PRIVATE/preflight.json --format json
 ```
 
-Native `--dry-run` can start bounded, network-denied local harness probes. It starts no model turn
-and makes no provider call. Inspect the returned capabilities and safety controls.
-
-`--save-preflight` requires a new native dry-run and a new output path outside the case and
-original workspace. After successful preflight it records capability, case, target, oracle and
-resource-limit identities, without session text or authentication. The receipt includes private
-paths and provider configuration. It is neither authenticated provenance nor proof of current
-runtime readiness.
+This starts bounded, network-denied local harness probes without a model turn. Inspect the returned
+capabilities and safety controls. On success, `--save-preflight` creates a private receipt binding
+the capability, case, target, oracle and resource limits. Use a new receipt path for each preflight.
+The receipt contains private paths and provider configuration, without session text or
+authentication. The complete-plan preflight checks runtime readiness again before execution.
 
 ## 2. Configure the experiment
 
-Save explicit statistical choices as `PRIVATE/settings.toml`, mode `0600`. This example uses the
-counts from the measured Codex reduction:
+Save the following as `PRIVATE/settings.toml`, with mode `0600`. Choose the sample counts and
+acceptable degradation margin before collecting observations. This example uses the measured
+Codex reduction's settings; adapt them to your decision and expected variability:
 
 ```toml
 schema_version = 1
@@ -76,11 +79,9 @@ method 10 with nominal 95% one-sided confidence. The
 counts, margin and a two-comparison search limit. It confirmed a reduction with 50.17% lower mean
 input tokens per observation.
 
-Choose the predicate and acceptable degradation margin before collecting observations. This
-configuration's usefulness depends on the decision, variability and removable context. The
-[synthetic reference](measurements.md#synthetic-reduction-reference) used smaller search samples
-on a planted instruction. See [sampled results](results.md#sampled-results) for assumptions and
-error handling.
+The [synthetic reference](measurements.md#synthetic-reduction-reference) used smaller search samples
+on a planted instruction. See [sampled results](results.md#sampled-results) for statistical
+assumptions and error handling.
 
 ### Optional section-removal settings
 
@@ -92,19 +93,19 @@ reduction; shell targets and fuzzing do not accept it. See the
 [qualification measurements](measurements.md#ordinary-session-paragraph-removal) for tested
 workloads and limits.
 
-Before preparation, list source-bound catalogs without a saved reduction result:
+List eligible paragraph-removal fields before preparation:
 
 ```bash
 ithrl inspect sections CASE --format json
 ```
 
-The report lists eligible fields, ordered section IDs, half-open Unicode codepoint offsets and
-UTF-8 byte counts without text. Fields exceeding policy limits are unavailable. Catalogs show
-possible edits, not whether fields survive coarse search or preserve behavior.
+The report lists eligible fields, ordered section IDs and UTF-8 byte counts without text. Fields
+exceeding policy limits are unavailable. Eligibility does not establish preservation or guarantee
+that a field survives coarse search.
 
-Choose the eligible fields, removable sections, traversal order, additional-byte criterion and
-stage budgets before collecting new observations. Add these tables to `PRIVATE/settings.toml`
-before running `prepare`, using field IDs and an ordered subset of section IDs from the catalog:
+Choose the fields, removable sections, traversal order, additional-byte criterion and stage budgets
+before collecting observations. Add these tables to `PRIVATE/settings.toml`, replacing the
+placeholders with a field's `context_id`, `content_index` and ordered section IDs from the report:
 
 ```toml
 [sections]
@@ -145,14 +146,13 @@ plan cannot change on resume; changing them requires a new experiment.
 
 For qualification, use the execution package's frozen byte criterion. The
 [original workload proposal](research/reduction-design.md#text-section-workload-preparation) used
-64 bytes for Codex and 256 for Copilot, separately from debugging value. Older partition-first
-results require their original build for inspection and cannot resume under this traversal's
-algorithm identity.
+64 bytes for Codex and 256 for Copilot, separately from debugging value.
 
 ## 3. Generate and inspect the complete plan and budget
 
-After completing the settings, generate the private experiment and its inspection command. Choose
-one of these Codex preparation commands, according to whether the settings include `[sections]`.
+Generate the private experiment and its inspection command. The commands below use the Codex
+16-request cap. For Copilot's one-request cap, use `--max-provider-calls 375` for whole-record
+reduction or `--max-provider-calls 1215` for the section plan, and omit `--inter-attempt-delay 15`.
 
 For whole-record reduction without `[sections]`, use the two-comparison budget:
 
@@ -178,16 +178,14 @@ admission bounds, not expected usage. A two-comparison limit could end coarse se
 search starts. For a smaller plan, reduce stage ceilings and recalculate administrative budgets
 together. Field survival and preservation remain untested until execution.
 
-`prepare` binds the recorded capability, target and grading configuration, preserves the oracle and
-protected IDs, and calculates the budget. Task grading uses an unconstrained final-response target.
-`prepare` starts no harness, reads no authentication, opens no observation store and inspects no
-original workspace. Output is private and bounded; an existing file is never overwritten. Changed
-settings require a new output path.
+On success, `prepare` writes the private experiment and reports its budget and inspection command.
+It preserves the target, oracle, grader and protected IDs. Preparation is offline: it starts no
+harness, reads no authentication, opens no observation store and inspects no original workspace.
+Existing output is never overwritten; changed settings require a new output path.
 
 Settings define statistical policy; command arguments set administrative ceilings and pacing.
 Per-attempt timeout, request and optional token bounds come from the receipt. Changed fixed native
-limits require a new receipt. Preparation does not choose sample counts, a margin or a usefulness
-criterion for you.
+limits require a new receipt.
 
 Run the preparation report's `next_command`. It contains the chosen limits and `--dry-run`, without
 execution acknowledgement. For the whole-record Codex example, it is equivalent to:
@@ -213,42 +211,28 @@ A native turn can require several successful requests even with retries disabled
 `--max-provider-calls-per-attempt N` from 1 to 16 and defaults to 16. A lower cap can stop a turn
 before completion. Recalculate the total-call allowance when changing it.
 
-With a Copilot runner, the whole-record example allows at most 375 calls; the section example
-allows at most 1,215. Set `--max-provider-calls-per-attempt 1` during native preflight, use the
-corresponding total-call budget during preparation and omit the 15-second delay.
-This translates the plans' resource limits; the
+The Copilot budget substitutions above translate these plans' resource limits; the
 [Copilot saved-session measurements](measurements.md#earlier-copilot-reductions) used separate
 sampling configurations. The request gate stops shell execution and any continuation after denial.
 
-The current profiles have these operating limits:
+See [native limits](native-runs.md#native-limits) for output, disposable-state and token bounds.
 
-| Limit | Codex | Copilot |
-| --- | --- | --- |
-| Physical inference requests per attempt | 1–16; default 16 | 1 |
-| Inter-attempt delay | Defaults to zero; measured examples use 15 seconds | Defaults to zero; measured examples use zero |
-| Native output per attempt | 8 MiB | 8 MiB |
-| Runner disposable state per attempt | 64 MiB; 10,000 entries | 512 MiB; 10,000 entries |
-| Token usage | Reported for completed observations in the measured profiles | Available when native events report it; unknown usage remains explicit |
-| Hard input-token cap | Unavailable | Unavailable |
-
-The dry-run checks the current runtime and configuration against the recorded capability binding;
-preparation alone cannot establish execution readiness. Review its provider, model, destination,
-safety policy and total limits before continuing. Keep the per-attempt cap unchanged between
-preflight and execution. It is part of the saved-run identity; increasing a total allowance on
-resume does not change it.
+Review the complete-plan dry-run's provider, model, destination, safety policy and total limits.
+It checks the current runtime and configuration against the recorded capability. Keep the
+per-attempt cap unchanged between preflight and execution; increasing a total allowance on resume
+does not change it.
 
 Call/time minima conservatively cover maximum attempts, per-attempt caps, timeouts and pacing.
 They predict neither actual cost nor subscription quota, and neither profile enforces a hard
-monetary cap. Use [measurements](measurements.md#native-context-fuzzing) to estimate usage. Both
-harnesses use the same frozen sampling and fresh-confirmation contracts, but available token
-telemetry depends on the native profile.
+monetary cap. Use [measurements](measurements.md) to estimate usage.
 
 ## 4. Run the experiment
 
 Run the complete-plan preflight's `next_command` with the same installation and environment. It
 includes `--acknowledge-model-execution` and makes real model requests for calibration, search and
-fresh confirmation within the displayed limits. Keep the result directory and read `summary.json`;
-see [results and resume](results.md).
+fresh confirmation within the displayed limits. After execution, keep the reported result directory
+and read `summary.json`. Use [sampled results](results.md#sampled-results) to distinguish search
+coverage from confirmed preservation, and [results and resume](results.md) for recovery.
 
 Progress shows valid samples and dispatched attempts for the original and candidate in each phase.
 Terminals use a live display; redirected stderr receives progress lines. With `--format json`,

@@ -54,7 +54,6 @@ def project_reacquisition(document: JsonlDocument) -> PassiveProjection:
     """Validate native identities and retain only top-level call/result evidence.
 
     Replacement history inside a compaction is a snapshot, never a new retrieval.
-    Existing experimental parsing and its active compaction policy are untouched.
     """
 
     if not PARSER.matches(document):

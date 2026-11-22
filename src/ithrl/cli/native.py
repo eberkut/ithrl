@@ -3,8 +3,8 @@
 The local selection convention is the executable on PATH, the current Python
 executable, and CODEX_HOME or COPILOT_HOME when set (otherwise ~/.codex or
 ~/.copilot). No missing provider identity or authentication source is inferred
-from case content. Detection uses local structural probes only; provider calls
-belong to the separately acknowledged calibration command.
+from case content. Detection uses local structural probes only; provider requests
+require separately acknowledged execution.
 """
 
 from __future__ import annotations
@@ -148,7 +148,12 @@ def native_selection(
     reasoning_effort: str | None = None,
     provider: str | None = None,
 ) -> NativeSelection:
-    """Resolve explicit samples against an exact current or persisted profile."""
+    """Detect a native runner and bind it to the case, execution settings and limits.
+
+    May start local harness probes and inspect authentication, but sends no model
+    requests. Returns a registry restricted to the resolved runner configuration
+    and case identity; a persisted capability digest must match current detection.
+    """
 
     if max_provider_calls_per_attempt is not None and (
         type(max_provider_calls_per_attempt) is not int

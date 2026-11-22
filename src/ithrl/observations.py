@@ -482,6 +482,8 @@ class SamplingBlockEvidence(_SamplingContract):
                 raise ValueError("attempt position exceeds the frozen schedule")
             arm = self.plan.schedule[item.schedule_position]
             observation = item.observation
+            # Failures and replacements retain their schedule positions. Only an
+            # arm that has reached its valid-sample target may skip later slots.
             for skipped_arm in self.plan.schedule[next_position : item.schedule_position]:
                 if valid[skipped_arm] != self.plan.targets_for(skipped_arm).required_valid:
                     raise ValueError("only completed arms may skip scheduled slots")
@@ -847,7 +849,12 @@ class ObservationStore:
     def read_snapshot(
         self, *, case_digest: str, experiment_digest: str, limit: int = 10_000
     ) -> tuple[Observation, ...]:
-        """Read a bounded case/experiment snapshot without creating or changing the store."""
+        """Read a bounded case/experiment snapshot without creating or changing the store.
+
+        Requires a rollback-journal database; WAL stores are refused before SQLite
+        can create sidecars. Refuses selections beyond the row or byte limit
+        rather than returning a partial snapshot.
+        """
 
         if not case_digest or not experiment_digest or not 1 <= limit <= 10_000:
             raise ValueError("snapshot requires a case, experiment and bounded limit")

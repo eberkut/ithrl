@@ -1,9 +1,11 @@
 # Synthetic fuzzing feasibility study
 
 Reproduce the discovery, paragraph simplification and fresh-confirmation study using synthetic
-Bernoulli responses. The scripts generate no prompts and invoke no harness, provider or network
-service. The [research record](../../docs/research/context-fuzzing.md) owns the question, methods,
-results, alternatives, validity assumptions and limitations.
+Bernoulli responses. The selected design passed its complete-workflow gate for a planted `.90` to
+`.10` target-rate decrease; it did not establish native success rates or costs. The scripts generate
+no prompts and invoke no harness, provider or network service. The
+[research record](../../docs/research/context-fuzzing.md) explains the question, methods, results,
+alternatives, validity assumptions and limitations.
 
 | Artifact | Contents |
 | --- | --- |
@@ -59,6 +61,7 @@ The short replay checks:
 
 Saved cell aggregates must match exactly; numerical method summaries allow differences within
 `1e-12`. The short replay checks the retained 64-cell data without resimulating the whole grid.
+Freeze a new output directory, then validate it:
 
 ```sh
 uv run --locked --offline --no-sync python research/fuzzing/study.py freeze --output research/fuzzing/outputs/replay
@@ -70,8 +73,7 @@ Every generated file belongs to the required `--output` directory under the igno
 a directory that does not exist, and writes use exclusive creation. The freeze records
 the public programme, numerical sources, validator, saved results and dependency versions;
 later commands verify them. Each reproduction records its own source and dependency identities.
-The short replay covers the checks listed above; use the full replay to evaluate the complete
-qualification grid.
+Use the full replay to evaluate the complete qualification grid.
 
 The full replay simulates 7,128 qualification rows of 10,000 campaigns each (71,280,000 campaigns),
 followed by 24 sensitivity cells and a drift block. Runtime depends on hardware. Run these commands

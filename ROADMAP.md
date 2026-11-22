@@ -76,9 +76,11 @@ The project-wide documentation review is complete in
 | Released in v0.4 | [#67: performance and simplification](https://github.com/eberkut/ithrl/issues/67) | Project-wide performance fixes, permanent local-workload benchmarks and durable coding guidance, merged in [PR #71](https://github.com/eberkut/ithrl/pull/71) |
 | Released in v0.4 | [#68: documentation and writing guidance](https://github.com/eberkut/ithrl/issues/68) | Project-wide documentation corrections and concise writing guidance, merged in [PR #72](https://github.com/eberkut/ithrl/pull/72) |
 
-## In development: v0.5 investigation reports and comparative debugging
+## Release preparation: v0.5 investigation reports and comparative debugging
 
-The [v0.5.0 milestone](https://github.com/eberkut/ithrl/milestone/4) groups broader
+Implementation and qualification for the
+[v0.5.0 milestone](https://github.com/eberkut/ithrl/milestone/4) are complete. Package release
+preparation and publication remain. The milestone covers broader
 ordinary-workflow evidence, public benchmark feasibility, self-describing sampled reports, cost
 estimates, a first-party agent skill, comparative debugging and localized tool-output interventions.
 The comparison workflow binds two explicit contexts to one immutable source, with
@@ -98,7 +100,7 @@ Codex/Copilot investigations qualified the tested profiles in
 | Completed in [#90](https://github.com/eberkut/ithrl/pull/90) | [#13: comparative debugging](https://github.com/eberkut/ithrl/issues/13) | Explicit source-bound contexts, repair/degradation objectives, constructed repair tasks and useful ordinary investigations |
 | Completed in [#90](https://github.com/eberkut/ithrl/pull/90) | [#88: explicit-context comparison](https://github.com/eberkut/ithrl/issues/88) | Comparison CLI, two-arm calibration, fresh confirmation, accounting, recovery and offline reports |
 | Completed in [#90](https://github.com/eberkut/ithrl/pull/90) | [#89: qualify comparative debugging](https://github.com/eberkut/ithrl/issues/89) | Constructed and ordinary Codex/Copilot investigations through the normal CLI and installed artifacts, with successful and unsuccessful costs and explicit limits |
-| Implemented and qualified | [#74: tool-output interventions](https://github.com/eberkut/ithrl/issues/74) | Exact span deletion for final-response comparisons, with native input controls, practical review and complete study costs in the [worked investigations](docs/research/tool-output-interventions.md) |
+| Completed in [#91](https://github.com/eberkut/ithrl/pull/91) | [#74: tool-output interventions](https://github.com/eberkut/ithrl/issues/74) | Exact span deletion for final-response comparisons, with native input controls, practical review and complete study costs in the [worked investigations](docs/research/tool-output-interventions.md) |
 
 ## Evidence guiding the next investigations
 
@@ -106,8 +108,8 @@ Codex/Copilot investigations qualified the tested profiles in
 approved measurements. Both primary workloads calibrated, but their selected fields were removed in
 coarse search; neither reached fine search or fresh confirmation. The
 [canonical report](docs/research/reduction-design.md#prospective-ordinary-workflow-cohort) is merged
-in [#82](https://github.com/eberkut/ithrl/pull/82). Its retained evidence informs #13 and #74
-without establishing either capability.
+in [#82](https://github.com/eberkut/ithrl/pull/82). Its retained evidence informed comparison and
+tool-output workload selection; their own studies establish the qualified workflows.
 
 [#81's public task package](research/benchmarks/README.md), merged in
 [#83](https://github.com/eberkut/ithrl/pull/83), recommends iniconfig as a supplementary
@@ -214,11 +216,12 @@ These candidates have no assigned release. The completed
 [broader-workload study](https://github.com/eberkut/ithrl/issues/16) records a bounded limiting
 outcome. Further ordinary-workflow evidence and
 [baseline-sharing strategies](https://github.com/eberkut/ithrl/issues/17) remain research
-opportunities without an assigned release. Synthetic qualification covers a planted approximately
-10k workload; [saved-session experiments](docs/measurements.md#saved-session-experiments) add
-selected larger contexts, including incomplete and inconclusive outcomes. Neither establishes a
-general 100k workload envelope. Qualification at that scale remains an optional expansion with a
-separate cost proposal.
+opportunities without an assigned release. Synthetic qualification covers a planted workload of
+approximately 10,000 estimated input tokens;
+[saved-session experiments](docs/measurements.md#saved-session-experiments) add selected larger
+contexts, including incomplete and inconclusive outcomes. Neither establishes a general capacity at
+100,000 input tokens. Qualification at that scale remains an optional expansion with a separate cost
+proposal.
 
 ### Planning and release policy
 

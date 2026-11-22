@@ -24,6 +24,12 @@ from ithrl.runner.codex.protocol_contracts import MAX_INFERENCE_REQUESTS
 
 @dataclass(slots=True)
 class _ProviderReceipts:
+    """Validate the event sequence for serialized upstream attempts.
+
+    Only started receipts count as physical calls; reservations alone do not.
+    Closure seals the counters and forbids further receipts.
+    """
+
     reserved: int = 0
     started: int = 0
     completed: int = 0

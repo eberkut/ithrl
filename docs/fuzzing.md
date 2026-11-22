@@ -1,10 +1,10 @@
 # Context fuzzing
 
-With the `fuzz` extra (`ithrl[fuzz]`), `ithrl fuzz` explores bounded text appends and confirms at
-most one decrease in the target's match rate. Codex and Copilot preserve the triggering input and
-append only to eligible prior user text. Copilot restores the session prefix through its installed
-CLI and SDK; its shell-action profiles support removal only. See
-[measurements](measurements.md#native-context-fuzzing) for completed synthetic campaigns and limits.
+`ithrl fuzz` searches for text appends that decrease the target's match rate, then uses fresh
+observations to confirm at most one selected change. Install `ithrl[fuzz]` to use it. Native Codex
+and Copilot fuzzing supports final-response targets and appends only to eligible prior-user text,
+preserving the triggering input. See [measurements](measurements.md#native-context-fuzzing) for
+completed synthetic campaigns and limits.
 
 ## Try locally
 
@@ -61,33 +61,38 @@ attempt_timeout_seconds = 1
 inter_attempt_delay_seconds = 0
 ```
 
-These small fixed counts are for the deterministic fake-runner example. The alternative mutator,
-`duplicate-text`, appends a copy of an existing editable text item.
-Both mutators preserve protected records and keep payloads bounded. `stale_text` is private input
-and is never printed in normal output.
+These small fixed counts demonstrate the deterministic fake runner; choose native sample sizes
+for your expected effect. The alternative mutator, `duplicate-text`, appends a copy of an editable
+text item. Both mutators preserve protected records and bound payload size. `stale_text` is private
+input and is absent from normal output.
 
-Inspect without execution, then run with a dedicated store:
+Inspect the plan without execution:
 
 ```bash
 ithrl fuzz ithrl-fuzz-demo/case --config ithrl-fuzz-demo/fuzz.toml \
   --observation-store ithrl-fuzz-demo/fuzz-observations.sqlite --dry-run
+```
+
+The report shows the candidate and sampling limits without creating a run. Then execute with the
+same configuration and dedicated store:
+
+```bash
 ithrl fuzz ithrl-fuzz-demo/case --config ithrl-fuzz-demo/fuzz.toml \
   --observation-store ithrl-fuzz-demo/fuzz-observations.sqlite
 ```
 
-The example finishes with `confirmed-change`, zero provider calls and zero executed actions. It uses
-fixed original/mutant samples and fresh confirmation. See [fuzz results](results.md#fuzz-results)
-for saved evidence and resume behavior. Use `--format json` for one JSON report on stdout; execution
-progress and the inspected plan go to stderr.
+Expect `confirmed-change`, zero provider calls and zero executed actions. Save the reported result
+path; [fuzz results](results.md#fuzz-results) explains the evidence and resume behavior. Use
+`--format json` for one JSON report on stdout, with plan and progress on stderr.
 
 ## Run the synthetic native campaign
 
 Use a
 [source checkout](https://github.com/eberkut/ithrl/blob/main/CONTRIBUTING.md#development-setup) with
-the locked environment, `fuzz` extra and
-[native prerequisites](native-runs.md#native-prerequisites). The inputs below are synthetic
-response-token exercises. Choose one harness for extraction; subsequent steps apply to either.
-Execution makes real provider requests and can produce different observations.
+the locked environment and `fuzz` extra. Check the
+[native prerequisites](native-runs.md#native-prerequisites) before detection. This campaign uses
+synthetic response-token exercises, not an ordinary session. Choose one harness below; the
+remaining steps apply to either. Execution makes real provider requests, and outcomes can vary.
 
 | Harness | Public source | Decision | Target |
 | --- | --- | --- | --- |
@@ -104,28 +109,26 @@ install -m 600 examples/fuzz/campaign.toml "$FUZZ_RUN/campaign.toml"
 ```
 
 The configuration uses 3 calibration samples, 8 per exploratory arm and 20 fresh per confirmation
-arm. It requires a 40-percentage-point screening decrease and a final decrease greater than
-10 percentage points at `alpha=.05`. It permits one candidate, ten simplification trials and
-350 calls, with a six-hour deadline, 120-second attempt timeout, 24-hour freshness and opt-in
-`safe-provider-overload` eligibility. These settings measured a large planted effect; 20 samples
-have weak power for moderate effects. Read the
+arm. Screening requires a 40-percentage-point decrease; confirmation tests a decrease greater than
+10 percentage points at `alpha = 0.05`. It permits one candidate and ten simplification trials,
+with a six-hour deadline, 120-second attempt timeout, 24-hour freshness and opt-in
+`safe-provider-overload` eligibility. Adjust its call budget below before detection. These settings
+measured a large planted effect; 20 samples have weak power for moderate effects. Read the
 [effect-size limits](research/context-fuzzing.md#alternatives-and-effect-size-limits) before reuse.
 
 Before detection, adjust the private configuration for the selected harness:
 
-- **Codex:** set `max_provider_calls = 5600` and keep `inter_attempt_delay_seconds = 15`. At its
+- **Codex:** set `max_provider_calls = 5600` and keep `inter_attempt_delay_seconds = 15`. At the
   default 16-request cap, confirmation reserves 1,152 calls and one exploratory block needs 576;
-  350 calls cannot admit both. The higher limit retains comparable headroom under the conservative
-  attempt bound. For a different cap, pass `--max-provider-calls-per-attempt N` during detection
-  and recalculate the total allowance. Changing that saved cap requires a new profile and run.
+  the copied configuration's 350-call limit cannot admit both. To lower the per-attempt cap, pass
+  `--max-provider-calls-per-attempt N` during detection and recalculate the total allowance.
 - **Copilot:** set `max_provider_calls = 339` and `inter_attempt_delay_seconds = 0`. Its inference
   cap is one request per attempt. These match the measured native-prefix campaign, which shared
   a 350-call qualification allowance with its control and interrupted-run calls.
 
-Pacing consumes wall time without changing sample targets. Call limits can stop exploration while
-preserving the 72-attempt fresh-confirmation reserve; neither call nor six-hour limits predict
-actual usage or guarantee completion. Throttling and ordinary-session costs vary by workload;
-[measurements](measurements.md#calls-duration-and-resource-use) record completed durations.
+Pacing consumes wall time. Call limits can stop exploration while preserving the 72-attempt
+confirmation reserve; neither limit guarantees completion or predicts actual usage. See
+[measured resource use](measurements.md#calls-duration-and-resource-use) for completed durations.
 
 Extract one case. For Codex:
 
@@ -165,8 +168,8 @@ The case retains captured routing and model evidence; there is no model override
     ```
 
     Check the provider, model, destination, isolation, action-denial policy and complete budget.
-    The profile binds the case, configuration and original workspace. Changed inputs need a new
-    profile. The native profile cannot enforce a hard input-token cap.
+    The profile binds the case, configuration, original workspace and per-attempt cap. Changing
+    them requires a new profile and run. Neither native profile enforces a hard input-token cap.
 
 3. Authorize execution of the reviewed plan:
 
@@ -177,9 +180,11 @@ The case retains captured routing and model evidence; there is no model override
       --acknowledge-model-execution --format json
     ```
 
+    Save the reported run/result path. A completed campaign may confirm a change, remain
+    inconclusive or find no candidate; use [fuzz results](results.md#fuzz-results) to interpret it.
+
 The same procedure accepts an eligible final-response case extracted from your own saved session.
 Pass that session's original workspace instead of the empty example workspace, and keep its case and
 configuration private. Fuzz `--dry-run` starts no harness or provider; a native case without a
-profile reports `detection-required`. Resume from the printed run/result path as described in
-[fuzz results](results.md#fuzz-results). See the [CLI reference](cli.md#ithrl-fuzz) for options and
+profile reports `detection-required`. See the [CLI reference](cli.md#ithrl-fuzz) for options and
 [troubleshooting](troubleshooting.md#fuzz-setup-and-resume) for refusals.

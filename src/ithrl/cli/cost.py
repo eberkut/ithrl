@@ -44,11 +44,23 @@ def cost(
         Path | None, typer.Option("--scenario", help="Explicit hypothetical token counts as JSON.")
     ] = None,
     max_observations: Annotated[
-        int, typer.Option("--max-observations", min=1, max=10_000)
+        int,
+        typer.Option(
+            "--max-observations",
+            min=1,
+            max=10_000,
+            help="Maximum recorded observations; larger selections are refused, not truncated.",
+        ),
     ] = 10_000,
     output_format: Annotated[OutputFormat, typer.Option("--format")] = OutputFormat.HUMAN,
 ) -> None:
-    """Estimate recorded or hypothetical token costs using explicit reference rates."""
+    """Estimate recorded or hypothetical token costs using reference rates.
+
+    Supply an observation database with --case-digest and --experiment-digest,
+    or use --scenario for hypothetical token counts. --pricing selects reference
+    prices or custom rates; estimates do not establish billed or subscription charges.
+    Prices are resolved offline, without provider requests.
+    """
     from ithrl.case.filesystem import read_safe_text
     from ithrl.cost_reporting import hypothetical_report, recorded_report, write_cost_report
     from ithrl.costs import CostUsage, PriceBook, PricingSpec

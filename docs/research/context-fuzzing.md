@@ -1,14 +1,15 @@
 # Context fuzzing: a bounded single-finding design
 
-The credential-free study selected a useful synthetic discovery, mutation simplification
-and fresh-confirmation procedure for a planted target-rate decrease from `.90` to `.10`. The minimum
+The credential-free study selected eight-sample exploratory comparisons and twenty fresh samples
+per confirmation arm, within a 384-call modeled allowance. It tested discovery, mutation
+simplification and confirmation for a planted target-rate decrease from `.90` to `.10`. The minimum
 complete-workflow success rate was 90.25%, with a simultaneous 99% lower bound of 88.86896%,
 exceeding the prospective 80% gate. These results support the design for the specified synthetic
 workload. The [native measurements](../measurements.md#native-context-fuzzing) evaluate completed
 Codex app-server and Copilot native-prefix append-text workflows, with their own input and
 execution checks. Ordinary-session success rates remain unmeasured.
 
-For current implementation contracts, see
+The study's rates and call counts describe synthetic work. For current implementation contracts, see
 [architecture](../architecture.md#measurement-search-and-confirmation). The
 [supported-inputs table](https://github.com/eberkut/ithrl/blob/main/README.md#supported-inputs)
 defines public capabilities; [ADR 0004](../decisions/0004-single-finding-fuzz-confirmation.md)
@@ -185,7 +186,7 @@ the passing design with lowest all-run mean cost, breaking ties by smaller allow
 smaller final sample count. Selection therefore accounts for the whole prospective menu rather
 than selecting a favorable unadjusted success interval.
 
-## Selected settings and measured synthetic cost
+## Selected settings and synthetic cost
 
 | Setting | Selected study design |
 | --- | --- |

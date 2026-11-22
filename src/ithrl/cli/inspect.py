@@ -1,4 +1,4 @@
-"""Provider-free inspection of saved reduction evidence."""
+"""Provider-free inspection of saved sessions, cases and experiment reports."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from ithrl.cli.output import (
 
 app = typer.Typer(
     cls=JsonAwareGroup,
-    help="Inspect saved experimental evidence without running a harness.",
+    help="Inspect saved sessions, cases and reports without running a harness.",
     no_args_is_help=True,
     pretty_exceptions_enable=False,
 )
@@ -32,7 +32,11 @@ def costs(
     report: Annotated[Path, typer.Argument(help="Saved token-cost report.")],
     output_format: Annotated[OutputFormat, typer.Option("--format")] = OutputFormat.HUMAN,
 ) -> None:
-    """Inspect a saved cost estimate without resolving prices or opening its source store."""
+    """Inspect a saved token-cost report.
+
+    Validates the saved identities and arithmetic without resolving prices or
+    opening the source observation database.
+    """
     from ithrl.cli.cost import render_cost_report
     from ithrl.cost_reporting import load_cost_report
 
@@ -69,7 +73,12 @@ def comparison(
     ] = 4096,
     output_format: Annotated[OutputFormat, typer.Option("--format")] = OutputFormat.HUMAN,
 ) -> None:
-    """Inspect a saved comparison without a runner or observation database."""
+    """Inspect a saved context comparison.
+
+    Reads the snapshot without a harness or observation database. Add --case to
+    verify both selections against their source; --show-text includes retained
+    tool output text and requires --case.
+    """
     from ithrl.case import CaseWorkspace
     from ithrl.cli.comparison_output import render_comparison, result_report
     from ithrl.comparison.results import load_comparison_result
@@ -145,10 +154,12 @@ def tool_output_text(
         OutputFormat, typer.Option("--format", help="Human-readable or JSON output.")
     ] = OutputFormat.HUMAN,
 ) -> None:
-    """Inspect captured tool output and select text to remove.
+    """List captured tool output fields or describe a text deletion.
 
-    Offsets select a nonempty half-open range in the original string. Sizes are UTF-8 bytes.
-    Text display shows the retained field when a range is selected.
+    Supply --field, --start and --end to create a source-bound edit descriptor;
+    the case remains unchanged. Offsets select a nonempty half-open range in
+    original Unicode codepoints; sizes are UTF-8 bytes. --show-text displays the
+    retained field when a range is selected.
     """
     from ithrl.case import CaseWorkspace
     from ithrl.extraction import load_extracted_case
@@ -232,7 +243,11 @@ def reacquire(
         OutputFormat, typer.Option("--format", help="Human-readable or JSON output.")
     ] = OutputFormat.HUMAN,
 ) -> None:
-    """Inspect recorded operations and results across compaction without model access."""
+    """Compare recorded operations and results across compaction.
+
+    Omit --boundary to list compaction IDs, then select one to compare adjacent
+    intervals. Reads saved JSONL without starting a harness or making model requests.
+    """
     from ithrl.adapters.errors import AdapterError
     from ithrl.reacquisition import inspect_reacquisition
 
@@ -313,9 +328,10 @@ def sections(
         OutputFormat, typer.Option("--format", help="Human-readable or JSON output.")
     ] = OutputFormat.HUMAN,
 ) -> None:
-    """List eligible section IDs and half-open Unicode codepoint offsets without text.
+    """List editable prior-user fields and paragraph section IDs.
 
-    Section sizes are UTF-8 byte counts.
+    Reports source-bound selectors, half-open Unicode codepoint offsets and
+    UTF-8 byte sizes without displaying text or collecting observations.
     """
 
     from ithrl.case import CaseWorkspace
@@ -396,7 +412,12 @@ def retained(
         ),
     ] = 4096,
 ) -> None:
-    """Explain retained context and recorded removal trials without collecting observations."""
+    """Explain retained context and removal trials from a saved reduction.
+
+    Supply the original case and --result directory. Reads saved evidence without
+    a harness or observation database. Default output omits private text; use
+    --show-text for bounded retained content.
+    """
 
     from ithrl.inspection import inspect_retained
 

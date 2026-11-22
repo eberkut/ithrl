@@ -1,4 +1,4 @@
-# An ordinary-session paragraph investigation
+# Ordinary-session paragraph removal
 
 An ordinary Codex workflow discussion mixed an administrative upgrade policy with a technical
 question: how does the version of an installer action relate to the CLI version selected by its
@@ -6,10 +6,10 @@ caller? The observed answer mentioned Databricks. The investigation asked whethe
 still appear when the administrative paragraphs were removed, while retaining the technical
 question and the other evidence in the selected context.
 
-The smaller context passed fresh preservation confirmation for the fixed topic predicate. It lets
-the developer inspect the installer-versus-installed-version distinction in a shorter record.
-It establishes neither the answer's correctness nor whether the removed paragraphs influenced the
-original answer.
+The smaller context passed fresh preservation confirmation for the fixed topic predicate, giving
+the developer a shorter record in which to inspect the installer-versus-installed-version
+distinction. The result establishes neither the answer's correctness nor whether the removed
+paragraphs influenced the original answer.
 
 ## Source, predicate and intervention
 
@@ -54,13 +54,14 @@ universal preservation or a future minimum match rate. The approximate interval 
 finite-sample coverage guarantee. Search establishes no minimality, necessity, unique cause or
 global optimum.
 
-## What the developer can do with the result
+## Developer conclusion
 
 The Databricks topic still appeared after removal of the administrative paragraphs. The developer
 can inspect the retained technical question and its code/documentation evidence without treating
 that discussion as required for this topic check.
 
-Next, trace the installer's version selection and the caller's CLI-version input separately.
+To check the technical recommendation, trace the installer's version selection and the caller's
+CLI-version input separately.
 Verify the installed version in an isolated, authorized workflow and compare it with the actual
 recommendation before changing the workflow. The reduction experiment did not perform this check.
 

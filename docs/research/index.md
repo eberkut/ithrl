@@ -1,11 +1,16 @@
 # Research
 
-The research asks whether controlled context interventions can produce useful, inspectable agent
-experiments at a defensible cost. Each study states its workload, method, evidence and limits.
-The [README](https://github.com/eberkut/ithrl/blob/main/README.md#supported-inputs) lists supported
-capabilities. A research result can precede a supported integration.
+These studies evaluate whether controlled context interventions produce useful, inspectable agent
+experiments at a defensible cost. Each records its workload, method, evidence and limits. Start with
+the study that matches the question below; use the executable packages to check synthetic results
+or repair graders.
 
-| Study | What it establishes |
+Research evidence does not establish product support. The
+[supported-inputs table](https://github.com/eberkut/ithrl/blob/main/README.md#supported-inputs)
+defines current capabilities, and [native measurements](../measurements.md) record qualification
+for specific workloads and profiles.
+
+| Study | Question and evidence |
 | --- | --- |
 | [Feasibility and portability](feasibility.md) | Historical evidence and reconstruction mechanisms across four harnesses, including negative and unassessed paths |
 | [Reduction design](reduction-design.md) | Statistical choices, failed cost/usefulness combinations, fresh confirmation, baseline-sharing alternatives and remaining measurement limits |
@@ -32,6 +37,6 @@ run without credentials or provider calls. Native measurements are reported sepa
 synthetic replay does not repeat model execution.
 
 Analytic guarantees, simulations, fixture checks and live measurements answer different questions.
-Studies report tested domains, criteria, seeds, complete-workflow costs, alternatives and
-limitations needed to interpret their results. [Issues](https://github.com/eberkut/ithrl/issues)
-track follow-up work; [decision records](../decisions/index.md) explain adopted designs.
+Read each result with its tested domain, criteria, seeds, complete-workflow costs and limitations.
+[Issues](https://github.com/eberkut/ithrl/issues) track follow-up work;
+[decision records](../decisions/index.md) explain adopted designs.

@@ -4,16 +4,18 @@ Comparative debugging asks whether a particular context difference changes a fix
 one execution profile. An earlier successful answer and a later unsuccessful answer supply a
 hypothesis; their difference alone does not explain the regression.
 
-The implemented workflow compares two explicitly selected contexts from one immutable source. It
-supports repair and degradation objectives, using the shared collector for calibration and fresh
-confirmation. Constructed repair tasks and ordinary Codex and Copilot investigations qualified the
-tested profiles. The ordinary results support retaining a diagnostic batch for test-command
-selection and restoring a policy-read bundle for a role-assumption answer. They establish useful
-effects of those complete bundles under their declared profiles.
+The workflow compares two explicitly selected contexts from one immutable source. It tests repair
+or degradation through calibration and fresh confirmation. Constructed repair tasks and ordinary
+Codex and Copilot investigations qualified the tested profiles. The ordinary results support
+retaining a diagnostic batch for test-command selection and restoring a policy-read bundle for a
+role-assumption answer. These are effects of complete bundles under declared profiles; individual
+components and historical causes remain unestablished.
 
-This study records the method, controls, outcomes, costs and interpretation limits for
-[#13](https://github.com/eberkut/ithrl/issues/13). The
-[comparison guide](../comparison.md) owns command usage and configuration.
+This study records the method, controls, outcomes, costs and limits for
+[#13](https://github.com/eberkut/ithrl/issues/13). Use the
+[comparison guide](../comparison.md) for commands and configuration, and the
+[supported-inputs table](https://github.com/eberkut/ithrl/blob/main/README.md#supported-inputs)
+for current capabilities.
 
 ## Comparison contract
 
@@ -24,8 +26,8 @@ Keep two questions separate:
 - **Prospective intervention:** does a source-bound edit change the probability of a fixed target
   when both arms use one immutable case and the same current execution profile?
 
-The second question can remain useful when the historical contrast is confounded. Report that
-change of question explicitly. It does not explain an earlier model or runtime's behavior.
+A prospective intervention can remain useful when the historical contrast is confounded. Report
+that change of question explicitly: it does not explain an earlier model or runtime's behavior.
 
 Bind both contexts to one preserved source, target and execution profile, with a separate candidate
 digest for each context. The source contains the full captured evidence; either selected context
@@ -167,9 +169,9 @@ Operational errors remain outside behavioral denominators and retain their usage
 call charges. Finite token or monetary caps require an enforceable estimator. Recorded usage and
 reference-price estimates do not establish billed charges or complete investigation effort.
 
-The constructed and ordinary investigations below supply the qualification evidence for the
-implemented workflow. They establish useful bundle effects under their bound profiles, not
-performance rankings between harnesses or a frequency estimate across ordinary sessions.
+The constructed and ordinary investigations below establish bundle effects under their bound
+profiles. They supply neither performance rankings between harnesses nor a frequency estimate
+across ordinary sessions.
 Implementation and qualification are tracked in [#88](https://github.com/eberkut/ithrl/issues/88)
 and [#89](https://github.com/eberkut/ithrl/issues/89).
 
@@ -314,7 +316,7 @@ and 2,087 elapsed seconds. No actions executed; source/workspace protection and 
 Offline inspection verified source bindings, and completed-run resume reused the terminal evidence
 without redispatch. The integrated artifact reproduced the same native inputs and effective policy.
 
-Selection and unsuccessful execution remain part of the cost:
+The complete recorded cost includes selection and unsuccessful execution:
 
 | Scope | Model attempts | Recorded request starts | Known input and output tokens |
 | --- | ---: | ---: | ---: |

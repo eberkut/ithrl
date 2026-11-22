@@ -15,12 +15,16 @@ even though `uvx` runs Library Skills itself in isolation:
 
 ```bash
 uvx library-skills scan --all --json
-uvx library-skills install --skill ithrl --copy
 ```
 
-Before installing, confirm the scan entry is named `ithrl`, comes from package `ithrl` and has the
-expected package version. `--all` includes installed packages outside declared direct dependencies.
+Before installing, confirm the scan entry is named `ithrl` and comes from package `ithrl`.
+Check the installed CLI version with `uv run ithrl --version`. `--all` includes transitive
+dependencies.
 For Claude Code, add `--claude` when installing to also create `.claude/skills/ithrl`.
+
+```bash
+uvx library-skills install --skill ithrl --copy
+```
 
 The default destination is the project's `.agents/skills/ithrl`. This route has no user-wide
 installation option. Library Skills does not automatically discover an isolated `uv tool`

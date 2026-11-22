@@ -13,29 +13,27 @@ Passive compaction inspection reads recorded operations and results without mode
 
 ## Start here
 
-- **Learn the workflow:**
-    [install ithrl](https://github.com/eberkut/ithrl/blob/main/README.md#install) and
-    [run the bundled example](https://github.com/eberkut/ithrl/blob/main/README.md#try-it). It needs
-    no agent installation or model access and shows the expected output.
-- **Use your own session:** [select a saved decision](native-runs.md#select-a-saved-decision),
-    [prepare a reduction](reduction.md) and review its provider, safety
-    controls and budget. The [fuzzing walkthrough](fuzzing.md) covers text
-    appends.
-- **Inspect compaction without model calls:**
-    [compare recorded operations and captured results](results.md#inspect-recorded-compaction) in
-    one saved session.
-- **Compare selected contexts:** [declare a repair or degradation comparison](comparison.md),
-    calibrate both contexts and confirm their effect with fresh observations.
-- **Investigate a result:** use [Results and privacy](results.md) for the workflow's saved files,
-    inspection commands and outcome interpretation. The
-    [worked reduction](research/ordinary-session-investigation.md) shows what retained context can
-    tell you.
+Choose the task you want to complete:
+
+| Task | Start with |
+| --- | --- |
+| Try ithrl without an agent or model account | [Install ithrl](https://github.com/eberkut/ithrl/blob/main/README.md#install), then [run the bundled example](https://github.com/eberkut/ithrl/blob/main/README.md#try-it) |
+| Use a saved session | [Select a decision and extract a case](native-runs.md#select-a-saved-decision) |
+| Find a smaller context that preserves a behavior | [Native reduction](reduction.md) |
+| Search for text appends that decrease the target's match rate | [Context fuzzing](fuzzing.md) |
+| Test whether a selected context change repairs or degrades behavior | [Context comparison](comparison.md) |
+| Inspect compaction without model calls | [Recorded operations and captured results](results.md#inspect-recorded-compaction) |
+| Inspect saved results or estimate token costs | [Results and privacy](results.md) |
+| Use ithrl through a coding agent | [Agent skill](agent-skill.md) |
+
+The [worked reduction](research/ordinary-session-investigation.md),
+[comparisons](research/comparative-debugging.md) and
+[tool output investigations](research/tool-output-interventions.md) show how to interpret the
+experimental results.
 
 ## Reference and background
 
 - [CLI reference](cli.md): commands, arguments, options and defaults generated from the CLI.
-- [Results and privacy](results.md): saved files, preservation, resource usage, resume and private
-  data handling.
 - [Troubleshooting](troubleshooting.md): selection, setup, refusal and resume problems.
 - [Measurements](measurements.md): benchmark construction, outcomes and costs.
 

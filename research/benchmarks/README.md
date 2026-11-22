@@ -8,10 +8,10 @@ test reporting. Independent checks are separately authored, not isolated from th
 
 ## Findings and decision
 
-Adopt iniconfig and its patch grader as a supplementary workload for bounded constructed
-investigations. Codex and Copilot each ran a bounded CLI reduction and completed fresh confirmation.
-Keep migration-linter as a baseline-calibration limiting case. These results establish neither a
-general benchmark nor improved ordinary debugging.
+Iniconfig and its patch grader qualified as a supplementary workload for bounded constructed
+investigations: Codex and Copilot each completed a CLI reduction and fresh confirmation.
+Migration-linter failed its three-of-three baseline-calibration gate and received no downstream
+controls. These results establish neither a general benchmark nor improved ordinary debugging.
 
 | Task / harness | Fresh calibration | Remove unrelated context | Withhold incident | Changed-defect replay |
 | --- | --- | --- | --- | --- |
@@ -83,7 +83,7 @@ need their own qualification. The optional `python-patch-tests` integration grad
 than keyword mentions or response shape. Corpus expansion and additional harnesses require separate
 evidence and execution decisions.
 
-Constructed-task results supplement the unchanged
+Constructed-task results supplement the
 [ordinary-workflow limiting outcome](../../docs/research/reduction-design.md#prospective-ordinary-workflow-cohort).
 The separate [statistical simulations](../reduction/README.md) assess specified rates and budgets.
 Task-specific grades remain conditional on the reviewed tests. Public-task contamination and opaque
@@ -122,7 +122,8 @@ See [NOTICE](NOTICE) for attribution and licenses.
 
 ## Reproduce
 
-Run from the repository root on Linux with usable Bubblewrap namespaces, `/usr/bin/bwrap`,
+Run the commands in this section in the same shell, from the repository root, so the disposable
+directory variables remain available. Use Linux with usable Bubblewrap namespaces, `/usr/bin/bwrap`,
 `/usr/bin/git`, GNU patch, curl and uv. The isolated replay mounts `/usr`, `/lib` and `/lib64` and
 requires system Python **3.12.3** at `/usr/bin/python3.12`. Verify that version before setup:
 
@@ -221,7 +222,7 @@ whether a `CREATE_INDEX` warning remains, not its count or table attribution. Th
 complete PostgreSQL parser. Preserve the original dataset result separately from this strengthened,
 adapted task.
 
-## Native pilot design
+## Native pilot protocol
 
 Tasks own their source, expected behavior and grader; harnesses own native evidence, reconstruction
 and permissions. The pilots test repairs from supplied incident captures, not autonomous repository
@@ -237,7 +238,7 @@ The migration capture includes an unrelated filesystem-utility module; removing 
 analyser and transaction-rule example intact. The changed-defect iniconfig control retains the
 visible symptom but moves the fault to the underlying getter.
 
-Freeze these conditions before model observations:
+The pilot protocol froze these conditions before model observations:
 
 - Original evidence and three fresh calibration responses.
 - A prospective removal of overload declarations or an unrelated filesystem-utility snapshot. Its
@@ -249,12 +250,13 @@ Freeze these conditions before model observations:
   different corrections. They are additional synthetic variants, not original dataset instances
   or supported substitution edits.
 
-Require the first source response to be exactly `ACK`, apart from surrounding whitespace, as
-requested by the source-generation prompt. Stop before requesting a repair if it differs.
-Keep source generation separate from immutable-original calibration. Changed-defect sources have
-their own identities and grading expectations. Irrelevant/withheld evidence removals use supported
-source-bound edits after extraction. Verify native identities, input visibility and materialization
-before execution. Do not protect a field artificially or change search to keep it available.
+Source eligibility required the first response to be exactly `ACK`, apart from surrounding
+whitespace, as requested by the source-generation prompt. A different response required stopping
+before a repair request. Source generation remained separate from immutable-original calibration.
+Changed-defect sources had their own identities and grading expectations; irrelevant/withheld
+evidence removals used supported source-bound edits after extraction. Native identities, input
+visibility and materialization required verification before execution. The protocol prohibited
+artificial field protection or search changes to keep a field available.
 
 ### Grader integration
 
@@ -296,10 +298,10 @@ Regenerate the original provider-free proposal arithmetic with:
 uv run --locked --offline --no-sync python research/benchmarks/budget.py
 ```
 
-That four-cell design permits at most 40 attempts, conditional on one-request enforcement. It is a
-proposal, not an execution authorization or a measured total. Each actual package needs its own
-bound runtime, whole-run deadline, stopping rules and approval. The migration-linter/Codex cell
-was not executed.
+That four-cell design permits at most 40 attempts, conditional on one-request enforcement. This
+historical proposal is neither an execution authorization nor a measured total. Each package needs
+its own bound runtime, whole-run deadline, stopping rules and approval. The
+migration-linter/Codex cell was not executed.
 
 | Task / harness | Recorded inference requests | Included unsuccessful work |
 | --- | ---: | --- |

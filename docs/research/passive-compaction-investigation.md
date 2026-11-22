@@ -1,4 +1,4 @@
-# Inspecting repeated operations across compaction
+# Repeated operations across compaction
 
 This investigation asked whether operations after compaction repeated an earlier lookup, returned
 changed information, or lacked comparable saved evidence. It used ordinary Codex and Copilot
@@ -46,7 +46,7 @@ omit arguments and result text; `--show-text --max-text-bytes 4096` permits boun
 
 For the catalog example, the report establishes that the same recorded operation returned the
 same captured payload. Manual inspection identified the generic Codex call as a catalog lookup;
-the inspector leaves generic code unclassified. A developer can now examine whether the relevant
+the inspector leaves generic code unclassified. A developer can examine whether the relevant
 catalog entry survived in the compaction summary and whether the later task required a fresh
 lookup. The report alone cannot answer those questions or justify deleting that operation.
 
@@ -83,9 +83,10 @@ During direct CLI checks, Python audit hooks restricted file opens to the select
 interpreter/package assets and read-only OS entropy. The hooks were configured to deny network,
 subprocess and application-write events; successful runs recorded no denials. Static review and
 in-process controls checked the passive call path as well.
-This is application-level evidence, not a kernel sandbox or a complete audit of interpreter
-startup and native system calls. No harness or recorded action was started, and no provider call
-was made. Usage stays unknown; repeated bytes are not token or cost savings.
+These application-level checks do not establish a kernel sandbox or a complete audit of
+interpreter startup and native system calls. No harness or recorded action was started, and no
+provider call was made. Usage remains unknown; repeated bytes do not establish token or cost
+savings.
 
 Normalized and heuristic matching, causal effects of compaction, resume/fork/handoff comparison
 and active Codex compaction reconstruction remain outside the qualified scope.

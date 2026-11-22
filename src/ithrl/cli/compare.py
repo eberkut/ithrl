@@ -568,6 +568,8 @@ def _handle(
                 raise ComparisonInputRefusal("calibration-after-selection-refused")
             completed = _saved_result(session, state_file, store)
         if completed is not None or dry_run:
+            # Publish saved evidence before native setup: a completed resume or
+            # dry-run must remain usable without the historical runtime or login.
             return execute_comparison(
                 session, None, dry_run=dry_run, calibration_only=calibration_only
             )
@@ -791,7 +793,7 @@ def compare(
         typer.Option(
             "--detect-capabilities",
             "--detect",
-            help="Explicit zero-provider structural detection and profile persistence.",
+            help="Probe local capabilities without provider requests; save a profile.",
         ),
     ] = False,
     resume: Annotated[
@@ -805,7 +807,7 @@ def compare(
         bool,
         typer.Option(
             "--calibration-only",
-            help="Stop after successful calibration, before selection or confirmation; preserve the full frozen allowance.",
+            help="Stop after calibration; the plan must still reserve confirmation capacity.",
         ),
     ] = False,
     acknowledge_model_execution: Annotated[
@@ -819,7 +821,14 @@ def compare(
         OutputFormat, typer.Option("--format", help="Output format.")
     ] = OutputFormat.HUMAN,
 ) -> None:
-    """Calibrate and freshly confirm one directed comparison of two explicit contexts."""
+    """Test whether a context change improves or degrades the selected behavior.
+
+    Requires the compare extra. Both contexts come from one case and keep the same
+    triggering input. Use --config to select the pair, direction, samples and
+    limits, then inspect with --dry-run. Native execution requires a detected
+    profile and --acknowledge-model-execution. Calibration precedes fresh
+    confirmation of the declared effect.
+    """
     from ithrl.cli.native import NativeSelectionError
 
     try:

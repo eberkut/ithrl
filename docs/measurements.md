@@ -3,7 +3,8 @@
 Ordinary Codex and Copilot saved-session experiments removed **580** and **6,512 additional UTF-8
 bytes** from retained prior-user text and passed fresh preservation confirmation. An earlier Codex
 whole-record reduction lowered mean confirmation input tokens by **50.17%**. The measurements
-below cover these reductions, synthetic fuzzing campaigns, reference workloads and their costs.
+below record the tested profiles, behavioral results, resource use and unsuccessful work for
+these reductions, synthetic fuzzing campaigns and reference workloads.
 
 Results apply to the recorded workloads, predicates and runner policies. General session success
 rates, robustness, unique historical causes and monetary savings remain unmeasured. See
@@ -14,19 +15,19 @@ Harness versions identify the measured installations. Compatibility depends on d
 capabilities and safety controls; there is no exact-release allowlist. Durations below are rounded
 to the nearest second; KiB and MiB use binary units.
 
-For explicit-context comparisons, see the
-[comparative-debugging study](research/comparative-debugging.md). It reports constructed and
-ordinary Codex/Copilot investigations, calibration, fresh confirmation and costs including
-unsuccessful work.
-The [localized tool output study](research/tool-output-interventions.md) reports exact field edits,
-native delivery controls, final-response confirmation and independent practical review, including
-unsuccessful packages and complete-study costs.
+Two studies own measurements for explicit-context comparisons:
+
+- [Comparative debugging](research/comparative-debugging.md): constructed and ordinary Codex/Copilot
+  investigations, calibration, fresh confirmation and costs including unsuccessful work.
+- [Localized tool output interventions](research/tool-output-interventions.md): exact field edits,
+  native delivery controls, final-response confirmation, independent practical review, unsuccessful
+  packages and complete-study costs.
 
 ## Saved-session experiments
 
-Saved-session experiments select decisions from existing coding sessions and use predicates chosen
-before collection. Their raw session content, identifiers and routing remain private;
-only aggregates and reviewed, sanitized interpretations are published.
+Saved-session experiments select decisions from existing coding sessions and freeze predicates
+before collection. Raw session content, identifiers and routing stay private. Published evidence
+consists of aggregates and reviewed, sanitized interpretations.
 
 ### Ordinary-session paragraph removal
 
@@ -64,10 +65,12 @@ observation. No coarse-versus-fine confirmation token difference was measured, s
 cannot be attributed to the paragraph edit alone. Input totals include cached input; token reduction
 does not establish monetary savings.
 
-Codex qualified a private candidate wheel on this uncompacted workload and runtime. Its private
-wire auditor checked all 37 external requests and continuations against the source projection,
-selected edit, fixed trigger and settings under recorded native normalizations. The shipped
-runner does not expose that instrumentation. This audit proves neither historical request
+#### Native delivery and integration evidence
+
+The Codex experiment qualified a private candidate wheel on the uncompacted workload and runtime. A
+private wire auditor checked all 37 external requests and continuations against the source
+projection, selected edit, fixed trigger and settings under recorded native normalizations. The
+shipped runner does not expose that instrumentation. This audit proves neither historical request
 equivalence nor provider-internal interpretation or compaction support on `0.167.0`; reasoning
 remained opaque. See [native compatibility](native-runs.md#compatibility-and-measurements) for
 public integration boundaries.
@@ -75,21 +78,21 @@ public integration boundaries.
 Both workflows verified unchanged source/workspace and cleanup, with zero executed actions or
 tool-side network effects. Codex exercised active interruption/resume and completed-result resume;
 the latter republished a summary snapshot without new observations or calls. A surrounding audit
-wrapper initially rejected the new summary path; the retained result and sampling state were then
-verified unchanged. This wrapper error remains part of the investigation history.
+wrapper initially rejected the new summary path; verification found the retained result and sampling
+state unchanged.
 
 The [worked investigation](research/ordinary-session-investigation.md) explains the Codex debugging
 question, retained evidence, interpretation and next action.
 
 The integrated wheel and sdist-built wheel reproduced the original, coarse and selected inputs
 without provider requests. Codex worker requests, rendered configuration and safety facts matched
-the qualified build despite a deliberate change to reconstruction identity. Copilot runner modules
-were unchanged. These are integration checks, not new provider-backed experiments.
+the qualified build with a changed reconstruction identity. Copilot runner modules were unchanged.
+These provider-free checks establish input reconstruction across the integrated distributions.
 
-The historical Copilot search partitioned sections first; current search tries all selected
-sections first. Its old result needs the original build for inspection and cannot resume under
-current traversal. The integrated inspector accepts the final Codex result; installed
-credential-free workflows cover current CLI, inspection and recovery contracts.
+The measured Copilot search partitioned sections first; current search tries all selected sections
+first. Its result needs the original build for inspection and cannot resume under current traversal.
+The integrated inspector accepted the final Codex result; installed credential-free workflows
+exercised CLI, inspection and recovery contracts.
 
 #### Investigation cost and unsuccessful work
 
@@ -99,13 +102,13 @@ traffic. Monetary cost is unknown.
 
 | Scope | Known calls | Additional possible calls | Known input + output tokens | Outcome or accounting limit |
 | --- | ---: | --- | ---: | --- |
-| Current Codex selection, including its final 37-call run | 75 | 1 | Incomplete aggregate | 76 conservatively charged; separately approved earlier investigations excluded |
+| Codex paragraph selection, including its final 37-call run | 75 | 1 | Incomplete aggregate | 76 conservatively charged; separately retained earlier investigations excluded |
 | Earlier Codex mixed-field selection, pilot and stopped search combined | 103 | 12 | 4,984,018, incomplete | Selected mixed field was removed during coarse search; no fine search or confirmation |
 | Earlier Codex literal-predicate workload | 7 | Unresolved outer-process envelope | 1,014,768 known | Seven nonmatches; calibration failed; observer/cleanup uncertainty remained |
 | Copilot pilot and reconstruction controls | 7 | 0 | 423,523 | Three calibration and four control observations; no search or confirmation |
 | Copilot completed reduction, separate from its pilot | 95 | 0 | 4,697,910 | Confirmed result reported above |
 
-The current Codex selection's **75 known plus one possible** requests include the completed
+The Codex paragraph selection's **75 known plus one possible** requests include the completed
 37-call run. Its full tokens and elapsed time are unreconciled; the 76-call charge excludes
 separately retained earlier diagnostic and aborted runs. The mixed-field selection's
 103-known/12-possible subtotal includes its pilot. Its search took 18 min 25 s; total
@@ -167,9 +170,9 @@ observation.
 The 6,000-call ceiling covers attempt limits and native continuations. Startup and exit were not
 separately timed. Input totals include cached input.
 
-Fresh confirmation followed durable selection. Counts, usage and intervals matched the saved native
-artifacts. Every attempt verified unchanged source/workspace and cleanup without residual state;
-zero actions executed or tool-side network effects occurred.
+Fresh confirmation followed durable selection, with counts, usage and intervals verified against
+the saved native artifacts. Every attempt verified unchanged source/workspace and cleanup without
+residual state; zero actions executed or tool-side network effects occurred.
 
 Search stopped at the two-comparison limit with coverage incomplete. Confirmation applies to the
 frozen literal predicate and declared margin; minimality remains unestablished. The original's
@@ -177,7 +180,7 @@ frozen literal predicate and declared margin; minimality remains unestablished. 
 
 ## Native context fuzzing
 
-The qualified final-response profiles completed discovery, intervention simplification and one fresh
+The following final-response profiles completed discovery, intervention simplification and one fresh
 confirmation using `gpt-6.1-sol`:
 
 | Harness | Measured installation | Controlled surface | Provider |
@@ -190,8 +193,8 @@ confirmation using `gpt-6.1-sol`:
 The editable surface is one eligible prior-user text field. An earlier message establishes a
 response token, and the fixed triggering input asks for the latest active token. The stress append
 contains three irrelevant notes and one instruction revising that token. The target checks for
-the original token. This competing instruction makes the campaign's intended behavioral change
-explicit. Public sources and the example configuration are under
+the original token, so following the revised instruction produces a nonmatch. Public sources and
+the example configuration are under
 [`examples/fuzz/`](https://github.com/eberkut/ithrl/tree/main/examples/fuzz).
 
 Each profile passed a six-observation identical-text duplication control: four original and two
@@ -378,7 +381,7 @@ for Codex, 196.67 MiB/345 for Copilot final response and 196.67 MiB/345 for shel
 This workload established instruction-retaining reduction and confirmation. Earlier failures and
 interrupted work are recorded in
 [the reduction research](research/reduction-design.md#failed-and-interrupted-native-predecessors).
-100k qualification remains deferred expansion work.
+The study did not qualify execution at an estimated 100,000 input tokens.
 
 ## Statistical reference checks
 

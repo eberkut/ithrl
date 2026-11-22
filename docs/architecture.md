@@ -1,24 +1,26 @@
 # Architecture
 
-`ithrl` tests how context changes affect one selected coding-agent decision. It preserves source
-evidence, constructs dependency-valid candidates and records runner observations and confirmation
-status. These experiments do not identify the original decision's cause or reproduce its runtime.
+`ithrl` tests how context changes affect one selected coding-agent decision. Adapters interpret
+native evidence, and extraction preserves it in a case. Shared workflows construct dependency-valid
+candidates; runners execute controlled attempts. Observations support the configured behavioral
+comparison, without identifying the original decision's cause or reproducing its historical runtime.
 
 The
 [README supported-inputs table](https://github.com/eberkut/ithrl/blob/main/README.md#supported-inputs)
-defines public support. Use `extract` to capture a decision, `prepare` to generate a reduction
-configuration, `shrink` to reduce context, `fuzz` to test mutations and `compare` to test a declared
-effect between two source-bound contexts. `inspect` reads retained context or recorded operations
-across compaction without starting a runner or opening an observation store. See
-[native runs](native-runs.md) and [comparison](comparison.md) for procedures,
-[measurements](measurements.md) and the [comparison study](research/comparative-debugging.md) for
-qualification evidence, and [results](results.md) for interpretation.
+defines public support. `extract` captures a decision. Reduction uses `prepare` to generate its
+configuration and `shrink` to run it; `fuzz` tests mutations and `compare` tests a declared effect
+between two source-bound contexts. `inspect` reads saved results, source-bound fields or recorded
+compaction evidence without starting a runner or opening an observation store. Execution procedures
+belong in [native runs](native-runs.md) and [comparison](comparison.md); qualification evidence
+belongs in [measurements](measurements.md) and the
+[comparison study](research/comparative-debugging.md); [results](results.md) explains report
+interpretation.
 
 ## Adapters and runners
 
 Adapters discover and parse native evidence, identify completed decisions and compile an edit
 graph. `extraction.py` verifies the source, re-derives the decision and graph, and writes the case.
-Adapters neither write cases nor invoke models or enforce execution policy. Codex and Copilot
+Adapters do not write cases, invoke models or enforce execution policy. Codex and Copilot
 have separate parsers, selectors and context compilers because their event formats and decision
 boundaries differ.
 
@@ -82,19 +84,17 @@ execution_plan_digest = SHA256(canonical_json(execution_plan_metadata))
 
 The metadata includes `plan_content_digest`, capability and safety-policy digests, capture type,
 candidate materialization, reconstruction method, `SafetyPolicyDeclarations` and `ResourceLimits`.
-The declaration contract owns the whitelist of disclosed policy fields; private provider
-destinations remain in the full plan. This binds readable declarations to all private plan inputs
-without disclosing those inputs or requiring them to recompute the execution-plan digest.
-
-A full-plan hash alone cannot validate a disclosed subset without the private contents. An
-unbound projection could change while retaining the recorded plan identity.
+The declaration contract limits disclosed policy fields; private provider destinations remain in
+the full plan. Hashing both the full plan and its metadata lets offline readers verify the
+disclosed declarations and their binding to private inputs without possessing those inputs. A
+full-plan hash alone would leave the disclosed subset unverifiable.
 
 `sampled_run_metadata.py` persists required `execution_metadata`, including per-attempt resource
 limits, and verifies its digest against the original observation identity. Sampled snapshots
 retain no full execution plan. `results/inspection.py` validates this binding offline;
 `inspection.py` reports the metadata and bounded coverage of recorded effective-policy digests.
 Declared policy and recorded attempt evidence remain separate, with interpretation in
-[results](results.md#interpret-retained-units-and-trials).
+[results](results.md#interpret-plan-and-policy-evidence).
 
 Sampled-run resource limits are recorded separately from the statistical settings. Increasing a
 run allowance leaves sample targets, freshness, effective policy and per-attempt limits unchanged.
@@ -106,6 +106,8 @@ is insufficient.
 `text_sections.py` defines removal within one eligible prior-user text field, independently of
 reconstruction and search. Adapters discover eligible fields; fixed decision input, instructions,
 protected nodes and opaque records are excluded. Each content block is a separate field.
+
+### Paragraph policy and identity
 
 `paragraph-v1` partitions the original string using physical LF, CRLF or CR line endings. A blank
 line contains only ASCII spaces or tabs before its ending. Each run of nonblank lines owns its
@@ -128,6 +130,8 @@ Prior-user text edits use `append-text` or `remove-text-sections`. Appending req
 context. Section removal may accompany dependency-closed record removal when the edited field
 survives.
 
+### Materialization and inspection
+
 Exact-request materialization edits a defensive copy, locating the original message before adjusting
 for removed positions. Combined section edits refuse removal touching the original last input,
 including its nested fields, even if graph flags permit coarse removal. `Candidate` JSON validation
@@ -144,6 +148,8 @@ Codex changes only the selected prior-user text block. Copilot changes the effec
 `transformedContent` when present, otherwise `content`, preserving the surrounding event and
 unedited prefix records. Copilot shell targets and fuzzing refuse section removal.
 
+### Search and selection
+
 `reduction.section_search` opts in with ordered original section IDs; omitted sections stay
 protected during fine search. Coarse and fine comparison ceilings are separate, with no capacity
 transfer. A checkpoint freezes the coarse candidate and stopping state before independent per-field
@@ -153,9 +159,9 @@ never combines fields or changes whole-record candidate order. The largest admit
 removal wins; ties retain the first candidate. Usefulness is reported separately from selection and
 confirmation.
 
-The frozen `require_criterion_for_confirmation` gate stops before selection and confirmation if
-the additional-byte criterion is unmet; run-state validation rejects a violating selection.
-Disabling the gate leaves threshold reporting independent. With this gate enabled,
+When enabled, the frozen `require_criterion_for_confirmation` gate stops before selection and
+confirmation if the additional-byte criterion is unmet; run-state validation rejects a violating
+selection. Disabling the gate leaves threshold reporting independent. With this gate enabled,
 `stop_when_no_retained_fields` can end coarse search at a completed comparison boundary once all
 selected fields are gone, preserving the accepted edit without another sampling reservation.
 
@@ -178,6 +184,8 @@ structural target and persists an observation. A valid match and a valid nonmatc
 outcomes. Invalid observations and runner errors retain execution evidence without becoming
 behavioral losses. The oracle recognizes the configured final response or shell request; it does
 not judge why the model produced it.
+
+### Optional repair grading
 
 Sampled experiments can attach `python-patch-tests` grading to an unconstrained final-response
 target. `grading/` binds the implementation, reviewed task bundle and prepared system-Python
@@ -203,6 +211,8 @@ and incomplete suites are operational grading errors.
 
 [ADR 0005](decisions/0005-cooperative-repair-grading.md) records the grading outcome and trust
 boundary.
+
+### Collection and search ownership
 
 Deterministic reduction and sampled reduction share dependency-valid candidate construction but
 make different claims. The deterministic reducer can establish `search-1-minimal` through a
@@ -306,6 +316,8 @@ native input visibility or behavioral qualification.
 
 ## Execution and privacy boundary
 
+### Passive inspection
+
 Passive compaction inspection has separate harness-owned projections over the bounded immutable
 JSONL snapshot, dispatched through the existing adapter registry. These projections retain only
 source anchors, recorded operations, captured result fields and compaction intervals needed by
@@ -315,6 +327,8 @@ not become newly completed execution. The shared matcher partitions adjacent epo
 recorded-operation identity, captured-result equality, completeness and unknown resource state
 separate. It opens no referenced resource and performs no native or provider operation. See
 [passive report semantics](results.md#inspect-recorded-compaction).
+
+### Native preparation and admission
 
 Native reduction preparation consumes a private receipt exported by a successful explicit dry-run.
 It records the execution plan, oracle identity and original-workspace path. `prepare` validates
@@ -334,6 +348,8 @@ before sampling resources are committed. An original reconstruction refusal is t
 candidate-local refusal during search consumes no provider calls. Admission starts no process or
 provider request; execution still validates the reconstructed candidate.
 
+### Native execution
+
 Codex reconstructs copied history through the installed CLI's app-server. Tool-output checkpoints
 inject the original output and call identity, then continue with empty new input; user-message
 triggers remain new input. `codex-app-server-inject-checkpoint-v1` binds this contract and refuses
@@ -352,19 +368,20 @@ turn, including after tool outputs, without a new user message or resume bookkee
 Selected environment tokens are passed explicitly to the SDK session; managed login uses the
 isolated configuration. When present, captured system
 guidance is restored and verified before inference; current custom-instruction and skill retrieval
-are disabled. A managed-request gate
-allows one inference request, verifies policy and denies shell execution before continuation.
+are disabled. A managed-request gate allows one inference request, verifies policy and denies shell
+execution before continuation.
 
 After policy verification, up to two same-session `/meta` GETs may precede model-context
 verification. Their count is retained in native output. The model-catalogue GET allows three
 connection attempts within the outer timeout, counted separately from inference; certificate
-failures remain terminal. Inference is never retried.
-Uncaptured historical guidance
-and harness-added context remain limits of the controlled prefix and policy.
+failures remain terminal. Inference is never retried. Uncaptured historical guidance and
+harness-added context remain limits of the controlled prefix and policy.
 
 Copilot fingerprints the Python executable, its shared library when present, and the installed SDK
 dependency files. It mounts the standard library read-only as a trusted host dependency and records
 its directory metadata. Standard-library file contents are outside the content fingerprint.
+
+### State, accounting and storage
 
 `runner/runtime/` owns private state, bounded output, process-group termination, cancellation and
 cleanup. Concrete runners supply filesystem/network isolation and effective action denial;

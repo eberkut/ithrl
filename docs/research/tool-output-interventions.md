@@ -1,11 +1,11 @@
 # Localized tool output interventions
 
-These investigations tested whether removing captured trust-policy text changes a role-assumption
-answer and whether removing the first error excerpt changes diagnosis of a CI retry. Both completed
-fresh final-response confirmation and practical review. The trust-policy result received narrower
-acceptance because its literal predicate did not always agree with practical review; the CI result
-passed both checks. [Issue #74](https://github.com/eberkut/ithrl/issues/74) records scope and
-acceptance.
+Removing captured trust-policy text changed a role-assumption answer; removing the first error
+excerpt changed diagnosis of a CI retry. Both investigations completed fresh final-response
+confirmation and practical review. The trust-policy result failed its original agreement gate and
+received narrower acceptance because its literal predicate did not always agree with practical
+review. The CI result passed both gates.
+[Issue #74](https://github.com/eberkut/ithrl/issues/74) records scope and acceptance.
 
 ## Source and intervention
 
@@ -43,7 +43,7 @@ predicate checks only the code.
 Provider-free controls tested the full source, reference, candidate and candidate with the edit
 undone. They forwarded zero inference requests and verified fixed input, call identity, policy,
 protected state and cleanup. Authentication and
-catalogue connectivity remained available. Action-refusal controls left canaries absent; native
+catalog connectivity remained available. Action-refusal controls left canaries absent; native
 dispatch refusal was not counted as a permission-denial event.
 
 Deleting the complete field caused reconstruction to omit its empty content block; the other seven
@@ -70,7 +70,7 @@ ratings intact.
 | Initial CI, interrupted run | 16/16 / 0/18 valid; one SDK failure; no bound | All 34 valid classifications agree | Incomplete; no confirmation claim |
 | Initial CI, fresh run | 20/20 / 0/20; difference 1; lower bound .6631330580338293 | 20/20 / 0/20 correct; 40/40 agreement; none unassessable | Complete; both gates passed |
 
-The accepted access finding supports retaining this field for configured-grant diagnosis. The
+The accepted trust-policy finding supports retaining this field for configured-grant diagnosis. The
 failed agreement gate and three disagreements remain recorded: two incorrect reference answers
 matched the name, while one correct answer abbreviated it and missed the literal predicate. The
 literal bound supplies no semantic-grader guarantee.
