@@ -76,19 +76,17 @@ The project-wide documentation review is complete in
 | Released in v0.4 | [#67: performance and simplification](https://github.com/eberkut/ithrl/issues/67) | Project-wide performance fixes, permanent local-workload benchmarks and durable coding guidance, merged in [PR #71](https://github.com/eberkut/ithrl/pull/71) |
 | Released in v0.4 | [#68: documentation and writing guidance](https://github.com/eberkut/ithrl/issues/68) | Project-wide documentation corrections and concise writing guidance, merged in [PR #72](https://github.com/eberkut/ithrl/pull/72) |
 
-## Release preparation: v0.5 investigation reports and comparative debugging
+## v0.5: investigation reports and comparative debugging
 
 Implementation and qualification for the
-[v0.5.0 milestone](https://github.com/eberkut/ithrl/milestone/4) are complete. Package release
-preparation and publication remain. The milestone covers broader
-ordinary-workflow evidence, public benchmark feasibility, self-describing sampled reports, cost
-estimates, a first-party agent skill, comparative debugging and localized tool-output interventions.
-The comparison workflow binds two explicit contexts to one immutable source, with
-repair/degradation objectives and independent fresh
-confirmation in [#88](https://github.com/eberkut/ithrl/issues/88). Constructed and ordinary
-Codex/Copilot investigations qualified the tested profiles in
-[#89](https://github.com/eberkut/ithrl/issues/89); the
-[worked comparisons](docs/research/comparative-debugging.md) record their costs and scope.
+[v0.5.0 milestone](https://github.com/eberkut/ithrl/milestone/4) are complete. The milestone covers
+broader ordinary-workflow evidence, public benchmark feasibility, self-describing sampled reports,
+cost estimates, a first-party agent skill, comparative debugging and localized tool-output
+interventions. The comparison workflow binds two explicit contexts to one immutable source, with
+repair/degradation objectives and independent fresh confirmation in
+[#88](https://github.com/eberkut/ithrl/issues/88). Constructed and ordinary Codex/Copilot
+investigations qualified the tested profiles in [#89](https://github.com/eberkut/ithrl/issues/89);
+the [worked comparisons](docs/research/comparative-debugging.md) record their costs and scope.
 
 | Scope | Issue | Expected outcome |
 | --- | --- | --- |
