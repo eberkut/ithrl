@@ -1,5 +1,20 @@
 # CHANGELOG
 
+## v0.5.0 (2026-11-23)
+
+### Bug Fixes
+
+- **runner**: Validate native startup and report cohort limits ([#82](https://github.com/eberkut/ithrl/pull/82), [`36fae9d`](https://github.com/eberkut/ithrl/commit/36fae9d0b23282a0154d849e6563127b73fd8b5f))
+
+### Features
+
+- Add patch grading and public debugging workloads ([#83](https://github.com/eberkut/ithrl/pull/83), [`6dd7b90`](https://github.com/eberkut/ithrl/commit/6dd7b90401f5691fcc0bac31b082610d0097b983))
+- Add source-bound context comparison ([#90](https://github.com/eberkut/ithrl/pull/90), [`95c9552`](https://github.com/eberkut/ithrl/commit/95c955274f0d56e879a7d2670883165c27c9bc2c))
+- Distribute a first-party agent skill ([#87](https://github.com/eberkut/ithrl/pull/87), [`72f3455`](https://github.com/eberkut/ithrl/commit/72f34554c705492a05ebbe3a4994cd62b0485c44))
+- Test localized tool output removals ([#91](https://github.com/eberkut/ithrl/pull/91), [`55a0d0d`](https://github.com/eberkut/ithrl/commit/55a0d0d0b44a1d0c87da5a0d614e1be74306fba7))
+- **cost**: Estimate recorded and hypothetical token costs ([#86](https://github.com/eberkut/ithrl/pull/86), [`145c2f0`](https://github.com/eberkut/ithrl/commit/145c2f03d819481704649e873cffb30784873883))
+- **inspect**: Expose sampled reconstruction and policy metadata ([#84](https://github.com/eberkut/ithrl/pull/84), [`e8e7529`](https://github.com/eberkut/ithrl/commit/e8e7529eafbd6a14c237cf47159f18e8565fb9de))
+
 ## v0.4.0 (2026-11-14)
 
 ### Features
