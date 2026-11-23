@@ -14,6 +14,13 @@ and `docs/research/` owns methods and evidence. Keep work status in issues, and 
 validation and commits there. Do not create a parallel planning ledger or infer task status from
 an old research result. Planned capabilities must remain clearly distinguished from public support.
 
+Make issue descriptions usable without session history: include relevant rationale, references and
+a clear stop point. Keep roadmap entries concise and link to their owning issues.
+
+Keep shared interfaces, documentation and the agent skill harness-neutral. Explain native
+differences where they affect use; qualification profiles do not define product defaults for
+providers or models.
+
 ## Architecture
 
 - `src/ithrl/adapters/` discovers and interprets harness-native evidence. Adapters do not invoke
@@ -78,6 +85,9 @@ an old research result. Planned capabilities must remain clearly distinguished f
   or chmod an unchecked existing lock file.
 - Provider-backed smoke tests are explicit, budget-limited, and outside default CI. Show the
   provider, model, limits, isolation, and action-denial policy before any authorized live run.
+- Provider-free preparation may use ordinary authentication and metadata connectivity while
+  preventing model requests. Continue diagnosis and bounded retries within the authorized scope;
+  provider-backed execution still requires separate approval.
 
 ## Development and validation
 
@@ -101,6 +111,8 @@ signals, not a reason to split cohesive safety code or add wrappers. Follow the 
 ownership and test-design guidance in
 [Performance and maintainability](CONTRIBUTING.md#performance-and-maintainability).
 Tests and fixtures must remain credential-free and sanitized by default.
+
+Reuse CI results for the exact revision when choosing additional local checks.
 
 For a local matrix run, set `UV_PYTHON=VERSION` on every `uv` command. A one-off `uv sync --python`
 does not override `.python-version` for later `uv run` commands. Parallel runs need separate
@@ -156,3 +168,5 @@ unrelated worktree changes and never publish private session data or evidence.
 For sustained implementation tasks, agree on one bounded outcome, its essential invariants,
 validation and relevant reviews, and an observable stop point. Task scope does not expand authority
 for provider calls, publication or history changes.
+Before completion, review correctness, simplification and affected documentation; examine
+performance where the change affects critical paths. Reconcile findings and validate the fixes.

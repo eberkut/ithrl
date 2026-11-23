@@ -111,6 +111,11 @@ are separate measurements.
 - Share an existing mechanism only when its ownership, errors and side effects fit. Require a
   concrete maintenance benefit from abstractions; keep different harness and statistical rules
   explicit. Compare behavior, failure paths and recovery as well as performance.
+- Simplify test code as well as production code. Test observable behavior at the appropriate
+  unit, integration or end-to-end boundary. Remove redundant or unreachable branches instead of
+  adding tests solely to raise coverage.
+- Use standard temporary-directory facilities for disposable validation and benchmark artifacts.
+  Do not hard-code workstation paths or depend on a maintainer's scratch-directory layout.
 
 ### Benchmarks
 
@@ -185,10 +190,13 @@ characters; commands and tables retain their layout. MkDocs syntax is recognized
 generated CLI reference has narrow exceptions for Typer's prompts, option alignment and wrapping;
 its byte-for-byte generation check remains enforced. The generated changelog keeps each entry on
 one source line, with a line-length exception.
+These source-formatting rules do not apply to GitHub issue or PR bodies.
 
 Keep installation and first-use instructions in README, and detailed user guides and reference in
 `docs/`. Support, security and conduct policies live at the repository root. Keep private sessions,
 cases and credentials out of documentation and generated output.
+Keep release-specific feature lists and release-preparation status out of README; use the
+changelog, releases and roadmap.
 
 ### Writing and review
 
@@ -203,12 +211,15 @@ combine orientation and first use; do not split pages just to fill those categor
   filler, promotional claims, rhetorical contrasts and sentences that repeat their heading.
   For example, replace “It is important to note that execution requires explicit acknowledgement”
   with “After reviewing the plan, pass `--acknowledge-model-execution` to allow provider calls.”
+- Describe current behavior directly. Keep work-in-progress status and session chronology in issues.
 - Give each topic one owner. Keep options in the generated CLI reference, procedures in user guides,
   measurements in `docs/measurements.md`, rationale in decisions and methods in research. Link to
   detail instead of repeating it. Keep essential safety conditions beside the affected action.
 - Shorten without widening claims. Preserve tested profiles, statistical conditions, costs,
   uncertainty, failed outcomes and historical context. “The screen passed” does not mean
   “preservation is confirmed.” Check commands against the current CLI and qualify future work.
+  Explain limits that affect the documented use or conclusion; keep broader research questions in
+  their owning issues.
 - Follow [W3C's writing guidance](https://www.w3.org/WAI/tips/writing/): use descriptive link text,
   ordered headings and useful image alternatives. Do not rely on color alone. Keep code blocks
   executable or identify placeholders before the command.
@@ -239,8 +250,10 @@ closing them. Keep future plans separate from current support claims.
 Use [architecture](docs/architecture.md) to locate current contracts,
 [decision records](docs/decisions/index.md) for significant choices and alternatives, and
 [research](docs/research/index.md) for methods, measurements and reproducibility. Amend the owning
-document instead of maintaining a second plan. A new decision record should explain context,
-decision, alternatives and consequences; supersede an old decision explicitly when needed.
+document instead of maintaining a second plan. Use dated decision records for consequential
+architectural choices, with context, alternatives and consequences. Routine repository tooling and
+configuration changes do not need ADRs. Match the existing format and preserve accepted decisions;
+record a superseding decision when the architecture changes.
 
 Before evaluating a new study, declare its tested domain, criteria, seeds, budget and intended
 claims. Report costs across complete workflows, including failed and incomplete work, and document
@@ -379,8 +392,12 @@ metadata without checking out PR code. Make sure the required CI and CodeQL chec
 review conversations before merging.
 
 CodeRabbit reviews PRs when they are ready for review and posts feedback in a walkthrough and
-inline comments. Address relevant findings or explain why a suggestion does not apply. The
-maintainer makes the final review and merge decisions.
+inline comments. Read all review feedback, including collapsed nitpicks and follow-ups. Address
+relevant findings or explain why a suggestion does not apply. The maintainer makes the final review
+and merge decisions.
+
+Keep PR descriptions focused on the change and its tradeoffs. Include validation details when they
+help assess behavior beyond visible CI.
 
 CodeRabbit's optional planning and code-generation features are configured in
 [`.coderabbit.yaml`](.coderabbit.yaml). A paid CodeRabbit account is not required to contribute.

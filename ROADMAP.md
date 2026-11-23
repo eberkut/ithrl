@@ -76,7 +76,7 @@ The project-wide documentation review is complete in
 | Released in v0.4 | [#67: performance and simplification](https://github.com/eberkut/ithrl/issues/67) | Project-wide performance fixes, permanent local-workload benchmarks and durable coding guidance, merged in [PR #71](https://github.com/eberkut/ithrl/pull/71) |
 | Released in v0.4 | [#68: documentation and writing guidance](https://github.com/eberkut/ithrl/issues/68) | Project-wide documentation corrections and concise writing guidance, merged in [PR #72](https://github.com/eberkut/ithrl/pull/72) |
 
-## v0.5: investigation reports and comparative debugging
+## Completed: v0.5 investigation reports and comparative debugging
 
 Implementation and qualification for the
 [v0.5.0 milestone](https://github.com/eberkut/ithrl/milestone/4) are complete. The milestone covers
@@ -99,6 +99,29 @@ the [worked comparisons](docs/research/comparative-debugging.md) record their co
 | Completed in [#90](https://github.com/eberkut/ithrl/pull/90) | [#88: explicit-context comparison](https://github.com/eberkut/ithrl/issues/88) | Comparison CLI, two-arm calibration, fresh confirmation, accounting, recovery and offline reports |
 | Completed in [#90](https://github.com/eberkut/ithrl/pull/90) | [#89: qualify comparative debugging](https://github.com/eberkut/ithrl/issues/89) | Constructed and ordinary Codex/Copilot investigations through the normal CLI and installed artifacts, with successful and unsuccessful costs and explicit limits |
 | Completed in [#91](https://github.com/eberkut/ithrl/pull/91) | [#74: tool-output interventions](https://github.com/eberkut/ithrl/issues/74) | Exact span deletion for final-response comparisons, with native input controls, practical review and complete study costs in the [worked investigations](docs/research/tool-output-interventions.md) |
+
+## Planned v0.6: context explanation and portable investigations
+
+The [v0.6.0 milestone](https://github.com/eberkut/ithrl/milestone/5) groups ablation,
+bounded alternative reproducers and two-component interaction investigations, optional confirmed
+single-removal minimality, and portable case/result archives. These are planned capabilities;
+the supported-inputs table remains the current public claim.
+
+| Workstream | Design | Implementation |
+| --- | --- | --- |
+| Comparison preparation and full-original/retained-context ablation | [#61](https://github.com/eberkut/ithrl/issues/61) | [Preparation and ablation](https://github.com/eberkut/ithrl/issues/98) |
+| Bounded alternative reproducers | [#62](https://github.com/eberkut/ithrl/issues/62) | [Discovery and confirmation](https://github.com/eberkut/ithrl/issues/99) |
+| Declared two-component interactions | [#62](https://github.com/eberkut/ithrl/issues/62) | [Interaction investigation](https://github.com/eberkut/ithrl/issues/100) |
+| Optional confirmed single-removal minimality | [#63](https://github.com/eberkut/ithrl/issues/63) | [Complete-neighborhood confirmation](https://github.com/eberkut/ithrl/issues/101) |
+| Portable archives and deliberate privacy review | [#18](https://github.com/eberkut/ithrl/issues/18) | [Export, import and offline inspection](https://github.com/eberkut/ithrl/issues/102) |
+
+Reviewed designs and cost proposals gate implementation. Interaction and minimality need early
+statistical and cost decisions; a limiting result requires an explicit scope decision and does not
+qualify a capability. [Native qualification](https://github.com/eberkut/ithrl/issues/103)
+owns useful ordinary Codex/Copilot investigations through the normal CLI and installed artifacts.
+Archives record external-state requirements and omitted evidence; portability does not imply replay.
+Additional harnesses and baseline sharing remain outside v0.6.0. Provider execution and publication
+require separate approval.
 
 ## Evidence guiding the next investigations
 
@@ -139,16 +162,12 @@ normalized matching needs a separate policy.
 
 ## Deferred work
 
-These issues remain outside v0.5 without a release assignment.
+Additional harnesses and baseline sharing remain outside v0.6.0 without a release assignment.
 
 | Scope | Issue | Expected outcome |
 | --- | --- | --- |
 | Deferred; no release assigned | [#14: additional harnesses](https://github.com/eberkut/ithrl/issues/14) | Assess Claude Code, OpenCode and Pi before choosing an integration order and qualification scope |
-| Deferred; no release assigned | [#18: portable archives and privacy](https://github.com/eberkut/ithrl/issues/18) | Define a useful sharing workflow, archive format and deliberate privacy review before implementation |
 | Research; no release assigned | [#17: baseline sharing](https://github.com/eberkut/ithrl/issues/17) | Reconsider reuse only if useful complete-workflow savings justify the statistical and recovery complexity |
-| Deferred research; no release assigned | [#61: ablation](https://github.com/eberkut/ithrl/issues/61) | Define retained-reproducer and full-original ablation, with distinct baselines and justified claims |
-| Deferred research; no release assigned | [#62: alternative reproducers and interactions](https://github.com/eberkut/ithrl/issues/62) | Assess useful differences between preserving contexts, redundancy and joint effects, with bounded discovery and confirmation |
-| Deferred research; no release assigned | [#63: confirmed single-removal minimality](https://github.com/eberkut/ithrl/issues/63) | Define the neighbor family, statistical claim, error allocation and complete comparison budget |
 
 ## Release history and current scope
 
@@ -203,10 +222,6 @@ is separate work.
   single-decision experiment does not claim to reproduce a complete agent trajectory.
 - Custom command/Python runners and additional provider integrations with the same observation,
   safety, identity and accounting contracts.
-- [Portable export/import and deliberate redaction](https://github.com/eberkut/ithrl/issues/18).
-  Exported experiments must state
-  external state requirements and omitted sensitive evidence; portable evidence does not require
-  a universal agent-session format.
 - Optional editor/agent integrations and handoff analysis that compose the CLI rather than
   introducing separate experimental semantics.
 
